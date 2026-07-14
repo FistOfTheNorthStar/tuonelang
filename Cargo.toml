@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "tools/tokenizer-lab"]
 
 # ---------------------------------------------------------------------------
 # Shared package metadata.
@@ -52,10 +52,13 @@ tuo-agent = { path = "crates/tuo-agent" }
 tuo-bench = { path = "crates/tuo-bench" }
 tuo-compiler = { path = "crates/tuo-compiler" }
 
-# Third-party crates. Only clap is used in this foundational task; it powers
-# the CLI argument parsing for `tuo`. Additional shared dependencies will be
-# added here as concrete functionality lands.
+# Third-party crates. Shared versions live here so every member agrees.
+# - clap powers the CLI argument parsing for `tuo`.
+# - serde/serde_json give the research harness machine-readable, stable I/O
+#   for tokenizer measurements and LLM-benchmark records (Prompt 2).
 clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints.

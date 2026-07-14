@@ -1,0 +1,118 @@
+{
+  "description": "Candidate tuonelang syntax spellings to compare across tokenizers. Each group poses one design question. Token metrics are ONE input to the decision, never the sole criterion — see tools/tokenizer-lab/README.md for the decision policy. Some candidates deliberately differ from the frozen v0 Constitution choice; they are kept so the trade-off that was made remains visible and reproducible.",
+  "groups": [
+    {
+      "id": "function-keyword",
+      "question": "Which keyword introduces a function?",
+      "level": "construct",
+      "constitution_ref": "§8",
+      "candidates": [
+        { "label": "fn", "source": "fn", "notes": ["v0 choice", "shortest", "familiar from Rust/Swift"] },
+        { "label": "func", "source": "func", "notes": ["familiar from Go/Swift"] },
+        { "label": "function", "source": "function", "notes": ["most explicit", "familiar from JS", "longest"] }
+      ]
+    },
+    {
+      "id": "spec-keyword",
+      "question": "Which keyword introduces an executable specification?",
+      "level": "construct",
+      "constitution_ref": "§27",
+      "candidates": [
+        { "label": "spec", "source": "spec", "notes": ["v0 choice", "distinct from unit-test connotations", "names the TDG paradigm"] },
+        { "label": "test", "source": "test", "notes": ["familiar", "but conflates spec with conventional test frameworks"] }
+      ]
+    },
+    {
+      "id": "signed-int-type",
+      "question": "How is the default 64-bit signed integer type spelled?",
+      "level": "construct",
+      "constitution_ref": "§10, §11",
+      "candidates": [
+        { "label": "Int", "source": "Int", "notes": ["v0 alias for I64", "friendly prose default"] },
+        { "label": "int", "source": "int", "notes": ["lowercase; clashes with tuonelang's UpperCamelCase type convention"] },
+        { "label": "I64", "source": "I64", "notes": ["v0 canonical explicit-width name"] }
+      ]
+    },
+    {
+      "id": "string-type",
+      "question": "How are the string/text types spelled?",
+      "level": "construct",
+      "constitution_ref": "§10",
+      "candidates": [
+        { "label": "Str", "source": "Str", "notes": ["v0 borrowed UTF-8 slice"] },
+        { "label": "str", "source": "str", "notes": ["lowercase; clashes with type-casing convention"] },
+        { "label": "String", "source": "String", "notes": ["v0 owned UTF-8 string"] }
+      ]
+    },
+    {
+      "id": "binding-keywords",
+      "question": "How are immutable and mutable bindings introduced?",
+      "level": "construct",
+      "constitution_ref": "§9",
+      "candidates": [
+        { "label": "let", "source": "let", "notes": ["v0 immutable binding"] },
+        { "label": "var", "source": "var", "notes": ["v0 mutable binding"] },
+        { "label": "let-mut", "source": "let mut", "notes": ["rejected alternative: mutability as a modifier is easy to miss/drop"] }
+      ]
+    },
+    {
+      "id": "generic-syntax",
+      "question": "How are generic type parameters and bounds written?",
+      "level": "construct",
+      "constitution_ref": "§18",
+      "candidates": [
+        { "label": "brackets", "source": "fn max[T: Ord](a: T, b: T) -> T", "notes": ["v0 choice: no </> parsing ambiguity"] },
+        { "label": "angles", "source": "fn max<T: Ord>(a: T, b: T) -> T", "notes": ["familiar but classic parse ambiguity with comparison/shift"] },
+        { "label": "of-keyword", "source": "fn max(a: T, b: T) -> T where T of Ord", "notes": ["keyword-bound form"] }
+      ]
+    },
+    {
+      "id": "import-syntax",
+      "question": "How is a name imported from a module path?",
+      "level": "construct",
+      "constitution_ref": "§7",
+      "candidates": [
+        { "label": "import-colon", "source": "import std::collections::Map;", "notes": ["v0 choice: :: path separator"] },
+        { "label": "use-colon", "source": "use std::collections::Map;", "notes": ["Rust-style keyword"] },
+        { "label": "import-dot", "source": "import std.collections.Map;", "notes": ["dot separator; familiar from many languages"] },
+        { "label": "from-import", "source": "from std.collections import Map;", "notes": ["Python-style; more tokens, reads naturally"] }
+      ]
+    },
+    {
+      "id": "representative-function",
+      "question": "Tokens for a small but representative complete function.",
+      "level": "function",
+      "constitution_ref": "§8, §20, §24",
+      "candidates": [
+        {
+          "label": "v0-style",
+          "source": "fn add(a: Int, b: Int) -> Int {\n    return a + b;\n}",
+          "notes": ["frozen v0 spellings"]
+        },
+        {
+          "label": "verbose-style",
+          "source": "function add(a: int, b: int) -> int {\n    return a + b;\n}",
+          "notes": ["longer keyword and lowercase types, for contrast"]
+        }
+      ]
+    },
+    {
+      "id": "representative-program",
+      "question": "Tokens for a representative complete program (struct, impl, function, spec).",
+      "level": "program",
+      "constitution_ref": "whole",
+      "candidates": [
+        {
+          "label": "v0-style",
+          "source": "module geometry;\n\nstruct Point { x: F64, y: F64 }\n\nfn distance_sq(p: in Point) -> F64 {\n    return p.x * p.x + p.y * p.y;\n}\n\nspec \"distance_sq of origin is zero\" {\n    given let origin = Point { x: 0.0, y: 0.0 };\n    when let d = distance_sq(origin);\n    then d == 0.0;\n}\n",
+          "notes": ["frozen v0 spellings across a full small program"]
+        },
+        {
+          "label": "verbose-style",
+          "source": "module geometry;\n\nstruct Point { x: float, y: float }\n\nfunction distance_sq(p: in Point) -> float {\n    return p.x * p.x + p.y * p.y;\n}\n\ntest \"distance_sq of origin is zero\" {\n    given let origin = Point { x: 0.0, y: 0.0 };\n    when let d = distance_sq(origin);\n    then d == 0.0;\n}\n",
+          "notes": ["longer keywords and lowercase types, for contrast"]
+        }
+      ]
+    }
+  ]
+}

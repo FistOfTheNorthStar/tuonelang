@@ -1,0 +1,673 @@
+{
+  "schema_version": 1,
+  "tokenizers": [
+    "bytes",
+    "whitespace",
+    "gpt-like"
+  ],
+  "groups": [
+    {
+      "id": "function-keyword",
+      "question": "Which keyword introduces a function?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "fn",
+          "source": "fn",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 2,
+              "byte_count": 2,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 2,
+              "bytes_per_token": 2.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 2,
+              "bytes_per_token": 2.0
+            }
+          ]
+        },
+        {
+          "label": "func",
+          "source": "func",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 4,
+              "byte_count": 4,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            }
+          ]
+        },
+        {
+          "label": "function",
+          "source": "function",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 8,
+              "byte_count": 8,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 8,
+              "bytes_per_token": 8.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 2,
+              "byte_count": 8,
+              "bytes_per_token": 4.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "spec-keyword",
+      "question": "Which keyword introduces an executable specification?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "spec",
+          "source": "spec",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 4,
+              "byte_count": 4,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            }
+          ]
+        },
+        {
+          "label": "test",
+          "source": "test",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 4,
+              "byte_count": 4,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 4,
+              "bytes_per_token": 4.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "signed-int-type",
+      "question": "How is the default 64-bit signed integer type spelled?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "Int",
+          "source": "Int",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "int",
+          "source": "int",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "I64",
+          "source": "I64",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "string-type",
+      "question": "How are the string/text types spelled?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "Str",
+          "source": "Str",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "str",
+          "source": "str",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "String",
+          "source": "String",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 6,
+              "byte_count": 6,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 6,
+              "bytes_per_token": 6.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 6,
+              "bytes_per_token": 6.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "binding-keywords",
+      "question": "How are immutable and mutable bindings introduced?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "let",
+          "source": "let",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "var",
+          "source": "var",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 3,
+              "byte_count": 3,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 1,
+              "byte_count": 3,
+              "bytes_per_token": 3.0
+            }
+          ]
+        },
+        {
+          "label": "let-mut",
+          "source": "let mut",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 7,
+              "byte_count": 7,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 3,
+              "byte_count": 7,
+              "bytes_per_token": 2.3333333333333335
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 4,
+              "byte_count": 7,
+              "bytes_per_token": 1.75
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "generic-syntax",
+      "question": "How are generic type parameters and bounds written?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "brackets",
+          "source": "fn max[T: Ord](a: T, b: T) -> T",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 31,
+              "byte_count": 31,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 26,
+              "byte_count": 31,
+              "bytes_per_token": 1.1923076923076923
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 22,
+              "byte_count": 31,
+              "bytes_per_token": 1.4090909090909092
+            }
+          ]
+        },
+        {
+          "label": "angles",
+          "source": "fn max<T: Ord>(a: T, b: T) -> T",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 31,
+              "byte_count": 31,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 26,
+              "byte_count": 31,
+              "bytes_per_token": 1.1923076923076923
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 22,
+              "byte_count": 31,
+              "bytes_per_token": 1.4090909090909092
+            }
+          ]
+        },
+        {
+          "label": "of-keyword",
+          "source": "fn max(a: T, b: T) -> T where T of Ord",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 38,
+              "byte_count": 38,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 28,
+              "byte_count": 38,
+              "bytes_per_token": 1.3571428571428572
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 26,
+              "byte_count": 38,
+              "bytes_per_token": 1.4615384615384615
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "import-syntax",
+      "question": "How is a name imported from a module path?",
+      "level": "construct",
+      "candidates": [
+        {
+          "label": "import-colon",
+          "source": "import std::collections::Map;",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 29,
+              "byte_count": 29,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 10,
+              "byte_count": 29,
+              "bytes_per_token": 2.9
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 17,
+              "byte_count": 29,
+              "bytes_per_token": 1.7058823529411764
+            }
+          ]
+        },
+        {
+          "label": "use-colon",
+          "source": "use std::collections::Map;",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 26,
+              "byte_count": 26,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 10,
+              "byte_count": 26,
+              "bytes_per_token": 2.6
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 19,
+              "byte_count": 26,
+              "bytes_per_token": 1.368421052631579
+            }
+          ]
+        },
+        {
+          "label": "import-dot",
+          "source": "import std.collections.Map;",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 27,
+              "byte_count": 27,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 8,
+              "byte_count": 27,
+              "bytes_per_token": 3.375
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 17,
+              "byte_count": 27,
+              "bytes_per_token": 1.588235294117647
+            }
+          ]
+        },
+        {
+          "label": "from-import",
+          "source": "from std.collections import Map;",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 32,
+              "byte_count": 32,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 10,
+              "byte_count": 32,
+              "bytes_per_token": 3.2
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 20,
+              "byte_count": 32,
+              "bytes_per_token": 1.6
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "representative-function",
+      "question": "Tokens for a small but representative complete function.",
+      "level": "function",
+      "candidates": [
+        {
+          "label": "v0-style",
+          "source": "fn add(a: Int, b: Int) -> Int {\n    return a + b;\n}",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 51,
+              "byte_count": 51,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 33,
+              "byte_count": 51,
+              "bytes_per_token": 1.5454545454545454
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 25,
+              "byte_count": 51,
+              "bytes_per_token": 2.04
+            }
+          ]
+        },
+        {
+          "label": "verbose-style",
+          "source": "function add(a: int, b: int) -> int {\n    return a + b;\n}",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 57,
+              "byte_count": 57,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 33,
+              "byte_count": 57,
+              "bytes_per_token": 1.7272727272727273
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 26,
+              "byte_count": 57,
+              "bytes_per_token": 2.1923076923076925
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "representative-program",
+      "question": "Tokens for a representative complete program (struct, impl, function, spec).",
+      "level": "program",
+      "candidates": [
+        {
+          "label": "v0-style",
+          "source": "module geometry;\n\nstruct Point { x: F64, y: F64 }\n\nfn distance_sq(p: in Point) -> F64 {\n    return p.x * p.x + p.y * p.y;\n}\n\nspec \"distance_sq of origin is zero\" {\n    given let origin = Point { x: 0.0, y: 0.0 };\n    when let d = distance_sq(origin);\n    then d == 0.0;\n}\n",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 272,
+              "byte_count": 272,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 144,
+              "byte_count": 272,
+              "bytes_per_token": 1.8888888888888888
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 184,
+              "byte_count": 272,
+              "bytes_per_token": 1.4782608695652173
+            }
+          ]
+        },
+        {
+          "label": "verbose-style",
+          "source": "module geometry;\n\nstruct Point { x: float, y: float }\n\nfunction distance_sq(p: in Point) -> float {\n    return p.x * p.x + p.y * p.y;\n}\n\ntest \"distance_sq of origin is zero\" {\n    given let origin = Point { x: 0.0, y: 0.0 };\n    when let d = distance_sq(origin);\n    then d == 0.0;\n}\n",
+          "measurements": [
+            {
+              "tokenizer": "bytes",
+              "token_count": 284,
+              "byte_count": 284,
+              "bytes_per_token": 1.0
+            },
+            {
+              "tokenizer": "whitespace",
+              "token_count": 144,
+              "byte_count": 284,
+              "bytes_per_token": 1.9722222222222223
+            },
+            {
+              "tokenizer": "gpt-like",
+              "token_count": 191,
+              "byte_count": 284,
+              "bytes_per_token": 1.486910994764398
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
