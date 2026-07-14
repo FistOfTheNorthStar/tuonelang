@@ -1,0 +1,10 @@
+# tuonelang formatting configuration.
+#
+# We keep formatting close to rustfmt defaults so that generated and
+# hand-written code remain deterministic and diff-friendly, which matters for
+# reliable machine editing. Only stable options are used so `cargo fmt` works
+# on the stable toolchain without nightly features.
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true

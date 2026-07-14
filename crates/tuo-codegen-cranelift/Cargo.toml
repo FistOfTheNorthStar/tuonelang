@@ -1,0 +1,18 @@
+[package]
+name = "tuo-codegen-cranelift"
+description = "Cranelift native backend for tuonelang (consumes MIR)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-mir.workspace = true
+tuo-codegen.workspace = true

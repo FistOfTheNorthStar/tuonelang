@@ -1,0 +1,30 @@
+(* ==========================================================================
+   tuonelang grammar
+
+   THE FORMAL SURFACE GRAMMAR IS NOT YET WRITTEN.
+
+   Status (see CONSTITUTION.md): tuonelang's v0 *semantics* are now frozen, and
+   several surface-syntax elements are decided at the level of illustrative
+   examples (braces + semicolons, `let`/`var`/`const`, `fn`, `struct`, `enum`,
+   `interface`/`impl`, `match`, bracketed generics `[T]`, parameter modes
+   `in`/`mut`/`take`, `spec`). However, the *authoritative* EBNF productions
+   have deliberately NOT been transcribed here yet.
+
+   Why this file is still a placeholder:
+     - Some surface forms are explicitly marked Experimental in the Constitution
+       (e.g. the `given`/`when`/`then` spec syntax §27, the dynamic-dispatch
+       spelling §19, labeled-loop sigils §16). Writing them into a normative
+       grammar now would imply a stability the Constitution does not yet claim.
+     - The grammar must be derived from, and kept in lockstep with, the lexer
+       (tuo-lexer) and parser (tuo-parser). Authoring it before those exist
+       risks a grammar that silently diverges from the implementation.
+
+   When the grammar is written it will:
+     - be normative EBNF, cross-referenced to CONSTITUTION.md section numbers;
+     - cover exactly the Frozen surface forms, marking Experimental productions
+       as such;
+     - stay in sync with tuo-lexer / tuo-parser and be checked against them.
+
+   Until then, the CONSTITUTION.md examples are illustrative, not normative, and
+   this file intentionally contains no productions.
+   ========================================================================== *)

@@ -1,0 +1,17 @@
+[package]
+name = "tuo-mir-interp"
+description = "Reference MIR interpreter for tuonelang."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-mir.workspace = true

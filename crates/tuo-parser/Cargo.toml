@@ -1,0 +1,19 @@
+[package]
+name = "tuo-parser"
+description = "Parser that builds tuonelang syntax and AST from tokens."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-lexer.workspace = true
+tuo-syntax.workspace = true
+tuo-ast.workspace = true

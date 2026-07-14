@@ -1,0 +1,32 @@
+[package]
+name = "tuo-compiler"
+description = "Facade crate coordinating the tuonelang compiler pipeline."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The facade re-exports and coordinates the pipeline stages. It depends on the
+# query database and every semantic-pipeline crate, but never on CLI
+# presentation. Backends are wired in via the codegen abstraction so the facade
+# stays backend-agnostic.
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-db.workspace = true
+tuo-lexer.workspace = true
+tuo-syntax.workspace = true
+tuo-parser.workspace = true
+tuo-ast.workspace = true
+tuo-hir.workspace = true
+tuo-resolve.workspace = true
+tuo-types.workspace = true
+tuo-ownership.workspace = true
+tuo-mir.workspace = true
+tuo-mir-interp.workspace = true
+tuo-codegen.workspace = true

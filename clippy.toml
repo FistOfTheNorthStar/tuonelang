@@ -1,0 +1,9 @@
+# tuonelang Clippy configuration.
+#
+# Lint *levels* are configured centrally in the root Cargo.toml under
+# `[workspace.lints.clippy]`. This file holds tunables for individual lints.
+# We keep it intentionally small; add entries here only with justification.
+
+# Flag functions whose cognitive complexity is high, encouraging the small,
+# focused units that make the compiler easier to read and to generate.
+cognitive-complexity-threshold = 30
