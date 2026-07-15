@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "description": "Starter set of tuonelang code-generation tasks. Each task pairs a natural-language prompt with the colocated spec(s) a correct program must satisfy (the TDG signal). These are INPUT fixtures; no model has been run against them here — the committed results directory contains an illustrative example run whose numbers are synthetic and clearly labelled as such. Tasks reference frozen v0 Constitution constructs only.",
+  "tasks": [
+    {
+      "task_id": "add-two-ints",
+      "prompt": "Write a function `add` that returns the sum of two Int values.",
+      "specs": [
+        "spec \"add sums its arguments\" { given a: Int, b: Int; when let s = add(a, b); then s == a + b; }",
+        "spec \"add is commutative\" { given a: Int, b: Int; then add(a, b) == add(b, a); }"
+      ],
+      "tags": ["arithmetic", "easy"]
+    },
+    {
+      "task_id": "option-unwrap-or",
+      "prompt": "Write a function `unwrap_or` that returns the value inside an Option[Int], or a supplied default when it is None.",
+      "specs": [
+        "spec \"some returns its value\" { given x: Int, d: Int; then unwrap_or(Some { value: x }, d) == x; }",
+        "spec \"none returns the default\" { given d: Int; then unwrap_or(None, d) == d; }"
+      ],
+      "tags": ["option", "control-flow", "easy"]
+    },
+    {
+      "task_id": "safe-divide",
+      "prompt": "Write a function `checked_divide` returning Result[Int, DivError] that yields Err on division by zero and Ok(quotient) otherwise.",
+      "specs": [
+        "spec \"divide by zero is an error\" { given a: Int; then checked_divide(a, 0) == Err { error: DivError::ByZero }; }",
+        "spec \"exact division\" { then checked_divide(10, 2) == Ok { value: 5 }; }"
+      ],
+      "tags": ["result", "error-handling", "medium"]
+    },
+    {
+      "task_id": "point-distance-sq",
+      "prompt": "Given a struct Point { x: F64, y: F64 }, write `distance_sq` returning the squared distance from the origin.",
+      "specs": [
+        "spec \"origin is zero\" { given let o = Point { x: 0.0, y: 0.0 }; then distance_sq(o) == 0.0; }",
+        "spec \"unit x is one\" { given let p = Point { x: 1.0, y: 0.0 }; then distance_sq(p) == 1.0; }"
+      ],
+      "tags": ["struct", "float", "medium"]
+    },
+    {
+      "task_id": "sum-list",
+      "prompt": "Write a function `sum` that returns the sum of a list of Int using a for loop.",
+      "specs": [
+        "spec \"empty list sums to zero\" { then sum(empty_list()) == 0; }",
+        "spec \"sum of 1..=3 is 6\" { then sum(list_of(1, 2, 3)) == 6; }"
+      ],
+      "tags": ["iteration", "collections", "medium"]
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "schema_version": 1,
+  "model": "example-model (SYNTHETIC ILLUSTRATIVE DATA — not a real evaluation)",
+  "attempts": [
+    {
+      "task_id": "add-two-ints",
+      "initial_generated_tokens": 90,
+      "initial_outcome": {
+        "parsed": true,
+        "checked": true,
+        "specs_passed": true,
+        "hallucinated_symbols": 0
+      }
+    },
+    {
+      "task_id": "option-unwrap-or",
+      "initial_generated_tokens": 140,
+      "initial_outcome": {
+        "parsed": true,
+        "checked": true,
+        "specs_passed": false,
+        "hallucinated_symbols": 0
+      },
+      "repairs": [
+        {
+          "generated_tokens": 50,
+          "outcome": {
+            "parsed": true,
+            "checked": true,
+            "specs_passed": true,
+            "hallucinated_symbols": 0
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "safe-divide",
+      "initial_generated_tokens": 160,
+      "initial_outcome": {
+        "parsed": false,
+        "checked": false,
+        "specs_passed": false,
+        "hallucinated_symbols": 1
+      },
+      "repairs": [
+        {
+          "generated_tokens": 70,
+          "outcome": {
+            "parsed": true,
+            "checked": true,
+            "specs_passed": true,
+            "hallucinated_symbols": 0
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "point-distance-sq",
+      "initial_generated_tokens": 130,
+      "initial_outcome": {
+        "parsed": true,
+        "checked": false,
+        "specs_passed": false,
+        "hallucinated_symbols": 0
+      },
+      "repairs": [
+        {
+          "generated_tokens": 60,
+          "outcome": {
+            "parsed": true,
+            "checked": false,
+            "specs_passed": false,
+            "hallucinated_symbols": 0
+          }
+        },
+        {
+          "generated_tokens": 55,
+          "outcome": {
+            "parsed": true,
+            "checked": true,
+            "specs_passed": true,
+            "hallucinated_symbols": 0
+          }
+        }
+      ]
+    },
+    {
+      "task_id": "sum-list",
+      "initial_generated_tokens": 200,
+      "initial_outcome": {
+        "parsed": false,
+        "checked": false,
+        "specs_passed": false,
+        "hallucinated_symbols": 2
+      },
+      "repairs": [
+        {
+          "generated_tokens": 80,
+          "outcome": {
+            "parsed": false,
+            "checked": false,
+            "specs_passed": false,
+            "hallucinated_symbols": 1
+          }
+        }
+      ]
+    }
+  ],
+  "summary": {
+    "task_count": 5,
+    "parse_at_1": 0.6,
+    "check_at_1": 0.4,
+    "spec_pass_at_1": 0.2,
+    "repair_at_1": 0.6,
+    "average_repair_cycles": 1.0,
+    "generated_tokens": 1035,
+    "hallucinated_symbol_count": 4
+  }
+}

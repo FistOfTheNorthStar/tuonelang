@@ -1,0 +1,21 @@
+[package]
+name = "tokenizer-lab"
+description = "Measures how candidate tuonelang syntax tokenizes across multiple tokenizers."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[[bin]]
+name = "tokenizer-lab"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+tuo-bench.workspace = true
+clap.workspace = true
+serde_json.workspace = true

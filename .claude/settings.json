@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "permissions": {
+    "deny": [
+      "Bash(dd:*)",
+      "Bash(mkfs:*)",
+      "Bash(shred:*)",
+      "Bash(sudo:*)",
+      "Bash(git filter-branch:*)",
+      "Bash(git update-ref -d:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)"
+    ],
+    "ask": [
+      "Bash(rm:*)",
+      "Bash(rmdir:*)",
+      "Bash(mv:*)",
+      "Bash(truncate:*)",
+      "Bash(:>*)",
+      "Bash(find:* -delete)",
+      "Bash(find:* -exec rm *)",
+      "Bash(xargs rm:*)",
+      "Bash(chmod -R:*)",
+      "Bash(chown -R:*)",
+      "Bash(git rm:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git clean:*)",
+      "Bash(git checkout -- :*)",
+      "Bash(git restore:*)",
+      "Bash(git branch -D:*)",
+      "Bash(git branch -d:*)",
+      "Bash(git stash drop:*)",
+      "Bash(git stash clear:*)",
+      "Bash(cargo clean:*)"
+    ]
+  }
+}

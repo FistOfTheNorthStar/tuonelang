@@ -1,0 +1,7 @@
+# tuonelang pins to the stable Rust channel. We intentionally do not pin an exact
+# version so contributors and CI track the current stable release; rustup
+# resolves this to the latest stable when it is installed.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

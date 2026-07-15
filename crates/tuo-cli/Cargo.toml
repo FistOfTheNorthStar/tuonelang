@@ -1,0 +1,20 @@
+[package]
+name = "tuo-cli"
+description = "Command-line interface for the tuonelang compiler and tooling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# The produced binary is named `tuo`, while the crate is `tuo-cli`.
+[[bin]]
+name = "tuo"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true

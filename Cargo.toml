@@ -1,0 +1,100 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "tools/tokenizer-lab"]
+
+# ---------------------------------------------------------------------------
+# Shared package metadata.
+#
+# Every tuonelang crate inherits these fields via `field.workspace = true`, keeping
+# version, edition, license, and repository information in a single place.
+# ---------------------------------------------------------------------------
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+license = "MIT"
+repository = "https://github.com/kaarlekulvik/tuo"
+authors = ["Kaarle Kulvik"]
+description = "tuonelang — an experimental statically typed, memory-safe native language and compiler."
+
+# ---------------------------------------------------------------------------
+# Shared dependencies.
+#
+# Third-party crates are declared here so that every workspace member depends
+# on a single, consistent version. Crates opt in with `dep.workspace = true`.
+# ---------------------------------------------------------------------------
+[workspace.dependencies]
+# tuonelang-owned crates. Declaring path dependencies here lets members reference
+# each other with `tuo-foo.workspace = true`.
+tuo-source = { path = "crates/tuo-source" }
+tuo-diagnostics = { path = "crates/tuo-diagnostics" }
+tuo-db = { path = "crates/tuo-db" }
+tuo-lexer = { path = "crates/tuo-lexer" }
+tuo-syntax = { path = "crates/tuo-syntax" }
+tuo-parser = { path = "crates/tuo-parser" }
+tuo-ast = { path = "crates/tuo-ast" }
+tuo-hir = { path = "crates/tuo-hir" }
+tuo-resolve = { path = "crates/tuo-resolve" }
+tuo-types = { path = "crates/tuo-types" }
+tuo-ownership = { path = "crates/tuo-ownership" }
+tuo-mir = { path = "crates/tuo-mir" }
+tuo-mir-interp = { path = "crates/tuo-mir-interp" }
+tuo-spec = { path = "crates/tuo-spec" }
+tuo-codegen = { path = "crates/tuo-codegen" }
+tuo-codegen-cranelift = { path = "crates/tuo-codegen-cranelift" }
+tuo-codegen-llvm = { path = "crates/tuo-codegen-llvm" }
+tuo-runtime = { path = "crates/tuo-runtime" }
+tuo-stdlib = { path = "crates/tuo-stdlib" }
+tuo-fmt = { path = "crates/tuo-fmt" }
+tuo-package = { path = "crates/tuo-package" }
+tuo-lsp = { path = "crates/tuo-lsp" }
+tuo-agent = { path = "crates/tuo-agent" }
+tuo-bench = { path = "crates/tuo-bench" }
+tuo-compiler = { path = "crates/tuo-compiler" }
+
+# Third-party crates. Shared versions live here so every member agrees.
+# - clap powers the CLI argument parsing for `tuo`.
+# - serde/serde_json give the research harness machine-readable, stable I/O
+#   for tokenizer measurements and LLM-benchmark records (Prompt 2).
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+
+# ---------------------------------------------------------------------------
+# Workspace-wide lints.
+#
+# These apply to every tuonelang-owned crate. Warnings fail CI (`-D warnings`).
+# We deliberately avoid enabling controversial or extremely noisy lint groups
+# (e.g. `clippy::pedantic`, `clippy::nursery`, `clippy::restriction`) wholesale;
+# instead we enforce a focused, high-signal set of correctness and quality
+# lints. See ARCHITECTURE.md for the rationale.
+# ---------------------------------------------------------------------------
+[workspace.lints.rust]
+# Lint groups get a lower priority so that individual lint levels above win.
+rust_2024_compatibility = { level = "warn", priority = -1 }
+# Correctness and hygiene.
+unsafe_code = "forbid"
+missing_docs = "warn"
+unreachable_pub = "warn"
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+# The core `all` group (correctness, suspicious, style, complexity, perf).
+all = { level = "warn", priority = -1 }
+# A curated selection of high-signal lints beyond the default group.
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+
+# ---------------------------------------------------------------------------
+# Release profile.
+#
+# Tuned for compiler/tooling binaries: full LTO across a single codegen unit
+# trades build time for faster, smaller release artifacts. This does not
+# affect the dev profile used during day-to-day work.
+# ---------------------------------------------------------------------------
+[profile.release]
+lto = "thin"
+codegen-units = 1
