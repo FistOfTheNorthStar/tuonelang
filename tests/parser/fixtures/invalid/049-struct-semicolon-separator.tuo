@@ -1,0 +1,1 @@
+struct P { x: F64; y: F64 }

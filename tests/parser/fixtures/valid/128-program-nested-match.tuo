@@ -1,0 +1,9 @@
+fn classify(in o: Option[Result[Int, Str]]) -> Int {
+    match o {
+        Some { value } => match value {
+            Ok { value } => value,
+            Err { error } => 0,
+        },
+        None => 0 - 1,
+    }
+}

@@ -1,0 +1,1 @@
+fn go() -> Int { add(mul(2, 3), 4) }

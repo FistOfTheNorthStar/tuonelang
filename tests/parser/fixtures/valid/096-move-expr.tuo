@@ -1,0 +1,1 @@
+fn f(take s: String) { let t = move s; }

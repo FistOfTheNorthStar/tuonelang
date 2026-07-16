@@ -1,0 +1,1 @@
+fn area(in s: Shape) -> F64 { match s { Circle { radius } => radius, Empty => 0.0 } }

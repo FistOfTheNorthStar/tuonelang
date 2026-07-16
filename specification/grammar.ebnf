@@ -1,30 +1,568 @@
 (* ==========================================================================
-   tuonelang grammar
+   tuonelang v0 — normative surface grammar (EBNF)
 
-   THE FORMAL SURFACE GRAMMAR IS NOT YET WRITTEN.
+   This file is the AUTHORITATIVE context-free grammar for tuonelang v0. It is
+   cross-referenced to CONSTITUTION.md section numbers as `[§N]` and is the
+   single source of truth the lexer (tuo-lexer) and parser (tuo-parser) must be
+   kept in lockstep with.
 
-   Status (see CONSTITUTION.md): tuonelang's v0 *semantics* are now frozen, and
-   several surface-syntax elements are decided at the level of illustrative
-   examples (braces + semicolons, `let`/`var`/`const`, `fn`, `struct`, `enum`,
-   `interface`/`impl`, `match`, bracketed generics `[T]`, parameter modes
-   `in`/`mut`/`take`, `spec`). However, the *authoritative* EBNF productions
-   have deliberately NOT been transcribed here yet.
+   Companion documents:
+     - lexical-grammar.md  — prose + tables for the LEXICAL grammar (tokens).
+     - syntax.md           — prose + rationale for the CONCRETE (syntactic)
+                             grammar, plus the boundary to SEMANTIC checks.
 
-   Why this file is still a placeholder:
-     - Some surface forms are explicitly marked Experimental in the Constitution
-       (e.g. the `given`/`when`/`then` spec syntax §27, the dynamic-dispatch
-       spelling §19, labeled-loop sigils §16). Writing them into a normative
-       grammar now would imply a stability the Constitution does not yet claim.
-     - The grammar must be derived from, and kept in lockstep with, the lexer
-       (tuo-lexer) and parser (tuo-parser). Authoring it before those exist
-       risks a grammar that silently diverges from the implementation.
+   THREE-LAYER SPLIT (read syntax.md §"Three layers" for the full statement):
 
-   When the grammar is written it will:
-     - be normative EBNF, cross-referenced to CONSTITUTION.md section numbers;
-     - cover exactly the Frozen surface forms, marking Experimental productions
-       as such;
-     - stay in sync with tuo-lexer / tuo-parser and be checked against them.
+     1. LEXICAL grammar  — characters -> tokens. Section (A) below and, in prose,
+        lexical-grammar.md. A regular grammar; runs first, with no feedback from
+        the parser (scannerless-but-layered: tokens are decided without parser
+        state).
 
-   Until then, the CONSTITUTION.md examples are illustrative, not normative, and
-   this file intentionally contains no productions.
+     2. CONCRETE grammar — tokens -> parse tree. Sections (B)..(H) below. A
+        context-free grammar designed for deterministic, single-token-lookahead
+        (LL(1)-ish, see NOTES) parsing with explicit synchronization points.
+
+     3. SEMANTIC restrictions — everything the CFG intentionally does NOT
+        express: type checking, name/path resolution, exhaustiveness, the borrow
+        rule, definite assignment, `?`-only-in-Result, coherence, overflow, etc.
+        These are enumerated (not defined) in syntax.md §"Semantic restrictions"
+        and are NOT part of this grammar. The grammar accepts a strict SUPERSET
+        of well-typed programs on purpose (see NOTES / "superset" below).
+
+   EBNF NOTATION used here (ISO-14977-flavoured, ASCII):
+     =            defines a rule
+     ;            ends a rule
+     ,            concatenation
+     |            alternation
+     [ x ]        optional (0 or 1)
+     { x }        repetition (0 or more)
+     ( x )        grouping
+     "abc"        a terminal spelled exactly `abc` (a keyword or punctuation token)
+     'a'          a single terminal character (used only in the lexical section)
+     UPPERCASE    a lexical token class (a terminal to the concrete grammar)
+     lower_snake  a nonterminal
+     (* ... *)    a comment
+     ? ... ?      a "special sequence": an English description of a constraint
+                  the CFG cannot capture (e.g. a Unicode class). Deferring to a
+                  named Unicode property, NOT smuggling in semantics.
+
+   STATUS TAGS on productions:
+     [FROZEN]        surface form is a v0 commitment (matches a Frozen §).
+     [EXPERIMENTAL]  surface form may change within v0 without an edition bump
+                     (matches an Experimental §). The production is normative
+                     *today* — the parser implements it — but is not promised
+                     stable. See CONSTITUTION.md and open-questions.md.
+   Where no tag appears the enclosing section's tag applies.
+   ========================================================================== *)
+
+
+(* ==========================================================================
+   (A) LEXICAL GRAMMAR                                          [§1 §2 §3 §4 §10]
+
+   Characters -> tokens. This layer is regular and runs to completion before the
+   concrete grammar sees anything. Whitespace and comments are TRIVIA: they
+   separate tokens and are otherwise discarded (no significant whitespace [§5],
+   no preprocessor). The lexer never consults parser state, so tokenization is
+   context-free of the syntax layer (a keyword is ALWAYS a keyword [§4]).
+
+   Full prose, including the exact Unicode properties and error conditions, is in
+   lexical-grammar.md. The productions here are normative and complete for the
+   token classes the concrete grammar references.
+   ========================================================================== *)
+
+(* --- source & trivia ---------------------------------------------------- *)
+
+(* A source file is UTF-8, no BOM, LF line endings [§1]. That is a byte-level
+   precondition checked before lexing; it is not itself a token rule. *)
+
+newline        = ? U+000A LINE FEED ? ;                              (* [§1] LF only *)
+whitespace     = { ' ' | newline } ;                                (* space + LF; TAB is a lexical error [§1] *)
+
+line_comment   = "//", { ? any char except newline ? }, ( newline | ? end of input ? ) ; (* [§3] *)
+doc_comment    = "///", { ? any char except newline ? }, ( newline | ? end of input ? ) ; (* [§3] attached to next item *)
+comment        = doc_comment | line_comment ;                       (* NO block comments [§3] *)
+
+trivia         = whitespace | line_comment ;                        (* discarded between tokens *)
+(* doc_comment is trivia to expression parsing but is CAPTURED and attached to
+   the following item by the parser; it is not discarded. See syntax.md. *)
+
+(* --- identifiers & keywords --------------------------------------------- *)
+
+xid_start      = ? a character with the Unicode XID_Start property, OR '_' ? ;   (* [§2] UAX-31 *)
+xid_continue   = ? a character with the Unicode XID_Continue property ? ;        (* [§2] *)
+
+IDENT          = xid_start, { xid_continue }
+               ? and the whole identifier is in NFC and is not a keyword and is not a single '_' ? ; (* [§2] [§4] *)
+UNDERSCORE     = "_" ;                                               (* the wildcard; NOT an IDENT [§2] *)
+
+(* KEYWORDS [§4]: a fixed, closed, fully-reserved set. Every word below is a
+   distinct terminal to the concrete grammar; none can ever be an IDENT. This
+   list is normative and MUST equal CONSTITUTION.md §4. *)
+keyword =
+      "module" | "import" | "pub" | "fn" | "let" | "var" | "const"
+    | "struct" | "enum" | "interface" | "impl" | "where"
+    | "if" | "else" | "match" | "for" | "in" | "while" | "loop"
+    | "break" | "continue" | "return"
+    | "take" | "mut" | "move" | "Box" | "Shared" | "Weak"
+    | "spec" | "given" | "when" | "then" | "assert"       (* "assert": spec form, see (H) [EXPERIMENTAL §27] *)
+    | "unsafe" | "as" | "true" | "false"
+    (* "self" and "Self" are reserved receiver/self-type words [§19]. *)
+    | "self" | "Self" ;
+
+(* Primitive type NAMES are reserved identifiers [§10]; lexed as IDENT but not
+   usable as binding names (a resolution rule, not a lexical one). Listed here
+   for completeness; the concrete grammar treats them as ordinary type paths. *)
+primitive_type_name =
+      "I8" | "I16" | "I32" | "I64" | "Isize"
+    | "U8" | "U16" | "U32" | "U64" | "Usize"
+    | "F32" | "F64" | "Bool" | "Char" | "String" | "Str"
+    | "Int" | "Float" ;                                  (* Int=I64, Float=F64 [§10 §11] *)
+
+(* --- literals ----------------------------------------------------------- *)
+
+digit          = '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9' ;
+hex_digit      = digit | 'a'..'f' | 'A'..'F' ;
+digit_sep      = '_' ;                                               (* readability separator inside numbers *)
+
+dec_digits     = digit, { digit | digit_sep } ;
+hex_digits     = hex_digit, { hex_digit | digit_sep } ;
+bin_digit      = '0' | '1' ;
+bin_digits     = bin_digit, { bin_digit | digit_sep } ;
+oct_digit      = '0'..'7' ;
+oct_digits     = oct_digit, { oct_digit | digit_sep } ;
+
+int_suffix     = "i8" | "i16" | "i32" | "i64" | "isize"
+               | "u8" | "u16" | "u32" | "u64" | "usize" ;           (* explicit literal type [§10] *)
+float_suffix   = "f32" | "f64" ;
+
+INT_LITERAL    = ( dec_digits
+                 | "0x", hex_digits
+                 | "0o", oct_digits
+                 | "0b", bin_digits ), [ int_suffix ] ;             (* [§10 §11] *)
+
+FLOAT_LITERAL  = dec_digits, ".", dec_digits, [ float_exp ], [ float_suffix ]
+               | dec_digits, float_exp, [ float_suffix ] ;          (* IEEE-754 binary64 default [§11] *)
+float_exp      = ( "e" | "E" ), [ "+" | "-" ], dec_digits ;
+(* NOTE: `1.` and `.5` are deliberately NOT float literals — a leading/trailing
+   dot is reserved for the `.` member/method operator, keeping `x.0` and `1.foo`
+   unambiguous with minimal lookahead. Write `1.0` and `0.5`. *)
+
+BOOL_LITERAL   = "true" | "false" ;                                 (* [§10] keywords, surfaced as a literal *)
+
+escape         = "\\", ( '"' | '\'' | '\\' | 'n' | 'r' | 't' | '0'
+                       | "u{", hex_digits, "}" ) ;                  (* Unicode scalar escape *)
+CHAR_LITERAL   = "'", ( ? any char except '\'' or '\\' or newline ? | escape ), "'" ; (* [§10] Char *)
+STRING_LITERAL = '"', { ? any char except '"' or '\\' or newline ? | escape }, '"' ; (* [§10] String/Str literal *)
+(* v0 has no raw strings, no multi-line string literals, and no string
+   interpolation: one canonical string form [FROZEN by omission; see syntax.md]. *)
+
+(* --- punctuation & operator tokens -------------------------------------- *)
+(* Each is a single terminal. Multi-char tokens are matched maximal-munch. *)
+
+punct =
+      "->" | "=>" | "::" | ".." | "==" | "!=" | "<=" | ">=" | "&&" | "||"
+    | "+" | "-" | "*" | "/" | "%"
+    | "<" | ">" | "!" | "=" | "?" | "."
+    | "(" | ")" | "{" | "}" | "[" | "]"
+    | "," | ";" | ":" ;
+(* NOTE on angle brackets: `<`/`>` are ONLY comparison/shift-free relational
+   operators — generics use square brackets `[T]` [§18], so there is no
+   `<`-as-generic ambiguity. This is a deliberate minimal-lookahead choice. *)
+
+
+(* ==========================================================================
+   (B) COMPILATION UNIT (a module = one .tuo file)               [§6]
+
+   A file is a sequence of items. There is no inline `module { }` block in v0
+   [§6]; the leading `module` name declaration is optional and, when present,
+   only names the file's own module for documentation/tooling.
+   ========================================================================== *)
+
+compilation_unit = [ module_decl ], { item } ;                      (* [§6] *)
+
+module_decl    = "module", path, ";" ;                              (* optional self-naming [§6] *)
+
+item           = { doc_comment },                                   (* docs attach to the item [§3] *)
+                 [ "pub" ],                                          (* visibility [§6] *)
+                 ( import_item
+                 | function_item
+                 | struct_item
+                 | enum_item
+                 | interface_item
+                 | impl_item
+                 | const_item
+                 | spec_item ) ;                                    (* spec is item-level [§27] *)
+
+(* Item-leading keyword is unique per item kind, so ONE token of lookahead after
+   the optional `pub` selects the production. This is the primary determinism
+   lever. See syntax.md §"Minimal lookahead". *)
+
+
+(* ==========================================================================
+   (C) IMPORTS                                                   [§7]
+   ========================================================================== *)
+
+import_item    = "import", import_path, [ "as", IDENT ], ";" ;      (* [§7] non-glob *)
+
+import_path    = path, [ "::", import_group ] ;
+import_group   = "{", import_leaf, { ",", import_leaf }, [ "," ], "}" ; (* trailing comma allowed *)
+import_leaf    = IDENT, [ "as", IDENT ] ;
+
+path           = path_segment, { "::", path_segment } ;             (* absolute, no super/self prefix [§7] *)
+path_segment   = IDENT ;                                            (* [EXPERIMENTAL §7]: relative prefixes not in v0 *)
+
+
+(* ==========================================================================
+   (D) TYPES                                                     [§10 §12 §13 §18]
+
+   The TYPE grammar is purely syntactic. Whether a named type exists, is in
+   scope, or satisfies a bound is a SEMANTIC question (resolution/typing), NOT
+   expressed here. Generics use square brackets [§18] — no `<>` — so a type is
+   parseable with a single token of lookahead.
+   ========================================================================== *)
+
+type           = path_type
+               | unit_type
+               | wrapper_type ;
+
+unit_type      = "(", ")" ;                                         (* the unit type () [§10] *)
+
+path_type      = type_path, [ type_arguments ] ;                    (* e.g. Map, Option[T], std::io::File *)
+type_path      = ( "Self" | IDENT ), { "::", IDENT } ;             (* "Self" only valid inside impl/interface (semantic) *)
+type_arguments = "[", type, { ",", type }, [ "," ], "]" ;           (* [§18] bracketed *)
+
+(* Ownership wrapper types [§25] are ordinary generic type applications whose
+   head is a reserved keyword; spelled with brackets like any generic. *)
+wrapper_type   = ( "Box" | "Shared" | "Weak" ), type_arguments ;    (* Box[T], Shared[T], Weak[T] [§25] *)
+
+(* NOTE: there is NO reference/pointer type syntax in the type grammar. Aliasing
+   is expressed only through parameter MODES in/mut/take [§22 §23], never as a
+   first-class `&T` type. This keeps §22 the sole aliasing mechanism. *)
+
+
+(* ==========================================================================
+   (E) DECLARATIONS: functions, structs, enums, interfaces, impls, const
+                                                                  [§8 §9 §12 §13 §18 §19]
+   ========================================================================== *)
+
+(* --- generics & where --------------------------------------------------- *)
+
+generic_params = "[", generic_param, { ",", generic_param }, [ "," ], "]" ; (* [§18] *)
+generic_param  = IDENT, [ ":", bound_list ] ;                       (* T or T: Bound [§18] *)
+bound_list     = type_path, { "+", type_path } ;                    (* Interface bounds; `+` joins [§18] *)
+where_clause   = "where", where_pred, { ",", where_pred }, [ "," ] ; (* [§18] *)
+where_pred     = type, ":", bound_list ;
+
+(* --- functions ---------------------------------------------------------- *)
+
+function_item  = "fn", IDENT, [ generic_params ],
+                 "(", [ param_list ], ")",
+                 [ "->", type ],                                    (* return type; omit == unit [§8] *)
+                 [ where_clause ],
+                 block ;                                            (* [§8] *)
+
+param_list     = param, { ",", param }, [ "," ] ;
+param          = receiver | normal_param ;                          (* receiver only as FIRST param (semantic) *)
+normal_param   = param_mode, IDENT, ":", type ;                    (* modes required; params typed [§8 §22] *)
+param_mode     = "in" | "mut" | "take" ;                            (* [§22] the complete set of modes *)
+
+(* A method receiver [§19]: `in self`, `mut self`, `take self`. `self` has no
+   written type (its type is the impl's Self). "self" is a keyword [§4]. *)
+receiver       = param_mode, "self" ;                               (* [§19] *)
+
+(* --- structs ------------------------------------------------------------ *)
+
+struct_item    = "struct", IDENT, [ generic_params ], [ where_clause ], field_block ; (* [§12] named fields only *)
+field_block    = "{", [ field_decl, { ",", field_decl }, [ "," ] ], "}" ;
+field_decl     = { doc_comment }, [ "pub" ], IDENT, ":", type ;    (* fields private by default [§12] *)
+
+(* --- enums -------------------------------------------------------------- *)
+
+enum_item      = "enum", IDENT, [ generic_params ], [ where_clause ],
+                 "{", [ variant_decl, { ",", variant_decl }, [ "," ] ], "}" ; (* [§13] *)
+variant_decl   = { doc_comment }, IDENT, [ field_block ] ;         (* bare, or named-field payload [§13] *)
+
+(* --- interfaces & impls ------------------------------------------------- *)
+
+interface_item = "interface", IDENT, [ generic_params ], [ where_clause ],
+                 "{", { interface_member }, "}" ;                   (* [§19] *)
+interface_member = { doc_comment },
+                   ( function_signature, ";"                        (* required method, no body *)
+                   | function_item ) ;                              (* method with default body *)
+function_signature = "fn", IDENT, [ generic_params ],
+                     "(", [ param_list ], ")", [ "->", type ], [ where_clause ] ;
+
+impl_item      = "impl", [ generic_params ],
+                 type_path, [ type_arguments ],                     (* the interface being implemented ... *)
+                 "for", type,                                       (* ... for this type [§19] *)
+                 [ where_clause ],
+                 "{", { impl_member }, "}" ;
+impl_member    = { doc_comment }, [ "pub" ], function_item ;        (* methods are fn items [§8 §19] *)
+(* NOTE: an inherent-impl form (`impl Type { ... }`, no `for`) is [EXPERIMENTAL]
+   and intentionally omitted from v0's normative grammar; see syntax.md. *)
+
+(* --- const -------------------------------------------------------------- *)
+
+const_item     = "const", IDENT, ":", type, "=", expression, ";" ; (* type required [§9] *)
+
+
+(* ==========================================================================
+   (F) STATEMENTS & BLOCKS                                       [§5 §9 §16]
+
+   A block is brace-delimited [§5] and is itself an expression whose value is its
+   trailing expression-without-`;` (or `()` otherwise) [§5]. Statements are
+   `;`-terminated; there is no ASI [§5].
+   ========================================================================== *)
+
+block          = "{", { statement }, [ tail_expression ], "}" ;    (* [§5] block-as-expression *)
+tail_expression = expression ;                                     (* no trailing ';' -> block's value [§5] *)
+
+statement      = let_statement
+               | var_statement
+               | const_item                                         (* block-scoped const [§9] *)
+               | expression_statement
+               | ";" ;                                              (* empty statement (a lone ';') *)
+
+let_statement  = "let", pattern, [ ":", type ], [ "=", expression ], ";" ; (* type/init optional [§9] *)
+var_statement  = "var", pattern, [ ":", type ], [ "=", expression ], ";" ; (* mutable [§9] *)
+(* Absence of an initializer is allowed by the CFG; "definitely assigned before
+   use" is a SEMANTIC check [§9], not expressed here. *)
+
+expression_statement =
+      block_expression                                              (* `if{}`/`match{}`/`{}`/loops: no `;` needed *)
+    | expression, ";" ;                                             (* all other expressions need `;` [§5] *)
+(* This split is the key to statement-level minimal lookahead: an expression that
+   STARTS with a block-introducing keyword forms a statement by itself; anything
+   else must be terminated by `;`. See syntax.md §"Expression statements". *)
+
+
+(* ==========================================================================
+   (G) EXPRESSIONS                                               [§16 §17 §20 §24]
+
+   Precedence is encoded by the rule layering below (lowest precedence first).
+   The grammar is unambiguous and left-associative where relevant; `match`/`if`
+   are expressions [§16]. This is a CONCRETE grammar only — it does not decide
+   whether operands' types are compatible (semantic).
+   ========================================================================== *)
+
+expression     = assignment ;
+
+(* Assignment is a statement-ish expression; RHS lower-precedence than `||`. *)
+assignment     = or_expr, [ assign_op, assignment ] ;              (* right-assoc; lvalue-ness is semantic *)
+assign_op      = "=" ;                                             (* v0 has no compound assignment (`+=`) [FROZEN by omission] *)
+
+or_expr        = and_expr, { "||", and_expr } ;
+and_expr       = compare_expr, { "&&", compare_expr } ;
+compare_expr   = range_expr, [ compare_op, range_expr ] ;          (* non-associative: a<b<c is a parse error *)
+compare_op     = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+range_expr     = add_expr, [ "..", add_expr ] ;                    (* half-open range (for/iteration) [§16] *)
+add_expr       = mul_expr, { ( "+" | "-" ), mul_expr } ;
+mul_expr       = unary_expr, { ( "*" | "/" | "%" ), unary_expr } ;
+unary_expr     = ( "-" | "!" | "move" ), unary_expr                (* prefix neg/not/explicit-move [§21] *)
+               | postfix_expr ;
+
+postfix_expr   = primary_expr, { postfix_op } ;
+postfix_op     = "?"                                               (* error propagation [§20] *)
+               | ".", IDENT                                        (* field access *)
+               | ".", IDENT, call_args                             (* method call *)
+               | ".", INT_LITERAL                                  (* reserved for future tuple index; parseable *)
+               | call_args                                         (* function call *)
+               | "[", expression, "]"                             (* index *)
+               | "as", type ;                                     (* numeric conversion [§10] *)
+call_args      = "(", [ expression, { ",", expression }, [ "," ] ], ")" ;
+
+primary_expr   = literal
+               | path_expr
+               | struct_literal
+               | grouping_or_unit
+               | block_expression ;
+
+grouping_or_unit = "(", [ expression ], ")" ;                      (* `()` is unit value; `(e)` is grouping *)
+
+path_expr      = ( "Self" | "self" | IDENT ), { "::", IDENT }
+                 [ turbofish ] ;                                    (* value/enum-variant/fn path *)
+turbofish      = "::", type_arguments ;                            (* explicit type args at a value path *)
+
+struct_literal = type_path, [ type_arguments ],
+                 "{", [ field_init, { ",", field_init }, [ "," ] ], "}" ; (* named fields [§12] *)
+field_init     = IDENT, ":", expression
+               | IDENT ;                                            (* field shorthand: `{ x }` == `{ x: x }` *)
+(* AMBIGUITY NOTE: `Ident { ... }` as a struct literal vs. a block after e.g. an
+   `if` condition is resolved by CONTEXT: struct literals are NOT permitted in
+   the "no-struct-literal" positions (the condition of if/while/match scrutinee)
+   without parentheses. This restriction lives in syntax.md and is enforced by
+   the parser with a grammar split; it is the one place the concrete grammar is
+   position-sensitive, and it is intentional and documented. *)
+
+(* --- block-form expressions (usable as expression-statements w/o `;`) ---- *)
+
+block_expression = block
+               | if_expr
+               | match_expr
+               | while_expr
+               | loop_expr
+               | for_expr
+               | unsafe_block ;                                    (* [§26] *)
+
+if_expr        = "if", expr_no_struct, block,
+                 [ "else", ( if_expr | block ) ] ;                 (* mandatory braces; else-if chains [§16] *)
+
+while_expr     = "while", expr_no_struct, block ;                  (* [§16] statement-flavoured *)
+loop_expr      = [ label, ":" ], "loop", block ;                   (* break value -> loop's value [§16] *)
+for_expr       = "for", pattern, "in", expr_no_struct, block ;     (* [§16] *)
+label          = LIFETIME_LABEL ;                                  (* [EXPERIMENTAL §16] sigil may change; see lexical-grammar.md *)
+
+unsafe_block   = "unsafe", block ;                                 (* [§26] *)
+
+match_expr     = "match", expr_no_struct, "{",
+                   [ match_arm, { ",", match_arm }, [ "," ] ],
+                 "}" ;                                             (* exhaustiveness is SEMANTIC [§17] *)
+match_arm      = pattern, [ "if", expression ], "=>", ( expression | block_expression ) ; (* guard [§17] *)
+
+(* `expr_no_struct` is `expression` parsed in a context where a bare struct
+   literal `Name { ... }` is NOT allowed (must be parenthesised). See the
+   ambiguity note above and syntax.md. Its productions are identical to
+   `expression` except `struct_literal` is excluded from `primary_expr`. *)
+expr_no_struct = ? `expression`, but `struct_literal` is not a valid primary ? ;
+
+(* --- control-transfer expressions --------------------------------------- *)
+(* These appear as ordinary expressions (each yields unit or diverges). *)
+
+return_expr    = "return", [ expression ] ;                        (* early return [§8] *)
+break_expr     = "break", [ label ], [ expression ] ;             (* labeled + value [§16] *)
+continue_expr  = "continue", [ label ] ;                          (* [§16] *)
+(* return/break/continue are added to `primary_expr` alternatives in the parser;
+   listed separately here for clarity. They only appear where an expression may. *)
+
+(* --- literals ----------------------------------------------------------- *)
+
+literal        = INT_LITERAL
+               | FLOAT_LITERAL
+               | BOOL_LITERAL
+               | CHAR_LITERAL
+               | STRING_LITERAL
+               | unit_literal ;
+unit_literal   = "(", ")" ;                                        (* the value `()` [§10] *)
+
+
+(* ==========================================================================
+   (H) PATTERNS                                                  [§17]
+
+   Patterns appear in match arms, let/var bindings, and `for`. The CFG describes
+   their SHAPE; exhaustiveness and reachability are SEMANTIC [§17].
+   ========================================================================== *)
+
+pattern        = or_pattern ;
+or_pattern     = primary_pattern, { "|", primary_pattern } ;       (* or-patterns [§17] *)
+primary_pattern =
+      literal_pattern
+    | wildcard_pattern
+    | binding_pattern
+    | struct_pattern
+    | enum_pattern
+    | "(", pattern, ")" ;                                          (* grouping *)
+
+literal_pattern = literal ;                                        (* 0, true, 'a', "s" [§17] *)
+wildcard_pattern = UNDERSCORE ;                                    (* `_` [§17] *)
+binding_pattern = IDENT ;                                          (* binds by move/copy per ownership [§17 §21] *)
+
+struct_pattern = type_path, "{", [ field_pattern, { ",", field_pattern } ,
+                                   [ ",", ".." ] | ".." ], "}" ;   (* `..` ignores the rest [§17] *)
+field_pattern  = IDENT, ":", pattern
+               | IDENT ;                                            (* shorthand `{ x }` binds field x *)
+
+enum_pattern   = type_path, [ field_block_pattern ] ;              (* Some { value }, None, Ok { value } [§17] *)
+field_block_pattern = "{", [ field_pattern, { ",", field_pattern }, [ [ ",", ] ".." ] ], "}" ;
+(* NO range patterns and NO ref patterns in v0 [§17]; deliberately absent. *)
+
+
+(* ==========================================================================
+   (I) SPECIFICATIONS (Test Driven Generation)      [EXPERIMENTAL §27, Q-0001]
+
+   `spec` is a first-class, item-level construct [§27]. Its SEMANTIC contract
+   (executable on shared MIR, pure, deterministic) is FROZEN; the SURFACE SYNTAX
+   below is EXPERIMENTAL and tracked in open-questions.md Q-0001. It is normative
+   for the v0 parser today but may change without an edition bump.
+
+   Two statement styles coexist so both the Constitution's given/when/then form
+   [§27] and the compact `assert` form (Prompt-003 example) are expressible:
+
+       spec fibonacci {
+           assert fibonacci(0) == 0;                 // compact assertion form
+       }
+
+       spec "add is commutative" {
+           given a: Int, b: Int;                     // inputs
+           when let s1 = add(a, b);                  // steps/bindings
+           when let s2 = add(b, a);
+           then s1 == s2;                            // conditions
+       }
+
+   A spec may reference a function declared LATER in the module — items are
+   resolved module-wide, not top-to-bottom (a resolution rule; the grammar
+   already permits forward reference because `item` order is unconstrained).
+   ========================================================================== *)
+
+spec_item      = "spec", spec_name, "{", { spec_statement }, "}" ; (* [EXPERIMENTAL §27] *)
+spec_name      = IDENT | STRING_LITERAL ;                          (* named by identifier or a description string *)
+
+spec_statement = given_clause
+               | when_clause
+               | then_clause
+               | assert_clause
+               | let_statement                                     (* local bindings inside a spec *)
+               | var_statement
+               | expression_statement ;
+
+given_clause   = "given", given_binding, { ",", given_binding }, ";" ; (* inputs [§27] *)
+given_binding  = IDENT, ":", type, [ "=", expression ] ;          (* typed input, optional concrete value *)
+
+when_clause    = "when", ( let_statement_inner | expression ), ";" ; (* a step/binding [§27] *)
+let_statement_inner = ( "let" | "var" ), pattern, [ ":", type ], "=", expression ; (* no own `;` — clause supplies it *)
+
+then_clause    = "then", expression, ";" ;                        (* a condition that must hold [§27] *)
+assert_clause  = "assert", expression, ";" ;                      (* compact condition [EXPERIMENTAL §27] *)
+
+
+(* ==========================================================================
+   NOTES — determinism, lookahead, recovery, and the superset property
+
+   1. DETERMINISTIC PARSING / MINIMAL LOOKAHEAD.
+      - Every `item` is selected by its unique leading keyword (after optional
+        `pub`) — one token of lookahead.
+      - Every `statement` is selected by `let`/`var`/`const`/`;` or by whether
+        the expression begins with a block-introducing keyword — one token.
+      - Generics use `[ ]`, never `< >`, so type and expression parsing never
+        needs the unbounded lookahead the `<` ambiguity forces elsewhere [§18].
+      - The ONE context-sensitive point is the struct-literal-vs-block ambiguity
+        in condition/scrutinee position, resolved by the `expr_no_struct` split
+        (documented, bounded, and local). Nothing else needs parser feedback
+        into the lexer.
+
+   2. SYNCHRONIZATION POINTS FOR ERROR RECOVERY.
+      On a parse error the parser skips tokens until a synchronization token,
+      then resumes. The v0 sync tokens are:
+        - `;`            (end of a statement / clause)
+        - `}`            (end of a block / item body)
+        - any `item`-leading keyword at brace depth 0
+          (`fn`,`struct`,`enum`,`interface`,`impl`,`import`,`const`,`spec`,
+           `module`,`pub`)
+      Braces and semicolons being MANDATORY [§5] is what makes these points
+      reliable — recovery does not depend on indentation or on inferring
+      statement ends. See syntax.md §"Error recovery".
+
+   3. ONE CANONICAL SPELLING. Where a construct could be written more than one
+      way, v0 admits exactly one: named-field structs only (no positional),
+      `[T]` generics only (no `<T>`), one string-literal form, one doc-comment
+      form, braces always. Omissions (no `+=`, no `1.` float, no block comments,
+      no glob import) are deliberate and cross-referenced above.
+
+   4. THE GRAMMAR ACCEPTS A SUPERSET. This CFG accepts programs that later fail
+      semantic checks: e.g. `let x` with no initializer (definite-assignment
+      §9), `a?` in a non-Result function (§20), a non-exhaustive `match` (§17), a
+      use-after-move (§21/§22), an integer literal that overflows its type (§24),
+      an unknown type name (resolution). That is intentional: the CFG's job is
+      shape, not meaning. syntax.md §"Semantic restrictions" enumerates every
+      such deferred check and states that this grammar does NOT model type
+      checking.
    ========================================================================== *)

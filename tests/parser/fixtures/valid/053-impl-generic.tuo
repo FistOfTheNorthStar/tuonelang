@@ -1,0 +1,3 @@
+impl[T] Container for Vec[T] {
+    fn size(in self) -> Int { 0 }
+}

@@ -1,0 +1,1 @@
+spec s { assert x == 1;

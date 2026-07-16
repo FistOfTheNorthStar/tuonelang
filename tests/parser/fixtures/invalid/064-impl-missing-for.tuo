@@ -1,0 +1,1 @@
+impl Ord { fn compare(in self) {} }

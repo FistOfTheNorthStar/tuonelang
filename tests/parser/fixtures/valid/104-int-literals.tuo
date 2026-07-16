@@ -1,0 +1,1 @@
+fn f() { let a = 42; let b = 0xFF; let c = 0o17; let d = 0b1010; let e = 1_000_000; }

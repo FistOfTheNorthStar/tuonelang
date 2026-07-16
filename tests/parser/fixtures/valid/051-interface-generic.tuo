@@ -1,0 +1,3 @@
+interface Into[T] {
+    fn into(take self) -> T;
+}

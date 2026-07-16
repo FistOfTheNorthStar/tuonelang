@@ -1,0 +1,1 @@
+fn f(in a: Int, in b: Int) -> Int { a | b }

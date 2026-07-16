@@ -1,0 +1,3 @@
+interface Ord {
+    fn compare(in self, in other: Self) -> Ordering;
+}

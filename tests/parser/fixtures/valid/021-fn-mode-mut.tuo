@@ -1,0 +1,1 @@
+fn bump(mut counter: Int) { counter = counter + 1; }

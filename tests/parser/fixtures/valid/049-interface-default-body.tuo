@@ -1,0 +1,3 @@
+interface Greet {
+    fn hello(in self) -> Str { "hi" }
+}

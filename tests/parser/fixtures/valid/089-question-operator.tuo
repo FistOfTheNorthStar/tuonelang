@@ -1,0 +1,1 @@
+fn f() -> Result[Int, Err] { let x = may_fail()?; Ok { value: x } }

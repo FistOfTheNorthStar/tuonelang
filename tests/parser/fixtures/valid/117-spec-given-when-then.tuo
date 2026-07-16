@@ -1,0 +1,6 @@
+spec "add is commutative" {
+    given a: Int, b: Int;
+    when let s1 = add(a, b);
+    when let s2 = add(b, a);
+    then s1 == s2;
+}

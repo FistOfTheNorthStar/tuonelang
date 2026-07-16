@@ -1,0 +1,1 @@
+fn f() { 'outer: loop { loop { break 'outer; } } }

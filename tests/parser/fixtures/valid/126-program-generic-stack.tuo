@@ -1,0 +1,6 @@
+struct Stack[T] { items: List[T] }
+
+impl[T] Container for Stack[T] {
+    fn push(mut self, take item: T) { append(self.items, item); }
+    fn pop(mut self) -> Option[T] { remove_last(self.items) }
+}

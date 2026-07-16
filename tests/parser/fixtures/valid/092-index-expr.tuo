@@ -1,0 +1,1 @@
+fn f(in xs: List[Int]) -> Int { xs[0] }

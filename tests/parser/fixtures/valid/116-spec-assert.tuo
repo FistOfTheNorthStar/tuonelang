@@ -1,0 +1,5 @@
+spec fibonacci {
+    assert fibonacci(0) == 0;
+}
+
+fn fibonacci(in n: Int) -> Int { n }

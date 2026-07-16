@@ -1,0 +1,3 @@
+impl Ord for Point {
+    fn compare(in self, in other: Point) -> Ordering { Ordering::Equal }
+}

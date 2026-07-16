@@ -1,0 +1,1 @@
+fn f() -> Point { Point { x: 1.0, y: 2.0 } }

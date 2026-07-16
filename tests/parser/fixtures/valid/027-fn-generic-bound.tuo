@@ -1,0 +1,1 @@
+fn max[T: Ord](in a: T, in b: T) -> T { a }

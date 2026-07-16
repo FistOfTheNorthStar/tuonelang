@@ -1,0 +1,9 @@
+import std::io::{read, write};
+
+const BUFFER: Int = 4096;
+
+fn copy() -> Result[Int, IoErr] {
+    let data = read(BUFFER)?;
+    let n = write(data)?;
+    Ok { value: n }
+}

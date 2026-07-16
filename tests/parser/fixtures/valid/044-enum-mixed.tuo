@@ -1,0 +1,5 @@
+enum Shape {
+    Circle { radius: F64 },
+    Rectangle { width: F64, height: F64 },
+    Empty,
+}

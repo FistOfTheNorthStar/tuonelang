@@ -1,0 +1,1 @@
+fn f(in c: Bool) -> Int { c ? 1 : 0 }

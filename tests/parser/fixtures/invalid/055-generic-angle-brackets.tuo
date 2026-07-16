@@ -1,0 +1,1 @@
+fn id<T>(take x: T) -> T { x }

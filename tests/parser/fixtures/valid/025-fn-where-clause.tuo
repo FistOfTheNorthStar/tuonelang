@@ -1,0 +1,1 @@
+fn largest[T](in xs: List[T]) -> T where T: Ord { first(xs) }

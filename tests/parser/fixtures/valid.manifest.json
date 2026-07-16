@@ -1,0 +1,519 @@
+{
+  "schema_version": 1,
+  "kind": "valid",
+  "count": 128,
+  "fixtures": [
+    {
+      "file": "001-module-decl.tuo",
+      "construct": "optional self-naming module declaration"
+    },
+    {
+      "file": "002-import-simple.tuo",
+      "construct": "single import binding a name"
+    },
+    {
+      "file": "003-import-nested-path.tuo",
+      "construct": "deep path import"
+    },
+    {
+      "file": "004-import-group.tuo",
+      "construct": "grouped import leaves"
+    },
+    {
+      "file": "005-import-group-trailing-comma.tuo",
+      "construct": "grouped import with trailing comma"
+    },
+    {
+      "file": "006-import-rename.tuo",
+      "construct": "import with `as` rename"
+    },
+    {
+      "file": "007-import-group-rename.tuo",
+      "construct": "grouped import with a renamed leaf"
+    },
+    {
+      "file": "008-import-pub.tuo",
+      "construct": "re-exported public import"
+    },
+    {
+      "file": "009-empty-file.tuo",
+      "construct": "an empty compilation unit"
+    },
+    {
+      "file": "010-only-comments.tuo",
+      "construct": "a file of comments and whitespace only"
+    },
+    {
+      "file": "011-fn-empty.tuo",
+      "construct": "function with empty body returning unit"
+    },
+    {
+      "file": "012-fn-unit-explicit.tuo",
+      "construct": "explicit unit return type"
+    },
+    {
+      "file": "013-fn-one-param.tuo",
+      "construct": "single typed parameter"
+    },
+    {
+      "file": "014-fn-two-params.tuo",
+      "construct": "two parameters"
+    },
+    {
+      "file": "015-fn-trailing-comma-params.tuo",
+      "construct": "trailing comma in parameter list"
+    },
+    {
+      "file": "016-fn-return-stmt.tuo",
+      "construct": "explicit early return"
+    },
+    {
+      "file": "017-fn-tail-expr.tuo",
+      "construct": "block tail expression as value"
+    },
+    {
+      "file": "018-fn-pub.tuo",
+      "construct": "public function"
+    },
+    {
+      "file": "019-fn-doc-comment.tuo",
+      "construct": "doc comment attached to a function"
+    },
+    {
+      "file": "020-fn-multi-doc-comment.tuo",
+      "construct": "multiple doc-comment lines"
+    },
+    {
+      "file": "021-fn-mode-mut.tuo",
+      "construct": "mutable-borrow parameter mode"
+    },
+    {
+      "file": "022-fn-mode-take.tuo",
+      "construct": "ownership-taking parameter mode"
+    },
+    {
+      "file": "023-fn-mixed-modes.tuo",
+      "construct": "in/mut/take modes together"
+    },
+    {
+      "file": "024-fn-nested-call.tuo",
+      "construct": "nested function calls"
+    },
+    {
+      "file": "025-fn-where-clause.tuo",
+      "construct": "generic function with a where clause"
+    },
+    {
+      "file": "026-fn-generic-one.tuo",
+      "construct": "one type parameter"
+    },
+    {
+      "file": "027-fn-generic-bound.tuo",
+      "construct": "bounded type parameter"
+    },
+    {
+      "file": "028-fn-generic-multi-bound.tuo",
+      "construct": "multiple bounds joined by +"
+    },
+    {
+      "file": "029-fn-generic-two-params.tuo",
+      "construct": "two type parameters"
+    },
+    {
+      "file": "030-struct-generic.tuo",
+      "construct": "generic struct declaration"
+    },
+    {
+      "file": "031-enum-generic.tuo",
+      "construct": "generic enum declaration"
+    },
+    {
+      "file": "032-type-nested-generic.tuo",
+      "construct": "nested generic type argument"
+    },
+    {
+      "file": "033-turbofish.tuo",
+      "construct": "explicit type arguments on a value path"
+    },
+    {
+      "file": "034-struct-empty.tuo",
+      "construct": "struct with no fields"
+    },
+    {
+      "file": "035-struct-one-field.tuo",
+      "construct": "single field"
+    },
+    {
+      "file": "036-struct-fields.tuo",
+      "construct": "several fields"
+    },
+    {
+      "file": "037-struct-trailing-comma.tuo",
+      "construct": "trailing comma after last field"
+    },
+    {
+      "file": "038-struct-pub-field.tuo",
+      "construct": "public field"
+    },
+    {
+      "file": "039-struct-doc-fields.tuo",
+      "construct": "doc comments on fields"
+    },
+    {
+      "file": "040-struct-generic-where.tuo",
+      "construct": "generic struct with where clause"
+    },
+    {
+      "file": "041-struct-wrapper-type-field.tuo",
+      "construct": "field of an ownership-wrapper type"
+    },
+    {
+      "file": "042-enum-c-like.tuo",
+      "construct": "all payload-less variants"
+    },
+    {
+      "file": "043-enum-payload.tuo",
+      "construct": "variant with a named-field payload"
+    },
+    {
+      "file": "044-enum-mixed.tuo",
+      "construct": "mixed bare and payload variants"
+    },
+    {
+      "file": "045-enum-result.tuo",
+      "construct": "the Result shape"
+    },
+    {
+      "file": "046-enum-doc-variant.tuo",
+      "construct": "doc comment on a variant"
+    },
+    {
+      "file": "047-enum-trailing-comma.tuo",
+      "construct": "trailing comma after last variant"
+    },
+    {
+      "file": "048-interface-one-method.tuo",
+      "construct": "interface with one required method"
+    },
+    {
+      "file": "049-interface-default-body.tuo",
+      "construct": "interface method with a default body"
+    },
+    {
+      "file": "050-interface-multi.tuo",
+      "construct": "interface with several methods"
+    },
+    {
+      "file": "051-interface-generic.tuo",
+      "construct": "generic interface"
+    },
+    {
+      "file": "052-impl-for.tuo",
+      "construct": "impl of an interface for a type"
+    },
+    {
+      "file": "053-impl-generic.tuo",
+      "construct": "generic impl"
+    },
+    {
+      "file": "054-impl-receiver-mut.tuo",
+      "construct": "impl method with a mut receiver"
+    },
+    {
+      "file": "055-impl-receiver-take.tuo",
+      "construct": "impl method with a take receiver"
+    },
+    {
+      "file": "056-const-item.tuo",
+      "construct": "module-level constant"
+    },
+    {
+      "file": "057-const-expr.tuo",
+      "construct": "constant initialized from an expression"
+    },
+    {
+      "file": "058-let-typed.tuo",
+      "construct": "let with type annotation"
+    },
+    {
+      "file": "059-let-inferred.tuo",
+      "construct": "let without annotation"
+    },
+    {
+      "file": "060-var-binding.tuo",
+      "construct": "mutable var binding"
+    },
+    {
+      "file": "061-let-shadowing.tuo",
+      "construct": "shadowing within a scope"
+    },
+    {
+      "file": "062-let-no-init.tuo",
+      "construct": "let with no initializer (definite-assignment is semantic)"
+    },
+    {
+      "file": "063-block-scoped-const.tuo",
+      "construct": "const inside a block"
+    },
+    {
+      "file": "064-if-expr.tuo",
+      "construct": "if/else expression"
+    },
+    {
+      "file": "065-if-else-if.tuo",
+      "construct": "else-if chain"
+    },
+    {
+      "file": "066-if-statement.tuo",
+      "construct": "if as a statement (no trailing semicolon)"
+    },
+    {
+      "file": "067-while-loop.tuo",
+      "construct": "while statement"
+    },
+    {
+      "file": "068-loop-break-value.tuo",
+      "construct": "loop yielding a value via break"
+    },
+    {
+      "file": "069-for-range.tuo",
+      "construct": "for over a range"
+    },
+    {
+      "file": "070-for-iterable.tuo",
+      "construct": "for over an iterable path"
+    },
+    {
+      "file": "071-break-continue.tuo",
+      "construct": "break and continue in a loop"
+    },
+    {
+      "file": "072-labeled-loop.tuo",
+      "construct": "labeled loop with labeled break (experimental sigil)"
+    },
+    {
+      "file": "073-nested-blocks.tuo",
+      "construct": "nested bare blocks"
+    },
+    {
+      "file": "074-match-literal.tuo",
+      "construct": "match on integer literals"
+    },
+    {
+      "file": "075-match-enum.tuo",
+      "construct": "match on enum variants"
+    },
+    {
+      "file": "076-match-binding.tuo",
+      "construct": "binding pattern in a match arm"
+    },
+    {
+      "file": "077-match-or-pattern.tuo",
+      "construct": "or-pattern in an arm"
+    },
+    {
+      "file": "078-match-guard.tuo",
+      "construct": "guard on a match arm"
+    },
+    {
+      "file": "079-match-struct-rest.tuo",
+      "construct": "struct pattern with `..` rest"
+    },
+    {
+      "file": "080-match-block-arm.tuo",
+      "construct": "block-bodied match arm"
+    },
+    {
+      "file": "081-match-wildcard-only.tuo",
+      "construct": "single wildcard arm"
+    },
+    {
+      "file": "082-let-destructure-struct.tuo",
+      "construct": "struct destructuring in let"
+    },
+    {
+      "file": "083-match-nested-pattern.tuo",
+      "construct": "nested field pattern"
+    },
+    {
+      "file": "084-arith-precedence.tuo",
+      "construct": "arithmetic precedence"
+    },
+    {
+      "file": "085-comparison.tuo",
+      "construct": "comparison operators"
+    },
+    {
+      "file": "086-logical-ops.tuo",
+      "construct": "logical and/or/not"
+    },
+    {
+      "file": "087-unary-neg.tuo",
+      "construct": "unary negation"
+    },
+    {
+      "file": "088-grouping.tuo",
+      "construct": "parenthesized grouping"
+    },
+    {
+      "file": "089-question-operator.tuo",
+      "construct": "postfix ? error propagation"
+    },
+    {
+      "file": "090-method-chain.tuo",
+      "construct": "chained method calls"
+    },
+    {
+      "file": "091-field-access.tuo",
+      "construct": "field access"
+    },
+    {
+      "file": "092-index-expr.tuo",
+      "construct": "indexing"
+    },
+    {
+      "file": "093-as-cast.tuo",
+      "construct": "numeric conversion with as"
+    },
+    {
+      "file": "094-call-trailing-comma.tuo",
+      "construct": "trailing comma in call args"
+    },
+    {
+      "file": "095-assignment-expr.tuo",
+      "construct": "assignment to a var"
+    },
+    {
+      "file": "096-move-expr.tuo",
+      "construct": "explicit move keyword"
+    },
+    {
+      "file": "097-range-expr.tuo",
+      "construct": "range expression outside for"
+    },
+    {
+      "file": "098-bool-literals.tuo",
+      "construct": "boolean literals"
+    },
+    {
+      "file": "099-char-literal.tuo",
+      "construct": "char literal"
+    },
+    {
+      "file": "100-char-escape.tuo",
+      "construct": "escaped char literal"
+    },
+    {
+      "file": "101-string-literal.tuo",
+      "construct": "string literal"
+    },
+    {
+      "file": "102-string-escapes.tuo",
+      "construct": "string with escapes"
+    },
+    {
+      "file": "103-unicode-escape.tuo",
+      "construct": "unicode scalar escape"
+    },
+    {
+      "file": "104-int-literals.tuo",
+      "construct": "integer literals in several bases"
+    },
+    {
+      "file": "105-suffixed-literals.tuo",
+      "construct": "type-suffixed numeric literals"
+    },
+    {
+      "file": "106-float-literals.tuo",
+      "construct": "float literals with exponents"
+    },
+    {
+      "file": "107-unit-value.tuo",
+      "construct": "the unit value ()"
+    },
+    {
+      "file": "108-struct-literal.tuo",
+      "construct": "struct literal construction"
+    },
+    {
+      "file": "109-struct-literal-shorthand.tuo",
+      "construct": "field shorthand in a struct literal"
+    },
+    {
+      "file": "110-struct-literal-generic.tuo",
+      "construct": "generic struct literal"
+    },
+    {
+      "file": "111-struct-literal-paren-cond.tuo",
+      "construct": "parenthesized struct literal in if condition"
+    },
+    {
+      "file": "112-enum-variant-path.tuo",
+      "construct": "enum variant via path"
+    },
+    {
+      "file": "113-nested-generic-call.tuo",
+      "construct": "call with turbofish type args"
+    },
+    {
+      "file": "114-unsafe-block.tuo",
+      "construct": "unsafe block expression"
+    },
+    {
+      "file": "115-unsafe-in-expr.tuo",
+      "construct": "unsafe block yielding a value"
+    },
+    {
+      "file": "116-spec-assert.tuo",
+      "construct": "spec with a compact assert (Prompt-003 example)"
+    },
+    {
+      "file": "117-spec-given-when-then.tuo",
+      "construct": "spec with given/when/then"
+    },
+    {
+      "file": "118-spec-forward-reference.tuo",
+      "construct": "spec references a function declared later"
+    },
+    {
+      "file": "119-spec-string-name.tuo",
+      "construct": "spec named by a description string"
+    },
+    {
+      "file": "120-spec-multiple-asserts.tuo",
+      "construct": "spec with several assertions"
+    },
+    {
+      "file": "121-spec-given-default.tuo",
+      "construct": "given binding with a concrete value"
+    },
+    {
+      "file": "122-spec-when-expr.tuo",
+      "construct": "when clause with an expression step"
+    },
+    {
+      "file": "123-spec-local-let.tuo",
+      "construct": "spec with a local let statement"
+    },
+    {
+      "file": "124-program-fibonacci.tuo",
+      "construct": "a complete small program with a spec"
+    },
+    {
+      "file": "125-program-shape-area.tuo",
+      "construct": "enum + match + interface program"
+    },
+    {
+      "file": "126-program-generic-stack.tuo",
+      "construct": "generic struct with methods via impl"
+    },
+    {
+      "file": "127-program-imports-and-const.tuo",
+      "construct": "imports, const, and a function together"
+    },
+    {
+      "file": "128-program-nested-match.tuo",
+      "construct": "nested match and option handling"
+    }
+  ]
+}

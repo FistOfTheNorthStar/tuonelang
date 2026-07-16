@@ -1,0 +1,3 @@
+impl Counter for Cell {
+    fn incr(mut self) { self.n = self.n + 1; }
+}

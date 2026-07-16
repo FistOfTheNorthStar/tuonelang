@@ -1,0 +1,2 @@
+/// Returns the answer.
+fn answer() -> Int { 42 }
