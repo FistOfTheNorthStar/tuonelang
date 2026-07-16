@@ -1,0 +1,5 @@
+spec effectful {
+    given xs: List[Int];
+    when push(xs, 1);
+    then len(xs) == 1;
+}

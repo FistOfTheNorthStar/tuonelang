@@ -1,0 +1,6 @@
+struct Point {
+    /// horizontal
+    x: F64,
+    /// vertical
+    y: F64,
+}

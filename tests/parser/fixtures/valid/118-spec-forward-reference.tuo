@@ -1,0 +1,5 @@
+spec double {
+    assert twice(2) == 4;
+}
+
+fn twice(in n: Int) -> Int { n * 2 }

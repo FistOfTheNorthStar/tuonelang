@@ -1,0 +1,1 @@
+fn f(in a: Bool, in b: Bool) -> Bool { !a && (a || b) }

@@ -1,0 +1,1 @@
+struct Wrapper { value: Int }

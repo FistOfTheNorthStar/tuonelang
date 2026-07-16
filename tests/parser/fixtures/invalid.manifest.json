@@ -1,0 +1,577 @@
+{
+  "schema_version": 1,
+  "kind": "invalid",
+  "count": 114,
+  "fixtures": [
+    {
+      "file": "001-tab-indentation.tuo",
+      "stage": "lexical",
+      "reason": "tab character used for indentation (\u00a71 forbids tabs outside literals)"
+    },
+    {
+      "file": "002-crlf-line-ending.tuo",
+      "stage": "lexical",
+      "reason": "CRLF line ending; only LF is permitted (\u00a71)"
+    },
+    {
+      "file": "003-block-comment.tuo",
+      "stage": "lexical",
+      "reason": "block comment /* */ does not exist in tuonelang (\u00a73)"
+    },
+    {
+      "file": "004-nested-block-comment.tuo",
+      "stage": "lexical",
+      "reason": "nested block comment; block comments do not exist (\u00a73)"
+    },
+    {
+      "file": "005-doc-block-comment.tuo",
+      "stage": "lexical",
+      "reason": "/** */ doc form does not exist; only /// (\u00a73)"
+    },
+    {
+      "file": "006-unterminated-string.tuo",
+      "stage": "lexical",
+      "reason": "string literal not closed before end of line (\u00a710)"
+    },
+    {
+      "file": "007-unterminated-char.tuo",
+      "stage": "lexical",
+      "reason": "char literal not closed (\u00a710)"
+    },
+    {
+      "file": "008-multi-char-char-literal.tuo",
+      "stage": "lexical",
+      "reason": "char literal holds more than one scalar (\u00a710)"
+    },
+    {
+      "file": "009-newline-in-string.tuo",
+      "stage": "lexical",
+      "reason": "raw newline inside a string literal; use \\n (\u00a710)"
+    },
+    {
+      "file": "010-bad-escape.tuo",
+      "stage": "lexical",
+      "reason": "unknown escape sequence in a string (\u00a710)"
+    },
+    {
+      "file": "011-trailing-dot-float.tuo",
+      "stage": "lexical",
+      "reason": "`1.` is not a float literal; write 1.0 (lexical rule)"
+    },
+    {
+      "file": "012-leading-dot-float.tuo",
+      "stage": "lexical",
+      "reason": "`.5` is not a float literal; write 0.5 (lexical rule)"
+    },
+    {
+      "file": "013-bad-numeric-suffix.tuo",
+      "stage": "lexical",
+      "reason": "unknown integer suffix (\u00a710 suffix set is closed)"
+    },
+    {
+      "file": "014-stray-backslash.tuo",
+      "stage": "lexical",
+      "reason": "stray backslash outside a literal is not a token"
+    },
+    {
+      "file": "015-stray-at-sign.tuo",
+      "stage": "lexical",
+      "reason": "`@` is not a token in v0"
+    },
+    {
+      "file": "016-stray-dollar.tuo",
+      "stage": "lexical",
+      "reason": "`$` is not a token in v0"
+    },
+    {
+      "file": "017-hex-no-digits.tuo",
+      "stage": "lexical",
+      "reason": "`0x` prefix with no hex digits (\u00a710)"
+    },
+    {
+      "file": "018-keyword-as-ident.tuo",
+      "stage": "lexical",
+      "reason": "reserved keyword `match` used as a binding name (\u00a74)"
+    },
+    {
+      "file": "019-keyword-fn-as-ident.tuo",
+      "stage": "lexical",
+      "reason": "reserved keyword `fn` used as a variable (\u00a74)"
+    },
+    {
+      "file": "020-bom-present.tuo",
+      "stage": "lexical",
+      "reason": "byte-order mark at start of file is forbidden (\u00a71)"
+    },
+    {
+      "file": "021-fn-missing-name.tuo",
+      "stage": "syntax",
+      "reason": "function has no name"
+    },
+    {
+      "file": "022-fn-missing-parens.tuo",
+      "stage": "syntax",
+      "reason": "function signature missing parameter parentheses"
+    },
+    {
+      "file": "023-fn-missing-body.tuo",
+      "stage": "syntax",
+      "reason": "function declared without a body or signature terminator"
+    },
+    {
+      "file": "024-fn-unclosed-body.tuo",
+      "stage": "syntax",
+      "reason": "function body brace never closed"
+    },
+    {
+      "file": "025-fn-param-no-type.tuo",
+      "stage": "syntax",
+      "reason": "parameter missing its type annotation (\u00a78)"
+    },
+    {
+      "file": "026-fn-param-no-mode.tuo",
+      "stage": "syntax",
+      "reason": "parameter missing its in/mut/take mode (\u00a722)"
+    },
+    {
+      "file": "027-fn-param-no-colon.tuo",
+      "stage": "syntax",
+      "reason": "parameter missing the colon before its type"
+    },
+    {
+      "file": "028-fn-double-arrow.tuo",
+      "stage": "syntax",
+      "reason": "malformed return arrow"
+    },
+    {
+      "file": "029-fn-return-no-type.tuo",
+      "stage": "syntax",
+      "reason": "arrow with no return type"
+    },
+    {
+      "file": "030-fn-trailing-comma-only.tuo",
+      "stage": "syntax",
+      "reason": "parameter list is a lone comma"
+    },
+    {
+      "file": "031-fn-missing-param-separator.tuo",
+      "stage": "syntax",
+      "reason": "two parameters without a separating comma"
+    },
+    {
+      "file": "032-missing-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "statement not terminated by a semicolon (\u00a75, no ASI)"
+    },
+    {
+      "file": "033-let-missing-pattern.tuo",
+      "stage": "syntax",
+      "reason": "let with no binding pattern before `=`"
+    },
+    {
+      "file": "034-let-missing-eq.tuo",
+      "stage": "syntax",
+      "reason": "let with an initializer but no `=`"
+    },
+    {
+      "file": "035-var-no-name.tuo",
+      "stage": "syntax",
+      "reason": "var binding without a name"
+    },
+    {
+      "file": "036-unbalanced-open-brace.tuo",
+      "stage": "syntax",
+      "reason": "extra opening brace"
+    },
+    {
+      "file": "037-unbalanced-close-brace.tuo",
+      "stage": "syntax",
+      "reason": "extra closing brace"
+    },
+    {
+      "file": "038-unclosed-paren.tuo",
+      "stage": "syntax",
+      "reason": "unclosed parenthesis in an expression"
+    },
+    {
+      "file": "039-unclosed-bracket.tuo",
+      "stage": "syntax",
+      "reason": "unclosed index bracket"
+    },
+    {
+      "file": "040-stray-semicolon-in-params.tuo",
+      "stage": "syntax",
+      "reason": "semicolon where a comma is required"
+    },
+    {
+      "file": "041-assign-in-condition-missing-brace.tuo",
+      "stage": "syntax",
+      "reason": "if condition not followed by a block"
+    },
+    {
+      "file": "042-braceless-if-body.tuo",
+      "stage": "syntax",
+      "reason": "brace-less if body (\u00a75 mandatory braces)"
+    },
+    {
+      "file": "043-braceless-while-body.tuo",
+      "stage": "syntax",
+      "reason": "brace-less while body (\u00a75)"
+    },
+    {
+      "file": "044-braceless-for-body.tuo",
+      "stage": "syntax",
+      "reason": "brace-less for body (\u00a75)"
+    },
+    {
+      "file": "045-struct-missing-name.tuo",
+      "stage": "syntax",
+      "reason": "struct with no name"
+    },
+    {
+      "file": "046-struct-positional-field.tuo",
+      "stage": "syntax",
+      "reason": "positional/tuple field; only named fields (\u00a712)"
+    },
+    {
+      "file": "047-struct-field-no-type.tuo",
+      "stage": "syntax",
+      "reason": "struct field missing its type"
+    },
+    {
+      "file": "048-struct-field-no-colon.tuo",
+      "stage": "syntax",
+      "reason": "struct field missing the colon"
+    },
+    {
+      "file": "049-struct-semicolon-separator.tuo",
+      "stage": "syntax",
+      "reason": "fields separated by `;` instead of `,`"
+    },
+    {
+      "file": "050-struct-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "struct body never closed"
+    },
+    {
+      "file": "051-enum-missing-name.tuo",
+      "stage": "syntax",
+      "reason": "enum with no name"
+    },
+    {
+      "file": "052-enum-positional-payload.tuo",
+      "stage": "syntax",
+      "reason": "positional variant payload; only named (\u00a713)"
+    },
+    {
+      "file": "053-enum-eq-discriminant.tuo",
+      "stage": "syntax",
+      "reason": "C-style integer discriminant (\u00a713 forbids)"
+    },
+    {
+      "file": "054-enum-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "enum body never closed"
+    },
+    {
+      "file": "055-generic-angle-brackets.tuo",
+      "stage": "syntax",
+      "reason": "angle-bracket generics; v0 uses [T] (\u00a718)"
+    },
+    {
+      "file": "056-type-angle-brackets.tuo",
+      "stage": "syntax",
+      "reason": "angle brackets on a type argument (\u00a718)"
+    },
+    {
+      "file": "057-generic-empty-brackets.tuo",
+      "stage": "syntax",
+      "reason": "empty generic parameter list"
+    },
+    {
+      "file": "058-generic-missing-close.tuo",
+      "stage": "syntax",
+      "reason": "generic parameter list not closed"
+    },
+    {
+      "file": "059-bound-missing-interface.tuo",
+      "stage": "syntax",
+      "reason": "bound colon with no interface named"
+    },
+    {
+      "file": "060-where-missing-bound.tuo",
+      "stage": "syntax",
+      "reason": "where predicate with no bound"
+    },
+    {
+      "file": "061-type-double-colon-trailing.tuo",
+      "stage": "syntax",
+      "reason": "path ends with a trailing `::`"
+    },
+    {
+      "file": "062-interface-missing-name.tuo",
+      "stage": "syntax",
+      "reason": "interface with no name"
+    },
+    {
+      "file": "063-interface-method-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "required method signature missing `;` or body"
+    },
+    {
+      "file": "064-impl-missing-for.tuo",
+      "stage": "syntax",
+      "reason": "impl of an interface without `for T` (inherent impl not in v0)"
+    },
+    {
+      "file": "065-impl-missing-type.tuo",
+      "stage": "syntax",
+      "reason": "impl ... for with no target type"
+    },
+    {
+      "file": "066-impl-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "impl body never closed"
+    },
+    {
+      "file": "067-import-glob.tuo",
+      "stage": "syntax",
+      "reason": "glob import is forbidden (\u00a77)"
+    },
+    {
+      "file": "068-import-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "import not terminated by a semicolon"
+    },
+    {
+      "file": "069-import-empty-group.tuo",
+      "stage": "syntax",
+      "reason": "empty import group"
+    },
+    {
+      "file": "070-import-group-no-close.tuo",
+      "stage": "syntax",
+      "reason": "import group brace not closed"
+    },
+    {
+      "file": "071-import-double-colon-start.tuo",
+      "stage": "syntax",
+      "reason": "import path starting with `::`"
+    },
+    {
+      "file": "072-import-as-no-name.tuo",
+      "stage": "syntax",
+      "reason": "`as` with no rename target"
+    },
+    {
+      "file": "073-match-missing-scrutinee.tuo",
+      "stage": "syntax",
+      "reason": "match with no scrutinee expression"
+    },
+    {
+      "file": "074-match-missing-arrow.tuo",
+      "stage": "syntax",
+      "reason": "match arm missing `=>`"
+    },
+    {
+      "file": "075-match-arm-comma-missing.tuo",
+      "stage": "syntax",
+      "reason": "two arms without a separating comma"
+    },
+    {
+      "file": "076-match-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "match body never closed"
+    },
+    {
+      "file": "077-match-fat-arrow-reversed.tuo",
+      "stage": "syntax",
+      "reason": "reversed arm arrow `<=` instead of `=>`"
+    },
+    {
+      "file": "078-pattern-double-pipe.tuo",
+      "stage": "syntax",
+      "reason": "or-pattern with a doubled `||`"
+    },
+    {
+      "file": "079-range-pattern.tuo",
+      "stage": "syntax",
+      "reason": "range pattern is not in v0 (\u00a717)"
+    },
+    {
+      "file": "080-ref-pattern.tuo",
+      "stage": "syntax",
+      "reason": "ref pattern is not in v0 (\u00a717)"
+    },
+    {
+      "file": "081-chained-comparison.tuo",
+      "stage": "syntax",
+      "reason": "non-associative comparison chained (a < b < c)"
+    },
+    {
+      "file": "082-compound-assignment.tuo",
+      "stage": "syntax",
+      "reason": "`+=` compound assignment not in v0"
+    },
+    {
+      "file": "083-bitwise-or.tuo",
+      "stage": "syntax",
+      "reason": "bitwise `|` operator not in v0"
+    },
+    {
+      "file": "084-shift-operator.tuo",
+      "stage": "syntax",
+      "reason": "shift `<<` operator not in v0"
+    },
+    {
+      "file": "085-increment-operator.tuo",
+      "stage": "syntax",
+      "reason": "`++` operator does not exist"
+    },
+    {
+      "file": "086-ternary-operator.tuo",
+      "stage": "syntax",
+      "reason": "C-style ternary `?:` does not exist (use if-expr)"
+    },
+    {
+      "file": "087-double-dot-dot.tuo",
+      "stage": "syntax",
+      "reason": "malformed range `...`"
+    },
+    {
+      "file": "088-empty-call-comma.tuo",
+      "stage": "syntax",
+      "reason": "call args are a lone comma"
+    },
+    {
+      "file": "089-struct-literal-in-if-cond.tuo",
+      "stage": "syntax",
+      "reason": "unparenthesized struct literal in if condition"
+    },
+    {
+      "file": "090-dangling-operator.tuo",
+      "stage": "syntax",
+      "reason": "binary operator with no right operand"
+    },
+    {
+      "file": "091-dangling-dot.tuo",
+      "stage": "syntax",
+      "reason": "member access with no member name"
+    },
+    {
+      "file": "092-as-no-type.tuo",
+      "stage": "syntax",
+      "reason": "`as` conversion with no target type"
+    },
+    {
+      "file": "093-double-question.tuo",
+      "stage": "syntax",
+      "reason": "malformed use of `?` as a prefix"
+    },
+    {
+      "file": "094-const-no-type.tuo",
+      "stage": "syntax",
+      "reason": "const without a type annotation (\u00a79 requires it)"
+    },
+    {
+      "file": "095-const-no-value.tuo",
+      "stage": "syntax",
+      "reason": "const without an initializer"
+    },
+    {
+      "file": "096-const-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "const not terminated by a semicolon"
+    },
+    {
+      "file": "097-pub-nothing.tuo",
+      "stage": "syntax",
+      "reason": "`pub` with no item following"
+    },
+    {
+      "file": "098-stray-keyword.tuo",
+      "stage": "syntax",
+      "reason": "a keyword where an item is expected"
+    },
+    {
+      "file": "099-top-level-expression.tuo",
+      "stage": "syntax",
+      "reason": "a bare expression at module top level"
+    },
+    {
+      "file": "100-module-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "module declaration missing its semicolon"
+    },
+    {
+      "file": "101-spec-missing-name.tuo",
+      "stage": "syntax",
+      "reason": "spec with no name"
+    },
+    {
+      "file": "102-spec-missing-body.tuo",
+      "stage": "syntax",
+      "reason": "spec with no body"
+    },
+    {
+      "file": "103-spec-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "spec body never closed"
+    },
+    {
+      "file": "104-spec-assert-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "assert clause missing its semicolon"
+    },
+    {
+      "file": "105-spec-given-no-type.tuo",
+      "stage": "syntax",
+      "reason": "given binding missing its type"
+    },
+    {
+      "file": "106-spec-then-no-expr.tuo",
+      "stage": "syntax",
+      "reason": "then clause with no condition"
+    },
+    {
+      "file": "107-spec-given-no-semicolon.tuo",
+      "stage": "syntax",
+      "reason": "given clause missing its semicolon"
+    },
+    {
+      "file": "108-fn-body-missing-open.tuo",
+      "stage": "syntax",
+      "reason": "function body missing its opening brace"
+    },
+    {
+      "file": "109-nested-unclosed.tuo",
+      "stage": "syntax",
+      "reason": "nested block left unclosed"
+    },
+    {
+      "file": "110-comma-before-arrow.tuo",
+      "stage": "syntax",
+      "reason": "stray comma before the return arrow"
+    },
+    {
+      "file": "111-two-return-types.tuo",
+      "stage": "syntax",
+      "reason": "two return arrows"
+    },
+    {
+      "file": "112-let-two-eq.tuo",
+      "stage": "syntax",
+      "reason": "let with a doubled `=`"
+    },
+    {
+      "file": "113-misplaced-else.tuo",
+      "stage": "syntax",
+      "reason": "else with no preceding if"
+    },
+    {
+      "file": "114-keyword-self-as-binding.tuo",
+      "stage": "syntax",
+      "reason": "reserved word `Self` used as a binding pattern; a pattern wants an IDENT (\u00a74)"
+    }
+  ]
+}

@@ -1,0 +1,4 @@
+spec bounds {
+    assert min(1, 2) == 1;
+    assert max(1, 2) == 2;
+}

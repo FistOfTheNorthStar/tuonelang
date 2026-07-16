@@ -1,0 +1,1 @@
+fn pick(in c: Bool) -> Int { if c { return 1; } return 0; }

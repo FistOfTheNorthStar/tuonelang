@@ -1,0 +1,1 @@
+fn f(in x: F64, in y: F64) -> Point { Point { x, y } }

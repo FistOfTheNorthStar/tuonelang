@@ -1,0 +1,4 @@
+spec sample {
+    given n: Int = 5;
+    then square(n) == 25;
+}

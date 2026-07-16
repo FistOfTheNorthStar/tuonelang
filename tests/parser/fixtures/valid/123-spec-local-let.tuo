@@ -1,0 +1,4 @@
+spec local {
+    let expected = 10;
+    assert compute() == expected;
+}

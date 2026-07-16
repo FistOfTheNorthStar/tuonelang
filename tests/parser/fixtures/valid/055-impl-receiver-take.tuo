@@ -1,0 +1,3 @@
+impl Close for File {
+    fn close(take self) {}
+}

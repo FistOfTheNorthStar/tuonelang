@@ -1,0 +1,1 @@
+fn pair[A, B](take a: A, take b: B) -> Pair[A, B] { Pair { first: a, second: b } }

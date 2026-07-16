@@ -1,0 +1,1 @@
+fn f(in n: Int) -> Int { match n { 0 .. 9 => 0, _ => 1 } }

@@ -1,0 +1,1 @@
+fn f(in n: Int) -> Bool { match n { 0 | 1 | 2 => true, _ => false } }

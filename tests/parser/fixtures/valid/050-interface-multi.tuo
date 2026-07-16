@@ -1,0 +1,4 @@
+interface Collection {
+    fn len(in self) -> Int;
+    fn is_empty(in self) -> Bool;
+}

@@ -1,0 +1,1 @@
+spec s { given a: Int then a == a; }

@@ -1,0 +1,1 @@
+fn f(in p: Point) -> F64 { p. }

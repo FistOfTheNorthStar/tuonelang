@@ -1,0 +1,1 @@
+struct Sorted[T] where T: Ord { items: List[T] }

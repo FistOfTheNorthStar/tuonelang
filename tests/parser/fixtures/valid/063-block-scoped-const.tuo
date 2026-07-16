@@ -1,0 +1,1 @@
+fn f() { const K: Int = 3; let y = K; }

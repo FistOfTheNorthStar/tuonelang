@@ -1,0 +1,5 @@
+# These fixtures intentionally contain "wrong" bytes — CRLF endings, a BOM, tabs,
+# and other lexical-error triggers (see invalid.manifest.json). Git must NOT
+# normalize them, or the negative test cases would be silently repaired.
+* -text
+*.tuo -text -eol

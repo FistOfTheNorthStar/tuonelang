@@ -1,0 +1,3 @@
+spec "empty list has length zero" {
+    assert len(empty()) == 0;
+}
