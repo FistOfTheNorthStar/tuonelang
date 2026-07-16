@@ -1,14 +1,26 @@
 //! Dependency-policy test.
 //!
-//! Enforces the hard crate-dependency invariants documented in
-//! `ARCHITECTURE.md`. It reads each workspace crate's `Cargo.toml`, extracts the
-//! set of *tuonelang-owned* crates it depends on (across all dependency tables), and
-//! asserts that no forbidden edge exists.
+//! Enforces the layered-architecture invariants documented in
+//! `ARCHITECTURE.md`: every tuonelang-owned crate is assigned to a **layer**,
+//! and a crate may only depend on crates in **strictly lower** layers. This is
+//! the general rule that lower compiler layers can never depend on higher
+//! layers — the whole pipeline direction (`source → diagnostics → lexer →
+//! syntax/parser → AST → HIR/resolution/types → ownership → MIR →
+//! interpreter/codegen → orchestration → CLI`) falls out of it, and it also
+//! rules out dependency cycles among tuonelang crates by construction (a cycle
+//! would need an edge that does not decrease the layer number).
 //!
-//! This is deliberately small: it scans manifests with a tiny hand-rolled
-//! parser rather than pulling in a TOML dependency or an architecture
-//! framework. It only needs to recognize dependency-table headers and the
-//! `tuo-*` keys within them.
+//! A small list of *extra* forbidden edges covers constraints the layer
+//! numbers alone cannot express (e.g. the `tuo-compiler` facade stops at the
+//! `tuo-codegen` abstraction and must never reach a concrete backend, even
+//! though the backends sit on a lower layer).
+//!
+//! The test reads each workspace crate's `Cargo.toml`, extracts the set of
+//! *tuonelang-owned* crates it depends on (across all dependency tables), and
+//! checks the rules above. It is deliberately small: a tiny hand-rolled
+//! manifest scan rather than a TOML dependency or an architecture framework.
+//! It only needs to recognize dependency-table headers and the `tuo-*` keys
+//! within them.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -96,91 +108,143 @@ fn is_dependency_table_header(header: &str) -> bool {
     )
 }
 
+/// The layer assignment for every tuonelang-owned crate.
+///
+/// A crate may only depend on crates with a **strictly lower** layer number.
+/// Numbers are spaced by 10 so a future crate can slot between existing layers
+/// without renumbering everything. This table is the machine-checked twin of
+/// the "Dependency architecture" section in `ARCHITECTURE.md` — keep the two
+/// in sync.
+const LAYERS: &[(&str, u32)] = &[
+    // Foundation.
+    ("tuo-source", 0),
+    ("tuo-diagnostics", 10),
+    // Infrastructure and front-end data structures over the foundation.
+    ("tuo-db", 20),
+    ("tuo-lexer", 20),
+    ("tuo-syntax", 20),
+    ("tuo-ast", 20),
+    // Front-end passes.
+    ("tuo-parser", 30),
+    ("tuo-hir", 30),
+    // Semantic analysis pipeline.
+    ("tuo-resolve", 40),
+    ("tuo-types", 50),
+    ("tuo-ownership", 60),
+    // The single executable semantic representation.
+    ("tuo-mir", 70),
+    // Native runtime support: below the backends so generated code / codegen
+    // may link against it, above MIR which must stay execution-agnostic.
+    ("tuo-runtime", 75),
+    // MIR consumers: the reference interpreter and the backend-agnostic
+    // codegen interface.
+    ("tuo-mir-interp", 80),
+    ("tuo-codegen", 80),
+    // Concrete backends and the spec runner (drives the interpreter).
+    ("tuo-codegen-cranelift", 90),
+    ("tuo-codegen-llvm", 90),
+    ("tuo-spec", 90),
+    // The standard library ships with the toolchain; it is written *in*
+    // tuonelang and must not become a dependency of any compiler stage.
+    ("tuo-stdlib", 90),
+    // Orchestration facade: wires the stages, stops at the `tuo-codegen`
+    // abstraction (concrete backends are additionally forbidden below).
+    ("tuo-compiler", 100),
+    // Tooling surfaces over the shared engine.
+    ("tuo-fmt", 110),
+    ("tuo-package", 110),
+    ("tuo-lsp", 110),
+    ("tuo-agent", 110),
+    ("tuo-bench", 110),
+    // The `tuo` binary: may orchestrate anything below it.
+    ("tuo-cli", 120),
+];
+
+/// Look up a crate's layer, or `None` if it is not classified.
+fn layer_of(name: &str) -> Option<u32> {
+    LAYERS
+        .iter()
+        .find(|(crate_name, _)| *crate_name == name)
+        .map(|(_, layer)| *layer)
+}
+
 /// A forbidden dependency edge: `from` must not depend on `to`.
+///
+/// Only for constraints the layer numbers cannot express — i.e. edges that
+/// point *downward* in the layer map but are still architecturally forbidden.
 struct Forbidden {
     from: &'static str,
     to: &'static str,
     rationale: &'static str,
 }
 
-/// The hard invariants from `ARCHITECTURE.md`, expressed as forbidden edges.
 const FORBIDDEN_EDGES: &[Forbidden] = &[
     Forbidden {
-        from: "tuo-source",
-        to: "tuo-parser",
-        rationale: "source infrastructure must not depend on parser infrastructure",
-    },
-    Forbidden {
-        from: "tuo-lexer",
-        to: "tuo-types",
-        rationale: "lexer must not depend on type checking",
-    },
-    Forbidden {
-        from: "tuo-syntax",
-        to: "tuo-codegen",
-        rationale: "syntax must not depend on code generation",
-    },
-    Forbidden {
-        from: "tuo-syntax",
+        from: "tuo-compiler",
         to: "tuo-codegen-cranelift",
-        rationale: "syntax must not depend on code generation",
+        rationale: "the facade stops at the `tuo-codegen` abstraction; \
+                    it must never depend on a concrete backend",
     },
     Forbidden {
-        from: "tuo-syntax",
+        from: "tuo-compiler",
         to: "tuo-codegen-llvm",
-        rationale: "syntax must not depend on code generation",
+        rationale: "the facade stops at the `tuo-codegen` abstraction; \
+                    it must never depend on a concrete backend",
     },
     Forbidden {
-        from: "tuo-parser",
-        to: "tuo-codegen-cranelift",
-        rationale: "parser must not depend on the Cranelift backend",
+        from: "tuo-compiler",
+        to: "tuo-stdlib",
+        rationale: "the stdlib is written in tuonelang and consumed as input, \
+                    not linked into the compiler",
     },
-    Forbidden {
-        from: "tuo-parser",
-        to: "tuo-codegen-llvm",
-        rationale: "parser must not depend on the LLVM backend",
-    },
-    Forbidden {
-        from: "tuo-mir",
-        to: "tuo-codegen-cranelift",
-        rationale: "MIR must not depend on Cranelift; backend types must not appear in MIR",
-    },
-    Forbidden {
-        from: "tuo-mir",
-        to: "tuo-codegen-llvm",
-        rationale: "MIR must not depend on LLVM; backend types must not appear in MIR",
-    },
-    Forbidden {
-        from: "tuo-mir",
-        to: "tuo-codegen",
-        rationale: "MIR must not depend on code generation",
-    },
-];
-
-/// Semantic and pipeline crates that must never depend on CLI presentation.
-const NON_CLI_CRATES: &[&str] = &[
-    "tuo-source",
-    "tuo-diagnostics",
-    "tuo-db",
-    "tuo-lexer",
-    "tuo-syntax",
-    "tuo-parser",
-    "tuo-ast",
-    "tuo-hir",
-    "tuo-resolve",
-    "tuo-types",
-    "tuo-ownership",
-    "tuo-mir",
-    "tuo-mir-interp",
-    "tuo-spec",
-    "tuo-codegen",
-    "tuo-codegen-cranelift",
-    "tuo-codegen-llvm",
-    "tuo-compiler",
 ];
 
 #[test]
-fn forbidden_dependency_edges_are_absent() {
+fn every_workspace_crate_has_a_layer() {
+    let root = workspace_root();
+    let known = all_tuo_crates(&root);
+
+    // Every crate on disk must be classified (adding a crate forces an
+    // explicit layering decision) …
+    for name in &known {
+        assert!(
+            layer_of(name).is_some(),
+            "crate `{name}` exists under crates/ but has no entry in the LAYERS \
+             table of this test; assign it a layer (and update ARCHITECTURE.md)",
+        );
+    }
+    // … and every classified crate must exist on disk (no stale entries).
+    for (name, _) in LAYERS {
+        assert!(
+            known.contains(*name),
+            "LAYERS table references `{name}`, which does not exist under crates/",
+        );
+    }
+}
+
+#[test]
+fn dependencies_flow_strictly_downward() {
+    let root = workspace_root();
+    let known = all_tuo_crates(&root);
+
+    for (name, layer) in LAYERS {
+        let manifest = root.join("crates").join(name).join("Cargo.toml");
+        let deps = tuo_dependencies_of(&manifest, &known);
+        for dep in &deps {
+            let dep_layer = layer_of(dep)
+                .unwrap_or_else(|| panic!("`{name}` depends on unclassified crate `{dep}`"));
+            assert!(
+                dep_layer < *layer,
+                "layering violation: `{name}` (layer {layer}) depends on `{dep}` \
+                 (layer {dep_layer}); dependencies must point to strictly lower \
+                 layers — lower compiler layers can never depend on higher ones",
+            );
+        }
+    }
+}
+
+#[test]
+fn extra_forbidden_edges_are_absent() {
     let root = workspace_root();
     let known = all_tuo_crates(&root);
 
@@ -198,21 +262,6 @@ fn forbidden_dependency_edges_are_absent() {
             edge.from,
             edge.to,
             edge.rationale,
-        );
-    }
-}
-
-#[test]
-fn semantic_crates_do_not_depend_on_cli() {
-    let root = workspace_root();
-    let known = all_tuo_crates(&root);
-
-    for &name in NON_CLI_CRATES {
-        let manifest = root.join("crates").join(name).join("Cargo.toml");
-        let deps = tuo_dependencies_of(&manifest, &known);
-        assert!(
-            !deps.contains("tuo-cli"),
-            "forbidden dependency: `{name}` must not depend on CLI presentation (`tuo-cli`)",
         );
     }
 }

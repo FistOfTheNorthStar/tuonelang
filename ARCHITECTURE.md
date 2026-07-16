@@ -167,31 +167,70 @@ tuo-resolve      tuo-types
 ```
 
 This is conceptual: not every crate depends directly on its predecessor. The
-following rules, however, are **hard invariants** and are checked by an
-automated test (see below):
+**hard invariant** is a total layering rule: every tuonelang-owned crate is
+assigned to a numbered layer, and a crate may only depend on crates in
+**strictly lower** layers. Lower compiler layers can never depend on higher
+ones.
 
-- Source infrastructure (`tuo-source`) must not depend on parser infrastructure.
-- The lexer (`tuo-lexer`) must not depend on type checking (`tuo-types`).
-- Syntax (`tuo-syntax`) must not depend on code generation.
-- The parser (`tuo-parser`) must not depend on LLVM or Cranelift backends.
-- Semantic layers must not depend on CLI presentation (`tuo-cli`).
-- MIR (`tuo-mir`) must not depend on Cranelift.
-- MIR (`tuo-mir`) must not depend on LLVM.
-- `tuo-codegen-cranelift` may depend on `tuo-mir`.
-- `tuo-codegen-llvm` may depend on `tuo-mir`.
-- Backend-specific types must not appear in `tuo-mir`.
-- The CLI may orchestrate higher-level crates.
-- The LSP and agent tooling reuse the shared compiler semantic engine rather
-  than reimplementing it.
+| Layer | Crates | Role |
+|-------|--------|------|
+| 0 | `tuo-source` | Foundation. |
+| 10 | `tuo-diagnostics` | Structured diagnostics. |
+| 20 | `tuo-db`, `tuo-lexer`, `tuo-syntax`, `tuo-ast` | Infrastructure & front-end data structures. |
+| 30 | `tuo-parser`, `tuo-hir` | Front-end passes. |
+| 40 | `tuo-resolve` | Name resolution. |
+| 50 | `tuo-types` | Type checking. |
+| 60 | `tuo-ownership` | Memory-safety analysis. |
+| 70 | `tuo-mir` | The single executable semantic representation. |
+| 75 | `tuo-runtime` | Native runtime support (below the backends, above MIR). |
+| 80 | `tuo-mir-interp`, `tuo-codegen` | MIR consumers: interpreter, backend interface. |
+| 90 | `tuo-codegen-cranelift`, `tuo-codegen-llvm`, `tuo-spec`, `tuo-stdlib` | Concrete backends, spec runner, stdlib. |
+| 100 | `tuo-compiler` | Orchestration facade. |
+| 110 | `tuo-fmt`, `tuo-package`, `tuo-lsp`, `tuo-agent`, `tuo-bench` | Tooling surfaces. |
+| 120 | `tuo-cli` | The `tuo` binary; may orchestrate anything below it. |
+
+Numbers are spaced by 10 so a new crate can slot between layers without
+renumbering. The familiar rules all follow from the table: the lexer cannot
+depend on type checking, syntax cannot depend on code generation, `tuo-mir`
+cannot depend on Cranelift or LLVM (backend-specific types cannot appear in
+it), no semantic crate can depend on CLI presentation, and the LSP and agent
+tooling sit *above* the shared engine (`tuo-db` + `tuo-compiler`) and reuse it
+rather than reimplementing it.
+
+A few constraints point *downward* in the table and therefore need explicit
+extra rules on top of layering:
+
+- `tuo-compiler` stops at the `tuo-codegen` abstraction — it must never depend
+  on `tuo-codegen-cranelift` or `tuo-codegen-llvm`, even though they sit lower.
+- `tuo-compiler` must not link `tuo-stdlib`; the standard library is written
+  *in* tuonelang and is compiler *input*, not a compiler component.
+
+### Dependency cycles
+
+Cycles between tuonelang crates are impossible by construction, twice over:
+
+1. **Cargo** rejects any cyclic crate dependency graph outright — a cycle
+   cannot even build.
+2. **The layering rule** is stricter: every edge must strictly *decrease* the
+   layer number, so a cycle (which would have to return to its starting layer)
+   cannot be expressed even between crates Cargo would allow, and crates within
+   the *same* layer may not depend on each other at all.
+
+What Cargo alone would still permit — and the layer test exists to prevent —
+is an *inverted* edge (e.g. `tuo-mir` → `tuo-codegen`) that is acyclic today
+but would forbid the legitimate downstream edge forever after.
 
 ### Enforcement
 
-These rules are documented here and enforced automatically by a lightweight
-dependency-policy test in the `tuo-cli` crate
-(`crates/tuo-cli/tests/dependency_policy.rs`). It parses the workspace's
-`Cargo.toml` manifests and asserts that forbidden dependency edges do not
-exist. This is intentionally small — it reads manifests and checks a table of
-forbidden edges; it is **not** a general-purpose architecture framework.
+The layer table and the extra forbidden edges are enforced automatically by a
+lightweight dependency-policy test in the `tuo-cli` crate
+(`crates/tuo-cli/tests/dependency_policy.rs`), which mirrors the table above —
+keep the two in sync. It parses the workspace's `Cargo.toml` manifests
+(including dev- and build-dependencies), asserts every crate under `crates/`
+has a layer assignment (adding a crate forces an explicit layering decision),
+and asserts every tuonelang-to-tuonelang edge points strictly downward. This is
+intentionally small — it reads manifests and checks a table; it is **not** a
+general-purpose architecture framework.
 
 ## The `tuo-compiler` facade crate — decision
 
