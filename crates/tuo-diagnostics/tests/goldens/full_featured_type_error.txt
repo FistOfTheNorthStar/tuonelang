@@ -1,0 +1,15 @@
+error[T0301]: mismatched types
+ --> main.tuo:2:18
+  |
+2 |     let x: Int = "hi";
+  |                  ^^^^ expected `Int`, found `String`
+ --> main.tuo:2:12
+  |
+2 |     let x: Int = "hi";
+  |            --- the binding is declared `Int` here
+  = expected: `Int`
+  = actual: `String`
+  = note: `Int` and `String` never coerce into each other
+  = help: convert the string explicitly, or change the binding's type
+  = suggestion (probable): change the binding's type to `String`
+      - replace main.tuo:2:12..2:15 with `String`

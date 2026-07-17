@@ -1,0 +1,2 @@
+error[M0002]: internal location lost
+ --> <unresolved span: unknown source#99 @ 0..4>

@@ -332,6 +332,7 @@ dependencies = [
 name = "tuo-diagnostics"
 version = "0.0.0"
 dependencies = [
+ "serde_json",
  "tuo-source",
 ]
 
