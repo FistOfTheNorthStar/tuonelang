@@ -1,0 +1,7 @@
+warning[R0045]: unused parameter `value`
+ --> lib.tuo:1:13
+  |
+1 | fn id[T](in value: T) -> T {
+  |             ^^^^^ never read
+  = suggestion (machine-applicable): prefix the name with `_` to mark it deliberately unused
+      - insert `_` at lib.tuo:1:13

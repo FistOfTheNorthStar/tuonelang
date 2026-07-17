@@ -1,0 +1,10 @@
+error[S0007]: spec references an undeclared function
+ --> näkymä.tuo:2:1
+  |
+2 | spec greeting {
+  | ^^^^^^^^^^^^^^^... this spec block
+ --> näkymä.tuo:1:5
+  |
+1 | let tervehdys = "päivää";
+  |     --------- only this binding is declared in the module
+  = note: a spec may refer to a function declared later in the same module
