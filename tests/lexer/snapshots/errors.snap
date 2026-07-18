@@ -1,0 +1,117 @@
+    0..6     KwModule      "module"
+    6..7     Whitespace    " "
+    7..13    Ident         "errors"
+   13..15    Whitespace    "\n\n"
+   15..17    KwFn          "fn"
+   17..18    Whitespace    " "
+   18..24    Ident         "broken"
+   24..25    OpenParen     "("
+   25..26    CloseParen    ")"
+   26..27    Whitespace    " "
+   27..28    OpenBrace     "{"
+   28..33    Whitespace    "\n    "
+   33..36    KwLet         "let"
+   36..37    Whitespace    " "
+   37..38    Ident         "n"
+   38..39    Whitespace    " "
+   39..40    Eq            "="
+   40..41    Whitespace    " "
+   41..43    Error         "0x"
+   43..44    Semi          ";"
+   44..49    Whitespace    "\n    "
+   49..52    KwLet         "let"
+   52..53    Whitespace    " "
+   53..54    Ident         "b"
+   54..55    Whitespace    " "
+   55..56    Eq            "="
+   56..57    Whitespace    " "
+   57..62    Error         "0b102"
+   62..63    Semi          ";"
+   63..68    Whitespace    "\n    "
+   68..71    KwLet         "let"
+   71..72    Whitespace    " "
+   72..73    Ident         "s"
+   73..74    Whitespace    " "
+   74..75    Eq            "="
+   75..76    Whitespace    " "
+   76..89    Error         "\"unterminated"
+   89..94    Whitespace    "\n    "
+   94..97    KwLet         "let"
+   97..98    Whitespace    " "
+   98..99    Ident         "e"
+   99..100   Whitespace    " "
+  100..101   Eq            "="
+  101..102   Whitespace    " "
+  102..117   Error         "\"bad \\q escape\""
+  117..118   Semi          ";"
+  118..123   Whitespace    "\n    "
+  123..126   KwLet         "let"
+  126..127   Whitespace    " "
+  127..128   Ident         "c"
+  128..129   Whitespace    " "
+  129..130   Eq            "="
+  130..131   Whitespace    " "
+  131..132   Error         "'"
+  132..133   Error         "'"
+  133..134   Semi          ";"
+  134..139   Whitespace    "\n    "
+  139..142   KwLet         "let"
+  142..143   Whitespace    " "
+  143..147   Ident         "crab"
+  147..148   Whitespace    " "
+  148..149   Eq            "="
+  149..150   Whitespace    " "
+  150..154   Error         "🦀"
+  154..155   Semi          ";"
+  155..156   Whitespace    "\n"
+  156..157   CloseBrace    "}"
+  157..158   Whitespace    "\n"
+  158..158   Eof           ""
+--- diagnostics ---
+error[L0008]: hexadecimal literal is missing digits
+ --> errors.tuo:4:13
+  |
+4 |     let n = 0x;
+  |             ^^
+  = note: integer literals are decimal, `0x` hex, `0o` octal, or `0b` binary, with `_` separators allowed between digits
+
+error[L0008]: invalid digit `2` in binary literal
+ --> errors.tuo:5:13
+  |
+5 |     let b = 0b102;
+  |             ^^^^^
+  = note: integer literals are decimal, `0x` hex, `0o` octal, or `0b` binary, with `_` separators allowed between digits
+
+error[L0006]: unterminated string literal
+ --> errors.tuo:6:13
+  |
+6 |     let s = "unterminated
+  |             ^^^^^^^^^^^^^
+  = note: string literals cannot span lines; write `\n` for a newline
+
+error[L0009]: invalid escape sequence `\q`
+ --> errors.tuo:7:18
+  |
+7 |     let e = "bad \q escape";
+  |                  ^^
+  = note: valid escapes are `\"`, `\'`, `\\`, `\n`, `\r`, `\t`, `\0`, and `\u{HEX}`
+
+error[L0007]: empty or unterminated character literal
+ --> errors.tuo:8:13
+  |
+8 |     let c = '';
+  |             ^
+  = note: a character literal is one Unicode scalar or escape between `'` quotes
+
+error[L0007]: empty or unterminated character literal
+ --> errors.tuo:8:14
+  |
+8 |     let c = '';
+  |              ^
+  = note: a character literal is one Unicode scalar or escape between `'` quotes
+
+error[L0001]: unexpected character `🦀` in source
+ --> errors.tuo:9:16
+  |
+9 |     let crab = 🦀;
+  |                ^

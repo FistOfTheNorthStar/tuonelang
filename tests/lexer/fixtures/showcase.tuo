@@ -1,0 +1,23 @@
+module showcase
+
+// Every keyword in one place.
+import pub fn let var const struct enum interface impl where
+if else match for in while loop break continue return
+take mut move Box Shared Weak
+spec given when then assert unsafe as true false self Self
+
+// Identifiers and the wildcard.
+plain _leading _ x1
+
+// Literals.
+0 42 1_000_000 255u8 0xFF 0xDE_AD_i32 0o17 0b1010 3usize
+1.0 0.5 2.5e10 7e-2 1.5f32 6.02e+23f64
+'a' '\n' '\u{41}' "text" "escaped \"quote\" and \u{1F600}"
+
+// Punctuation, maximal munch first.
+-> => :: .. == != <= >= && ||
+< > ! + - * / % = ? .
+( ) { } [ ] , ; :
+
+/// Labels are experimental (§16).
+'outer: loop { break 'outer; }
