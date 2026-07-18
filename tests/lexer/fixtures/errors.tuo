@@ -1,0 +1,10 @@
+module errors
+
+fn broken() {
+    let n = 0x;
+    let b = 0b102;
+    let s = "unterminated
+    let e = "bad \q escape";
+    let c = '';
+    let crab = 🦀;
+}

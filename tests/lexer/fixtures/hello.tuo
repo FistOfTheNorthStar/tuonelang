@@ -1,0 +1,12 @@
+module hello
+
+/// Greet the world.
+pub fn main() -> Int {
+    // A friendly greeting.
+    let greeting = "Hello, world!\n";
+    let answer = 42;
+    if answer >= 40 && answer != 43 {
+        return 0;
+    }
+    return 1;
+}

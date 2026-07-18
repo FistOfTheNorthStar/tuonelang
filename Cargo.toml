@@ -59,6 +59,12 @@ tuo-compiler = { path = "crates/tuo-compiler" }
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+# - logos generates the DFA behind tuo-lexer's TDG-owned token interface.
+# - unicode-normalization backs the §2 "identifiers must already be NFC" check.
+# - criterion powers the lexer throughput benchmark.
+logos = "0.15"
+unicode-normalization = "0.1"
+criterion = "0.5"
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints.

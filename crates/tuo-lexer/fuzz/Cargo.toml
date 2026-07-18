@@ -1,0 +1,28 @@
+# Coverage-guided fuzzing for the lexer. Not a workspace member: cargo-fuzz
+# manages this crate and it requires a nightly toolchain.
+#
+#     cargo install cargo-fuzz
+#     cd crates/tuo-lexer && cargo +nightly fuzz run lex
+[package]
+name = "tuo-lexer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tuo-lexer = { path = ".." }
+tuo-source = { path = "../../tuo-source" }
+
+[[bin]]
+name = "lex"
+path = "fuzz_targets/lex.rs"
+test = false
+doc = false
+bench = false
+
+# Opt out of the workspace: this crate is driven by cargo-fuzz, not CI.
+[workspace]

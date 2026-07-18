@@ -1,0 +1,9 @@
+module näkymä
+
+/// Tervehdys — a greeting in several scripts.
+fn tervehdys() -> String {
+    let päivää = "hyvää päivää";
+    let 変数 = "こんにちは";
+    let привет = 'п';
+    return päivää;
+}
