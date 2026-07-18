@@ -1,0 +1,2114 @@
+module bench::exprs;
+
+fn chain_0(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 0, offset: seed, label: "c0" };
+    let a = (seed + 0) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_1(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 1, offset: seed, label: "c1" };
+    let a = (seed + 1) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_2(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 2, offset: seed, label: "c2" };
+    let a = (seed + 2) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_3(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 3, offset: seed, label: "c3" };
+    let a = (seed + 3) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_4(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 4, offset: seed, label: "c4" };
+    let a = (seed + 4) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_5(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 5, offset: seed, label: "c5" };
+    let a = (seed + 5) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_6(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 6, offset: seed, label: "c6" };
+    let a = (seed + 6) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_7(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 7, offset: seed, label: "c7" };
+    let a = (seed + 7) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_8(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 8, offset: seed, label: "c8" };
+    let a = (seed + 8) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_9(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 9, offset: seed, label: "c9" };
+    let a = (seed + 9) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_10(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 10, offset: seed, label: "c10" };
+    let a = (seed + 10) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_11(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 11, offset: seed, label: "c11" };
+    let a = (seed + 11) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_12(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 12, offset: seed, label: "c12" };
+    let a = (seed + 12) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_13(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 13, offset: seed, label: "c13" };
+    let a = (seed + 13) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_14(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 14, offset: seed, label: "c14" };
+    let a = (seed + 14) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_15(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 15, offset: seed, label: "c15" };
+    let a = (seed + 15) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_16(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 16, offset: seed, label: "c16" };
+    let a = (seed + 16) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_17(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 17, offset: seed, label: "c17" };
+    let a = (seed + 17) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_18(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 18, offset: seed, label: "c18" };
+    let a = (seed + 18) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_19(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 19, offset: seed, label: "c19" };
+    let a = (seed + 19) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_20(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 20, offset: seed, label: "c20" };
+    let a = (seed + 20) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_21(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 21, offset: seed, label: "c21" };
+    let a = (seed + 21) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_22(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 22, offset: seed, label: "c22" };
+    let a = (seed + 22) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_23(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 23, offset: seed, label: "c23" };
+    let a = (seed + 23) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_24(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 24, offset: seed, label: "c24" };
+    let a = (seed + 24) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_25(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 25, offset: seed, label: "c25" };
+    let a = (seed + 25) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_26(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 26, offset: seed, label: "c26" };
+    let a = (seed + 26) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_27(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 27, offset: seed, label: "c27" };
+    let a = (seed + 27) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_28(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 28, offset: seed, label: "c28" };
+    let a = (seed + 28) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_29(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 29, offset: seed, label: "c29" };
+    let a = (seed + 29) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_30(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 30, offset: seed, label: "c30" };
+    let a = (seed + 30) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_31(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 31, offset: seed, label: "c31" };
+    let a = (seed + 31) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_32(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 32, offset: seed, label: "c32" };
+    let a = (seed + 32) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_33(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 33, offset: seed, label: "c33" };
+    let a = (seed + 33) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_34(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 34, offset: seed, label: "c34" };
+    let a = (seed + 34) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_35(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 35, offset: seed, label: "c35" };
+    let a = (seed + 35) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_36(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 36, offset: seed, label: "c36" };
+    let a = (seed + 36) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_37(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 37, offset: seed, label: "c37" };
+    let a = (seed + 37) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_38(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 38, offset: seed, label: "c38" };
+    let a = (seed + 38) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_39(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 39, offset: seed, label: "c39" };
+    let a = (seed + 39) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_40(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 40, offset: seed, label: "c40" };
+    let a = (seed + 40) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_41(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 41, offset: seed, label: "c41" };
+    let a = (seed + 41) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_42(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 42, offset: seed, label: "c42" };
+    let a = (seed + 42) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_43(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 43, offset: seed, label: "c43" };
+    let a = (seed + 43) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_44(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 44, offset: seed, label: "c44" };
+    let a = (seed + 44) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_45(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 45, offset: seed, label: "c45" };
+    let a = (seed + 45) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_46(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 46, offset: seed, label: "c46" };
+    let a = (seed + 46) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_47(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 47, offset: seed, label: "c47" };
+    let a = (seed + 47) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_48(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 48, offset: seed, label: "c48" };
+    let a = (seed + 48) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_49(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 49, offset: seed, label: "c49" };
+    let a = (seed + 49) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_50(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 50, offset: seed, label: "c50" };
+    let a = (seed + 50) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_51(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 51, offset: seed, label: "c51" };
+    let a = (seed + 51) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_52(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 52, offset: seed, label: "c52" };
+    let a = (seed + 52) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_53(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 53, offset: seed, label: "c53" };
+    let a = (seed + 53) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_54(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 54, offset: seed, label: "c54" };
+    let a = (seed + 54) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_55(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 55, offset: seed, label: "c55" };
+    let a = (seed + 55) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_56(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 56, offset: seed, label: "c56" };
+    let a = (seed + 56) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_57(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 57, offset: seed, label: "c57" };
+    let a = (seed + 57) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_58(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 58, offset: seed, label: "c58" };
+    let a = (seed + 58) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_59(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 59, offset: seed, label: "c59" };
+    let a = (seed + 59) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_60(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 60, offset: seed, label: "c60" };
+    let a = (seed + 60) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_61(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 61, offset: seed, label: "c61" };
+    let a = (seed + 61) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_62(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 62, offset: seed, label: "c62" };
+    let a = (seed + 62) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_63(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 63, offset: seed, label: "c63" };
+    let a = (seed + 63) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_64(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 64, offset: seed, label: "c64" };
+    let a = (seed + 64) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_65(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 65, offset: seed, label: "c65" };
+    let a = (seed + 65) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_66(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 66, offset: seed, label: "c66" };
+    let a = (seed + 66) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_67(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 67, offset: seed, label: "c67" };
+    let a = (seed + 67) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_68(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 68, offset: seed, label: "c68" };
+    let a = (seed + 68) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_69(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 69, offset: seed, label: "c69" };
+    let a = (seed + 69) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_70(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 70, offset: seed, label: "c70" };
+    let a = (seed + 70) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_71(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 71, offset: seed, label: "c71" };
+    let a = (seed + 71) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_72(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 72, offset: seed, label: "c72" };
+    let a = (seed + 72) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_73(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 73, offset: seed, label: "c73" };
+    let a = (seed + 73) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_74(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 74, offset: seed, label: "c74" };
+    let a = (seed + 74) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_75(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 75, offset: seed, label: "c75" };
+    let a = (seed + 75) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_76(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 76, offset: seed, label: "c76" };
+    let a = (seed + 76) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_77(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 77, offset: seed, label: "c77" };
+    let a = (seed + 77) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_78(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 78, offset: seed, label: "c78" };
+    let a = (seed + 78) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_79(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 79, offset: seed, label: "c79" };
+    let a = (seed + 79) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_80(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 80, offset: seed, label: "c80" };
+    let a = (seed + 80) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_81(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 81, offset: seed, label: "c81" };
+    let a = (seed + 81) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_82(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 82, offset: seed, label: "c82" };
+    let a = (seed + 82) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_83(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 83, offset: seed, label: "c83" };
+    let a = (seed + 83) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_84(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 84, offset: seed, label: "c84" };
+    let a = (seed + 84) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_85(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 85, offset: seed, label: "c85" };
+    let a = (seed + 85) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_86(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 86, offset: seed, label: "c86" };
+    let a = (seed + 86) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_87(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 87, offset: seed, label: "c87" };
+    let a = (seed + 87) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_88(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 88, offset: seed, label: "c88" };
+    let a = (seed + 88) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_89(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 89, offset: seed, label: "c89" };
+    let a = (seed + 89) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_90(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 90, offset: seed, label: "c90" };
+    let a = (seed + 90) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_91(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 91, offset: seed, label: "c91" };
+    let a = (seed + 91) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_92(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 92, offset: seed, label: "c92" };
+    let a = (seed + 92) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_93(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 93, offset: seed, label: "c93" };
+    let a = (seed + 93) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_94(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 94, offset: seed, label: "c94" };
+    let a = (seed + 94) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}
+fn chain_95(in seed: Int) -> Result[Int, Err] {
+    let base = Config { scale: 95, offset: seed, label: "c95" };
+    let a = (seed + 95) * 3 - seed / (2 + 1) % 7;
+    let b = a as F64 as Int;
+    let c = registry::lookup::[Int](base.scale)?.normalize(a, b)?.value;
+    let d = table[a][b].rows[c].sum();
+    let range = a .. b + c;
+    let flag = !(a < b) && (c >= d || a == b) && seed != 0;
+    let picked = match flag {
+        true if a % 2 == 0 => moved.consume(move a),
+        true => -b,
+        false => {
+            let inner = Wrapper { value: d };
+            inner.value
+        },
+    };
+    var acc = 0;
+    acc = acc + if flag { picked } else { -picked };
+    let tuple_field = pair.0 + pair.1 * 2;
+    let folded = data.iter().filter(is_even).map(double).fold(0, add)?;
+    return Result::ok(acc + folded + tuple_field);
+}

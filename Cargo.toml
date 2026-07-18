@@ -67,6 +67,9 @@ unicode-normalization = "0.1"
 criterion = "0.5"
 # - chumsky powers the prototype parser behind tuo-parser's TDG-owned interface.
 chumsky = "0.10"
+# - dhat measures heap use for the parser architecture decision gate
+#   (ADR-parser-strategy); dev-dependency only.
+dhat = "0.3"
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints.

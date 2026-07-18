@@ -1,0 +1,1298 @@
+module bench::errors;
+
+fn good_0(in x: Int) -> Int {
+    let y = x * 0;
+    y + 1
+}
+
+fn wobbly_0(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 0;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken0 { field: , other Int }
+
+fn tail_0() -> Int {
+    0 +
+}
+fn good_1(in x: Int) -> Int {
+    let y = x * 1;
+    y + 1
+}
+
+fn wobbly_1(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 1;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken1 { field: , other Int }
+
+fn tail_1() -> Int {
+    1 +
+}
+fn good_2(in x: Int) -> Int {
+    let y = x * 2;
+    y + 1
+}
+
+fn wobbly_2(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 2;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken2 { field: , other Int }
+
+fn tail_2() -> Int {
+    2 +
+}
+fn good_3(in x: Int) -> Int {
+    let y = x * 3;
+    y + 1
+}
+
+fn wobbly_3(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 3;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken3 { field: , other Int }
+
+fn tail_3() -> Int {
+    3 +
+}
+fn good_4(in x: Int) -> Int {
+    let y = x * 4;
+    y + 1
+}
+
+fn wobbly_4(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 4;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken4 { field: , other Int }
+
+fn tail_4() -> Int {
+    4 +
+}
+fn good_5(in x: Int) -> Int {
+    let y = x * 5;
+    y + 1
+}
+
+fn wobbly_5(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 5;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken5 { field: , other Int }
+
+fn tail_5() -> Int {
+    5 +
+}
+fn good_6(in x: Int) -> Int {
+    let y = x * 6;
+    y + 1
+}
+
+fn wobbly_6(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 6;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken6 { field: , other Int }
+
+fn tail_6() -> Int {
+    6 +
+}
+fn good_7(in x: Int) -> Int {
+    let y = x * 7;
+    y + 1
+}
+
+fn wobbly_7(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 7;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken7 { field: , other Int }
+
+fn tail_7() -> Int {
+    7 +
+}
+fn good_8(in x: Int) -> Int {
+    let y = x * 8;
+    y + 1
+}
+
+fn wobbly_8(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 8;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken8 { field: , other Int }
+
+fn tail_8() -> Int {
+    8 +
+}
+fn good_9(in x: Int) -> Int {
+    let y = x * 9;
+    y + 1
+}
+
+fn wobbly_9(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 9;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken9 { field: , other Int }
+
+fn tail_9() -> Int {
+    9 +
+}
+fn good_10(in x: Int) -> Int {
+    let y = x * 10;
+    y + 1
+}
+
+fn wobbly_10(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 10;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken10 { field: , other Int }
+
+fn tail_10() -> Int {
+    10 +
+}
+fn good_11(in x: Int) -> Int {
+    let y = x * 11;
+    y + 1
+}
+
+fn wobbly_11(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 11;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken11 { field: , other Int }
+
+fn tail_11() -> Int {
+    11 +
+}
+fn good_12(in x: Int) -> Int {
+    let y = x * 12;
+    y + 1
+}
+
+fn wobbly_12(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 12;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken12 { field: , other Int }
+
+fn tail_12() -> Int {
+    12 +
+}
+fn good_13(in x: Int) -> Int {
+    let y = x * 13;
+    y + 1
+}
+
+fn wobbly_13(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 13;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken13 { field: , other Int }
+
+fn tail_13() -> Int {
+    13 +
+}
+fn good_14(in x: Int) -> Int {
+    let y = x * 14;
+    y + 1
+}
+
+fn wobbly_14(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 14;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken14 { field: , other Int }
+
+fn tail_14() -> Int {
+    14 +
+}
+fn good_15(in x: Int) -> Int {
+    let y = x * 15;
+    y + 1
+}
+
+fn wobbly_15(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 15;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken15 { field: , other Int }
+
+fn tail_15() -> Int {
+    15 +
+}
+fn good_16(in x: Int) -> Int {
+    let y = x * 16;
+    y + 1
+}
+
+fn wobbly_16(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 16;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken16 { field: , other Int }
+
+fn tail_16() -> Int {
+    16 +
+}
+fn good_17(in x: Int) -> Int {
+    let y = x * 17;
+    y + 1
+}
+
+fn wobbly_17(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 17;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken17 { field: , other Int }
+
+fn tail_17() -> Int {
+    17 +
+}
+fn good_18(in x: Int) -> Int {
+    let y = x * 18;
+    y + 1
+}
+
+fn wobbly_18(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 18;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken18 { field: , other Int }
+
+fn tail_18() -> Int {
+    18 +
+}
+fn good_19(in x: Int) -> Int {
+    let y = x * 19;
+    y + 1
+}
+
+fn wobbly_19(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 19;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken19 { field: , other Int }
+
+fn tail_19() -> Int {
+    19 +
+}
+fn good_20(in x: Int) -> Int {
+    let y = x * 20;
+    y + 1
+}
+
+fn wobbly_20(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 20;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken20 { field: , other Int }
+
+fn tail_20() -> Int {
+    20 +
+}
+fn good_21(in x: Int) -> Int {
+    let y = x * 21;
+    y + 1
+}
+
+fn wobbly_21(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 21;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken21 { field: , other Int }
+
+fn tail_21() -> Int {
+    21 +
+}
+fn good_22(in x: Int) -> Int {
+    let y = x * 22;
+    y + 1
+}
+
+fn wobbly_22(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 22;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken22 { field: , other Int }
+
+fn tail_22() -> Int {
+    22 +
+}
+fn good_23(in x: Int) -> Int {
+    let y = x * 23;
+    y + 1
+}
+
+fn wobbly_23(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 23;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken23 { field: , other Int }
+
+fn tail_23() -> Int {
+    23 +
+}
+fn good_24(in x: Int) -> Int {
+    let y = x * 24;
+    y + 1
+}
+
+fn wobbly_24(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 24;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken24 { field: , other Int }
+
+fn tail_24() -> Int {
+    24 +
+}
+fn good_25(in x: Int) -> Int {
+    let y = x * 25;
+    y + 1
+}
+
+fn wobbly_25(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 25;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken25 { field: , other Int }
+
+fn tail_25() -> Int {
+    25 +
+}
+fn good_26(in x: Int) -> Int {
+    let y = x * 26;
+    y + 1
+}
+
+fn wobbly_26(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 26;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken26 { field: , other Int }
+
+fn tail_26() -> Int {
+    26 +
+}
+fn good_27(in x: Int) -> Int {
+    let y = x * 27;
+    y + 1
+}
+
+fn wobbly_27(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 27;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken27 { field: , other Int }
+
+fn tail_27() -> Int {
+    27 +
+}
+fn good_28(in x: Int) -> Int {
+    let y = x * 28;
+    y + 1
+}
+
+fn wobbly_28(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 28;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken28 { field: , other Int }
+
+fn tail_28() -> Int {
+    28 +
+}
+fn good_29(in x: Int) -> Int {
+    let y = x * 29;
+    y + 1
+}
+
+fn wobbly_29(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 29;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken29 { field: , other Int }
+
+fn tail_29() -> Int {
+    29 +
+}
+fn good_30(in x: Int) -> Int {
+    let y = x * 30;
+    y + 1
+}
+
+fn wobbly_30(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 30;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken30 { field: , other Int }
+
+fn tail_30() -> Int {
+    30 +
+}
+fn good_31(in x: Int) -> Int {
+    let y = x * 31;
+    y + 1
+}
+
+fn wobbly_31(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 31;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken31 { field: , other Int }
+
+fn tail_31() -> Int {
+    31 +
+}
+fn good_32(in x: Int) -> Int {
+    let y = x * 32;
+    y + 1
+}
+
+fn wobbly_32(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 32;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken32 { field: , other Int }
+
+fn tail_32() -> Int {
+    32 +
+}
+fn good_33(in x: Int) -> Int {
+    let y = x * 33;
+    y + 1
+}
+
+fn wobbly_33(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 33;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken33 { field: , other Int }
+
+fn tail_33() -> Int {
+    33 +
+}
+fn good_34(in x: Int) -> Int {
+    let y = x * 34;
+    y + 1
+}
+
+fn wobbly_34(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 34;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken34 { field: , other Int }
+
+fn tail_34() -> Int {
+    34 +
+}
+fn good_35(in x: Int) -> Int {
+    let y = x * 35;
+    y + 1
+}
+
+fn wobbly_35(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 35;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken35 { field: , other Int }
+
+fn tail_35() -> Int {
+    35 +
+}
+fn good_36(in x: Int) -> Int {
+    let y = x * 36;
+    y + 1
+}
+
+fn wobbly_36(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 36;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken36 { field: , other Int }
+
+fn tail_36() -> Int {
+    36 +
+}
+fn good_37(in x: Int) -> Int {
+    let y = x * 37;
+    y + 1
+}
+
+fn wobbly_37(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 37;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken37 { field: , other Int }
+
+fn tail_37() -> Int {
+    37 +
+}
+fn good_38(in x: Int) -> Int {
+    let y = x * 38;
+    y + 1
+}
+
+fn wobbly_38(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 38;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken38 { field: , other Int }
+
+fn tail_38() -> Int {
+    38 +
+}
+fn good_39(in x: Int) -> Int {
+    let y = x * 39;
+    y + 1
+}
+
+fn wobbly_39(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 39;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken39 { field: , other Int }
+
+fn tail_39() -> Int {
+    39 +
+}
+fn good_40(in x: Int) -> Int {
+    let y = x * 40;
+    y + 1
+}
+
+fn wobbly_40(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 40;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken40 { field: , other Int }
+
+fn tail_40() -> Int {
+    40 +
+}
+fn good_41(in x: Int) -> Int {
+    let y = x * 41;
+    y + 1
+}
+
+fn wobbly_41(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 41;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken41 { field: , other Int }
+
+fn tail_41() -> Int {
+    41 +
+}
+fn good_42(in x: Int) -> Int {
+    let y = x * 42;
+    y + 1
+}
+
+fn wobbly_42(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 42;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken42 { field: , other Int }
+
+fn tail_42() -> Int {
+    42 +
+}
+fn good_43(in x: Int) -> Int {
+    let y = x * 43;
+    y + 1
+}
+
+fn wobbly_43(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 43;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken43 { field: , other Int }
+
+fn tail_43() -> Int {
+    43 +
+}
+fn good_44(in x: Int) -> Int {
+    let y = x * 44;
+    y + 1
+}
+
+fn wobbly_44(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 44;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken44 { field: , other Int }
+
+fn tail_44() -> Int {
+    44 +
+}
+fn good_45(in x: Int) -> Int {
+    let y = x * 45;
+    y + 1
+}
+
+fn wobbly_45(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 45;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken45 { field: , other Int }
+
+fn tail_45() -> Int {
+    45 +
+}
+fn good_46(in x: Int) -> Int {
+    let y = x * 46;
+    y + 1
+}
+
+fn wobbly_46(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 46;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken46 { field: , other Int }
+
+fn tail_46() -> Int {
+    46 +
+}
+fn good_47(in x: Int) -> Int {
+    let y = x * 47;
+    y + 1
+}
+
+fn wobbly_47(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 47;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken47 { field: , other Int }
+
+fn tail_47() -> Int {
+    47 +
+}
+fn good_48(in x: Int) -> Int {
+    let y = x * 48;
+    y + 1
+}
+
+fn wobbly_48(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 48;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken48 { field: , other Int }
+
+fn tail_48() -> Int {
+    48 +
+}
+fn good_49(in x: Int) -> Int {
+    let y = x * 49;
+    y + 1
+}
+
+fn wobbly_49(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 49;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken49 { field: , other Int }
+
+fn tail_49() -> Int {
+    49 +
+}
+fn good_50(in x: Int) -> Int {
+    let y = x * 50;
+    y + 1
+}
+
+fn wobbly_50(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 50;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken50 { field: , other Int }
+
+fn tail_50() -> Int {
+    50 +
+}
+fn good_51(in x: Int) -> Int {
+    let y = x * 51;
+    y + 1
+}
+
+fn wobbly_51(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 51;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken51 { field: , other Int }
+
+fn tail_51() -> Int {
+    51 +
+}
+fn good_52(in x: Int) -> Int {
+    let y = x * 52;
+    y + 1
+}
+
+fn wobbly_52(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 52;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken52 { field: , other Int }
+
+fn tail_52() -> Int {
+    52 +
+}
+fn good_53(in x: Int) -> Int {
+    let y = x * 53;
+    y + 1
+}
+
+fn wobbly_53(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 53;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken53 { field: , other Int }
+
+fn tail_53() -> Int {
+    53 +
+}
+fn good_54(in x: Int) -> Int {
+    let y = x * 54;
+    y + 1
+}
+
+fn wobbly_54(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 54;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken54 { field: , other Int }
+
+fn tail_54() -> Int {
+    54 +
+}
+fn good_55(in x: Int) -> Int {
+    let y = x * 55;
+    y + 1
+}
+
+fn wobbly_55(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 55;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken55 { field: , other Int }
+
+fn tail_55() -> Int {
+    55 +
+}
+fn good_56(in x: Int) -> Int {
+    let y = x * 56;
+    y + 1
+}
+
+fn wobbly_56(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 56;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken56 { field: , other Int }
+
+fn tail_56() -> Int {
+    56 +
+}
+fn good_57(in x: Int) -> Int {
+    let y = x * 57;
+    y + 1
+}
+
+fn wobbly_57(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 57;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken57 { field: , other Int }
+
+fn tail_57() -> Int {
+    57 +
+}
+fn good_58(in x: Int) -> Int {
+    let y = x * 58;
+    y + 1
+}
+
+fn wobbly_58(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 58;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken58 { field: , other Int }
+
+fn tail_58() -> Int {
+    58 +
+}
+fn good_59(in x: Int) -> Int {
+    let y = x * 59;
+    y + 1
+}
+
+fn wobbly_59(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 59;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken59 { field: , other Int }
+
+fn tail_59() -> Int {
+    59 +
+}
+fn good_60(in x: Int) -> Int {
+    let y = x * 60;
+    y + 1
+}
+
+fn wobbly_60(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 60;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken60 { field: , other Int }
+
+fn tail_60() -> Int {
+    60 +
+}
+fn good_61(in x: Int) -> Int {
+    let y = x * 61;
+    y + 1
+}
+
+fn wobbly_61(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 61;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken61 { field: , other Int }
+
+fn tail_61() -> Int {
+    61 +
+}
+fn good_62(in x: Int) -> Int {
+    let y = x * 62;
+    y + 1
+}
+
+fn wobbly_62(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 62;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken62 { field: , other Int }
+
+fn tail_62() -> Int {
+    62 +
+}
+fn good_63(in x: Int) -> Int {
+    let y = x * 63;
+    y + 1
+}
+
+fn wobbly_63(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 63;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken63 { field: , other Int }
+
+fn tail_63() -> Int {
+    63 +
+}
+fn good_64(in x: Int) -> Int {
+    let y = x * 64;
+    y + 1
+}
+
+fn wobbly_64(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 64;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken64 { field: , other Int }
+
+fn tail_64() -> Int {
+    64 +
+}
+fn good_65(in x: Int) -> Int {
+    let y = x * 65;
+    y + 1
+}
+
+fn wobbly_65(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 65;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken65 { field: , other Int }
+
+fn tail_65() -> Int {
+    65 +
+}
+fn good_66(in x: Int) -> Int {
+    let y = x * 66;
+    y + 1
+}
+
+fn wobbly_66(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 66;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken66 { field: , other Int }
+
+fn tail_66() -> Int {
+    66 +
+}
+fn good_67(in x: Int) -> Int {
+    let y = x * 67;
+    y + 1
+}
+
+fn wobbly_67(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 67;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken67 { field: , other Int }
+
+fn tail_67() -> Int {
+    67 +
+}
+fn good_68(in x: Int) -> Int {
+    let y = x * 68;
+    y + 1
+}
+
+fn wobbly_68(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 68;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken68 { field: , other Int }
+
+fn tail_68() -> Int {
+    68 +
+}
+fn good_69(in x: Int) -> Int {
+    let y = x * 69;
+    y + 1
+}
+
+fn wobbly_69(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 69;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken69 { field: , other Int }
+
+fn tail_69() -> Int {
+    69 +
+}
+fn good_70(in x: Int) -> Int {
+    let y = x * 70;
+    y + 1
+}
+
+fn wobbly_70(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 70;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken70 { field: , other Int }
+
+fn tail_70() -> Int {
+    70 +
+}
+fn good_71(in x: Int) -> Int {
+    let y = x * 71;
+    y + 1
+}
+
+fn wobbly_71(in x: Int) -> Int {
+    let ok = x + 1;
+    let = broken 71;
+    var kept = ok * 2;
+    ) stray tokens here ;
+    kept + ok
+}
+
+struct Broken71 { field: , other Int }
+
+fn tail_71() -> Int {
+    71 +
+}

@@ -48,5 +48,9 @@ the replacement, preserving the decision history.
 
 ## Current ADRs
 
-No ADRs have been recorded yet. The example filename above (`ADR-0001-…`)
-illustrates the convention; it is not itself an ADR.
+| ADR | Title | Status |
+|-----|-------|--------|
+| [ADR-0001](ADR-parser-strategy.md) | Parser implementation strategy | accepted |
+
+(`ADR-parser-strategy.md` carries number 0001 without it in the filename;
+new ADRs should follow the `ADR-NNNN-…` naming above.)
