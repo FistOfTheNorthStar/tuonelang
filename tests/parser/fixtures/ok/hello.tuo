@@ -1,0 +1,10 @@
+module hello;
+
+/// Greet the world.
+pub fn main() -> Int {
+    let greeting = "Hello, world!\n";
+    if greeting != "" {
+        return 0;
+    }
+    1
+}

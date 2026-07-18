@@ -1,0 +1,37 @@
+SourceFile
+  FunctionItem
+    KwFn "fn"
+    Ident "ok_before"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      Literal
+        IntLiteral "1"
+      CloseBrace "}"
+  Error
+    KwFn "fn"
+    Ident "never_closed"
+    OpenParen "("
+    CloseParen ")"
+    ThinArrow "->"
+    Ident "Int"
+    OpenBrace "{"
+    KwLet "let"
+    Ident "x"
+    Eq "="
+    IntLiteral "2"
+    Semi ";"
+--- diagnostics ---
+error[P0002]: malformed item: skipped 12 token(s) starting with `fn`
+ --> unclosed.tuo:5:1
+  |
+5 | fn never_closed() -> Int {
+  | ^^ skipped during error recovery
+  = note: the parser resynchronized at the next `;`, `}`, or item keyword and continued

@@ -106,6 +106,8 @@ fn maximal_munch_resolves_multi_character_operators() {
     assert_eq!(kinds("0 .. 5"), [IntLiteral, DotDot, IntLiteral]);
     assert_eq!(kinds("!!="), [Bang, NotEq]);
     assert_eq!(kinds("x<=>y"), [Ident, LtEq, Gt, Ident]);
+    // `|` (pattern separator, §17) exists alongside `||`; munch prefers `||`.
+    assert_eq!(kinds("a | b || c"), [Ident, Pipe, Ident, PipePipe, Ident]);
 }
 
 #[test]

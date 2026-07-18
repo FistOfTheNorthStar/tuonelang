@@ -151,6 +151,9 @@ pub enum TokenKind {
     AmpAmp,
     /// `||`
     PipePipe,
+    /// `|` — the pattern-alternative separator (§17). Not a bitwise
+    /// operator: v0 has no bitwise expression operators.
+    Pipe,
     /// `!`
     Bang,
     /// `+`

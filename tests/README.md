@@ -4,7 +4,7 @@ This directory holds end-to-end and stage-level tests that exercise the
 compiler through its public surfaces. It is organized by compiler stage so that
 each phase can be validated in isolation as it is implemented.
 
-`lexer/` holds the tokenizer's fixture + snapshot corpus (see its README).
+`lexer/` and `parser/` hold fixture + snapshot corpora (see their READMEs).
 The other categories contain no tests yet — the corresponding compiler stages
 do not exist. The directories and this document define where those tests will
 live and what each category is responsible for.

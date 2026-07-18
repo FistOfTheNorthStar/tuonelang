@@ -1,0 +1,11 @@
+fn stumbles() -> Int {
+    let good = 1;
+    let 5 = oops;
+    var also_good = 2;
+    good + + ;
+    if good == 2 {
+        broken syntax here;
+        good = 3;
+    }
+    good + also_good
+}

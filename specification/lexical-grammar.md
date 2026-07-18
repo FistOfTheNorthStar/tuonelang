@@ -163,6 +163,7 @@ before their single-character prefixes are considered.
 | Range | `..` |
 | Comparison | `==` `!=` `<` `>` `<=` `>=` |
 | Logical | `&&` `\|\|` `!` |
+| Pattern alternative | `\|` (or-patterns `A \| B` and interface bounds use it/`+`; **not** a bitwise operator) |
 | Arithmetic | `+` `-` `*` `/` `%` |
 | Assignment | `=` |
 | Propagation | `?` |

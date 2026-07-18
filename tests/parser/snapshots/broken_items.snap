@@ -1,0 +1,87 @@
+SourceFile
+  ModuleDecl
+    KwModule "module"
+    Path
+      Ident "broken"
+    Semi ";"
+  FunctionItem
+    KwFn "fn"
+    Ident "first"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      Literal
+        IntLiteral "1"
+      CloseBrace "}"
+  Error
+    KwFn "fn"
+    Ident "broken"
+    OpenParen "("
+    OpenBrace "{"
+  StructItem
+    KwStruct "struct"
+    Ident "Point"
+    FieldBlock
+      OpenBrace "{"
+      FieldDecl
+        Ident "x"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "F64"
+      Comma ","
+      FieldDecl
+        Ident "y"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "F64"
+      CloseBrace "}"
+  Error
+    KwStruct "struct"
+    Ident "Unfinished"
+    OpenBrace "{"
+    Ident "x"
+    Colon ":"
+    Ident "F64"
+    Ident "y"
+    Ident "F64"
+    Comma ","
+    CloseBrace "}"
+  FunctionItem
+    KwFn "fn"
+    Ident "last"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      Literal
+        IntLiteral "2"
+      CloseBrace "}"
+--- diagnostics ---
+error[P0002]: malformed item: skipped 4 token(s) starting with `fn`
+ --> broken_items.tuo:7:1
+  |
+7 | fn broken( {
+  | ^^ skipped during error recovery
+  = note: the parser resynchronized at the next `;`, `}`, or item keyword and continued
+
+error[P0002]: malformed item: skipped 10 token(s) starting with `struct`
+ --> broken_items.tuo:11:1
+   |
+11 | struct Unfinished {
+   | ^^^^^^ skipped during error recovery
+  = note: the parser resynchronized at the next `;`, `}`, or item keyword and continued

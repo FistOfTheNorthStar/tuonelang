@@ -1,0 +1,89 @@
+SourceFile
+  FunctionItem
+    KwFn "fn"
+    Ident "stumbles"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "good"
+        Eq "="
+        Literal
+          IntLiteral "1"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        LiteralPattern
+          IntLiteral "5"
+        Eq "="
+        PathExpr
+          Ident "oops"
+        Semi ";"
+      VarStatement
+        KwVar "var"
+        BindingPattern
+          Ident "also_good"
+        Eq "="
+        Literal
+          IntLiteral "2"
+        Semi ";"
+      Error
+        Ident "good"
+        Plus "+"
+        Plus "+"
+        Semi ";"
+      ExpressionStatement
+        IfExpr
+          KwIf "if"
+          BinaryExpr
+            PathExpr
+              Ident "good"
+            EqEq "=="
+            Literal
+              IntLiteral "2"
+          Block
+            OpenBrace "{"
+            Error
+              Ident "broken"
+              Ident "syntax"
+              Ident "here"
+              Semi ";"
+            ExpressionStatement
+              AssignExpr
+                PathExpr
+                  Ident "good"
+                Eq "="
+                Literal
+                  IntLiteral "3"
+              Semi ";"
+            CloseBrace "}"
+      BinaryExpr
+        PathExpr
+          Ident "good"
+        Plus "+"
+        PathExpr
+          Ident "also_good"
+      CloseBrace "}"
+--- diagnostics ---
+error[P0002]: malformed statement: skipped 3 token(s) starting with identifier
+ --> broken_statements.tuo:5:5
+  |
+5 |     good + + ;
+  |     ^^^^ skipped during error recovery
+  = note: the parser resynchronized at the next `;`, `}`, or item keyword and continued
+
+error[P0002]: malformed statement: skipped 3 token(s) starting with identifier
+ --> broken_statements.tuo:7:9
+  |
+7 |         broken syntax here;
+  |         ^^^^^^ skipped during error recovery
+  = note: the parser resynchronized at the next `;`, `}`, or item keyword and continued

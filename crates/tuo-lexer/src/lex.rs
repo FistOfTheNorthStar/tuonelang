@@ -92,6 +92,8 @@ enum Raw {
     AmpAmp,
     #[token("||")]
     PipePipe,
+    #[token("|")]
+    Pipe,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -266,6 +268,7 @@ fn classify(raw: Raw, slice: &str, span: Span, diagnostics: &mut Vec<Diagnostic>
         Raw::GtEq => TokenKind::GtEq,
         Raw::AmpAmp => TokenKind::AmpAmp,
         Raw::PipePipe => TokenKind::PipePipe,
+        Raw::Pipe => TokenKind::Pipe,
         Raw::Lt => TokenKind::Lt,
         Raw::Gt => TokenKind::Gt,
         Raw::Bang => TokenKind::Bang,
