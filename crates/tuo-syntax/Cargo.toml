@@ -14,3 +14,4 @@ workspace = true
 [dependencies]
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
+tuo-lexer.workspace = true

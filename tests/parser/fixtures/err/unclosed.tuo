@@ -1,0 +1,6 @@
+fn ok_before() -> Int {
+    1
+}
+
+fn never_closed() -> Int {
+    let x = 2;

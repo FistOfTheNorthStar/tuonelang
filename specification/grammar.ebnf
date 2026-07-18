@@ -164,7 +164,8 @@ punct =
     | "+" | "-" | "*" | "/" | "%"
     | "<" | ">" | "!" | "=" | "?" | "."
     | "(" | ")" | "{" | "}" | "[" | "]"
-    | "," | ";" | ":" ;
+    | "," | ";" | ":"
+    | "|" ;             (* pattern alternative only, (H); NOT a bitwise operator *)
 (* NOTE on angle brackets: `<`/`>` are ONLY comparison/shift-free relational
    operators — generics use square brackets `[T]` [§18], so there is no
    `<`-as-generic ambiguity. This is a deliberate minimal-lookahead choice. *)

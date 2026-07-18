@@ -1,0 +1,50 @@
+SourceFile
+  ModuleDecl
+    KwModule "module"
+    Path
+      Ident "hello"
+    Semi ";"
+  FunctionItem
+    DocComment "/// Greet the world."
+    KwPub "pub"
+    KwFn "fn"
+    Ident "main"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "greeting"
+        Eq "="
+        Literal
+          StringLiteral "\"Hello, world!\\n\""
+        Semi ";"
+      ExpressionStatement
+        IfExpr
+          KwIf "if"
+          BinaryExpr
+            PathExpr
+              Ident "greeting"
+            NotEq "!="
+            Literal
+              StringLiteral "\"\""
+          Block
+            OpenBrace "{"
+            ExpressionStatement
+              ReturnExpr
+                KwReturn "return"
+                Literal
+                  IntLiteral "0"
+              Semi ";"
+            CloseBrace "}"
+      Literal
+        IntLiteral "1"
+      CloseBrace "}"

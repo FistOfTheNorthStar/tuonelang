@@ -1,0 +1,988 @@
+SourceFile
+  ModuleDecl
+    KwModule "module"
+    Path
+      Ident "examples"
+      ColonColon "::"
+      Ident "showcase"
+    Semi ";"
+  ImportItem
+    KwImport "import"
+    Path
+      Ident "std"
+      ColonColon "::"
+      Ident "io"
+    Semi ";"
+  ImportItem
+    KwImport "import"
+    Path
+      Ident "std"
+      ColonColon "::"
+      Ident "mem"
+    KwAs "as"
+    Ident "memory"
+    Semi ";"
+  ImportItem
+    KwImport "import"
+    Path
+      Ident "std"
+      ColonColon "::"
+      Ident "collections"
+    ColonColon "::"
+    ImportGroup
+      OpenBrace "{"
+      ImportLeaf
+        Ident "Map"
+        KwAs "as"
+        Ident "Dict"
+      Comma ","
+      ImportLeaf
+        Ident "Set"
+      Comma ","
+      CloseBrace "}"
+    Semi ";"
+  StructItem
+    DocComment "/// A point in the plane."
+    KwPub "pub"
+    KwStruct "struct"
+    Ident "Point"
+    FieldBlock
+      OpenBrace "{"
+      FieldDecl
+        DocComment "/// Horizontal coordinate."
+        KwPub "pub"
+        Ident "x"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "F64"
+      Comma ","
+      FieldDecl
+        KwPub "pub"
+        Ident "y"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "F64"
+      Comma ","
+      CloseBrace "}"
+  StructItem
+    KwStruct "struct"
+    Ident "Wrapperless"
+    GenericParams
+      OpenBracket "["
+      GenericParam
+        Ident "T"
+      CloseBracket "]"
+    WhereClause
+      KwWhere "where"
+      WherePred
+        PathType
+          TypePath
+            Ident "T"
+        Colon ":"
+        BoundList
+          TypePath
+            Ident "Clone"
+    FieldBlock
+      OpenBrace "{"
+      FieldDecl
+        Ident "value"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "T"
+      Comma ","
+      CloseBrace "}"
+  EnumItem
+    KwPub "pub"
+    KwEnum "enum"
+    Ident "Shape"
+    OpenBrace "{"
+    VariantDecl
+      DocComment "/// A circle with a radius."
+      Ident "Circle"
+      FieldBlock
+        OpenBrace "{"
+        FieldDecl
+          Ident "radius"
+          Colon ":"
+          PathType
+            TypePath
+              Ident "F64"
+        CloseBrace "}"
+    Comma ","
+    VariantDecl
+      Ident "Rect"
+      FieldBlock
+        OpenBrace "{"
+        FieldDecl
+          Ident "w"
+          Colon ":"
+          PathType
+            TypePath
+              Ident "F64"
+        Comma ","
+        FieldDecl
+          Ident "h"
+          Colon ":"
+          PathType
+            TypePath
+              Ident "F64"
+        Comma ","
+        CloseBrace "}"
+    Comma ","
+    VariantDecl
+      Ident "Dot"
+    Comma ","
+    CloseBrace "}"
+  InterfaceItem
+    KwInterface "interface"
+    Ident "Renderable"
+    OpenBrace "{"
+    FunctionSignature
+      KwFn "fn"
+      Ident "render"
+      ParamList
+        OpenParen "("
+        Receiver
+          KwIn "in"
+          KwSelfValue "self"
+        CloseParen ")"
+      ReturnType
+        ThinArrow "->"
+        PathType
+          TypePath
+            Ident "String"
+      Semi ";"
+    FunctionItem
+      KwFn "fn"
+      Ident "describe"
+      ParamList
+        OpenParen "("
+        Receiver
+          KwIn "in"
+          KwSelfValue "self"
+        CloseParen ")"
+      ReturnType
+        ThinArrow "->"
+        PathType
+          TypePath
+            Ident "String"
+      Block
+        OpenBrace "{"
+        MethodCallExpr
+          PathExpr
+            KwSelfValue "self"
+          Dot "."
+          Ident "render"
+          CallArgs
+            OpenParen "("
+            CloseParen ")"
+        CloseBrace "}"
+    CloseBrace "}"
+  ImplItem
+    KwImpl "impl"
+    GenericParams
+      OpenBracket "["
+      GenericParam
+        Ident "T"
+      CloseBracket "]"
+    TypePath
+      Ident "Renderable"
+    KwFor "for"
+    PathType
+      TypePath
+        Ident "Wrapperless"
+      TypeArguments
+        OpenBracket "["
+        PathType
+          TypePath
+            Ident "T"
+        CloseBracket "]"
+    WhereClause
+      KwWhere "where"
+      WherePred
+        PathType
+          TypePath
+            Ident "T"
+        Colon ":"
+        BoundList
+          TypePath
+            Ident "Renderable"
+    OpenBrace "{"
+    FunctionItem
+      KwFn "fn"
+      Ident "render"
+      ParamList
+        OpenParen "("
+        Receiver
+          KwIn "in"
+          KwSelfValue "self"
+        CloseParen ")"
+      ReturnType
+        ThinArrow "->"
+        PathType
+          TypePath
+            Ident "String"
+      Block
+        OpenBrace "{"
+        MethodCallExpr
+          FieldExpr
+            PathExpr
+              KwSelfValue "self"
+            Dot "."
+            Ident "value"
+          Dot "."
+          Ident "render"
+          CallArgs
+            OpenParen "("
+            CloseParen ")"
+        CloseBrace "}"
+    CloseBrace "}"
+  ConstItem
+    KwConst "const"
+    Ident "LIMIT"
+    Colon ":"
+    PathType
+      TypePath
+        Ident "Int"
+    Eq "="
+    Literal
+      IntLiteral "100"
+    Semi ";"
+  ConstItem
+    KwConst "const"
+    Ident "ORIGIN"
+    Colon ":"
+    PathType
+      TypePath
+        Ident "Point"
+    Eq "="
+    StructLiteral
+      TypePath
+        Ident "Point"
+      OpenBrace "{"
+      FieldInit
+        Ident "x"
+        Colon ":"
+        Literal
+          FloatLiteral "0.0"
+      Comma ","
+      FieldInit
+        Ident "y"
+        Colon ":"
+        Literal
+          FloatLiteral "0.0"
+      CloseBrace "}"
+    Semi ";"
+  FunctionItem
+    KwPub "pub"
+    KwFn "fn"
+    Ident "classify"
+    GenericParams
+      OpenBracket "["
+      GenericParam
+        Ident "T"
+        Colon ":"
+        BoundList
+          TypePath
+            Ident "Ord"
+          Plus "+"
+          TypePath
+            Ident "Clone"
+      CloseBracket "]"
+    ParamList
+      OpenParen "("
+      Param
+        KwIn "in"
+        Ident "value"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "T"
+      Comma ","
+      Param
+        KwMut "mut"
+        Ident "count"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "Int"
+      Comma ","
+      Param
+        KwTake "take"
+        Ident "sink"
+        Colon ":"
+        WrapperType
+          KwBox "Box"
+          TypeArguments
+            OpenBracket "["
+            PathType
+              TypePath
+                Ident "T"
+            CloseBracket "]"
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Bool"
+    WhereClause
+      KwWhere "where"
+      WherePred
+        PathType
+          TypePath
+            Ident "T"
+        Colon ":"
+        BoundList
+          TypePath
+            Ident "Renderable"
+    Block
+      OpenBrace "{"
+      VarStatement
+        KwVar "var"
+        BindingPattern
+          Ident "total"
+        Eq "="
+        Literal
+          IntLiteral "0"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "boxed"
+        Colon ":"
+        WrapperType
+          KwShared "Shared"
+          TypeArguments
+            OpenBracket "["
+            PathType
+              TypePath
+                Ident "Point"
+            CloseBracket "]"
+        Eq "="
+        CallExpr
+          PathExpr
+            Ident "share"
+          CallArgs
+            OpenParen "("
+            CloseParen ")"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "weak"
+        Colon ":"
+        WrapperType
+          KwWeak "Weak"
+          TypeArguments
+            OpenBracket "["
+            PathType
+              TypePath
+                Ident "Point"
+            CloseBracket "]"
+        Eq "="
+        CallExpr
+          PathExpr
+            Ident "downgrade"
+          CallArgs
+            OpenParen "("
+            CloseParen ")"
+        Semi ";"
+      EmptyStatement
+        Semi ";"
+      ExpressionStatement
+        AssignExpr
+          PathExpr
+            Ident "total"
+          Eq "="
+          BinaryExpr
+            PathExpr
+              Ident "total"
+            Plus "+"
+            Literal
+              IntLiteral "1"
+        Semi ";"
+      ExpressionStatement
+        AssignExpr
+          PathExpr
+            Ident "count"
+          Eq "="
+          BinaryExpr
+            BinaryExpr
+              PathExpr
+                Ident "LIMIT"
+              Percent "%"
+              Literal
+                IntLiteral "7"
+            Minus "-"
+            UnaryExpr
+              Minus "-"
+              PathExpr
+                Ident "total"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "flag"
+        Eq "="
+        BinaryExpr
+          BinaryExpr
+            UnaryExpr
+              Bang "!"
+              GroupExpr
+                OpenParen "("
+                BinaryExpr
+                  PathExpr
+                    Ident "count"
+                  LtEq "<="
+                  Literal
+                    IntLiteral "3"
+                CloseParen ")"
+            AmpAmp "&&"
+            BinaryExpr
+              PathExpr
+                Ident "count"
+              NotEq "!="
+              Literal
+                IntLiteral "4"
+          PipePipe "||"
+          Literal
+            BoolLiteral "false"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "in_range"
+        Eq "="
+        RangeExpr
+          Literal
+            IntLiteral "0"
+          DotDot ".."
+          PathExpr
+            Ident "count"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "converted"
+        Eq "="
+        CastExpr
+          PathExpr
+            Ident "total"
+          KwAs "as"
+          PathType
+            TypePath
+              Ident "F64"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "picked"
+        Eq "="
+        IndexExpr
+          CallExpr
+            PathExpr
+              Ident "points"
+            CallArgs
+              OpenParen "("
+              CloseParen ")"
+          OpenBracket "["
+          Literal
+            IntLiteral "0"
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "renamed"
+        Eq "="
+        CallExpr
+          PathExpr
+            Ident "memory"
+            ColonColon "::"
+            Ident "swap"
+            Turbofish
+              ColonColon "::"
+              TypeArguments
+                OpenBracket "["
+                PathType
+                  TypePath
+                    Ident "Int"
+                CloseBracket "]"
+          CallArgs
+            OpenParen "("
+            CloseParen ")"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "shorthand"
+        Eq "="
+        StructLiteral
+          TypePath
+            Ident "Point"
+          OpenBrace "{"
+          FieldInit
+            Ident "x"
+            Colon ":"
+            Literal
+              FloatLiteral "1.0"
+          Comma ","
+          FieldInit
+            Ident "y"
+          CloseBrace "}"
+        Semi ";"
+      ExpressionStatement
+        ForExpr
+          KwFor "for"
+          BindingPattern
+            Ident "p"
+          KwIn "in"
+          CallExpr
+            PathExpr
+              Ident "points"
+            CallArgs
+              OpenParen "("
+              CloseParen ")"
+          Block
+            OpenBrace "{"
+            ExpressionStatement
+              CallExpr
+                PathExpr
+                  Ident "io"
+                  ColonColon "::"
+                  Ident "print"
+                CallArgs
+                  OpenParen "("
+                  FieldExpr
+                    PathExpr
+                      Ident "p"
+                    Dot "."
+                    Ident "x"
+                  CloseParen ")"
+              Semi ";"
+            CloseBrace "}"
+      ExpressionStatement
+        LoopExpr
+          LifetimeLabel "'outer"
+          Colon ":"
+          KwLoop "loop"
+          Block
+            OpenBrace "{"
+            ExpressionStatement
+              WhileExpr
+                KwWhile "while"
+                BinaryExpr
+                  PathExpr
+                    Ident "total"
+                  Lt "<"
+                  PathExpr
+                    Ident "LIMIT"
+                Block
+                  OpenBrace "{"
+                  ExpressionStatement
+                    IfExpr
+                      KwIf "if"
+                      BinaryExpr
+                        PathExpr
+                          Ident "total"
+                        EqEq "=="
+                        Literal
+                          IntLiteral "42"
+                      Block
+                        OpenBrace "{"
+                        ExpressionStatement
+                          BreakExpr
+                            KwBreak "break"
+                            LifetimeLabel "'outer"
+                            PathExpr
+                              Ident "total"
+                          Semi ";"
+                        CloseBrace "}"
+                      KwElse "else"
+                      IfExpr
+                        KwIf "if"
+                        BinaryExpr
+                          PathExpr
+                            Ident "total"
+                          Gt ">"
+                          Literal
+                            IntLiteral "42"
+                        Block
+                          OpenBrace "{"
+                          ExpressionStatement
+                            ContinueExpr
+                              KwContinue "continue"
+                            Semi ";"
+                          CloseBrace "}"
+                        KwElse "else"
+                        Block
+                          OpenBrace "{"
+                          ExpressionStatement
+                            AssignExpr
+                              PathExpr
+                                Ident "total"
+                              Eq "="
+                              BinaryExpr
+                                PathExpr
+                                  Ident "total"
+                                Plus "+"
+                                Literal
+                                  IntLiteral "1"
+                            Semi ";"
+                          CloseBrace "}"
+                  CloseBrace "}"
+            ExpressionStatement
+              BreakExpr
+                KwBreak "break"
+              Semi ";"
+            CloseBrace "}"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "category"
+        Eq "="
+        MatchExpr
+          KwMatch "match"
+          CallExpr
+            PathExpr
+              Ident "shape"
+            CallArgs
+              OpenParen "("
+              CloseParen ")"
+          OpenBrace "{"
+          MatchArm
+            PathPattern
+              TypePath
+                Ident "Shape"
+                ColonColon "::"
+                Ident "Circle"
+              FieldPatternBlock
+                OpenBrace "{"
+                FieldPattern
+                  Ident "radius"
+                CloseBrace "}"
+            KwIf "if"
+            BinaryExpr
+              PathExpr
+                Ident "radius"
+              Gt ">"
+              Literal
+                FloatLiteral "1.0"
+            FatArrow "=>"
+            Literal
+              StringLiteral "\"big circle\""
+          Comma ","
+          MatchArm
+            PathPattern
+              TypePath
+                Ident "Shape"
+                ColonColon "::"
+                Ident "Rect"
+              FieldPatternBlock
+                OpenBrace "{"
+                FieldPattern
+                  Ident "w"
+                Comma ","
+                RestPattern
+                  DotDot ".."
+                CloseBrace "}"
+            FatArrow "=>"
+            Literal
+              StringLiteral "\"rect\""
+          Comma ","
+          MatchArm
+            OrPattern
+              PathPattern
+                Ident "Shape"
+                ColonColon "::"
+                Ident "Dot"
+              Pipe "|"
+              PathPattern
+                TypePath
+                  Ident "Shape"
+                  ColonColon "::"
+                  Ident "Circle"
+                FieldPatternBlock
+                  OpenBrace "{"
+                  RestPattern
+                    DotDot ".."
+                  CloseBrace "}"
+            FatArrow "=>"
+            Literal
+              StringLiteral "\"small\""
+          Comma ","
+          MatchArm
+            GroupPattern
+              OpenParen "("
+              OrPattern
+                LiteralPattern
+                  IntLiteral "0"
+                Pipe "|"
+                LiteralPattern
+                  IntLiteral "1"
+              CloseParen ")"
+            FatArrow "=>"
+            Literal
+              StringLiteral "\"unit-ish\""
+          Comma ","
+          MatchArm
+            WildcardPattern
+              Underscore "_"
+            FatArrow "=>"
+            TryExpr
+              MethodCallExpr
+                MethodCallExpr
+                  FieldExpr
+                    CallExpr
+                      PathExpr
+                        Ident "other"
+                      CallArgs
+                        OpenParen "("
+                        CloseParen ")"
+                    Dot "."
+                    Ident "field"
+                  Dot "."
+                  Ident "method"
+                  CallArgs
+                    OpenParen "("
+                    Literal
+                      IntLiteral "1"
+                    Comma ","
+                    Literal
+                      IntLiteral "2"
+                    Comma ","
+                    CloseParen ")"
+                Dot "."
+                Ident "chained"
+                CallArgs
+                  OpenParen "("
+                  CloseParen ")"
+              Question "?"
+          Comma ","
+          CloseBrace "}"
+        Semi ";"
+      ExpressionStatement
+        UnsafeExpr
+          KwUnsafe "unsafe"
+          Block
+            OpenBrace "{"
+            ExpressionStatement
+              CallExpr
+                PathExpr
+                  Ident "poke"
+                CallArgs
+                  OpenParen "("
+                  CloseParen ")"
+              Semi ";"
+            CloseBrace "}"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "tuple_ish"
+        Eq "="
+        FieldExpr
+          PathExpr
+            Ident "value"
+          Dot "."
+          IntLiteral "0"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "unit"
+        Eq "="
+        Literal
+          OpenParen "("
+          CloseParen ")"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "grouped"
+        Eq "="
+        BinaryExpr
+          GroupExpr
+            OpenParen "("
+            BinaryExpr
+              Literal
+                IntLiteral "1"
+              Plus "+"
+              Literal
+                IntLiteral "2"
+            CloseParen ")"
+          Star "*"
+          Literal
+            IntLiteral "3"
+        Semi ";"
+      ExpressionStatement
+        ReturnExpr
+          KwReturn "return"
+          PathExpr
+            Ident "flag"
+        Semi ";"
+      CloseBrace "}"
+  SpecItem
+    DocComment "/// Specs are first-class items."
+    KwSpec "spec"
+    Ident "classify_small"
+    OpenBrace "{"
+    AssertClause
+      KwAssert "assert"
+      BinaryExpr
+        CallExpr
+          PathExpr
+            Ident "classify"
+          CallArgs
+            OpenParen "("
+            CallExpr
+              PathExpr
+                Ident "dot"
+              CallArgs
+                OpenParen "("
+                CloseParen ")"
+            Comma ","
+            Literal
+              IntLiteral "1"
+            Comma ","
+            CallExpr
+              PathExpr
+                Ident "boxed"
+              CallArgs
+                OpenParen "("
+                CloseParen ")"
+            CloseParen ")"
+        EqEq "=="
+        Literal
+          BoolLiteral "true"
+      Semi ";"
+    CloseBrace "}"
+  SpecItem
+    KwSpec "spec"
+    StringLiteral "\"classification is stable\""
+    OpenBrace "{"
+    GivenClause
+      KwGiven "given"
+      GivenBinding
+        Ident "p"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "Point"
+        Eq "="
+        StructLiteral
+          TypePath
+            Ident "Point"
+          OpenBrace "{"
+          FieldInit
+            Ident "x"
+            Colon ":"
+            Literal
+              FloatLiteral "1.0"
+          Comma ","
+          FieldInit
+            Ident "y"
+            Colon ":"
+            Literal
+              FloatLiteral "2.0"
+          CloseBrace "}"
+      Comma ","
+      GivenBinding
+        Ident "n"
+        Colon ":"
+        PathType
+          TypePath
+            Ident "Int"
+      Semi ";"
+    WhenClause
+      KwWhen "when"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "first"
+        Eq "="
+        CallExpr
+          PathExpr
+            Ident "classify"
+          CallArgs
+            OpenParen "("
+            PathExpr
+              Ident "p"
+            Comma ","
+            PathExpr
+              Ident "n"
+            Comma ","
+            CallExpr
+              PathExpr
+                Ident "boxed"
+              CallArgs
+                OpenParen "("
+                CloseParen ")"
+            CloseParen ")"
+      Semi ";"
+    WhenClause
+      KwWhen "when"
+      CallExpr
+        PathExpr
+          Ident "reclassify"
+        CallArgs
+          OpenParen "("
+          CloseParen ")"
+      Semi ";"
+    ThenClause
+      KwThen "then"
+      BinaryExpr
+        PathExpr
+          Ident "first"
+        EqEq "=="
+        CallExpr
+          PathExpr
+            Ident "classify"
+          CallArgs
+            OpenParen "("
+            PathExpr
+              Ident "p"
+            Comma ","
+            PathExpr
+              Ident "n"
+            Comma ","
+            CallExpr
+              PathExpr
+                Ident "boxed"
+              CallArgs
+                OpenParen "("
+                CloseParen ")"
+            CloseParen ")"
+      Semi ";"
+    LetStatement
+      KwLet "let"
+      BindingPattern
+        Ident "cached"
+      Eq "="
+      Literal
+        IntLiteral "3"
+      Semi ";"
+    VarStatement
+      KwVar "var"
+      BindingPattern
+        Ident "swaps"
+      Eq "="
+      Literal
+        IntLiteral "0"
+      Semi ";"
+    ExpressionStatement
+      CallExpr
+        PathExpr
+          Ident "touch"
+        CallArgs
+          OpenParen "("
+          PathExpr
+            Ident "cached"
+          Comma ","
+          PathExpr
+            Ident "swaps"
+          CloseParen ")"
+      Semi ";"
+    CloseBrace "}"

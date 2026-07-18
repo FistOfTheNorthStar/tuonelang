@@ -65,6 +65,8 @@ serde_json = { version = "1", features = ["preserve_order"] }
 logos = "0.15"
 unicode-normalization = "0.1"
 criterion = "0.5"
+# - chumsky powers the prototype parser behind tuo-parser's TDG-owned interface.
+chumsky = "0.10"
 
 # ---------------------------------------------------------------------------
 # Workspace-wide lints.

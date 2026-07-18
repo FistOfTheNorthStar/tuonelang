@@ -176,7 +176,8 @@ ones.
 |-------|--------|------|
 | 0 | `tuo-source` | Foundation. |
 | 10 | `tuo-diagnostics` | Structured diagnostics. |
-| 20 | `tuo-db`, `tuo-lexer`, `tuo-syntax`, `tuo-ast` | Infrastructure & front-end data structures. |
+| 20 | `tuo-db`, `tuo-lexer`, `tuo-ast` | Infrastructure & front-end data structures. |
+| 25 | `tuo-syntax` | Lossless CST over the lexer's tokens. |
 | 30 | `tuo-parser`, `tuo-hir` | Front-end passes. |
 | 40 | `tuo-resolve` | Name resolution. |
 | 50 | `tuo-types` | Type checking. |
