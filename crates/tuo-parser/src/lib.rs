@@ -9,9 +9,14 @@
 //!
 //! - **TDG-owned boundary.** The public surface is [`parse`] and
 //!   [`ParseResult`]; everything else is [`tuo_syntax`] and
-//!   [`tuo_diagnostics`] data. The grammar is implemented with
-//!   [Chumsky](https://crates.io/crates/chumsky) today, but no Chumsky type
-//!   appears in the API — the engine is replaceable.
+//!   [`tuo_diagnostics`] data. The engine behind [`parse`] is a handwritten
+//!   recursive-descent + Pratt parser, chosen at the parser architecture
+//!   decision gate (`specification/adr/ADR-parser-strategy.md`) on measured
+//!   throughput, allocation, and recovery-quality results. The original
+//!   [Chumsky](https://crates.io/crates/chumsky) engine is retained behind
+//!   the same interface as a differential-testing oracle ([`oracle`]) with
+//!   an explicit removal gate — no engine type appears in the API, so the
+//!   engine stays replaceable.
 //! - **Complete files, complete recovery.** [`parse`] always consumes the
 //!   whole file and never panics on any input. On a syntax error it skips to
 //!   the language's deliberate synchronization points — `;`, `}`, and
@@ -36,6 +41,8 @@
 //! | `P0003` | construct nests deeper than the parser's limit             |
 
 mod grammar;
+mod handwritten;
+pub mod oracle;
 mod parse;
 mod stream;
 

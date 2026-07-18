@@ -18,3 +18,11 @@ tuo-lexer.workspace = true
 tuo-syntax.workspace = true
 tuo-ast.workspace = true
 chumsky.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+dhat.workspace = true
+
+[[bench]]
+name = "parser_compare"
+harness = false

@@ -1,0 +1,3525 @@
+module bench::clean;
+
+import std::collections::{Map as Dict, Set};
+import std::fmt;
+
+/// Point number 0 in the clean corpus.
+pub struct Point0[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape0 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area0 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area0 for Shape0 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape0::Circle { radius } => 3.14159 * radius * radius,
+            Shape0::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_0: Int = 0 * 64 + 7;
+
+fn build_0[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_0 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_0_area {
+    given radius: F64 = 0.5;
+    when let shape = Shape0::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_0 > 0;
+}
+/// Point number 1 in the clean corpus.
+pub struct Point1[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape1 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area1 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area1 for Shape1 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape1::Circle { radius } => 3.14159 * radius * radius,
+            Shape1::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_1: Int = 1 * 64 + 7;
+
+fn build_1[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_1 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_1_area {
+    given radius: F64 = 1.5;
+    when let shape = Shape1::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_1 > 0;
+}
+/// Point number 2 in the clean corpus.
+pub struct Point2[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape2 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area2 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area2 for Shape2 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape2::Circle { radius } => 3.14159 * radius * radius,
+            Shape2::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_2: Int = 2 * 64 + 7;
+
+fn build_2[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_2 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_2_area {
+    given radius: F64 = 2.5;
+    when let shape = Shape2::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_2 > 0;
+}
+/// Point number 3 in the clean corpus.
+pub struct Point3[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape3 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area3 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area3 for Shape3 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape3::Circle { radius } => 3.14159 * radius * radius,
+            Shape3::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_3: Int = 3 * 64 + 7;
+
+fn build_3[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_3 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_3_area {
+    given radius: F64 = 3.5;
+    when let shape = Shape3::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_3 > 0;
+}
+/// Point number 4 in the clean corpus.
+pub struct Point4[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape4 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area4 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area4 for Shape4 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape4::Circle { radius } => 3.14159 * radius * radius,
+            Shape4::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_4: Int = 4 * 64 + 7;
+
+fn build_4[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_4 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_4_area {
+    given radius: F64 = 4.5;
+    when let shape = Shape4::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_4 > 0;
+}
+/// Point number 5 in the clean corpus.
+pub struct Point5[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape5 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area5 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area5 for Shape5 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape5::Circle { radius } => 3.14159 * radius * radius,
+            Shape5::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_5: Int = 5 * 64 + 7;
+
+fn build_5[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_5 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_5_area {
+    given radius: F64 = 5.5;
+    when let shape = Shape5::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_5 > 0;
+}
+/// Point number 6 in the clean corpus.
+pub struct Point6[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape6 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area6 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area6 for Shape6 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape6::Circle { radius } => 3.14159 * radius * radius,
+            Shape6::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_6: Int = 6 * 64 + 7;
+
+fn build_6[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_6 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_6_area {
+    given radius: F64 = 6.5;
+    when let shape = Shape6::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_6 > 0;
+}
+/// Point number 7 in the clean corpus.
+pub struct Point7[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape7 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area7 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area7 for Shape7 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape7::Circle { radius } => 3.14159 * radius * radius,
+            Shape7::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_7: Int = 7 * 64 + 7;
+
+fn build_7[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_7 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_7_area {
+    given radius: F64 = 7.5;
+    when let shape = Shape7::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_7 > 0;
+}
+/// Point number 8 in the clean corpus.
+pub struct Point8[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape8 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area8 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area8 for Shape8 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape8::Circle { radius } => 3.14159 * radius * radius,
+            Shape8::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_8: Int = 8 * 64 + 7;
+
+fn build_8[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_8 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_8_area {
+    given radius: F64 = 8.5;
+    when let shape = Shape8::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_8 > 0;
+}
+/// Point number 9 in the clean corpus.
+pub struct Point9[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape9 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area9 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area9 for Shape9 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape9::Circle { radius } => 3.14159 * radius * radius,
+            Shape9::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_9: Int = 9 * 64 + 7;
+
+fn build_9[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_9 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_9_area {
+    given radius: F64 = 9.5;
+    when let shape = Shape9::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_9 > 0;
+}
+/// Point number 10 in the clean corpus.
+pub struct Point10[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape10 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area10 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area10 for Shape10 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape10::Circle { radius } => 3.14159 * radius * radius,
+            Shape10::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_10: Int = 10 * 64 + 7;
+
+fn build_10[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_10 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_10_area {
+    given radius: F64 = 10.5;
+    when let shape = Shape10::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_10 > 0;
+}
+/// Point number 11 in the clean corpus.
+pub struct Point11[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape11 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area11 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area11 for Shape11 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape11::Circle { radius } => 3.14159 * radius * radius,
+            Shape11::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_11: Int = 11 * 64 + 7;
+
+fn build_11[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_11 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_11_area {
+    given radius: F64 = 11.5;
+    when let shape = Shape11::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_11 > 0;
+}
+/// Point number 12 in the clean corpus.
+pub struct Point12[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape12 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area12 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area12 for Shape12 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape12::Circle { radius } => 3.14159 * radius * radius,
+            Shape12::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_12: Int = 12 * 64 + 7;
+
+fn build_12[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_12 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_12_area {
+    given radius: F64 = 12.5;
+    when let shape = Shape12::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_12 > 0;
+}
+/// Point number 13 in the clean corpus.
+pub struct Point13[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape13 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area13 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area13 for Shape13 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape13::Circle { radius } => 3.14159 * radius * radius,
+            Shape13::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_13: Int = 13 * 64 + 7;
+
+fn build_13[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_13 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_13_area {
+    given radius: F64 = 13.5;
+    when let shape = Shape13::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_13 > 0;
+}
+/// Point number 14 in the clean corpus.
+pub struct Point14[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape14 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area14 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area14 for Shape14 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape14::Circle { radius } => 3.14159 * radius * radius,
+            Shape14::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_14: Int = 14 * 64 + 7;
+
+fn build_14[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_14 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_14_area {
+    given radius: F64 = 14.5;
+    when let shape = Shape14::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_14 > 0;
+}
+/// Point number 15 in the clean corpus.
+pub struct Point15[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape15 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area15 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area15 for Shape15 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape15::Circle { radius } => 3.14159 * radius * radius,
+            Shape15::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_15: Int = 15 * 64 + 7;
+
+fn build_15[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_15 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_15_area {
+    given radius: F64 = 15.5;
+    when let shape = Shape15::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_15 > 0;
+}
+/// Point number 16 in the clean corpus.
+pub struct Point16[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape16 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area16 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area16 for Shape16 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape16::Circle { radius } => 3.14159 * radius * radius,
+            Shape16::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_16: Int = 16 * 64 + 7;
+
+fn build_16[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_16 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_16_area {
+    given radius: F64 = 16.5;
+    when let shape = Shape16::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_16 > 0;
+}
+/// Point number 17 in the clean corpus.
+pub struct Point17[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape17 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area17 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area17 for Shape17 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape17::Circle { radius } => 3.14159 * radius * radius,
+            Shape17::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_17: Int = 17 * 64 + 7;
+
+fn build_17[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_17 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_17_area {
+    given radius: F64 = 17.5;
+    when let shape = Shape17::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_17 > 0;
+}
+/// Point number 18 in the clean corpus.
+pub struct Point18[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape18 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area18 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area18 for Shape18 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape18::Circle { radius } => 3.14159 * radius * radius,
+            Shape18::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_18: Int = 18 * 64 + 7;
+
+fn build_18[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_18 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_18_area {
+    given radius: F64 = 18.5;
+    when let shape = Shape18::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_18 > 0;
+}
+/// Point number 19 in the clean corpus.
+pub struct Point19[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape19 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area19 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area19 for Shape19 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape19::Circle { radius } => 3.14159 * radius * radius,
+            Shape19::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_19: Int = 19 * 64 + 7;
+
+fn build_19[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_19 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_19_area {
+    given radius: F64 = 19.5;
+    when let shape = Shape19::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_19 > 0;
+}
+/// Point number 20 in the clean corpus.
+pub struct Point20[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape20 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area20 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area20 for Shape20 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape20::Circle { radius } => 3.14159 * radius * radius,
+            Shape20::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_20: Int = 20 * 64 + 7;
+
+fn build_20[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_20 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_20_area {
+    given radius: F64 = 20.5;
+    when let shape = Shape20::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_20 > 0;
+}
+/// Point number 21 in the clean corpus.
+pub struct Point21[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape21 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area21 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area21 for Shape21 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape21::Circle { radius } => 3.14159 * radius * radius,
+            Shape21::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_21: Int = 21 * 64 + 7;
+
+fn build_21[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_21 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_21_area {
+    given radius: F64 = 21.5;
+    when let shape = Shape21::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_21 > 0;
+}
+/// Point number 22 in the clean corpus.
+pub struct Point22[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape22 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area22 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area22 for Shape22 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape22::Circle { radius } => 3.14159 * radius * radius,
+            Shape22::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_22: Int = 22 * 64 + 7;
+
+fn build_22[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_22 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_22_area {
+    given radius: F64 = 22.5;
+    when let shape = Shape22::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_22 > 0;
+}
+/// Point number 23 in the clean corpus.
+pub struct Point23[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape23 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area23 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area23 for Shape23 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape23::Circle { radius } => 3.14159 * radius * radius,
+            Shape23::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_23: Int = 23 * 64 + 7;
+
+fn build_23[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_23 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_23_area {
+    given radius: F64 = 23.5;
+    when let shape = Shape23::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_23 > 0;
+}
+/// Point number 24 in the clean corpus.
+pub struct Point24[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape24 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area24 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area24 for Shape24 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape24::Circle { radius } => 3.14159 * radius * radius,
+            Shape24::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_24: Int = 24 * 64 + 7;
+
+fn build_24[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_24 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_24_area {
+    given radius: F64 = 24.5;
+    when let shape = Shape24::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_24 > 0;
+}
+/// Point number 25 in the clean corpus.
+pub struct Point25[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape25 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area25 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area25 for Shape25 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape25::Circle { radius } => 3.14159 * radius * radius,
+            Shape25::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_25: Int = 25 * 64 + 7;
+
+fn build_25[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_25 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_25_area {
+    given radius: F64 = 25.5;
+    when let shape = Shape25::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_25 > 0;
+}
+/// Point number 26 in the clean corpus.
+pub struct Point26[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape26 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area26 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area26 for Shape26 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape26::Circle { radius } => 3.14159 * radius * radius,
+            Shape26::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_26: Int = 26 * 64 + 7;
+
+fn build_26[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_26 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_26_area {
+    given radius: F64 = 26.5;
+    when let shape = Shape26::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_26 > 0;
+}
+/// Point number 27 in the clean corpus.
+pub struct Point27[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape27 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area27 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area27 for Shape27 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape27::Circle { radius } => 3.14159 * radius * radius,
+            Shape27::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_27: Int = 27 * 64 + 7;
+
+fn build_27[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_27 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_27_area {
+    given radius: F64 = 27.5;
+    when let shape = Shape27::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_27 > 0;
+}
+/// Point number 28 in the clean corpus.
+pub struct Point28[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape28 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area28 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area28 for Shape28 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape28::Circle { radius } => 3.14159 * radius * radius,
+            Shape28::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_28: Int = 28 * 64 + 7;
+
+fn build_28[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_28 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_28_area {
+    given radius: F64 = 28.5;
+    when let shape = Shape28::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_28 > 0;
+}
+/// Point number 29 in the clean corpus.
+pub struct Point29[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape29 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area29 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area29 for Shape29 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape29::Circle { radius } => 3.14159 * radius * radius,
+            Shape29::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_29: Int = 29 * 64 + 7;
+
+fn build_29[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_29 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_29_area {
+    given radius: F64 = 29.5;
+    when let shape = Shape29::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_29 > 0;
+}
+/// Point number 30 in the clean corpus.
+pub struct Point30[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape30 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area30 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area30 for Shape30 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape30::Circle { radius } => 3.14159 * radius * radius,
+            Shape30::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_30: Int = 30 * 64 + 7;
+
+fn build_30[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_30 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_30_area {
+    given radius: F64 = 30.5;
+    when let shape = Shape30::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_30 > 0;
+}
+/// Point number 31 in the clean corpus.
+pub struct Point31[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape31 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area31 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area31 for Shape31 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape31::Circle { radius } => 3.14159 * radius * radius,
+            Shape31::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_31: Int = 31 * 64 + 7;
+
+fn build_31[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_31 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_31_area {
+    given radius: F64 = 31.5;
+    when let shape = Shape31::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_31 > 0;
+}
+/// Point number 32 in the clean corpus.
+pub struct Point32[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape32 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area32 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area32 for Shape32 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape32::Circle { radius } => 3.14159 * radius * radius,
+            Shape32::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_32: Int = 32 * 64 + 7;
+
+fn build_32[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_32 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_32_area {
+    given radius: F64 = 32.5;
+    when let shape = Shape32::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_32 > 0;
+}
+/// Point number 33 in the clean corpus.
+pub struct Point33[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape33 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area33 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area33 for Shape33 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape33::Circle { radius } => 3.14159 * radius * radius,
+            Shape33::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_33: Int = 33 * 64 + 7;
+
+fn build_33[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_33 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_33_area {
+    given radius: F64 = 33.5;
+    when let shape = Shape33::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_33 > 0;
+}
+/// Point number 34 in the clean corpus.
+pub struct Point34[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape34 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area34 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area34 for Shape34 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape34::Circle { radius } => 3.14159 * radius * radius,
+            Shape34::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_34: Int = 34 * 64 + 7;
+
+fn build_34[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_34 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_34_area {
+    given radius: F64 = 34.5;
+    when let shape = Shape34::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_34 > 0;
+}
+/// Point number 35 in the clean corpus.
+pub struct Point35[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape35 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area35 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area35 for Shape35 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape35::Circle { radius } => 3.14159 * radius * radius,
+            Shape35::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_35: Int = 35 * 64 + 7;
+
+fn build_35[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_35 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_35_area {
+    given radius: F64 = 35.5;
+    when let shape = Shape35::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_35 > 0;
+}
+/// Point number 36 in the clean corpus.
+pub struct Point36[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape36 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area36 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area36 for Shape36 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape36::Circle { radius } => 3.14159 * radius * radius,
+            Shape36::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_36: Int = 36 * 64 + 7;
+
+fn build_36[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_36 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_36_area {
+    given radius: F64 = 36.5;
+    when let shape = Shape36::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_36 > 0;
+}
+/// Point number 37 in the clean corpus.
+pub struct Point37[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape37 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area37 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area37 for Shape37 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape37::Circle { radius } => 3.14159 * radius * radius,
+            Shape37::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_37: Int = 37 * 64 + 7;
+
+fn build_37[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_37 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_37_area {
+    given radius: F64 = 37.5;
+    when let shape = Shape37::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_37 > 0;
+}
+/// Point number 38 in the clean corpus.
+pub struct Point38[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape38 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area38 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area38 for Shape38 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape38::Circle { radius } => 3.14159 * radius * radius,
+            Shape38::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_38: Int = 38 * 64 + 7;
+
+fn build_38[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_38 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_38_area {
+    given radius: F64 = 38.5;
+    when let shape = Shape38::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_38 > 0;
+}
+/// Point number 39 in the clean corpus.
+pub struct Point39[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape39 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area39 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area39 for Shape39 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape39::Circle { radius } => 3.14159 * radius * radius,
+            Shape39::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_39: Int = 39 * 64 + 7;
+
+fn build_39[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_39 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_39_area {
+    given radius: F64 = 39.5;
+    when let shape = Shape39::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_39 > 0;
+}
+/// Point number 40 in the clean corpus.
+pub struct Point40[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape40 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area40 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area40 for Shape40 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape40::Circle { radius } => 3.14159 * radius * radius,
+            Shape40::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_40: Int = 40 * 64 + 7;
+
+fn build_40[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_40 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_40_area {
+    given radius: F64 = 40.5;
+    when let shape = Shape40::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_40 > 0;
+}
+/// Point number 41 in the clean corpus.
+pub struct Point41[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape41 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area41 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area41 for Shape41 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape41::Circle { radius } => 3.14159 * radius * radius,
+            Shape41::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_41: Int = 41 * 64 + 7;
+
+fn build_41[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_41 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_41_area {
+    given radius: F64 = 41.5;
+    when let shape = Shape41::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_41 > 0;
+}
+/// Point number 42 in the clean corpus.
+pub struct Point42[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape42 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area42 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area42 for Shape42 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape42::Circle { radius } => 3.14159 * radius * radius,
+            Shape42::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_42: Int = 42 * 64 + 7;
+
+fn build_42[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_42 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_42_area {
+    given radius: F64 = 42.5;
+    when let shape = Shape42::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_42 > 0;
+}
+/// Point number 43 in the clean corpus.
+pub struct Point43[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape43 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area43 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area43 for Shape43 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape43::Circle { radius } => 3.14159 * radius * radius,
+            Shape43::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_43: Int = 43 * 64 + 7;
+
+fn build_43[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_43 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_43_area {
+    given radius: F64 = 43.5;
+    when let shape = Shape43::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_43 > 0;
+}
+/// Point number 44 in the clean corpus.
+pub struct Point44[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape44 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area44 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area44 for Shape44 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape44::Circle { radius } => 3.14159 * radius * radius,
+            Shape44::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_44: Int = 44 * 64 + 7;
+
+fn build_44[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_44 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_44_area {
+    given radius: F64 = 44.5;
+    when let shape = Shape44::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_44 > 0;
+}
+/// Point number 45 in the clean corpus.
+pub struct Point45[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape45 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area45 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area45 for Shape45 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape45::Circle { radius } => 3.14159 * radius * radius,
+            Shape45::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_45: Int = 45 * 64 + 7;
+
+fn build_45[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_45 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_45_area {
+    given radius: F64 = 45.5;
+    when let shape = Shape45::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_45 > 0;
+}
+/// Point number 46 in the clean corpus.
+pub struct Point46[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape46 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area46 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area46 for Shape46 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape46::Circle { radius } => 3.14159 * radius * radius,
+            Shape46::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_46: Int = 46 * 64 + 7;
+
+fn build_46[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_46 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_46_area {
+    given radius: F64 = 46.5;
+    when let shape = Shape46::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_46 > 0;
+}
+/// Point number 47 in the clean corpus.
+pub struct Point47[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape47 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area47 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area47 for Shape47 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape47::Circle { radius } => 3.14159 * radius * radius,
+            Shape47::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_47: Int = 47 * 64 + 7;
+
+fn build_47[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_47 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_47_area {
+    given radius: F64 = 47.5;
+    when let shape = Shape47::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_47 > 0;
+}
+/// Point number 48 in the clean corpus.
+pub struct Point48[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape48 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area48 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area48 for Shape48 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape48::Circle { radius } => 3.14159 * radius * radius,
+            Shape48::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_48: Int = 48 * 64 + 7;
+
+fn build_48[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_48 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_48_area {
+    given radius: F64 = 48.5;
+    when let shape = Shape48::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_48 > 0;
+}
+/// Point number 49 in the clean corpus.
+pub struct Point49[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape49 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area49 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area49 for Shape49 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape49::Circle { radius } => 3.14159 * radius * radius,
+            Shape49::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_49: Int = 49 * 64 + 7;
+
+fn build_49[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_49 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_49_area {
+    given radius: F64 = 49.5;
+    when let shape = Shape49::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_49 > 0;
+}
+/// Point number 50 in the clean corpus.
+pub struct Point50[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape50 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area50 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area50 for Shape50 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape50::Circle { radius } => 3.14159 * radius * radius,
+            Shape50::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_50: Int = 50 * 64 + 7;
+
+fn build_50[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_50 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_50_area {
+    given radius: F64 = 50.5;
+    when let shape = Shape50::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_50 > 0;
+}
+/// Point number 51 in the clean corpus.
+pub struct Point51[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape51 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area51 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area51 for Shape51 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape51::Circle { radius } => 3.14159 * radius * radius,
+            Shape51::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_51: Int = 51 * 64 + 7;
+
+fn build_51[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_51 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_51_area {
+    given radius: F64 = 51.5;
+    when let shape = Shape51::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_51 > 0;
+}
+/// Point number 52 in the clean corpus.
+pub struct Point52[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape52 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area52 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area52 for Shape52 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape52::Circle { radius } => 3.14159 * radius * radius,
+            Shape52::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_52: Int = 52 * 64 + 7;
+
+fn build_52[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_52 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_52_area {
+    given radius: F64 = 52.5;
+    when let shape = Shape52::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_52 > 0;
+}
+/// Point number 53 in the clean corpus.
+pub struct Point53[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape53 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area53 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area53 for Shape53 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape53::Circle { radius } => 3.14159 * radius * radius,
+            Shape53::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_53: Int = 53 * 64 + 7;
+
+fn build_53[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_53 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_53_area {
+    given radius: F64 = 53.5;
+    when let shape = Shape53::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_53 > 0;
+}
+/// Point number 54 in the clean corpus.
+pub struct Point54[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape54 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area54 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area54 for Shape54 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape54::Circle { radius } => 3.14159 * radius * radius,
+            Shape54::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_54: Int = 54 * 64 + 7;
+
+fn build_54[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_54 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_54_area {
+    given radius: F64 = 54.5;
+    when let shape = Shape54::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_54 > 0;
+}
+/// Point number 55 in the clean corpus.
+pub struct Point55[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape55 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area55 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area55 for Shape55 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape55::Circle { radius } => 3.14159 * radius * radius,
+            Shape55::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_55: Int = 55 * 64 + 7;
+
+fn build_55[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_55 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_55_area {
+    given radius: F64 = 55.5;
+    when let shape = Shape55::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_55 > 0;
+}
+/// Point number 56 in the clean corpus.
+pub struct Point56[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape56 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area56 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area56 for Shape56 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape56::Circle { radius } => 3.14159 * radius * radius,
+            Shape56::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_56: Int = 56 * 64 + 7;
+
+fn build_56[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_56 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_56_area {
+    given radius: F64 = 56.5;
+    when let shape = Shape56::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_56 > 0;
+}
+/// Point number 57 in the clean corpus.
+pub struct Point57[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape57 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area57 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area57 for Shape57 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape57::Circle { radius } => 3.14159 * radius * radius,
+            Shape57::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_57: Int = 57 * 64 + 7;
+
+fn build_57[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_57 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_57_area {
+    given radius: F64 = 57.5;
+    when let shape = Shape57::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_57 > 0;
+}
+/// Point number 58 in the clean corpus.
+pub struct Point58[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape58 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area58 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area58 for Shape58 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape58::Circle { radius } => 3.14159 * radius * radius,
+            Shape58::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_58: Int = 58 * 64 + 7;
+
+fn build_58[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_58 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_58_area {
+    given radius: F64 = 58.5;
+    when let shape = Shape58::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_58 > 0;
+}
+/// Point number 59 in the clean corpus.
+pub struct Point59[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape59 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area59 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area59 for Shape59 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape59::Circle { radius } => 3.14159 * radius * radius,
+            Shape59::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_59: Int = 59 * 64 + 7;
+
+fn build_59[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_59 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_59_area {
+    given radius: F64 = 59.5;
+    when let shape = Shape59::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_59 > 0;
+}
+/// Point number 60 in the clean corpus.
+pub struct Point60[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape60 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area60 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area60 for Shape60 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape60::Circle { radius } => 3.14159 * radius * radius,
+            Shape60::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_60: Int = 60 * 64 + 7;
+
+fn build_60[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_60 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_60_area {
+    given radius: F64 = 60.5;
+    when let shape = Shape60::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_60 > 0;
+}
+/// Point number 61 in the clean corpus.
+pub struct Point61[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape61 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area61 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area61 for Shape61 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape61::Circle { radius } => 3.14159 * radius * radius,
+            Shape61::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_61: Int = 61 * 64 + 7;
+
+fn build_61[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_61 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_61_area {
+    given radius: F64 = 61.5;
+    when let shape = Shape61::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_61 > 0;
+}
+/// Point number 62 in the clean corpus.
+pub struct Point62[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape62 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area62 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area62 for Shape62 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape62::Circle { radius } => 3.14159 * radius * radius,
+            Shape62::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_62: Int = 62 * 64 + 7;
+
+fn build_62[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_62 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_62_area {
+    given radius: F64 = 62.5;
+    when let shape = Shape62::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_62 > 0;
+}
+/// Point number 63 in the clean corpus.
+pub struct Point63[T: Ord + Clone] where T: Display {
+    /// Horizontal coordinate.
+    pub x: T,
+    pub y: T,
+    tags: Set[Str],
+}
+
+pub enum Shape63 {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Empty,
+}
+
+interface Area63 {
+    fn area(in self) -> F64;
+    fn scaled(in self, in factor: F64) -> F64 {
+        self.area() * factor
+    }
+}
+
+impl Area63 for Shape63 {
+    fn area(in self) -> F64 {
+        match self {
+            Shape63::Circle { radius } => 3.14159 * radius * radius,
+            Shape63::Rect { w, h } => w * h,
+            _ => 0.0,
+        }
+    }
+}
+
+const LIMIT_63: Int = 63 * 64 + 7;
+
+fn build_63[T: Ord](in items: List[T], mut acc: List[T]) -> List[T] where T: Clone {
+    var total = 0;
+    for item in items {
+        if total > LIMIT_63 {
+            break;
+        };
+        total = total + 1;
+    }
+    'outer: loop {
+        while total > 0 {
+            total = total - 1;
+        }
+        break 'outer acc;
+    }
+}
+
+spec shape_63_area {
+    given radius: F64 = 63.5;
+    when let shape = Shape63::Circle;
+    then shape.area() >= 0.0;
+    assert LIMIT_63 > 0;
+}

@@ -138,7 +138,7 @@ fn comma_list1<'a>(item: BP<'a>) -> Boxed<'a, 'a, Stream<'a>, Vec<SyntaxElement>
 
 /// The item-leading token kinds (grammar NOTES §2): recovery stops before
 /// these so a broken item cannot swallow the next one.
-const ITEM_START: [K; 11] = [
+pub(crate) const ITEM_START: [K; 11] = [
     K::DocComment,
     K::KwPub,
     K::KwImport,

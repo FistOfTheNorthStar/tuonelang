@@ -1,15 +1,11 @@
-//! The public parse entry point and error conversion.
-
-use chumsky::Parser as _;
-use chumsky::error::{Rich, RichReason};
+//! The public parse entry point and the helpers both engines share.
 
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
 use tuo_lexer::LexResult;
 use tuo_source::{ByteOffset, SourceText, Span, TextRange};
 use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
-use crate::grammar;
-use crate::stream::{Tok, kind_name, parse_stream};
+use crate::stream::Tok;
 
 /// Everything the parser produced for one source snapshot.
 ///
@@ -52,68 +48,51 @@ impl ParseResult {
 /// still yields every well-formed construct around them.
 #[must_use]
 pub fn parse(source: &SourceText) -> ParseResult {
-    let lex = tuo_lexer::lex(source);
-    let toks = parse_stream(&lex);
-
-    // Guard the recursive-descent engine against adversarial nesting depth
-    // (P0003) *before* parsing: a stack overflow is not a diagnostic.
-    if let Some(pos) = nests_too_deeply(&toks) {
-        let primary = byte_span(pos, &toks, &lex, source);
-        let els = toks
-            .iter()
-            .map(|tk| SyntaxElement::Token(tk.index))
-            .collect();
-        let root = SyntaxNode::new(
-            SyntaxKind::SourceFile,
-            vec![SyntaxElement::Node(SyntaxNode::new(SyntaxKind::Error, els))],
-        );
-        let diagnostic = Diagnostic::error(
-            code(3),
-            format!("construct nests deeper than the parser's limit ({MAX_NEST})"),
-            primary,
-        )
-        .with_note("deeply nested delimiters, prefix operators, or chains are rejected before parsing to keep the parser total");
-        return ParseResult {
-            tree: SyntaxTree { root, lex },
-            diagnostics: vec![diagnostic],
-        };
-    }
-
-    let (output, errors) = grammar::parser().parse(&toks[..]).into_output_errors();
-
-    let mut diagnostics: Vec<Diagnostic> = errors
-        .into_iter()
-        .map(|error| to_diagnostic(&error, &toks, &lex, source))
-        .collect();
-    diagnostics.sort_by_key(|d| d.primary_span.range().start());
-
-    let root = output.unwrap_or_else(|| {
-        // Unrecoverable parse (should be rare: recovery is total by
-        // construction). Keep losslessness: every token goes under one
-        // Error node. The failure itself has already produced diagnostics.
-        let els = toks
-            .iter()
-            .map(|tk| SyntaxElement::Token(tk.index))
-            .collect();
-        SyntaxNode::new(
-            SyntaxKind::SourceFile,
-            vec![SyntaxElement::Node(SyntaxNode::new(SyntaxKind::Error, els))],
-        )
-    });
-
-    ParseResult {
-        tree: SyntaxTree { root, lex },
-        diagnostics,
-    }
+    // The handwritten recursive-descent + Pratt engine, chosen at the
+    // parser architecture decision gate (ADR-parser-strategy).
+    crate::handwritten::parse(source)
 }
 
 /// The parser's diagnostic codes (the reserved `Pxxxx` namespace).
-fn code(number: u16) -> DiagnosticCode {
+pub(crate) fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Parser, number)
 }
 
 /// The maximum depth for every construct that recurses in the grammar.
 const MAX_NEST: usize = 128;
+
+/// Run the [`nests_too_deeply`] pre-scan; on violation, build the flat
+/// depth-limited `ParseResult` (one `Error` node over every token, one
+/// `P0003`). Shared by both parsing engines so the guarded path is
+/// byte-for-byte identical.
+pub(crate) fn depth_guard(
+    lex: LexResult,
+    toks: &[Tok],
+    source: &SourceText,
+) -> Result<LexResult, ParseResult> {
+    let Some(pos) = nests_too_deeply(toks) else {
+        return Ok(lex);
+    };
+    let primary = byte_span(pos, toks, &lex, source);
+    let els = toks
+        .iter()
+        .map(|tk| SyntaxElement::Token(tk.index))
+        .collect();
+    let root = SyntaxNode::new(
+        SyntaxKind::SourceFile,
+        vec![SyntaxElement::Node(SyntaxNode::new(SyntaxKind::Error, els))],
+    );
+    let diagnostic = Diagnostic::error(
+        code(3),
+        format!("construct nests deeper than the parser's limit ({MAX_NEST})"),
+        primary,
+    )
+    .with_note("deeply nested delimiters, prefix operators, or chains are rejected before parsing to keep the parser total");
+    Err(ParseResult {
+        tree: SyntaxTree { root, lex },
+        diagnostics: vec![diagnostic],
+    })
+}
 
 /// Linear pre-scan for input that would recurse beyond [`MAX_NEST`] in the
 /// recursive-descent engine: delimiter nesting, runs of prefix
@@ -159,53 +138,9 @@ fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
     None
 }
 
-/// Convert one chumsky error to a diagnostic.
-///
-/// - `P0001`: unexpected token (expected/found, from the grammar itself).
-/// - `P0002`: tokens skipped during recovery ("malformed statement/item:
-///   skipped …"), pointing at the first skipped token.
-fn to_diagnostic(
-    error: &Rich<'_, Tok>,
-    toks: &[Tok],
-    lex: &LexResult,
-    source: &SourceText,
-) -> Diagnostic {
-    let span = error.span();
-    let primary = byte_span(span.start, toks, lex, source);
-
-    match error.reason() {
-        RichReason::Custom(message) => Diagnostic::error(code(2), message.clone(), primary)
-            .with_primary_label("skipped during error recovery")
-            .with_note(
-                "the parser resynchronized at the next `;`, `}`, or item keyword and continued",
-            ),
-        RichReason::ExpectedFound { .. } => {
-            let mut expected: Vec<String> = error.expected().map(ToString::to_string).collect();
-            expected.sort_unstable();
-            expected.dedup();
-            if expected.len() > 8 {
-                expected.truncate(8);
-                expected.push("…".to_owned());
-            }
-            let expected = if expected.is_empty() {
-                "a different token".to_owned()
-            } else {
-                expected.join(" or ")
-            };
-            let found = error.found().map_or("end of file", |tk| kind_name(tk.kind));
-            Diagnostic::error(
-                code(1),
-                format!("expected {expected}, found {found}"),
-                primary,
-            )
-            .with_primary_label(format!("expected {expected}"))
-        }
-    }
-}
-
 /// The byte-level span of the token at parse-stream position `pos`, or an
 /// empty span at end of file.
-fn byte_span(pos: usize, toks: &[Tok], lex: &LexResult, source: &SourceText) -> Span {
+pub(crate) fn byte_span(pos: usize, toks: &[Tok], lex: &LexResult, source: &SourceText) -> Span {
     let range = toks
         .get(pos)
         .and_then(|tk| lex.tokens.get(tk.index as usize))
