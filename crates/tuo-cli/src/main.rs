@@ -1,12 +1,16 @@
 //! `tuo` — the command-line entry point for the tuonelang compiler and tooling.
 //!
-//! This binary currently supports only the built-in `--help` and `--version`
-//! flags. Subcommands such as `build`, `run`, `check`, `spec`, and `verify`
-//! are intentionally **not** implemented: they will be added as their
-//! underlying functionality exists, so that the CLI never advertises behavior
-//! the compiler cannot yet perform. See [`cli::Cli`] for the extension point.
+//! Implemented today: the `tuo debug syntax <file>` / `tuo debug ast <file>`
+//! developer tools (raw dumps of the CST and the typed AST views — unstable
+//! diagnostic output, not a language protocol) plus the built-in `--help`
+//! and `--version`. Compiler subcommands such as `build`, `run`, `check`,
+//! `spec`, and `verify` are intentionally **not** implemented: they are
+//! added as their underlying functionality exists, so that the CLI never
+//! advertises behavior the compiler cannot yet perform. See [`cli::Cli`]
+//! for the extension point.
 
 mod cli;
+mod debug;
 
 use std::process::ExitCode;
 

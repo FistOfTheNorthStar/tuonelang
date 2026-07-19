@@ -19,7 +19,9 @@ boundary each stub describes rather than reshaping the graph.
 ```bash
 cargo build                    # build the whole workspace
 cargo build -p tdg-cli         # build a single crate (produces the `tdg` binary)
-cargo run -p tdg-cli -- --help # run the CLI (only --help / --version exist today)
+cargo run -p tdg-cli -- --help # run the CLI
+cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
+cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo test                     # run all tests
 cargo test -p tdg-cli          # test one crate
 cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
@@ -80,8 +82,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (and CI is `-D warnings`). Don't leave them in committed code.
 - **The CLI must never advertise behavior the compiler can't perform.** Subcommands
   (`build`, `run`, `check`, `spec`, `verify`) are deliberately absent until their
-  functionality exists; the empty `Command` enum in `tdg-cli/src/cli.rs` is the extension
-  point.
+  functionality exists; the `Command` enum in `tdg-cli/src/cli.rs` is the extension
+  point. Implemented so far: `tdg debug syntax|ast <file>` — diagnostic developer
+  tools with unstable output, not language protocols.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

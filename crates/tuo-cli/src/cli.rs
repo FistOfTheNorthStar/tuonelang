@@ -1,13 +1,17 @@
 //! CLI definition for `tuo`.
 //!
-//! The command surface is intentionally minimal. A [`Command`] enum is present
-//! as the extension point for future subcommands, but no subcommands are
-//! defined yet — adding one is a matter of a new enum variant plus a match arm
-//! in [`Cli::dispatch`].
+//! The command surface is intentionally minimal: only functionality the
+//! compiler can actually perform is exposed. Today that is the `tuo debug`
+//! developer tools; compiler subcommands (`build`, `run`, `check`, `spec`,
+//! `verify`, …) are added as their functionality is implemented — a new
+//! [`Command`] variant plus a match arm in [`Cli::dispatch`].
 
+use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory as _, Parser, Subcommand};
+
+use crate::debug::{self, Dump};
 
 /// The `tuo` command-line interface.
 #[derive(Debug, Parser)]
@@ -15,11 +19,9 @@ use clap::{CommandFactory as _, Parser, Subcommand};
     name = "tuo",
     version,
     about = "tuonelang — an experimental statically typed, memory-safe native language.",
-    long_about = "tuonelang is an experimental compiler project. This CLI currently exposes only \
-                  `--help` and `--version`; compiler subcommands are added as their \
-                  functionality is implemented.",
-    // Show help when invoked with no subcommand, once subcommands exist. For
-    // now the parse always yields no subcommand and we handle that in dispatch.
+    long_about = "tuonelang is an experimental compiler project. Compiler subcommands are added \
+                  as their functionality is implemented; today the CLI exposes only the \
+                  `debug` developer tools.",
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
@@ -29,17 +31,45 @@ pub(crate) struct Cli {
 
 /// Top-level subcommands.
 ///
-/// This enum is deliberately empty of real commands. It exists so that future
-/// work can add variants (`Build`, `Run`, `Check`, `Spec`, `Verify`, …)
-/// without restructuring argument parsing.
+/// Future compiler commands (`Build`, `Run`, `Check`, `Spec`, `Verify`, …)
+/// slot in as new variants once their functionality exists.
 #[derive(Debug, Subcommand)]
-enum Command {}
+enum Command {
+    /// Diagnostic developer tools (unstable output, not a language protocol).
+    #[command(subcommand)]
+    Debug(DebugCommand),
+}
+
+/// The `tuo debug` tools: raw dumps of compiler-internal representations.
+#[derive(Debug, Subcommand)]
+enum DebugCommand {
+    /// Print the lossless concrete syntax tree of a source file.
+    ///
+    /// The dump shows every node, token, and comment, including Error nodes
+    /// where the parser recovered. Parse diagnostics go to stderr; the exit
+    /// code is a failure only if the file cannot be read.
+    Syntax {
+        /// The tuonelang source file to inspect.
+        file: PathBuf,
+    },
+    /// Print the typed AST view of a source file.
+    ///
+    /// The dump walks the typed accessors (FnDecl, StructDecl, Expr, …) over
+    /// the syntax tree. Parse diagnostics go to stderr; the exit code is a
+    /// failure only if the file cannot be read.
+    Ast {
+        /// The tuonelang source file to inspect.
+        file: PathBuf,
+    },
+}
 
 impl Cli {
     /// Execute the parsed command.
     pub(crate) fn dispatch(self) -> ExitCode {
         match self.command {
-            // No subcommands exist yet, so a bare `tuo` invocation prints help.
+            Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
+            Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
+            // A bare `tuo` invocation prints help.
             None => match Self::command().print_help() {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(_) => ExitCode::FAILURE,

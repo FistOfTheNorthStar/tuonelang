@@ -1,0 +1,17 @@
+SourceFile
+  ModuleDecl broken
+  FnDecl first
+    Returns `Int`
+    Block
+      Tail
+        Literal `1`
+  Error «fn broken( {»
+  StructDecl Point
+    FieldDecl x ty=`F64`
+    FieldDecl y ty=`F64`
+  Error «struct Unfinished { x: F64 y F64, }»
+  FnDecl last
+    Returns `Int`
+    Block
+      Tail
+        Literal `2`

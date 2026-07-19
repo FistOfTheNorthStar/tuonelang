@@ -1,0 +1,7 @@
+SourceFile
+  FnDecl ok_before
+    Returns `Int`
+    Block
+      Tail
+        Literal `1`
+  Error «fn never_closed() -> Int { let x = 2;»

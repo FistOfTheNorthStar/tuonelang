@@ -947,8 +947,9 @@ dependencies = [
 name = "tuo-ast"
 version = "0.0.0"
 dependencies = [
- "tuo-diagnostics",
+ "tuo-lexer",
  "tuo-source",
+ "tuo-syntax",
 ]
 
 [[package]]
@@ -964,6 +965,7 @@ name = "tuo-cli"
 version = "0.0.0"
 dependencies = [
  "clap",
+ "tuo-compiler",
 ]
 
 [[package]]

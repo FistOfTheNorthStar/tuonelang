@@ -18,3 +18,5 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+# The CLI drives the compiler exclusively through the facade.
+tuo-compiler.workspace = true
