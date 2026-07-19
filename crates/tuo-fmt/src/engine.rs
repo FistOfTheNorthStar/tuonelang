@@ -41,8 +41,6 @@ enum Brk {
     Auto,
     /// Force no separator.
     None,
-    /// Force a single space.
-    Space,
     /// Break the line.
     Newline,
     /// Break the line and leave one blank line.
@@ -52,7 +50,7 @@ enum Brk {
 impl Brk {
     fn rank(self) -> u8 {
         match self {
-            Self::Auto | Self::None | Self::Space => 0,
+            Self::Auto | Self::None => 0,
             Self::Newline => 1,
             Self::Blank => 2,
         }
@@ -60,7 +58,11 @@ impl Brk {
 
     /// The stronger of two separators (line breaks win over inline forms).
     fn max(self, other: Self) -> Self {
-        if other.rank() > self.rank() { other } else { self }
+        if other.rank() > self.rank() {
+            other
+        } else {
+            self
+        }
     }
 }
 
@@ -132,7 +134,6 @@ impl<'a> Writer<'a> {
     fn apply_break(&mut self, brk: Brk, next: TokenKind) {
         match brk {
             Brk::None => {}
-            Brk::Space => self.out.push(' '),
             Brk::Newline => {
                 self.out.push('\n');
                 self.push_indent();
@@ -279,12 +280,13 @@ fn auto_sep(prev: Option<TokenKind>, next: TokenKind) -> &'static str {
     if matches!(prev, OpenParen | OpenBracket | Dot | ColonColon | Bang) {
         return "";
     }
-    // Call/index/generic openers glue to a completed operand on the left,
-    // but keep a space after keywords and operators.
+    // Call/index/generic openers glue to a completed operand on the left
+    // (and `impl[T]`), but keep a space after other keywords and operators.
     if matches!(next, OpenParen | OpenBracket) {
         return if matches!(
             prev,
             Ident
+                | KwImpl
                 | KwSelfValue
                 | KwSelfType
                 | CloseParen
@@ -360,13 +362,15 @@ fn inline(w: &mut Writer<'_>, node: &SyntaxNode) {
 /// Is the element after `position` a closing delimiter (so a comma here is a
 /// trailing separator to drop in inline layout)?
 fn closes_next(w: &Writer<'_>, node: &SyntaxNode, position: usize) -> bool {
-    node.children.get(position + 1).is_some_and(|next| match next {
-        SyntaxElement::Token(index) => matches!(
-            w.kind(*index),
-            TokenKind::CloseParen | TokenKind::CloseBracket | TokenKind::CloseBrace
-        ),
-        SyntaxElement::Node(_) => false,
-    })
+    node.children
+        .get(position + 1)
+        .is_some_and(|next| match next {
+            SyntaxElement::Token(index) => matches!(
+                w.kind(*index),
+                TokenKind::CloseParen | TokenKind::CloseBracket | TokenKind::CloseBrace
+            ),
+            SyntaxElement::Node(_) => false,
+        })
 }
 
 /// A `{ … }` code block: statements and the tail expression one per line.

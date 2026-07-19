@@ -22,6 +22,8 @@ cargo build -p tdg-cli         # build a single crate (produces the `tdg` binary
 cargo run -p tdg-cli -- --help # run the CLI
 cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
+cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
+cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
 cargo test                     # run all tests
 cargo test -p tdg-cli          # test one crate
 cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
@@ -83,8 +85,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
 - **The CLI must never advertise behavior the compiler can't perform.** Subcommands
   (`build`, `run`, `check`, `spec`, `verify`) are deliberately absent until their
   functionality exists; the `Command` enum in `tdg-cli/src/cli.rs` is the extension
-  point. Implemented so far: `tdg debug syntax|ast <file>` — diagnostic developer
-  tools with unstable output, not language protocols.
+  point. Implemented so far: `tdg fmt [--check] <files>` (the canonical formatter —
+  deterministic, idempotent, zero configuration) and `tdg debug syntax|ast <file>`
+  (diagnostic developer tools with unstable output, not language protocols).
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

@@ -1,0 +1,12 @@
+spec simple {
+    assert f(1) == true;
+}
+spec "with a name" {
+    given p: Point = Point { x: 1.0, y: 2.0 }, n: Int;
+    when let first = classify(p, n);
+    when reclassify();
+    then first == classify(p, n);
+    let cached = 3;
+    var swaps = 0;
+    touch(cached, swaps);
+}

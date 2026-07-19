@@ -11,3 +11,6 @@ compiler validates them, and the tooling that performs that validation does not
 yet exist.
 
 The corpus is intentionally empty at this stage.
+
+All corpus programs must be canonically formatted (`tuo fmt --check` clean);
+the formatter defines tuonelang's single canonical source representation.

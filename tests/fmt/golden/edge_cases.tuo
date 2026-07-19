@@ -1,0 +1,13 @@
+;
+fn empty() {}
+fn only_semi() {
+    ;
+    ;
+}
+fn unit() {
+    let u = ();
+    ()
+}
+struct Bare {}
+enum Nothing {}
+spec empty_spec {}

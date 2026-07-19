@@ -12,6 +12,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory as _, Parser, Subcommand};
 
 use crate::debug::{self, Dump};
+use crate::fmt;
 
 /// The `tuo` command-line interface.
 #[derive(Debug, Parser)]
@@ -38,6 +39,21 @@ enum Command {
     /// Diagnostic developer tools (unstable output, not a language protocol).
     #[command(subcommand)]
     Debug(DebugCommand),
+    /// Rewrite source files into tuonelang's canonical format.
+    ///
+    /// The canonical form is fixed: one brace style, 4-space indentation,
+    /// nothing configurable. Formatting preserves every comment and the
+    /// program's meaning (each run is self-verified), and reproduces
+    /// malformed regions byte-for-byte. `--check` reports files that are
+    /// not canonical instead of rewriting them.
+    Fmt {
+        /// Report non-canonical files (exit status 1) instead of rewriting.
+        #[arg(long)]
+        check: bool,
+        /// The tuonelang source files to format.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
 }
 
 /// The `tuo debug` tools: raw dumps of compiler-internal representations.
@@ -69,6 +85,7 @@ impl Cli {
         match self.command {
             Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
             Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
+            Some(Command::Fmt { check, files }) => fmt::run(check, &files),
             // A bare `tuo` invocation prints help.
             None => match Self::command().print_help() {
                 Ok(()) => ExitCode::SUCCESS,

@@ -1,0 +1,98 @@
+module examples::showcase;
+
+import std::io;
+import std::mem as memory;
+import std::collections::{Map as Dict, Set};
+
+/// A point in the plane.
+pub struct Point {
+    /// Horizontal coordinate.
+    pub x: F64,
+    pub y: F64,
+}
+
+struct Wrapperless[T] where T: Clone {
+    value: T,
+}
+
+pub enum Shape {
+    /// A circle with a radius.
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Dot,
+}
+
+interface Renderable {
+    fn render(in self) -> String;
+    fn describe(in self) -> String {
+        self.render()
+    }
+}
+
+impl[T] Renderable for Wrapperless[T] where T: Renderable {
+    fn render(in self) -> String {
+        self.value.render()
+    }
+}
+
+const LIMIT: Int = 100;
+const ORIGIN: Point = Point { x: 0.0, y: 0.0 };
+
+pub fn classify[T: Ord + Clone](in value: T, mut count: Int, take sink: Box[T]) -> Bool where T: Renderable {
+    var total = 0;
+    let boxed: Shared[Point] = share();
+    let weak: Weak[Point] = downgrade();
+    ;
+    total = total + 1;
+    count = LIMIT % 7 - -total;
+    let flag = !(count <= 3) && count != 4 || false;
+    let in_range = 0 .. count;
+    let converted = total as F64;
+    let picked = points()[0];
+    let renamed = memory::swap::[Int]();
+    let shorthand = Point { x: 1.0, y };
+    for p in points() {
+        io::print(p.x);
+    }
+    'outer: loop {
+        while total < LIMIT {
+            if total == 42 {
+                break 'outer total;
+            } else if total > 42 {
+                continue;
+            } else {
+                total = total + 1;
+            }
+        }
+        break;
+    }
+    let category = match shape() {
+        Shape::Circle { radius } if radius > 1.0 => "big circle",
+        Shape::Rect { w, .. } => "rect",
+        Shape::Dot | Shape::Circle { .. } => "small",
+        (0 | 1) => "unit-ish",
+        _ => other().field.method(1, 2).chained()?,
+    };
+    unsafe {
+        poke();
+    }
+    let tuple_ish = value.0;
+    let unit = ();
+    let grouped = (1 + 2) * 3;
+    return flag;
+}
+
+/// Specs are first-class items.
+spec classify_small {
+    assert classify(dot(), 1, boxed()) == true;
+}
+
+spec "classification is stable" {
+    given p: Point = Point { x: 1.0, y: 2.0 }, n: Int;
+    when let first = classify(p, n, boxed());
+    when reclassify();
+    then first == classify(p, n, boxed());
+    let cached = 3;
+    var swaps = 0;
+    touch(cached, swaps);
+}
