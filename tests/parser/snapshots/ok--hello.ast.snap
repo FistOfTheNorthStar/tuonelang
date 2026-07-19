@@ -1,0 +1,18 @@
+SourceFile
+  ModuleDecl hello
+  FnDecl main pub
+    Returns `Int`
+    Block
+      Let `greeting`
+        Literal `"Hello, world!\n"`
+      ExprStatement
+        If
+          Binary `!=`
+            Path `greeting`
+            Literal `""`
+          Block
+            ExprStatement
+              Return
+                Literal `0`
+      Tail
+        Literal `1`

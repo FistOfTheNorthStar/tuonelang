@@ -12,5 +12,8 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# Typed views are read-only accessors over the CST and its lossless token
+# stream; they carry no semantic (type or ownership) information.
 tuo-source.workspace = true
-tuo-diagnostics.workspace = true
+tuo-lexer.workspace = true
+tuo-syntax.workspace = true

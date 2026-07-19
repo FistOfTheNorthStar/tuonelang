@@ -1,0 +1,26 @@
+SourceFile
+  FnDecl stumbles
+    Returns `Int`
+    Block
+      Let `good`
+        Literal `1`
+      Let `5`
+        Path `oops`
+      Var `also_good`
+        Literal `2`
+      Error «good + + ;»
+      ExprStatement
+        If
+          Binary `==`
+            Path `good`
+            Literal `2`
+          Block
+            Error «broken syntax here;»
+            ExprStatement
+              Assign
+                Path `good`
+                Literal `3`
+      Tail
+        Binary `+`
+          Path `good`
+          Path `also_good`

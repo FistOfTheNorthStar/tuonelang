@@ -7,6 +7,9 @@ Parsing tests: syntax-tree shape and parse-error diagnostics.
 - `fixtures/ok/*.tuo` — programs that must parse with **zero** diagnostics.
 - `fixtures/err/*.tuo` — deliberately broken programs that must produce
   diagnostics while retaining the valid constructs around the damage.
+- `snapshots/*.ast.snap` — the blessed typed-AST rendering of the same
+  fixtures (harness: `crates/tuo-compiler/tests/ast_snapshots.rs`; bless with
+  `TUO_BLESS=1 cargo test -p tuo-compiler --test ast_snapshots`).
 - `snapshots/*.snap` — the blessed syntax tree (with token lexemes) and
   rendered diagnostics for each fixture.
 

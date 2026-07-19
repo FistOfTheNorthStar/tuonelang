@@ -1,0 +1,248 @@
+SourceFile
+  ModuleDecl examples::showcase
+  ImportDecl std::io
+  ImportDecl std::mem as=memory
+  ImportDecl std::collections group=[Map as Dict, Set]
+  StructDecl Point pub
+    FieldDecl x pub ty=`F64`
+    FieldDecl y pub ty=`F64`
+  StructDecl Wrapperless generics=`[T]`
+    FieldDecl value ty=`T`
+  EnumDecl Shape pub
+    VariantDecl Circle
+      FieldDecl radius ty=`F64`
+    VariantDecl Rect
+      FieldDecl w ty=`F64`
+      FieldDecl h ty=`F64`
+    VariantDecl Dot
+  InterfaceDecl Renderable
+    FnDecl render (signature)
+      Param in self
+      Returns `String`
+    FnDecl describe
+      Param in self
+      Returns `String`
+      Block
+        Tail
+          MethodCall .render
+            Path `self`
+  ImplDecl `Renderable` for `Wrapperless[T]`
+    FnDecl render
+      Param in self
+      Returns `String`
+      Block
+        Tail
+          MethodCall .render
+            Field .value
+              Path `self`
+  ConstDecl LIMIT ty=`Int`
+    Literal `100`
+  ConstDecl ORIGIN ty=`Point`
+    StructLiteral `Point`
+      FieldInit x
+        Literal `0.0`
+      FieldInit y
+        Literal `0.0`
+  FnDecl classify pub generics=`[T: Ord + Clone]` where=`where T: Renderable`
+    Param in value ty=`T`
+    Param mut count ty=`Int`
+    Param take sink ty=`Box[T]`
+    Returns `Bool`
+    Block
+      Var `total`
+        Literal `0`
+      Let `boxed` ty=`Shared[Point]`
+        Call
+          Path `share`
+      Let `weak` ty=`Weak[Point]`
+        Call
+          Path `downgrade`
+      EmptyStatement
+      ExprStatement
+        Assign
+          Path `total`
+          Binary `+`
+            Path `total`
+            Literal `1`
+      ExprStatement
+        Assign
+          Path `count`
+          Binary `-`
+            Binary `%`
+              Path `LIMIT`
+              Literal `7`
+            Unary `-`
+              Path `total`
+      Let `flag`
+        Binary `||`
+          Binary `&&`
+            Unary `!`
+              Group
+                Binary `<=`
+                  Path `count`
+                  Literal `3`
+            Binary `!=`
+              Path `count`
+              Literal `4`
+          Literal `false`
+      Let `in_range`
+        Range
+          Literal `0`
+          Path `count`
+      Let `converted`
+        Cast ty=`F64`
+          Path `total`
+      Let `picked`
+        Index
+          Call
+            Path `points`
+          Literal `0`
+      Let `renamed`
+        Call
+          Path `memory::swap` turbofish=`[Int]`
+      Let `shorthand`
+        StructLiteral `Point`
+          FieldInit x
+            Literal `1.0`
+          FieldInit y
+      ExprStatement
+        For `p`
+          Call
+            Path `points`
+          Block
+            ExprStatement
+              Call
+                Path `io::print`
+                Field .x
+                  Path `p`
+      ExprStatement
+        Loop label='outer
+          Block
+            ExprStatement
+              While
+                Binary `<`
+                  Path `total`
+                  Path `LIMIT`
+                Block
+                  ExprStatement
+                    If
+                      Binary `==`
+                        Path `total`
+                        Literal `42`
+                      Block
+                        ExprStatement
+                          Break label='outer
+                            Path `total`
+                      Else
+                        If
+                          Binary `>`
+                            Path `total`
+                            Literal `42`
+                          Block
+                            ExprStatement
+                              Continue
+                          Else
+                            Block
+                              ExprStatement
+                                Assign
+                                  Path `total`
+                                  Binary `+`
+                                    Path `total`
+                                    Literal `1`
+            ExprStatement
+              Break
+      Let `category`
+        Match
+          Call
+            Path `shape`
+          Arm `Shape::Circle { radius }` guarded
+            Guard
+              Binary `>`
+                Path `radius`
+                Literal `1.0`
+            Literal `"big circle"`
+          Arm `Shape::Rect { w, .. }`
+            Literal `"rect"`
+          Arm `Shape::Dot | Shape::Circle { .. }`
+            Literal `"small"`
+          Arm `(0 | 1)`
+            Literal `"unit-ish"`
+          Arm `_`
+            Try
+              MethodCall .chained
+                MethodCall .method
+                  Field .field
+                    Call
+                      Path `other`
+                  Literal `1`
+                  Literal `2`
+      ExprStatement
+        Unsafe
+          Block
+            ExprStatement
+              Call
+                Path `poke`
+      Let `tuple_ish`
+        Field .0
+          Path `value`
+      Let `unit`
+        Literal `()`
+      Let `grouped`
+        Binary `*`
+          Group
+            Binary `+`
+              Literal `1`
+              Literal `2`
+          Literal `3`
+      ExprStatement
+        Return
+          Path `flag`
+  SpecDecl classify_small
+    Assert
+      Binary `==`
+        Call
+          Path `classify`
+          Call
+            Path `dot`
+          Literal `1`
+          Call
+            Path `boxed`
+        Literal `true`
+  SpecDecl "classification is stable"
+    Given
+      GivenBinding p ty=`Point`
+        StructLiteral `Point`
+          FieldInit x
+            Literal `1.0`
+          FieldInit y
+            Literal `2.0`
+      GivenBinding n ty=`Int`
+    When
+      Let `first`
+        Call
+          Path `classify`
+          Path `p`
+          Path `n`
+          Call
+            Path `boxed`
+    When
+      Call
+        Path `reclassify`
+    Then
+      Binary `==`
+        Path `first`
+        Call
+          Path `classify`
+          Path `p`
+          Path `n`
+          Call
+            Path `boxed`
+    Let `cached`
+      Literal `3`
+    Var `swaps`
+      Literal `0`
+    ExprStatement
+      Call
+        Path `touch`
+        Path `cached`
+        Path `swaps`

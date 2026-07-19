@@ -122,10 +122,13 @@ const LAYERS: &[(&str, u32)] = &[
     // Infrastructure and front-end data structures over the foundation.
     ("tuo-db", 20),
     ("tuo-lexer", 20),
-    ("tuo-ast", 20),
     // The lossless CST is built over the lexer's tokens (lexer → syntax in
     // the pipeline), so it sits strictly above tuo-lexer.
     ("tuo-syntax", 25),
+    // Typed AST views are read-only accessors over the CST (and its token
+    // stream), so tuo-ast sits strictly above tuo-syntax and below the
+    // passes that consume the views.
+    ("tuo-ast", 27),
     // Front-end passes.
     ("tuo-parser", 30),
     ("tuo-hir", 30),
