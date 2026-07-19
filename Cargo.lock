@@ -1038,6 +1038,8 @@ name = "tuo-fmt"
 version = "0.0.0"
 dependencies = [
  "tuo-diagnostics",
+ "tuo-lexer",
+ "tuo-parser",
  "tuo-source",
  "tuo-syntax",
 ]
