@@ -1,0 +1,28 @@
+module decls::messy;
+import std::io;
+import std::mem as memory;
+import std::collections::{Map as Dict, Set};
+/// A documented struct.
+pub struct Point[T: Ord + Clone] where T: Display {
+    pub x: T,
+    y: T,
+}
+struct Empty {}
+enum Shape {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Dot,
+}
+interface Render {
+    fn render(in self) -> String;
+    fn twice(in self) -> String {
+        self.render()
+    }
+}
+impl[T] Render for Point[T] where T: Render {
+    fn render(in self) -> String {
+        go()
+    }
+}
+const LIMIT: Int = 100;
+const ORIGIN: Point = Point { x: 0.0, y: 0.0 };

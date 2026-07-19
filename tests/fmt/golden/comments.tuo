@@ -1,0 +1,27 @@
+// Leading file comment.
+// Second line of the header.
+
+module app; // trailing after module
+
+// Comment block before an item,
+// spanning two lines.
+fn first() -> Int {
+    // own-line inside a block
+    let a = 1; // trailing a statement
+
+    // after a blank line
+    let b = 2;
+    a + b
+}
+/// Doc comment survives.
+/// Second doc line.
+pub fn second() {
+    ;
+}
+
+// Comment between items.
+
+fn third() {}
+
+// Trailing file comment.
+// Very last line.

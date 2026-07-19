@@ -1,0 +1,289 @@
+module   large::generated ;
+
+/// Struct number 0.
+pub struct S0[T:Ord]where T:Clone{ pub a0:T ,b0:Box[T],}
+enum E0{A0{v:F64},B0,}
+fn f0(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=0+x*2;    // trailing 0
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>0{q}else{x}
+}
+spec "spec 0"{given g:Int=0;when let w=f0(g,1.0,boxed());then w==f0(g,1.0,boxed());assert w!=1;}
+
+/// Struct number 1.
+pub struct S1[T:Ord]where T:Clone{ pub a1:T ,b1:Box[T],}
+enum E1{A1{v:F64},B1,}
+fn f1(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=1+x*2; // trailing 1
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>1{q}else{x}
+}
+spec "spec 1"{given g:Int=1;when let w=f1(g,1.0,boxed());then w==f1(g,1.0,boxed());assert w!=2;}
+
+/// Struct number 2.
+pub struct S2[T:Ord]where T:Clone{ pub a2:T ,b2:Box[T],}
+enum E2{A2{v:F64},B2,}
+fn f2(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=2+x*2;   // trailing 2
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>2{q}else{x}
+}
+spec "spec 2"{given g:Int=2;when let w=f2(g,1.0,boxed());then w==f2(g,1.0,boxed());assert w!=3;}
+
+/// Struct number 3.
+pub struct S3[T:Ord]where T:Clone{ pub a3:T ,b3:Box[T],}
+enum E3{A3{v:F64},B3,}
+fn f3(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=3+x*2; // trailing 3
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>3{q}else{x}
+}
+spec "spec 3"{given g:Int=3;when let w=f3(g,1.0,boxed());then w==f3(g,1.0,boxed());assert w!=4;}
+
+/// Struct number 4.
+pub struct S4[T:Ord]where T:Clone{ pub a4:T ,b4:Box[T],}
+enum E4{A4{v:F64},B4,}
+fn f4(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=4+x*2;// trailing 4
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>4{q}else{x}
+}
+spec "spec 4"{given g:Int=4;when let w=f4(g,1.0,boxed());then w==f4(g,1.0,boxed());assert w!=5;}
+
+/// Struct number 5.
+pub struct S5[T:Ord]where T:Clone{ pub a5:T ,b5:Box[T],}
+enum E5{A5{v:F64},B5,}
+fn f5(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=5+x*2;   // trailing 5
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>5{q}else{x}
+}
+spec "spec 5"{given g:Int=5;when let w=f5(g,1.0,boxed());then w==f5(g,1.0,boxed());assert w!=6;}
+
+/// Struct number 6.
+pub struct S6[T:Ord]where T:Clone{ pub a6:T ,b6:Box[T],}
+enum E6{A6{v:F64},B6,}
+fn f6(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=6+x*2;    // trailing 6
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>6{q}else{x}
+}
+spec "spec 6"{given g:Int=6;when let w=f6(g,1.0,boxed());then w==f6(g,1.0,boxed());assert w!=7;}
+
+/// Struct number 7.
+pub struct S7[T:Ord]where T:Clone{ pub a7:T ,b7:Box[T],}
+enum E7{A7{v:F64},B7,}
+fn f7(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=7+x*2; // trailing 7
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>7{q}else{x}
+}
+spec "spec 7"{given g:Int=7;when let w=f7(g,1.0,boxed());then w==f7(g,1.0,boxed());assert w!=8;}
+
+/// Struct number 8.
+pub struct S8[T:Ord]where T:Clone{ pub a8:T ,b8:Box[T],}
+enum E8{A8{v:F64},B8,}
+fn f8(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=8+x*2;   // trailing 8
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>8{q}else{x}
+}
+spec "spec 8"{given g:Int=8;when let w=f8(g,1.0,boxed());then w==f8(g,1.0,boxed());assert w!=9;}
+
+/// Struct number 9.
+pub struct S9[T:Ord]where T:Clone{ pub a9:T ,b9:Box[T],}
+enum E9{A9{v:F64},B9,}
+fn f9(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=9+x*2; // trailing 9
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>9{q}else{x}
+}
+spec "spec 9"{given g:Int=9;when let w=f9(g,1.0,boxed());then w==f9(g,1.0,boxed());assert w!=10;}
+
+/// Struct number 10.
+pub struct S10[T:Ord]where T:Clone{ pub a10:T ,b10:Box[T],}
+enum E10{A10{v:F64},B10,}
+fn f10(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=10+x*2;// trailing 10
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>10{q}else{x}
+}
+spec "spec 10"{given g:Int=10;when let w=f10(g,1.0,boxed());then w==f10(g,1.0,boxed());assert w!=11;}
+
+/// Struct number 11.
+pub struct S11[T:Ord]where T:Clone{ pub a11:T ,b11:Box[T],}
+enum E11{A11{v:F64},B11,}
+fn f11(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=11+x*2;   // trailing 11
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>11{q}else{x}
+}
+spec "spec 11"{given g:Int=11;when let w=f11(g,1.0,boxed());then w==f11(g,1.0,boxed());assert w!=12;}
+
+/// Struct number 12.
+pub struct S12[T:Ord]where T:Clone{ pub a12:T ,b12:Box[T],}
+enum E12{A12{v:F64},B12,}
+fn f12(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=12+x*2;   // trailing 12
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>12{q}else{x}
+}
+spec "spec 12"{given g:Int=12;when let w=f12(g,1.0,boxed());then w==f12(g,1.0,boxed());assert w!=13;}
+
+/// Struct number 13.
+pub struct S13[T:Ord]where T:Clone{ pub a13:T ,b13:Box[T],}
+enum E13{A13{v:F64},B13,}
+fn f13(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=13+x*2;// trailing 13
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>13{q}else{x}
+}
+spec "spec 13"{given g:Int=13;when let w=f13(g,1.0,boxed());then w==f13(g,1.0,boxed());assert w!=14;}
+
+/// Struct number 14.
+pub struct S14[T:Ord]where T:Clone{ pub a14:T ,b14:Box[T],}
+enum E14{A14{v:F64},B14,}
+fn f14(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=14+x*2;// trailing 14
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>14{q}else{x}
+}
+spec "spec 14"{given g:Int=14;when let w=f14(g,1.0,boxed());then w==f14(g,1.0,boxed());assert w!=15;}
+
+/// Struct number 15.
+pub struct S15[T:Ord]where T:Clone{ pub a15:T ,b15:Box[T],}
+enum E15{A15{v:F64},B15,}
+fn f15(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=15+x*2;// trailing 15
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>15{q}else{x}
+}
+spec "spec 15"{given g:Int=15;when let w=f15(g,1.0,boxed());then w==f15(g,1.0,boxed());assert w!=16;}
+
+/// Struct number 16.
+pub struct S16[T:Ord]where T:Clone{ pub a16:T ,b16:Box[T],}
+enum E16{A16{v:F64},B16,}
+fn f16(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=16+x*2;    // trailing 16
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>16{q}else{x}
+}
+spec "spec 16"{given g:Int=16;when let w=f16(g,1.0,boxed());then w==f16(g,1.0,boxed());assert w!=17;}
+
+/// Struct number 17.
+pub struct S17[T:Ord]where T:Clone{ pub a17:T ,b17:Box[T],}
+enum E17{A17{v:F64},B17,}
+fn f17(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=17+x*2;   // trailing 17
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>17{q}else{x}
+}
+spec "spec 17"{given g:Int=17;when let w=f17(g,1.0,boxed());then w==f17(g,1.0,boxed());assert w!=18;}
+
+/// Struct number 18.
+pub struct S18[T:Ord]where T:Clone{ pub a18:T ,b18:Box[T],}
+enum E18{A18{v:F64},B18,}
+fn f18(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=18+x*2;    // trailing 18
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>18{q}else{x}
+}
+spec "spec 18"{given g:Int=18;when let w=f18(g,1.0,boxed());then w==f18(g,1.0,boxed());assert w!=19;}
+
+/// Struct number 19.
+pub struct S19[T:Ord]where T:Clone{ pub a19:T ,b19:Box[T],}
+enum E19{A19{v:F64},B19,}
+fn f19(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=19+x*2; // trailing 19
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>19{q}else{x}
+}
+spec "spec 19"{given g:Int=19;when let w=f19(g,1.0,boxed());then w==f19(g,1.0,boxed());assert w!=20;}
+
+/// Struct number 20.
+pub struct S20[T:Ord]where T:Clone{ pub a20:T ,b20:Box[T],}
+enum E20{A20{v:F64},B20,}
+fn f20(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=20+x*2;// trailing 20
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>20{q}else{x}
+}
+spec "spec 20"{given g:Int=20;when let w=f20(g,1.0,boxed());then w==f20(g,1.0,boxed());assert w!=21;}
+
+/// Struct number 21.
+pub struct S21[T:Ord]where T:Clone{ pub a21:T ,b21:Box[T],}
+enum E21{A21{v:F64},B21,}
+fn f21(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=21+x*2;   // trailing 21
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>21{q}else{x}
+}
+spec "spec 21"{given g:Int=21;when let w=f21(g,1.0,boxed());then w==f21(g,1.0,boxed());assert w!=22;}
+
+/// Struct number 22.
+pub struct S22[T:Ord]where T:Clone{ pub a22:T ,b22:Box[T],}
+enum E22{A22{v:F64},B22,}
+fn f22(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=22+x*2;// trailing 22
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>22{q}else{x}
+}
+spec "spec 22"{given g:Int=22;when let w=f22(g,1.0,boxed());then w==f22(g,1.0,boxed());assert w!=23;}
+
+/// Struct number 23.
+pub struct S23[T:Ord]where T:Clone{ pub a23:T ,b23:Box[T],}
+enum E23{A23{v:F64},B23,}
+fn f23(in x:Int,mut y:F64,take z:Box[Int])->Int{
+let q=23+x*2;    // trailing 23
+var r=q..x;
+let s=match q{0=>"z",1|2=>"s",n if n>9=>"b",_=>"o",};
+for e in items(){touch(e);}
+if q>23{q}else{x}
+}
+spec "spec 23"{given g:Int=23;when let w=f23(g,1.0,boxed());then w==f23(g,1.0,boxed());assert w!=24;}

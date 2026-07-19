@@ -1,0 +1,13 @@
+fn first() -> Int {
+    1
+}
+
+fn broken( {
+
+struct Point {
+    x: F64,
+}
+
+fn last() -> Int {
+    2
+}

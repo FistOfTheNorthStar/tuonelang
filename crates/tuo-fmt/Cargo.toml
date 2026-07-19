@@ -12,6 +12,10 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The formatter re-emits the lossless CST, so it drives the lexer and parser
+# directly and verifies its own output by re-parsing.
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
+tuo-lexer.workspace = true
 tuo-syntax.workspace = true
+tuo-parser.workspace = true

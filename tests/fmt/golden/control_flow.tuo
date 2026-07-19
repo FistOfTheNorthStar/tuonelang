@@ -1,0 +1,32 @@
+fn flow(in xs: List[Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    'outer: loop {
+        while total < 10 {
+            if total == 4 {
+                break 'outer total;
+            } else if total > 4 {
+                continue;
+            } else {
+                total = total + 1;
+            }
+        }
+        break;
+    }
+    let category = match total {
+        0 => "zero",
+        1 | 2 => "small",
+        n if n > 100 => "big",
+        _ => "other",
+    };
+    unsafe {
+        poke();
+    }
+    if total > 0 {
+        total
+    } else {
+        0
+    }
+}
