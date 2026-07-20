@@ -14,4 +14,9 @@ workspace = true
 [dependencies]
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
-tuo-hir.workspace = true
+tuo-ast.workspace = true
+
+[dev-dependencies]
+tuo-lexer.workspace = true
+tuo-syntax.workspace = true
+tuo-parser.workspace = true

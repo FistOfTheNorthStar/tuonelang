@@ -4,7 +4,7 @@ use tuo_lexer::TokenKind;
 use tuo_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::Ast;
-use crate::context::{ast_view, child_nodes, child_tokens, node_of_kind, nodes_of_kind};
+use crate::context::{Name, ast_view, child_nodes, child_tokens, node_of_kind, nodes_of_kind};
 use crate::expr::Expr;
 use crate::stmt::{BindingStmt, Block};
 use crate::ty::{TypeArgs, TypePath, TypeRef};
@@ -102,10 +102,15 @@ ast_view! {
 impl<'a> PathNode<'a> {
     /// The path segments, in source order.
     pub fn segments(self) -> impl Iterator<Item = &'a str> {
+        self.segment_names().map(|name| name.text)
+    }
+
+    /// The path segments with their exact spans, in source order.
+    pub fn segment_names(self) -> impl Iterator<Item = Name<'a>> {
         let ast = self.ast;
         child_tokens(self.node)
             .filter(move |&index| ast.token_kind(index) == TokenKind::Ident)
-            .map(move |index| ast.token_text(index))
+            .map(move |index| ast.token_name(index))
     }
 }
 
@@ -135,7 +140,13 @@ impl<'a> ImportDecl<'a> {
     /// The whole-import alias of `import path as name;`.
     #[must_use]
     pub fn alias(self) -> Option<&'a str> {
-        self.ast.direct_token_text(self.node, TokenKind::Ident)
+        self.alias_name().map(|name| name.text)
+    }
+
+    /// The whole-import alias with its exact span.
+    #[must_use]
+    pub fn alias_name(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 }
 
@@ -148,16 +159,28 @@ impl<'a> ImportLeaf<'a> {
     /// The imported name.
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
-        self.ast.direct_token_text(self.node, TokenKind::Ident)
+        self.name_ref().map(|name| name.text)
+    }
+
+    /// The imported name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The alias, if renamed.
     #[must_use]
     pub fn alias(self) -> Option<&'a str> {
+        self.alias_name().map(|name| name.text)
+    }
+
+    /// The alias with its exact span, if renamed.
+    #[must_use]
+    pub fn alias_name(self) -> Option<Name<'a>> {
         let ast = self.ast;
         child_tokens(self.node)
             .filter(|&index| ast.token_kind(index) == TokenKind::Ident)
-            .map(|index| ast.token_text(index))
+            .map(|index| ast.token_name(index))
             .nth(1)
     }
 }
@@ -186,6 +209,12 @@ macro_rules! decl_accessors {
             #[must_use]
             pub fn name(self) -> Option<&'a str> {
                 self.ast.direct_token_text(self.node, TokenKind::Ident)
+            }
+
+            /// The declared name with its exact span.
+            #[must_use]
+            pub fn name_ref(self) -> Option<Name<'a>> {
+                self.ast.direct_token_name(self.node, TokenKind::Ident)
             }
         }
     };
@@ -267,11 +296,17 @@ impl<'a> ParamDecl<'a> {
     /// The parameter name (`self` for the receiver).
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
+        self.name_ref().map(|name| name.text)
+    }
+
+    /// The parameter name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
         if self.is_receiver() {
             self.ast
-                .direct_token_text(self.node, TokenKind::KwSelfValue)
+                .direct_token_name(self.node, TokenKind::KwSelfValue)
         } else {
-            self.ast.direct_token_text(self.node, TokenKind::Ident)
+            self.ast.direct_token_name(self.node, TokenKind::Ident)
         }
     }
 
@@ -306,6 +341,12 @@ impl<'a> GenericParam<'a> {
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
         self.ast.direct_token_text(self.node, TokenKind::Ident)
+    }
+
+    /// The parameter name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The bound paths, in source order.
@@ -496,6 +537,13 @@ impl<'a> ImplDecl<'a> {
             .and_then(|node| TypeArgs::cast(self.ast, node))
     }
 
+    /// The `where` clause, if any.
+    #[must_use]
+    pub fn where_clause(self) -> Option<WhereClause<'a>> {
+        node_of_kind(self.node, SyntaxKind::WhereClause)
+            .and_then(|node| WhereClause::cast(self.ast, node))
+    }
+
     /// The implementing type (after `for`).
     #[must_use]
     pub fn target(self) -> Option<TypeRef<'a>> {
@@ -553,6 +601,14 @@ impl<'a> SpecDecl<'a> {
                 )
             })
             .map(|index| ast.token_text(index))
+    }
+
+    /// The spec's name as a spanned identifier, when the identifier form is
+    /// used. Identifier-named specs *target* the declaration of that name;
+    /// string-named specs are free-standing descriptions.
+    #[must_use]
+    pub fn target_name(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The spec's statements and clauses, in source order.
@@ -626,6 +682,12 @@ impl<'a> GivenBinding<'a> {
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
         self.ast.direct_token_text(self.node, TokenKind::Ident)
+    }
+
+    /// The bound name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The declared type.

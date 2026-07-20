@@ -2,9 +2,22 @@
 //! typed views are built from.
 
 use tuo_lexer::{Token, TokenKind};
+use tuo_source::Span;
 use tuo_syntax::{SyntaxElement, SyntaxNode, SyntaxTree};
 
 use crate::item::SourceFile;
+
+/// One spanned name occurrence: the exact identifier text plus where it is.
+///
+/// This is the currency of tooling that needs to *point at* names — name
+/// resolution, rename, and go-to-definition — rather than merely read them.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Name<'a> {
+    /// The name as written in source.
+    pub text: &'a str,
+    /// Exactly where it is written.
+    pub span: Span,
+}
 
 /// The borrowed `(tree, text)` pair every typed view hangs off.
 ///
@@ -71,6 +84,21 @@ impl<'a> Ast<'a> {
     /// Does `node` have a direct child token of `kind`?
     pub(crate) fn has_token(self, node: &SyntaxNode, kind: TokenKind) -> bool {
         child_tokens(node).any(|index| self.token_kind(index) == kind)
+    }
+
+    /// The spanned name of the token at `index`.
+    pub(crate) fn token_name(self, index: u32) -> Name<'a> {
+        Name {
+            text: self.token_text(index),
+            span: self.token(index).span,
+        }
+    }
+
+    /// The spanned name of the first **direct** child token of `kind`.
+    pub(crate) fn direct_token_name(self, node: &SyntaxNode, kind: TokenKind) -> Option<Name<'a>> {
+        child_tokens(node)
+            .find(|&index| self.token_kind(index) == kind)
+            .map(|index| self.token_name(index))
     }
 }
 

@@ -4,7 +4,7 @@ use tuo_lexer::TokenKind;
 use tuo_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::Ast;
-use crate::context::{ast_view, child_nodes, child_tokens, node_of_kind, nth_node};
+use crate::context::{Name, ast_view, child_nodes, child_tokens, node_of_kind, nth_node};
 use crate::pat::Pattern;
 use crate::stmt::Block;
 use crate::ty::{TypeArgs, TypePath, TypeRef};
@@ -160,6 +160,11 @@ ast_view! {
 impl<'a> PathExpr<'a> {
     /// The path segments (`self`, `Self`, and identifiers), in source order.
     pub fn segments(self) -> impl Iterator<Item = &'a str> {
+        self.segment_names().map(|name| name.text)
+    }
+
+    /// The path segments with their exact spans, in source order.
+    pub fn segment_names(self) -> impl Iterator<Item = Name<'a>> {
         let ast = self.ast;
         child_tokens(self.node)
             .filter(move |&index| {
@@ -168,7 +173,7 @@ impl<'a> PathExpr<'a> {
                     TokenKind::Ident | TokenKind::KwSelfType | TokenKind::KwSelfValue
                 )
             })
-            .map(move |index| ast.token_text(index))
+            .map(move |index| ast.token_name(index))
     }
 
     /// The turbofish type arguments (`::[T]`), if present.
@@ -217,6 +222,12 @@ impl<'a> FieldInit<'a> {
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
         self.ast.direct_token_text(self.node, TokenKind::Ident)
+    }
+
+    /// The field name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The initializer value, if not the shorthand form.
