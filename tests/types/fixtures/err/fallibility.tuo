@@ -1,0 +1,17 @@
+fn find() -> Option[Int] {
+    None
+}
+
+fn parse() -> Result[Int, Str] {
+    Ok { value: 1 }
+}
+
+fn plain(in n: Int) -> Int {
+    let v = find()?;
+    n?
+}
+
+fn crossed() -> Result[Int, Bool] {
+    let v = parse()?;
+    Ok { value: v }
+}

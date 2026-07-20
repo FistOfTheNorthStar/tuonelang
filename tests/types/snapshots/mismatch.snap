@@ -1,0 +1,4 @@
+T0001@22..34 mismatched types | expected type `I64` | actual type `Bool`
+T0001@114..115 mismatched types | expected type `I64` | actual type `I32`
+T0001@125..126 mismatched types | expected type `I32` | actual type `I64`
+T0001@198..202 mismatched types | expected type `I64` | actual type `Bool`

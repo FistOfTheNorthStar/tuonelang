@@ -1,0 +1,12 @@
+struct Point {
+    x: F64,
+    y: F64,
+}
+
+fn f(in p: Point, in n: Int) -> F64 {
+    let partial = Point { x: 1.0 };
+    let unknown = Point { x: 1.0, y: 2.0, z: 3.0 };
+    let doubled = Point { x: 1.0, x: 2.0, y: 3.0 };
+    n.x;
+    p.z
+}

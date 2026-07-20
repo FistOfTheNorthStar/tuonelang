@@ -1,0 +1,6 @@
+T0001@72..76 mismatched types | expected type `I64` | actual type `Bool`
+T0006@82..87 operator `<` is not supported for type `P` | actual type `P`
+T0001@93..95 mismatched types | expected type `Bool` | actual type `I64`
+T0006@101..103 operator `-` is not supported for type `U32` | actual type `U32`
+T0001@112..113 mismatched types | expected type `Bool` | actual type `I64`
+T0001@130..139 mismatched types | expected type `Bool` | actual type `I64`

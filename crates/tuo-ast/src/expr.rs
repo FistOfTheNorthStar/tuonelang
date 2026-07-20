@@ -96,6 +96,38 @@ impl<'a> Expr<'a> {
         })
     }
 
+    /// The exact source span this expression covers, or `None` if it is
+    /// empty.
+    #[must_use]
+    pub fn span(self) -> Option<tuo_source::Span> {
+        match self {
+            Self::Literal(e) => e.span(),
+            Self::Path(e) => e.span(),
+            Self::StructLiteral(e) => e.span(),
+            Self::Unary(e) => e.span(),
+            Self::Binary(e) => e.span(),
+            Self::Range(e) => e.span(),
+            Self::Assign(e) => e.span(),
+            Self::Call(e) => e.span(),
+            Self::MethodCall(e) => e.span(),
+            Self::Field(e) => e.span(),
+            Self::Index(e) => e.span(),
+            Self::Try(e) => e.span(),
+            Self::Cast(e) => e.span(),
+            Self::Group(e) => e.span(),
+            Self::If(e) => e.span(),
+            Self::Match(e) => e.span(),
+            Self::While(e) => e.span(),
+            Self::Loop(e) => e.span(),
+            Self::For(e) => e.span(),
+            Self::Unsafe(e) => e.span(),
+            Self::Return(e) => e.span(),
+            Self::Break(e) => e.span(),
+            Self::Continue(e) => e.span(),
+            Self::Block(e) => e.span(),
+        }
+    }
+
     /// The underlying CST node.
     #[must_use]
     pub fn syntax(self) -> &'a SyntaxNode {

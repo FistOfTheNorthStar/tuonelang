@@ -1,0 +1,20 @@
+enum Shape {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Dot,
+}
+
+fn f(in s: Shape, in v: Option[Int], in b: Bool, in n: Int) -> Int {
+    match s {
+        Shape::Dot => 0,
+    };
+    match v {
+        Some { value } => value,
+    };
+    match b {
+        true => 1,
+    };
+    match n {
+        0 => 1,
+    }
+}

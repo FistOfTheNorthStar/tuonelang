@@ -1,6 +1,8 @@
 //! The output of resolution: symbols, references, spec attachments, and
 //! diagnostics, with the queries tooling asks of them.
 
+use std::collections::HashMap;
+
 use tuo_diagnostics::Diagnostic;
 use tuo_source::Span;
 
@@ -27,6 +29,8 @@ pub struct Resolution {
     pub(crate) references: Vec<Reference>,
     pub(crate) spec_targets: Vec<SpecTarget>,
     pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) variants: HashMap<SymbolId, Vec<SymbolId>>,
+    pub(crate) prelude: Vec<(String, SymbolId)>,
 }
 
 impl Resolution {
@@ -113,5 +117,24 @@ impl Resolution {
     #[must_use]
     pub fn diagnostics(&self) -> &[Diagnostic] {
         &self.diagnostics
+    }
+
+    /// The variants of an enum symbol, in declaration order (empty for
+    /// non-enum symbols).
+    #[must_use]
+    pub fn variants_of(&self, id: SymbolId) -> &[SymbolId] {
+        self.variants.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    /// The prelude symbol of `name`, if the language provides one
+    /// (`Option`, `Result`, and their variants `Some`, `None`, `Ok`,
+    /// `Err`). Prelude names are in scope everywhere but may be shadowed
+    /// by module declarations.
+    #[must_use]
+    pub fn prelude_symbol(&self, name: &str) -> Option<SymbolId> {
+        self.prelude
+            .iter()
+            .find(|(entry, _)| entry == name)
+            .map(|(_, id)| *id)
     }
 }

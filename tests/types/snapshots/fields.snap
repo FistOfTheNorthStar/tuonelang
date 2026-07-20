@@ -1,0 +1,5 @@
+T0005@98..114 missing fields `y` in literal of `Point` | expected name `y`
+T0004@158..159 no field `z` on type `Point` | expected type `Point` | actual name `z`
+T0005@202..203 field `x` specified more than once | actual name `x`
+T0004@224..227 no field `x` on type `I64` | expected type `I64` | actual name `x`
+T0004@233..236 no field `z` on type `Point` | expected type `Point` | actual name `z`

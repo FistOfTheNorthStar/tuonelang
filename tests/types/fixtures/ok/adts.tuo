@@ -1,0 +1,33 @@
+struct Point {
+    x: F64,
+    y: F64,
+}
+
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+enum Shape {
+    Circle { radius: F64 },
+    Rect { w: F64, h: F64 },
+    Dot,
+}
+
+fn area(in s: Shape) -> F64 {
+    match s {
+        Shape::Circle { radius } => radius * radius * 3.0,
+        Shape::Rect { w, h } => w * h,
+        Shape::Dot => 0.0,
+    }
+}
+
+fn build(in x: F64) -> Point {
+    let swap = Pair { first: 1, second: true };
+    let y = x + 1.0;
+    Point { x, y }
+}
+
+fn read(in p: Point) -> F64 {
+    p.x + p.y
+}

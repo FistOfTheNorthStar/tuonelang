@@ -1,0 +1,8 @@
+fn f() -> Int {
+    break;
+    continue;
+    loop {
+        break 1;
+        break "two";
+    }
+}

@@ -1,0 +1,17 @@
+fn wants_int() -> Int {
+    true
+}
+
+fn no_implicit_widening(in a: I32, in b: I64) -> I64 {
+    let widened: I64 = a;
+    a + b;
+    b
+}
+
+fn wrong_argument(in flag: Bool) -> Int {
+    wants_int_from(flag)
+}
+
+fn wants_int_from(in n: Int) -> Int {
+    n
+}

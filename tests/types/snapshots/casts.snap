@@ -1,0 +1,3 @@
+T0008@45..53 invalid cast from `Bool` to `I64` | expected type `I64` | actual type `Bool`
+T0008@59..68 invalid cast from `I64` to `Bool` | expected type `Bool` | actual type `I64`
+T0008@74..85 invalid cast from `Str` to `String` | expected type `String` | actual type `Str`

@@ -1,0 +1,11 @@
+enum Shape {
+    Circle { radius: F64 },
+    Dot,
+}
+
+fn f() {
+    let a = Shape;
+    let b = Shape::Circle;
+    let c = String { text: 1 };
+    let d = 1(2);
+}

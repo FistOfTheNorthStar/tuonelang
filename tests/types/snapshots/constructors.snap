@@ -1,0 +1,4 @@
+T0012@74..79 expected a value, found enum `Shape` | actual name `Shape`
+T0012@93..106 variant `Circle` has a payload; construct it with `Circle { … }` | actual name `Circle`
+T0012@120..126 `String` is not a struct | actual type `String`
+T0003@152..156 expected a function, found `{integer}` | actual type `{integer}`

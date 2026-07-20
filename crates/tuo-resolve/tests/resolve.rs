@@ -554,6 +554,69 @@ fn rename_spans_cover_declaration_calls_imports_and_spec_targets() {
 }
 
 // ----------------------------------------------------------------------
+// The prelude
+// ----------------------------------------------------------------------
+
+#[test]
+fn option_result_and_their_variants_are_in_the_prelude() {
+    let resolution = resolve_one(
+        "fn find(in n: Int) -> Option[Int] {\n\
+             if n > 0 { Some { value: n } } else { None }\n\
+         }\n\
+         fn run() -> Result[Int, Str] { Ok { value: 1 } }\n\
+         fn unwrap_or_zero(in v: Option[Int]) -> Int {\n\
+             match v {\n\
+                 Some { value } => value,\n\
+                 None => 0,\n\
+             }\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    let option = resolution
+        .prelude_symbol("Option")
+        .expect("Option is in the prelude");
+    assert_eq!(
+        resolution.variants_of(option).len(),
+        2,
+        "Option has Some and None"
+    );
+    let some = resolution.prelude_symbol("Some").expect("Some in prelude");
+    assert!(
+        resolution.references_to(some).count() >= 2,
+        "`Some` uses resolve to the prelude variant"
+    );
+}
+
+#[test]
+fn a_module_declaration_shadows_the_prelude() {
+    let resolution = resolve_one(
+        "enum Option { Filled, Vacant }\n\
+         fn f() -> Option { Option::Filled }\n",
+    );
+    assert_clean(&resolution);
+    // The user's enum has a written declaration; the prelude's does not.
+    let user_option = resolution
+        .symbols()
+        .find(|(_, symbol)| {
+            symbol.name == "Option"
+                && symbol.kind == SymbolKind::Enum
+                && symbol.declaration.is_some()
+        })
+        .map(|(id, _)| id)
+        .expect("the user enum exists");
+    assert_ne!(
+        Some(user_option),
+        resolution.prelude_symbol("Option"),
+        "the user enum is a distinct symbol"
+    );
+    assert_eq!(
+        resolution.references_to(user_option).count(),
+        2,
+        "both uses resolve to the user enum, not the prelude"
+    );
+}
+
+// ----------------------------------------------------------------------
 // Malformed input
 // ----------------------------------------------------------------------
 

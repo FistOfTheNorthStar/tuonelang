@@ -1,0 +1,32 @@
+fn find(in n: Int) -> Option[Int] {
+    if n > 0 {
+        Some { value: n }
+    } else {
+        None
+    }
+}
+
+fn parse(in ok: Bool) -> Result[Int, Str] {
+    if ok {
+        Ok { value: 1 }
+    } else {
+        Err { error: "bad input" }
+    }
+}
+
+fn chain(in n: Int) -> Option[Int] {
+    let found = find(n)?;
+    Some { value: found + 1 }
+}
+
+fn chain_result(in ok: Bool) -> Result[Int, Str] {
+    let value = parse(ok)?;
+    Ok { value }
+}
+
+fn unwrap_or_zero(in v: Option[Int]) -> Int {
+    match v {
+        Some { value } => value,
+        None => 0,
+    }
+}
