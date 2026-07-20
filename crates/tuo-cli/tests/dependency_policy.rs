@@ -131,9 +131,11 @@ const LAYERS: &[(&str, u32)] = &[
     ("tuo-ast", 27),
     // Front-end passes.
     ("tuo-parser", 30),
-    ("tuo-hir", 30),
-    // Semantic analysis pipeline.
+    // Semantic analysis pipeline. HIR sits *above* resolution: it is
+    // lowered from the typed AST views plus resolution's stable IDs, so
+    // its nodes can represent resolved names.
     ("tuo-resolve", 40),
+    ("tuo-hir", 45),
     ("tuo-types", 50),
     ("tuo-ownership", 60),
     // The single executable semantic representation.

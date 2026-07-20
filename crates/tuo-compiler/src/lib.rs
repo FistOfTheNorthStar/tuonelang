@@ -20,14 +20,16 @@
 //!
 //! Implemented so far: the front-end re-exports below (source management,
 //! lexing, parsing, the lossless CST, typed AST views, name resolution,
-//! and type checking), which the CLI's `tuo debug syntax` / `tuo debug
-//! ast` developer tools drive. Later stages are still stubs, so no
-//! further orchestration exists yet.
+//! HIR lowering, and type checking), which the CLI's `tuo debug
+//! syntax` / `tuo debug ast` / `tuo debug hir` developer tools drive.
+//! Later stages are still stubs, so no further orchestration exists yet.
 
 /// Typed AST views over the CST (re-export of [`tuo_ast`]).
 pub use tuo_ast as ast;
 /// Structured diagnostics (re-export of [`tuo_diagnostics`]).
 pub use tuo_diagnostics as diagnostics;
+/// The desugared high-level IR (re-export of [`tuo_hir`]).
+pub use tuo_hir as hir;
 /// Lexing (re-export of [`tuo_lexer`]).
 pub use tuo_lexer as lexer;
 /// Parsing (re-export of [`tuo_parser`]).

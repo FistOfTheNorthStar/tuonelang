@@ -150,12 +150,14 @@ tuo-parser
 tuo-ast
     │
     ▼
+tuo-resolve
+    │
+    ▼
 tuo-hir
     │
-    ├───────────────┐
-    ▼               ▼
-tuo-resolve      tuo-types
-                    │
+    ▼
+tuo-types
+    │
                     ▼
               tuo-ownership
                     │
@@ -167,9 +169,11 @@ tuo-resolve      tuo-types
 ```
 
 This is conceptual: not every crate depends directly on its predecessor.
-(For example, `tuo-resolve` currently resolves directly over the typed AST
-views while `tuo-hir` is still a stub; when HIR lowering exists, resolution
-moves onto it without changing its stable-ID output surface.) The
+(For example, `tuo-resolve` resolves directly over the typed AST views, and
+`tuo-hir` is lowered from those views *plus* resolution's output — that is
+what lets HIR represent resolved names as stable semantic IDs. `tuo-types`
+currently also checks over the AST views; moving it onto HIR is a later,
+mechanical step.) The
 **hard invariant** is a total layering rule: every tuonelang-owned crate is
 assigned to a numbered layer, and a crate may only depend on crates in
 **strictly lower** layers. Lower compiler layers can never depend on higher
@@ -182,8 +186,9 @@ ones.
 | 20 | `tuo-db`, `tuo-lexer` | Infrastructure & front-end data structures. |
 | 25 | `tuo-syntax` | Lossless CST over the lexer's tokens. |
 | 27 | `tuo-ast` | Typed AST views over the CST. |
-| 30 | `tuo-parser`, `tuo-hir` | Front-end passes. |
+| 30 | `tuo-parser` | Front-end passes. |
 | 40 | `tuo-resolve` | Name resolution. |
+| 45 | `tuo-hir` | High-level IR, lowered from AST + resolution. |
 | 50 | `tuo-types` | Type checking. |
 | 60 | `tuo-ownership` | Memory-safety analysis. |
 | 70 | `tuo-mir` | The single executable semantic representation. |

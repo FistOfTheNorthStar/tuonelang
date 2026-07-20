@@ -39,6 +39,20 @@ impl<'a> Pattern<'a> {
         }
     }
 
+    /// The exact source span this pattern covers, or `None` if it is
+    /// empty.
+    #[must_use]
+    pub fn span(self) -> Option<tuo_source::Span> {
+        match self {
+            Self::Literal(pat) => pat.span(),
+            Self::Wildcard(pat) => pat.span(),
+            Self::Binding(pat) => pat.span(),
+            Self::Path(pat) => pat.span(),
+            Self::Or(pat) => pat.span(),
+            Self::Group(pat) => pat.span(),
+        }
+    }
+
     /// The exact source text of the pattern.
     #[must_use]
     pub fn text(self) -> &'a str {

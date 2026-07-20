@@ -77,6 +77,16 @@ enum DebugCommand {
         /// The tuonelang source file to inspect.
         file: PathBuf,
     },
+    /// Print the lowered high-level IR (HIR) of a source file.
+    ///
+    /// The dump shows the desugared semantic tree with names resolved to
+    /// stable symbol IDs (`name@symN`). Parse and resolution diagnostics go
+    /// to stderr; the exit code is a failure only if the file cannot be
+    /// read.
+    Hir {
+        /// The tuonelang source file to inspect.
+        file: PathBuf,
+    },
 }
 
 impl Cli {
@@ -85,6 +95,7 @@ impl Cli {
         match self.command {
             Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
             Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
+            Some(Command::Debug(DebugCommand::Hir { file })) => debug::run(Dump::Hir, &file),
             Some(Command::Fmt { check, files }) => fmt::run(check, &files),
             // A bare `tuo` invocation prints help.
             None => match Self::command().print_help() {

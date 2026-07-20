@@ -32,6 +32,15 @@ const BUILTIN_TYPES: &[&str] = &[
     "Float", "Bool", "Char", "String", "Str", "Array",
 ];
 
+/// Is `name` a builtin type name (resolved silently, without a symbol)?
+///
+/// Later stages (HIR lowering, type checking) use this to give the same
+/// meaning to builtin names that resolution did.
+#[must_use]
+pub fn is_builtin_type(name: &str) -> bool {
+    BUILTIN_TYPES.contains(&name)
+}
+
 /// The resolver's diagnostic codes (the reserved `Rxxxx` namespace).
 ///
 /// - `R0001` — duplicate definition.

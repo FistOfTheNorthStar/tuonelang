@@ -8,7 +8,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use tuo_compiler::ast::{self, Ast};
-use tuo_compiler::{diagnostics, parser, source::SourceMap};
+use tuo_compiler::{diagnostics, hir, parser, resolve, source::SourceMap};
 
 /// Which representation to dump.
 #[derive(Clone, Copy, Debug)]
@@ -17,6 +17,8 @@ pub(crate) enum Dump {
     Syntax,
     /// The typed AST views.
     Ast,
+    /// The lowered high-level IR.
+    Hir,
 }
 
 /// Dump `file`'s syntax or AST to stdout; parse diagnostics go to stderr.
@@ -51,6 +53,19 @@ pub(crate) fn run(dump: Dump, path: &Path) -> ExitCode {
     let rendered = match dump {
         Dump::Syntax => result.tree.render(&text),
         Dump::Ast => ast::render(Ast::new(&result.tree, &text)),
+        Dump::Hir => {
+            let asts = [Ast::new(&result.tree, &text)];
+            let resolution = resolve::resolve(&asts);
+            let lowered = hir::lower(&asts, &resolution);
+            let rendered = hir::render(&lowered, &resolution);
+            if !resolution.diagnostics().is_empty() {
+                eprint!(
+                    "{}",
+                    diagnostics::render::render_all(resolution.diagnostics(), &map)
+                );
+            }
+            rendered
+        }
     };
     print!("{rendered}");
 

@@ -27,10 +27,10 @@
 //! — field accesses, method calls, `Self`, associated path tails — are
 //! deliberately skipped, never guessed at; the type checker owns them.
 //!
-//! This crate currently resolves directly over the typed AST views. When
-//! the HIR layer (`tuo-hir`) is implemented, resolution will move to
-//! consuming it; the stable-ID surface here is designed to survive that
-//! move unchanged.
+//! This crate resolves directly over the typed AST views. The HIR layer
+//! (`tuo-hir`) sits *above* resolution and consumes its output — lowering
+//! combines the AST with this crate's stable IDs so HIR nodes carry
+//! resolved names.
 
 mod ids;
 mod resolution;
@@ -39,5 +39,5 @@ mod symbol;
 
 pub use ids::{ModuleId, SymbolId};
 pub use resolution::{ModuleInfo, Resolution};
-pub use resolver::resolve;
+pub use resolver::{is_builtin_type, resolve};
 pub use symbol::{Reference, SpecTarget, Symbol, SymbolKind};
