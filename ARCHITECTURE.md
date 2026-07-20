@@ -166,7 +166,10 @@ tuo-resolve      tuo-types
           interpreter  Cranelift  LLVM
 ```
 
-This is conceptual: not every crate depends directly on its predecessor. The
+This is conceptual: not every crate depends directly on its predecessor.
+(For example, `tuo-resolve` currently resolves directly over the typed AST
+views while `tuo-hir` is still a stub; when HIR lowering exists, resolution
+moves onto it without changing its stable-ID output surface.) The
 **hard invariant** is a total layering rule: every tuonelang-owned crate is
 assigned to a numbered layer, and a crate may only depend on crates in
 **strictly lower** layers. Lower compiler layers can never depend on higher

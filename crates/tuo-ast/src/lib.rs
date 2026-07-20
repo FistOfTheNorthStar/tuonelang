@@ -36,7 +36,7 @@ mod render;
 mod stmt;
 mod ty;
 
-pub use context::Ast;
+pub use context::{Ast, Name};
 pub use expr::{
     AssignExpr, BinaryExpr, BreakExpr, CallExpr, CastExpr, ContinueExpr, ElseBranch, Expr,
     FieldExpr, FieldInit, ForExpr, GroupExpr, IfExpr, IndexExpr, LiteralExpr, LoopExpr, MatchArm,

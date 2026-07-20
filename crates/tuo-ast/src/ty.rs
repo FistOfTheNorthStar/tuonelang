@@ -4,7 +4,7 @@ use tuo_lexer::TokenKind;
 use tuo_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::Ast;
-use crate::context::{ast_view, child_nodes, node_of_kind};
+use crate::context::{Name, ast_view, child_nodes, node_of_kind};
 
 /// A reference to a type as written in source: `()`, a wrapper
 /// (`Box[T]`, `Shared[T]`, `Weak[T]`), or a (possibly generic) path.
@@ -107,6 +107,11 @@ ast_view! {
 impl<'a> TypePath<'a> {
     /// The path segments, in source order.
     pub fn segments(self) -> impl Iterator<Item = &'a str> {
+        self.segment_names().map(|name| name.text)
+    }
+
+    /// The path segments with their exact spans, in source order.
+    pub fn segment_names(self) -> impl Iterator<Item = Name<'a>> {
         let ast = self.ast;
         crate::context::child_tokens(self.node)
             .filter(move |&index| {
@@ -115,7 +120,7 @@ impl<'a> TypePath<'a> {
                     TokenKind::Ident | TokenKind::KwSelfType
                 )
             })
-            .map(move |index| ast.token_text(index))
+            .map(move |index| ast.token_name(index))
     }
 }
 

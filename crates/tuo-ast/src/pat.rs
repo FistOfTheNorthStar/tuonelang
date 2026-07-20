@@ -4,7 +4,7 @@ use tuo_lexer::TokenKind;
 use tuo_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::Ast;
-use crate::context::{ast_view, child_nodes, node_of_kind};
+use crate::context::{Name, ast_view, child_nodes, node_of_kind};
 
 /// A pattern as written in source.
 #[derive(Clone, Copy, Debug)]
@@ -87,6 +87,12 @@ impl<'a> BindingPat<'a> {
     pub fn name(self) -> Option<&'a str> {
         self.ast.direct_token_text(self.node, TokenKind::Ident)
     }
+
+    /// The bound name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
+    }
 }
 
 ast_view! {
@@ -95,6 +101,17 @@ ast_view! {
 }
 
 impl<'a> PathPat<'a> {
+    /// The path segments with their exact spans, in source order. (With a
+    /// field block the parser nests the path in a `TypePath` child;
+    /// otherwise the segment tokens are direct children.)
+    pub fn segment_names(self) -> impl Iterator<Item = Name<'a>> {
+        let ast = self.ast;
+        let path = node_of_kind(self.node, SyntaxKind::TypePath).unwrap_or(self.node);
+        crate::context::child_tokens(path)
+            .filter(move |&index| ast.token_kind(index) == TokenKind::Ident)
+            .map(move |index| ast.token_name(index))
+    }
+
     /// The destructured fields, if the pattern has a field block.
     pub fn fields(self) -> impl Iterator<Item = FieldPat<'a>> {
         let ast = self.ast;
@@ -124,6 +141,12 @@ impl<'a> FieldPat<'a> {
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
         self.ast.direct_token_text(self.node, TokenKind::Ident)
+    }
+
+    /// The field name with its exact span.
+    #[must_use]
+    pub fn name_ref(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::Ident)
     }
 
     /// The sub-pattern, if not the shorthand form.

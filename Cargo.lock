@@ -1130,9 +1130,12 @@ dependencies = [
 name = "tuo-resolve"
 version = "0.0.0"
 dependencies = [
+ "tuo-ast",
  "tuo-diagnostics",
- "tuo-hir",
+ "tuo-lexer",
+ "tuo-parser",
  "tuo-source",
+ "tuo-syntax",
 ]
 
 [[package]]
