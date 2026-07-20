@@ -30,6 +30,17 @@ impl<'a> TypeRef<'a> {
         }
     }
 
+    /// The exact source span this type reference covers, or `None` if it
+    /// is empty.
+    #[must_use]
+    pub fn span(self) -> Option<tuo_source::Span> {
+        match self {
+            Self::Unit(ty) => ty.span(),
+            Self::Wrapper(ty) => ty.span(),
+            Self::Path(ty) => ty.span(),
+        }
+    }
+
     /// The exact source text of the type reference.
     #[must_use]
     pub fn text(self) -> &'a str {
