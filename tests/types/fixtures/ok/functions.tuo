@@ -1,0 +1,18 @@
+fn add(in a: Int, in b: Int) -> Int {
+    a + b
+}
+
+fn double(in n: Int) -> Int {
+    add(n, n)
+}
+
+fn pick(in flag: Bool) -> Int {
+    if flag {
+        return double(2);
+    }
+    add(1, 2)
+}
+
+fn unit_by_omission() {
+    pick(true);
+}

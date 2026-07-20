@@ -19,10 +19,10 @@
 //! stage crates.
 //!
 //! Implemented so far: the front-end re-exports below (source management,
-//! lexing, parsing, the lossless CST, typed AST views, and name
-//! resolution), which the CLI's `tuo debug syntax` / `tuo debug ast`
-//! developer tools drive. Later stages are still stubs, so no further
-//! orchestration exists yet.
+//! lexing, parsing, the lossless CST, typed AST views, name resolution,
+//! and type checking), which the CLI's `tuo debug syntax` / `tuo debug
+//! ast` developer tools drive. Later stages are still stubs, so no
+//! further orchestration exists yet.
 
 /// Typed AST views over the CST (re-export of [`tuo_ast`]).
 pub use tuo_ast as ast;
@@ -38,3 +38,5 @@ pub use tuo_resolve as resolve;
 pub use tuo_source as source;
 /// The lossless concrete syntax tree (re-export of [`tuo_syntax`]).
 pub use tuo_syntax as syntax;
+/// Type checking and inference (re-export of [`tuo_types`]).
+pub use tuo_types as types;

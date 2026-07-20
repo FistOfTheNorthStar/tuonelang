@@ -1,0 +1,14 @@
+fn double(in n: Int) -> Int {
+    n * 2
+}
+
+spec double {
+    given n: Int = 21;
+    when let result = double(n);
+    then result == 42;
+    assert double(0) == 0;
+}
+
+spec "doubling is even" {
+    assert double(3) % 2 == 0;
+}

@@ -1,0 +1,12 @@
+struct P {
+    x: Int,
+}
+
+fn f(in p: P, in u: U32, in n: Int) {
+    1 + true;
+    p < p;
+    !n;
+    -u;
+    if n { }
+    let b = n && true;
+}

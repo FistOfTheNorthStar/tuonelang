@@ -1,0 +1,7 @@
+fn convert(in n: Int) -> F64 {
+    let narrowed = n as I32;
+    let unsigned = n as U64;
+    let index = n as Usize;
+    let single = n as F32;
+    single as F64
+}

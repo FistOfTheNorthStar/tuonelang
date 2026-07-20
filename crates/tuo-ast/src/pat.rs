@@ -71,6 +71,17 @@ ast_view! {
     LiteralPat from LiteralPattern
 }
 
+impl LiteralPat<'_> {
+    /// The kind of the literal token (`IntLiteral`, `BoolLiteral`, …);
+    /// `OpenParen` for the unit literal `()`.
+    #[must_use]
+    pub fn token_kind(self) -> Option<TokenKind> {
+        crate::context::child_tokens(self.node)
+            .next()
+            .map(|index| self.ast.token_kind(index))
+    }
+}
+
 ast_view! {
     /// The wildcard pattern `_`.
     WildcardPat from WildcardPattern

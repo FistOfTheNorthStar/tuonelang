@@ -1,0 +1,4 @@
+T0007@161..162 non-exhaustive match on `Shape`: missing `Circle`, `Rect` | expected name `Circle` | expected name `Rect`
+T0007@207..208 non-exhaustive match on `Option[I64]`: missing `None` | expected name `None`
+T0007@261..262 non-exhaustive match on `Bool`: missing `false` | expected name `false`
+T0007@301..302 non-exhaustive match on `I64`

@@ -1,0 +1,19 @@
+struct Counter {
+    count: Int,
+}
+
+interface Reset {
+    fn reset(in self) -> Int;
+}
+
+impl Reset for Counter {
+    fn reset(in self) -> Int {
+        self.count
+    }
+}
+
+const START: Int = 10;
+
+fn fresh() -> Counter {
+    Counter { count: START }
+}

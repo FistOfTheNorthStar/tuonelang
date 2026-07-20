@@ -24,8 +24,13 @@ use crate::ids::{ModuleId, SymbolId};
 use crate::resolution::{ModuleInfo, Resolution};
 use crate::symbol::{Reference, SpecTarget, Symbol, SymbolKind};
 
-/// Type names the language provides without a declaration.
-const BUILTIN_TYPES: &[&str] = &["Int", "F64", "Bool", "String", "Char"];
+/// Type names the language provides without a declaration: the fixed
+/// primitive set of Constitution §10 (with the `Int`/`Float` aliases of §11)
+/// plus the builtin `Array` type constructor.
+const BUILTIN_TYPES: &[&str] = &[
+    "I8", "I16", "I32", "I64", "Isize", "U8", "U16", "U32", "U64", "Usize", "F32", "F64", "Int",
+    "Float", "Bool", "Char", "String", "Str", "Array",
+];
 
 /// The resolver's diagnostic codes (the reserved `Rxxxx` namespace).
 ///
@@ -49,6 +54,7 @@ fn code(number: u16) -> DiagnosticCode {
 #[must_use]
 pub fn resolve(files: &[Ast<'_>]) -> Resolution {
     let mut resolver = Resolver::default();
+    resolver.install_prelude();
     let modules: Vec<ModuleId> = files
         .iter()
         .map(|ast| resolver.collect_file(*ast))
@@ -199,6 +205,46 @@ impl Resolver {
     }
 
     // ------------------------------------------------------------------
+    // The prelude
+    // ------------------------------------------------------------------
+
+    /// Install the language prelude: the canonical `Option`/`Result` enums
+    /// (Constitution §14, §15) with their variants `Some`/`None`/`Ok`/`Err`
+    /// bound directly, so patterns like `Some { value }` resolve without a
+    /// qualifying path. Prelude names live in a synthetic `$prelude` module
+    /// (unreachable from source, since `$` cannot start an identifier) and
+    /// are consulted *after* every user scope, so declarations shadow them.
+    fn install_prelude(&mut self) {
+        let prelude_path = vec!["$prelude".to_owned()];
+        let module = self.ensure_module(&prelude_path, None);
+        for (enum_name, variant_names) in [("Option", ["Some", "None"]), ("Result", ["Ok", "Err"])]
+        {
+            let id = self.new_symbol(enum_name, SymbolKind::Enum, module, true, None);
+            self.out.prelude.push((enum_name.to_owned(), id));
+            let mut by_name: HashMap<String, SymbolId> = HashMap::new();
+            let mut ordered = Vec::new();
+            for variant_name in variant_names {
+                let variant =
+                    self.new_symbol(variant_name, SymbolKind::Variant, module, true, None);
+                by_name.insert(variant_name.to_owned(), variant);
+                ordered.push(variant);
+                self.out.prelude.push((variant_name.to_owned(), variant));
+            }
+            self.enum_variants.insert(id, by_name);
+            self.out.variants.insert(id, ordered);
+        }
+    }
+
+    /// The prelude symbol of `name`, if any.
+    fn prelude_lookup(&self, name: &str) -> Option<SymbolId> {
+        self.out
+            .prelude
+            .iter()
+            .find(|(entry, _)| entry == name)
+            .map(|(_, id)| *id)
+    }
+
+    // ------------------------------------------------------------------
     // Phase 1: modules and module-level declarations
     // ------------------------------------------------------------------
 
@@ -286,6 +332,7 @@ impl Resolver {
             return;
         };
         let mut variants: HashMap<String, SymbolId> = HashMap::new();
+        let mut ordered: Vec<SymbolId> = Vec::new();
         for variant in decl.variants() {
             let Some(name) = variant.name_ref() else {
                 continue;
@@ -303,8 +350,10 @@ impl Resolver {
                 Some(name.span),
             );
             variants.insert(name.text.to_owned(), symbol);
+            ordered.push(symbol);
         }
         self.enum_variants.insert(id, variants);
+        self.out.variants.insert(id, ordered);
     }
 
     fn collect_spec(&mut self, module: ModuleId, decl: SpecDecl<'_>) {
@@ -1226,6 +1275,9 @@ impl Resolver {
                         let symbol = self.out.modules[module.as_u32() as usize].symbol;
                         self.record(first, symbol);
                         Target::Module(module)
+                    } else if let Some(id) = self.prelude_lookup(first.text) {
+                        self.record(first, id);
+                        Target::Symbol(id)
                     } else if pos == Pos::Type
                         && segments.len() == 1
                         && BUILTIN_TYPES.contains(&first.text)

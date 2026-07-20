@@ -1,0 +1,12 @@
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+fn add(in a: Int, in b: Int) -> Int {
+    a + b
+}
+
+fn f(in a: Option[Int, Int], in b: Pair[Int], in c: Array) -> Int {
+    add(1)
+}

@@ -1,0 +1,5 @@
+fn f(in n: Int, in b: Bool, in s: Str) {
+    b as Int;
+    n as Bool;
+    s as String;
+}

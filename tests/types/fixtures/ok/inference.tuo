@@ -1,0 +1,15 @@
+fn identity[T](in value: T) -> T {
+    value
+}
+
+fn f() -> F64 {
+    let defaulted = 1;
+    let annotated: U8 = 7;
+    let steered = annotated + 1;
+    let float_default = 0.5;
+    let narrow: F32 = 0.5;
+    let through_generic: Int = identity(41);
+    let pinned = identity::[Bool](true);
+    let text = identity("hello");
+    float_default
+}

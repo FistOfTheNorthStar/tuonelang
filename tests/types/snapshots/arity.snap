@@ -1,0 +1,4 @@
+T0010@114..120 wrong number of type arguments for `Option`: expected 1, found 2 | expected count 1 | actual count 2
+T0010@138..142 wrong number of type arguments for `Pair`: expected 2, found 1 | expected count 2 | actual count 1
+T0010@155..160 wrong number of type arguments for `Array`: expected 1, found 0 | expected count 1 | actual count 0
+T0002@175..181 this call takes 2 arguments but 1 was supplied | expected count 2 | actual count 1

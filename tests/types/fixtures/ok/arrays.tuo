@@ -1,0 +1,13 @@
+fn head(in items: Array[Int]) -> Int {
+    items[0]
+}
+
+fn sum(in items: Array[Int], in count: Usize) -> Int {
+    var total = 0;
+    var i: Usize = 0;
+    while i < count {
+        total = total + items[i];
+        i = i + 1;
+    }
+    total
+}

@@ -114,6 +114,14 @@ impl<'a> ExprStmt<'a> {
         let ast = self.ast;
         child_nodes(self.node).find_map(move |node| Expr::cast(ast, node))
     }
+
+    /// Is the statement terminated by a `;`? (Block-form expressions may
+    /// stand alone without one; as a block's final statement they then act
+    /// as its tail value.)
+    #[must_use]
+    pub fn has_semicolon(self) -> bool {
+        self.ast.has_token(self.node, tuo_lexer::TokenKind::Semi)
+    }
 }
 
 ast_view! {
