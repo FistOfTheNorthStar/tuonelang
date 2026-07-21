@@ -1,0 +1,40 @@
+// ownership.md §3, O0007 — explicit `move` requires a non-Copy place;
+// applying it to Copy values or non-places is rejected as meaningless.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn renew(take b: Box[Int]) -> Box[Int] {
+    b
+}
+
+fn case_move_of_int(in n: Int) -> Int {
+    move n // ERROR: O0007 `Int` is Copy; `move` is meaningless
+}
+
+fn case_move_of_bool(in flag: Bool) -> Bool {
+    move flag // ERROR: O0007 `Bool` is Copy; `move` is meaningless
+}
+
+fn case_move_of_literal() -> Int {
+    move 1 // ERROR: O0007 a literal is not a place
+}
+
+fn case_move_of_copy_struct(in p: Point) -> Point {
+    move p // ERROR: O0007 `Point` is Copy; `move` is meaningless
+}
+
+fn case_move_of_call_result(take b: Box[Int]) -> Box[Int] {
+    move renew(b) // ERROR: O0007 a call result is not a place
+}
+
+fn case_move_of_str() -> Str {
+    let s = "static";
+    move s // ERROR: O0007 `Str` is Copy; `move` is meaningless
+}
+
+fn case_move_of_copy_field(in p: Point) -> Int {
+    move p.x // ERROR: O0007 `Int` is Copy; `move` is meaningless
+}

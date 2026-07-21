@@ -1,0 +1,86 @@
+// ownership.md §12 — Box/Shared/Weak are ordinary non-Copy values: they
+// move, borrow, and drop by the general rules; Weak back-edges make cyclic
+// shapes expressible.
+
+struct Node {
+    value: Int,
+    parent: Weak[Node],
+}
+
+struct Tree {
+    root: Shared[Node],
+}
+
+fn consume_box(take b: Box[String]) { }
+
+fn consume_shared(take s: Shared[Int]) { }
+
+fn consume_weak(take w: Weak[Int]) { }
+
+fn peek_shared(in s: Shared[Int]) { }
+
+fn peek_weak(in w: Weak[Int]) { }
+
+fn peek_node(in n: Node) -> Int {
+    n.value
+}
+
+fn case_box_moves_like_a_value(take b: Box[String]) {
+    let owned = b;
+    consume_box(owned);
+}
+
+fn case_box_borrowed_then_moved(take b: Box[String]) {
+    peek_box(b);
+    consume_box(b);
+}
+
+fn peek_box(in b: Box[String]) { }
+
+fn case_nested_box_moves(take b: Box[Box[Int]]) -> Box[Box[Int]] {
+    let inner = b;
+    inner
+}
+
+fn case_shared_handle_moves(take s: Shared[Int]) {
+    let handle = s;
+    consume_shared(handle);
+}
+
+fn case_shared_borrowed_repeatedly(take s: Shared[Int]) -> Shared[Int] {
+    peek_shared(s);
+    peek_shared(s);
+    s
+}
+
+fn case_shared_dropped_at_scope_end(take s: Shared[Int]) {
+    let handle = s;
+}
+
+fn case_weak_handle_moves(take w: Weak[Int]) {
+    let handle = w;
+    consume_weak(handle);
+}
+
+fn case_weak_borrowed_then_dropped(take w: Weak[Int]) {
+    peek_weak(w);
+    peek_weak(w);
+}
+
+fn case_weak_back_edge_shape(take n: Node) -> Int {
+    peek_node(n);
+    n.value
+}
+
+fn case_cycle_broken_by_weak(take t: Tree) -> Tree {
+    t
+}
+
+fn case_wrapper_field_moved_out(take t: Tree) -> Shared[Node] {
+    t.root
+}
+
+fn case_generic_wrapper_passthrough[T](take b: Box[T]) -> Box[T] {
+    let held = b;
+    held
+}

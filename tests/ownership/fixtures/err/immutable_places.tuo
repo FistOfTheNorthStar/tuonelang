@@ -1,0 +1,93 @@
+// ownership.md §7, O0004 — `let` bindings and `in` parameters (and their
+// fields) are immutable: no assignment, no `mut` borrow.
+
+struct Counter {
+    count: Int,
+}
+
+struct Nested {
+    inner: Counter,
+}
+
+fn bump(mut c: Counter) {
+    c.count = c.count + 1;
+}
+
+fn set_int(mut n: Int) {
+    n = 0;
+}
+
+fn case_assign_to_let(in n: Int) {
+    let x = n;
+    x = n + 1; // ERROR: O0004 `x` is a `let` binding
+}
+
+fn case_second_assignment_to_deferred_let(in flag: Bool) {
+    let x: Int;
+    x = 1;
+    x = 2; // ERROR: O0004 `x` was already initialized
+}
+
+fn case_deferred_let_double_init_in_branch(in flag: Bool) -> Int {
+    let x: Int;
+    x = 1;
+    if flag {
+        x = 2; // ERROR: O0004 `x` was already initialized on this path
+    }
+    x
+}
+
+fn case_assign_to_in_param(in n: Int) {
+    n = 5; // ERROR: O0004 `in n` is a shared borrow
+}
+
+fn case_assign_to_field_of_in_param(in c: Counter) {
+    c.count = 5; // ERROR: O0004 cannot mutate a field of `in c`
+}
+
+fn case_assign_to_field_of_let(in n: Int) {
+    let c = Counter { count: n };
+    c.count = 0; // ERROR: O0004 `c` is a `let` binding
+}
+
+fn case_mut_borrow_of_let(in n: Int) {
+    let c = Counter { count: n };
+    bump(c); // ERROR: O0004 cannot pass `let` binding `c` as `mut`
+}
+
+fn case_mut_borrow_of_in_param(in c: Counter) {
+    bump(c); // ERROR: O0004 cannot pass `in c` as `mut`
+}
+
+fn case_mut_borrow_of_field_of_in_param(in c: Counter) {
+    set_int(c.count); // ERROR: O0004 cannot pass a field of `in c` as `mut`
+}
+
+fn case_mut_borrow_of_field_of_let(in n: Int) {
+    let c = Counter { count: n };
+    set_int(c.count); // ERROR: O0004 `c` is a `let` binding
+}
+
+fn case_assign_nested_field_of_in_param(in n: Nested) {
+    n.inner.count = 1; // ERROR: O0004 cannot mutate a nested field of `in n`
+}
+
+fn case_assign_to_let_holding_owned(take b: Box[Int], take c: Box[Int]) {
+    let slot = b;
+    slot = c; // ERROR: O0004 `slot` is a `let` binding
+}
+
+fn case_mut_borrow_of_shadowed_let(in n: Int) {
+    var c = Counter { count: n };
+    let c = c;
+    bump(c); // ERROR: O0004 the shadowing `c` is a `let` binding
+}
+
+fn case_assign_inside_loop_to_let(in rounds: Int) {
+    let total = 0;
+    var i = 0;
+    while i < rounds {
+        total = total + i; // ERROR: O0004 `total` is a `let` binding
+        i = i + 1;
+    }
+}

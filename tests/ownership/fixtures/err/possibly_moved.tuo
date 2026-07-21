@@ -1,0 +1,146 @@
+// ownership.md §10, O0002 — a place moved on some paths but not all is
+// possibly-moved at the join; using it there is rejected.
+
+enum Msg {
+    Text { body: String },
+    Ping,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn peek(in b: Box[Int]) { }
+
+fn case_moved_in_then_branch(take b: Box[Int], in flag: Bool) -> Int {
+    if flag {
+        consume(b);
+    } else {
+        peek(b);
+    }
+    read_value(b) // ERROR: O0002 `b` is moved when `flag` held
+}
+
+fn read_value(in b: Box[Int]) -> Int {
+    0
+}
+
+fn case_moved_in_else_branch(take b: Box[Int], in flag: Bool) {
+    if flag {
+        peek(b);
+    } else {
+        consume(b);
+    }
+    consume(b); // ERROR: O0002 `b` is moved when `flag` did not hold
+}
+
+fn case_moved_in_one_match_arm(take b: Box[Int], in flag: Bool) {
+    match flag {
+        true => consume(b),
+        false => peek(b),
+    }
+    peek(b); // ERROR: O0002 `b` is moved on the `true` arm
+}
+
+fn case_reinit_on_one_path_only(take b: Box[Int], take c: Box[Int], in flag: Bool) {
+    var slot = b;
+    if flag {
+        consume(slot);
+        slot = c;
+    } else {
+        consume(slot);
+        consume(c);
+    }
+    consume(slot); // ERROR: O0002 `slot` is reinitialized only when `flag` held
+}
+
+fn case_loop_carried_move(take b: Box[Int], in rounds: Int) {
+    var i = 0;
+    while i < rounds {
+        let held = b; // ERROR: O0002 `b` may be moved by a previous iteration
+        i = i + 1;
+    }
+}
+
+fn case_loop_take_call(take b: Box[Int], in rounds: Int) {
+    var i = 0;
+    while i < rounds {
+        consume(b); // ERROR: O0002 `b` may be moved by a previous iteration
+        i = i + 1;
+    }
+}
+
+fn case_loop_reinit_after_use(take b: Box[Int], take c: Box[Int], in rounds: Int) {
+    var slot = b;
+    var i = 0;
+    while i < rounds {
+        peek(slot);
+        consume(slot); // ERROR: O0002 `slot` is not restored before this move on the next pass
+        if i > 1 {
+            slot = c;
+        }
+        i = i + 1;
+    }
+}
+
+fn case_for_loop_carried_move(take b: Box[Int], in limit: Int) {
+    for n in 0 .. limit {
+        consume(b); // ERROR: O0002 `b` may be moved by a previous iteration
+    }
+}
+
+fn case_nested_if_partial_paths(take b: Box[Int], in outer: Bool, in inner: Bool) {
+    if outer {
+        if inner {
+            consume(b);
+        }
+    }
+    peek(b); // ERROR: O0002 `b` is moved only when both conditions held
+}
+
+fn case_moved_before_break_then_used_after(take b: Box[Int], in rounds: Int) {
+    var i = 0;
+    while i < rounds {
+        if i > 2 {
+            consume(b);
+            break;
+        }
+        i = i + 1;
+    }
+    peek(b); // ERROR: O0002 `b` is moved when the loop broke early
+}
+
+fn case_match_with_guarded_arm(take b: Box[Int], in n: Int) {
+    match n > 0 {
+        true => consume(b),
+        false => { }
+    }
+    consume(b); // ERROR: O0002 `b` is moved on the `true` arm
+}
+
+fn case_deferred_init_on_one_path(in flag: Bool) -> Int {
+    let x: Int;
+    if flag {
+        x = 1;
+    }
+    x // ERROR: O0002 `x` is uninitialized when `flag` did not hold
+}
+
+fn case_enum_moved_in_arm_of_its_own_match(take m: Msg, in flag: Bool) {
+    if flag {
+        match m {
+            Msg::Text { body } => consume_string(body),
+            Msg::Ping => { }
+        }
+    }
+    let held = m; // ERROR: O0002 `m` is moved when `flag` held
+}
+
+fn case_conditional_generic_move[T](take value: T, in flag: Bool) {
+    if flag {
+        let sink = value;
+    }
+    peek_generic(value); // ERROR: O0002 `value` is moved when `flag` held
+}
+
+fn peek_generic[T](in value: T) { }

@@ -1,0 +1,87 @@
+// ownership.md §11 — RAII: drops run at scope end in reverse declaration
+// order, on every exit path, with statically known drop state everywhere.
+
+fn consume(take b: Box[Int]) { }
+
+fn find(in n: Int) -> Option[Int] {
+    if n > 0 {
+        Some { value: n }
+    } else {
+        None
+    }
+}
+
+fn case_unused_owned_values_drop(take a: Box[Int], take b: Box[Int]) {
+    let first = a;
+    let second = b;
+}
+
+fn case_inner_block_moves_outward(take b: Box[Int]) -> Box[Int] {
+    let outer = {
+        let inner = b;
+        inner
+    };
+    outer
+}
+
+fn case_inner_block_drops_its_own(take a: Box[Int], take b: Box[Int]) -> Box[Int] {
+    {
+        let scoped = a;
+    }
+    b
+}
+
+fn case_shadowed_value_lives_to_scope_end(in n: Int) -> Int {
+    let x = n;
+    let x = x + 1;
+    let x = x + 1;
+    x
+}
+
+fn case_owned_shadowed_by_copy(take b: Box[Int], in n: Int) -> Int {
+    let value = b;
+    let value = n;
+    value
+}
+
+fn case_early_return_drops_locals(take a: Box[Int], take b: Box[Int], in flag: Bool) -> Int {
+    let first = a;
+    let second = b;
+    if flag {
+        return 1;
+    }
+    0
+}
+
+fn case_question_mark_exit_drops_locals(take b: Box[Int], in n: Int) -> Option[Int] {
+    let owned = b;
+    let found = find(n)?;
+    Some { value: found }
+}
+
+fn case_break_exits_and_drops(take b: Box[Int], in rounds: Int) -> Int {
+    var i = 0;
+    while i < rounds {
+        let scoped = 1;
+        if i > 2 {
+            break;
+        }
+        i = i + 1;
+    }
+    consume(b);
+    0
+}
+
+fn case_unsafe_block_same_rules(take b: Box[Int]) -> Box[Int] {
+    unsafe {
+        let held = b;
+        held
+    }
+}
+
+fn case_move_on_every_exit_path(take b: Box[Int], in flag: Bool) -> Box[Int] {
+    if flag {
+        return b;
+    }
+    b
+}

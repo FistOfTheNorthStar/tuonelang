@@ -1,0 +1,123 @@
+// ownership.md §10 — loops: the body's exit state joins the loop head, so
+// every moved place must be reinitialized before the back edge (or the loop
+// must exit first).
+
+fn consume(take b: Box[Int]) { }
+
+fn peek(in b: Box[Int]) { }
+
+fn renew(take b: Box[Int]) -> Box[Int] {
+    b
+}
+
+fn case_borrow_inside_loop(take b: Box[Int], in rounds: Int) -> Box[Int] {
+    var i = 0;
+    while i < rounds {
+        peek(b);
+        i = i + 1;
+    }
+    b
+}
+
+fn case_move_and_restore_before_back_edge(take b: Box[Int], in rounds: Int) -> Box[Int] {
+    var slot = b;
+    var i = 0;
+    while i < rounds {
+        let held = slot;
+        slot = held;
+        i = i + 1;
+    }
+    slot
+}
+
+fn case_rotate_through_call_each_iteration(take b: Box[Int], in rounds: Int) -> Box[Int] {
+    var slot = b;
+    var i = 0;
+    while i < rounds {
+        slot = renew(slot);
+        i = i + 1;
+    }
+    slot
+}
+
+fn case_loop_break_carries_value(take b: Box[Int]) -> Box[Int] {
+    var slot = b;
+    loop {
+        let held = slot;
+        slot = renew(held);
+        break;
+    }
+    slot
+}
+
+fn case_loop_yields_moved_value(take b: Box[Int]) -> Box[Int] {
+    loop {
+        break b;
+    }
+}
+
+fn case_for_moves_iterable_once(take items: Array[Int]) -> Int {
+    var total = 0;
+    for n in items {
+        total = total + n;
+    }
+    total
+}
+
+fn case_for_over_fresh_range_each_call(in limit: Int) -> Int {
+    var total = 0;
+    for n in 0 .. limit {
+        total = total + n;
+    }
+    for n in 0 .. limit {
+        total = total + n;
+    }
+    total
+}
+
+fn case_copy_carried_across_iterations(in rounds: Int) -> Int {
+    var acc = 0;
+    var i = 0;
+    while i < rounds {
+        let snapshot = acc;
+        acc = snapshot + i;
+        i = i + 1;
+    }
+    acc
+}
+
+fn case_continue_after_reinit(take b: Box[Int], in rounds: Int) -> Box[Int] {
+    var slot = b;
+    var i = 0;
+    while i < rounds {
+        i = i + 1;
+        if i > 2 {
+            slot = renew(slot);
+            continue;
+        }
+        peek(slot);
+    }
+    slot
+}
+
+fn case_move_after_loop_exits(take b: Box[Int], in rounds: Int) {
+    var i = 0;
+    while i < rounds {
+        peek(b);
+        i = i + 1;
+    }
+    consume(b);
+}
+
+fn case_nested_loops_borrow_only(take b: Box[Int], in rounds: Int) -> Box[Int] {
+    var i = 0;
+    while i < rounds {
+        var j = 0;
+        while j < rounds {
+            peek(b);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    b
+}

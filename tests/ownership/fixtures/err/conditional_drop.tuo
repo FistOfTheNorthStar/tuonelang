@@ -1,0 +1,74 @@
+// ownership.md §11, O0008 — no hidden drop flags: a place whose
+// initialization is unknown at a drop point is rejected even if never used
+// again.
+
+struct Pair {
+    left: Box[Int],
+    right: Box[Int],
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn case_move_in_then_branch_only(take b: Box[Int], in flag: Bool) {
+    if flag {
+        consume(b); // ERROR: O0008 `b` moved here but not on the other path
+    }
+}
+
+fn case_move_in_else_branch_only(take b: Box[Int], in flag: Bool) {
+    if flag {
+        let n = 1;
+    } else {
+        consume(b); // ERROR: O0008 `b` moved here but not on the other path
+    }
+}
+
+fn case_move_in_one_match_arm_only(take b: Box[Int], in flag: Bool) {
+    match flag {
+        true => consume(b), // ERROR: O0008 `b` moved on this arm only
+        false => { }
+    }
+}
+
+fn case_conditional_field_move(take p: Pair, in flag: Bool) {
+    if flag {
+        consume(p.left); // ERROR: O0008 `p.left` moved here but not on the other path
+    }
+}
+
+fn case_conditional_move_of_local(take b: Box[Int], in flag: Bool) {
+    let owned = b;
+    if flag {
+        consume(owned); // ERROR: O0008 `owned` moved here but not on the other path
+    }
+}
+
+fn case_break_leaves_state_unbalanced(take b: Box[Int], in rounds: Int) {
+    var i = 0;
+    while i < rounds {
+        if i > 1 {
+            consume(b); // ERROR: O0008 `b` moved only on the breaking path
+            break;
+        }
+        i = i + 1;
+    }
+}
+
+fn case_reinit_missing_on_one_arm(take b: Box[Int], take c: Box[Int], in flag: Bool) {
+    var slot = b;
+    match flag {
+        true => {
+            consume(slot);
+            slot = c;
+        },
+        false => consume(slot), // ERROR: O0008 `slot` is not restored on this arm
+    }
+}
+
+fn case_nested_conditional_move(take b: Box[Int], in outer: Bool, in inner: Bool) {
+    if outer {
+        if inner {
+            consume(b); // ERROR: O0008 `b` moved only when both conditions held
+        }
+    }
+}

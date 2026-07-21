@@ -576,8 +576,11 @@ Experimental. The authoritative surface grammar is tracked in `grammar.ebnf`.
   legibly. *Only `in`/`take` (no `mut`)*: would force ownership transfer for all
   mutation, hurting ergonomics and performance. *Unrestricted aliasing*:
   reintroduces data races.
-- **Status.** **Frozen** (the three modes and the borrow rule). Whether `mut`
-  borrows may be re-borrowed/split: **Experimental**.
+- **Status.** **Frozen** (the three modes and the borrow rule). `mut`
+  re-borrowing/splitting: **resolved by ADR-0003** — re-borrowing is
+  pass-through only (forwarding a parameter, or a field path of one, as an
+  argument), and disjoint field paths never conflict; see
+  `specification/ownership.md`.
 
 ## 23. Null policy
 
@@ -838,7 +841,7 @@ package naming (§29); edition mechanism (§30).
 
 **Experimental (open within v0):** tab prohibition (§1); directory/`mod.tuo`
 convention & relative paths (§6, §7); dynamic-dispatch spelling & associated
-types (§19); `?` error-conversion rule (§20); `mut` re-borrowing (§22); named
+types (§19); `?` error-conversion rule (§20); named
 overflow-op spellings (§24); `Shared` atomicity (§25); intrinsic set (§26);
 `given/when/then` surface syntax (§27); reproducibility mechanisms (§28);
 registry details (§29). Deferred entirely from v0: tuple structs (§12), range /

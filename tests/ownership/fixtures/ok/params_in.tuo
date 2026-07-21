@@ -1,0 +1,75 @@
+// ownership.md §4, §6 — `in` parameters are shared read-only borrows; they
+// can be read and forwarded freely, and never move.
+
+struct Account {
+    id: Int,
+    label: String,
+}
+
+fn peek(in b: Box[Int]) { }
+
+fn peek_pair(in a: Box[Int], in b: Box[Int]) { }
+
+fn peek_account(in acc: Account) { }
+
+fn peek_string(in s: String) { }
+
+fn case_in_borrow_read_repeatedly(in b: Box[Int]) {
+    peek(b);
+    peek(b);
+    peek(b);
+}
+
+fn case_in_param_forwarded(in b: Box[Int]) {
+    peek(b);
+}
+
+fn case_same_place_twice_as_in(in b: Box[Int]) {
+    peek_pair(b, b);
+}
+
+fn case_owner_borrowed_then_still_owned(take b: Box[Int]) -> Box[Int] {
+    peek(b);
+    peek(b);
+    b
+}
+
+fn case_in_param_copy_field_read(in acc: Account) -> Int {
+    let a = acc.id;
+    let b = acc.id;
+    a + b
+}
+
+fn case_in_param_field_forwarded(in acc: Account) {
+    peek_string(acc.label);
+    peek_string(acc.label);
+}
+
+fn case_in_param_whole_and_field_reads(in acc: Account) -> Int {
+    peek_account(acc);
+    peek_string(acc.label);
+    acc.id
+}
+
+fn case_copy_in_param_used_by_value(in n: Int) -> Int {
+    let doubled = n + n;
+    doubled
+}
+
+fn case_nested_call_borrows_do_not_overlap(in b: Box[Int]) {
+    observe(b, forward(b));
+}
+
+fn forward(in b: Box[Int]) -> Int {
+    0
+}
+
+fn observe(in b: Box[Int], in n: Int) { }
+
+fn case_local_borrowed_between_uses(take b: Box[Int]) -> Box[Int] {
+    let held = b;
+    peek(held);
+    let next = held;
+    peek(next);
+    next
+}

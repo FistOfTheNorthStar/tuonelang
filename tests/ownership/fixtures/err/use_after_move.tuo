@@ -1,0 +1,143 @@
+// ownership.md §3, O0001 — using a place after its value moved. Every case
+// type-checks today and must be rejected by the ownership checker at the
+// annotated line.
+
+struct Wrap {
+    buf: String,
+}
+
+enum Msg {
+    Text { body: String },
+    Ping,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn consume_msg(take m: Msg) { }
+
+fn consume_wrap(take w: Wrap) { }
+
+fn peek(in b: Box[Int]) { }
+
+fn text_length(in s: String) -> Int {
+    0
+}
+
+fn case_move_to_binding_then_read(take b: Box[Int]) {
+    let owned = b;
+    peek(b); // ERROR: O0001 `b` was moved into `owned`
+}
+
+fn case_move_to_binding_then_move_again(take b: Box[Int]) {
+    let first = b;
+    let second = b; // ERROR: O0001 `b` was moved into `first`
+}
+
+fn case_take_call_then_read(take b: Box[Int]) {
+    consume(b);
+    peek(b); // ERROR: O0001 `b` was moved into the `take` argument
+}
+
+fn case_take_call_twice(take b: Box[Int]) {
+    consume(b);
+    consume(b); // ERROR: O0001 `b` was moved into the first call
+}
+
+fn case_move_into_struct_then_use(take s: String) {
+    let w = Wrap { buf: s };
+    consume_string(s); // ERROR: O0001 `s` was moved into the struct literal
+}
+
+fn case_move_into_enum_then_use(take s: String) {
+    let m = Msg::Text { body: s };
+    consume_string(s); // ERROR: O0001 `s` was moved into the enum literal
+}
+
+fn case_explicit_move_then_read(take b: Box[Int]) {
+    let owned = move b;
+    peek(b); // ERROR: O0001 `b` was explicitly moved
+}
+
+fn case_return_does_not_resurrect(take b: Box[Int], in flag: Bool) -> Box[Int] {
+    let owned = b;
+    if flag {
+        return owned;
+    }
+    b // ERROR: O0001 `b` was moved into `owned`
+}
+
+fn case_move_in_inner_block(take b: Box[Int]) {
+    {
+        let scoped = b;
+    }
+    peek(b); // ERROR: O0001 `b` was moved into the inner block
+}
+
+fn case_match_moves_scrutinee(take m: Msg) {
+    match m {
+        Msg::Text { body } => consume_string(body),
+        Msg::Ping => { }
+    }
+    consume_msg(m); // ERROR: O0001 `m` was moved by the binding match
+}
+
+fn case_shadowed_original_still_moved(take b: Box[Int]) {
+    let c = b;
+    let b = c;
+    let d = b;
+    peek(b); // ERROR: O0001 the shadowing `b` was moved into `d`
+}
+
+fn case_move_generic_twice[T](take value: T) {
+    let first = value;
+    let second = value; // ERROR: O0001 generic `T` is move-only
+}
+
+fn case_var_moved_without_reinit(take b: Box[Int]) {
+    var slot = b;
+    consume(slot);
+    peek(slot); // ERROR: O0001 `slot` was moved and never reinitialized
+}
+
+fn case_borrow_after_move(take b: Box[Int]) {
+    let owned = b;
+    let n = read_value(b); // ERROR: O0001 cannot borrow `b` after its move
+    consume(owned);
+}
+
+fn read_value(in b: Box[Int]) -> Int {
+    0
+}
+
+fn case_move_out_of_block_then_use_source(take b: Box[Int]) {
+    let outer = { b };
+    peek(b); // ERROR: O0001 `b` was moved out through the block expression
+}
+
+fn case_for_consumes_iterable(take items: Array[Int]) -> Int {
+    var total = 0;
+    for n in items {
+        total = total + n;
+    }
+    for n in items { // ERROR: O0001 `items` was moved by the first `for`
+        total = total + n;
+    }
+    total
+}
+
+fn case_wrapper_field_move_then_read_field(take w: Wrap) {
+    let buf = w.buf;
+    let n = text_length(w.buf); // ERROR: O0001 `w.buf` was moved into `buf`
+    consume_string(buf);
+}
+
+fn case_move_then_use_in_loop(take b: Box[Int], in rounds: Int) {
+    consume(b);
+    var i = 0;
+    while i < rounds {
+        peek(b); // ERROR: O0001 `b` was moved before the loop
+        i = i + 1;
+    }
+}

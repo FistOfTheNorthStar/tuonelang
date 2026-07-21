@@ -1,0 +1,141 @@
+// ownership.md §10 — joins: a place is initialized after a join iff it is
+// initialized on every arriving path; diverging paths do not contribute.
+
+enum Msg {
+    Text { body: String },
+    Ping,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn text_length(in s: String) -> Int {
+    0
+}
+
+fn case_both_branches_move(take b: Box[Int], in flag: Bool) {
+    if flag {
+        consume(b);
+    } else {
+        consume(b);
+    }
+}
+
+fn case_move_or_return(take b: Box[Int], in flag: Bool) -> Int {
+    if flag {
+        consume(b);
+    } else {
+        return 0;
+    }
+    1
+}
+
+fn case_move_with_diverging_else(take b: Box[Int], in flag: Bool) -> Box[Int] {
+    if flag {
+        return b;
+    }
+    b
+}
+
+fn case_all_match_arms_move(take m: Msg) -> Int {
+    match m {
+        Msg::Text { body } => text_length(body),
+        Msg::Ping => 0,
+    }
+}
+
+fn case_match_binds_only_copy(in flag: Bool) -> Int {
+    let verdict = match flag {
+        true => 1,
+        false => 0,
+    };
+    let again = match flag {
+        true => 10,
+        false => 20,
+    };
+    verdict + again
+}
+
+fn case_balanced_replacement(take b: Box[Int], take c: Box[Int], in flag: Bool) -> Box[Int] {
+    var slot = b;
+    if flag {
+        let taken = slot;
+        slot = c;
+        consume(taken);
+    } else {
+        consume(c);
+    }
+    slot
+}
+
+fn case_moved_in_both_then_reinit_in_both(
+    take b: Box[Int],
+    take c: Box[Int],
+    take d: Box[Int],
+    in flag: Bool,
+) {
+    var slot = b;
+    if flag {
+        consume(slot);
+        slot = c;
+        consume(d);
+    } else {
+        consume(slot);
+        slot = d;
+        consume(c);
+    }
+    consume(slot);
+}
+
+fn case_nested_ifs_balanced(take b: Box[Int], in outer: Bool, in inner: Bool) {
+    if outer {
+        if inner {
+            consume(b);
+        } else {
+            consume(b);
+        }
+    } else {
+        consume(b);
+    }
+}
+
+fn case_else_if_chain_moves_everywhere(take b: Box[Int], in n: Int) {
+    if n > 10 {
+        consume(b);
+    } else if n > 5 {
+        consume(b);
+    } else {
+        consume(b);
+    }
+}
+
+fn case_match_arm_diverges(take m: Msg, in fallback: Int) -> Int {
+    let out: String;
+    match m {
+        Msg::Text { body } => out = body,
+        Msg::Ping => return fallback,
+    }
+    text_length(out)
+}
+
+fn case_conditional_use_of_copy(in n: Int, in flag: Bool) -> Int {
+    let a = n;
+    if flag {
+        let b = n;
+        a + b
+    } else {
+        a
+    }
+}
+
+fn case_if_expression_moves_value(take b: Box[Int], take c: Box[Int], in flag: Bool) -> Box[Int] {
+    let chosen = if flag {
+        consume(c);
+        b
+    } else {
+        consume(b);
+        c
+    };
+    chosen
+}
