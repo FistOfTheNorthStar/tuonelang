@@ -255,9 +255,12 @@ fn broken(take p: Pair, take q: Pair) -> Pair {
   a `?` early exit, trailing `Never`) do not contribute to the join.
 - **Loops.** The body's exit state joins back into the loop head: a value
   moved in an iteration and not reinitialized before the back edge is
-  possibly-moved at the next iteration's use site (O0002). `for` moves its
-  iterable once, before the first iteration; loop-local bindings are fresh
-  each iteration.
+  possibly-moved at the next iteration's use site (O0002); the diagnostic
+  is anchored at the responsible move, since that is where the fix goes.
+  `for` moves its iterable once, before the first iteration; loop-local
+  bindings are fresh each iteration. A deferred-initialization `let` (§7)
+  may not be initialized inside a loop body: the assignment could run once
+  per iteration, so it is a conservative O0004.
 
 ```tuo
 // MUST COMPILE — every path replaces what it moved

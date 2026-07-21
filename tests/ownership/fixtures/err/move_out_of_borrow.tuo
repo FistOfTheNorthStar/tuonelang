@@ -68,7 +68,10 @@ fn case_return_field_of_in_param(in p: Pair) -> Box[Int] {
 
 fn case_match_moves_in_param(in m: Option[Box[Int]], take fallback: Box[Int]) -> Box[Int] {
     match m {
-        Some { value } => value, // ERROR: O0003 binding `value` moves out of `in m`
+        Some { value } => { // ERROR: O0003 binding `value` moves out of `in m`
+            consume(fallback);
+            value
+        },
         None => fallback,
     }
 }

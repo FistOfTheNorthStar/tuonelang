@@ -42,11 +42,38 @@ use tuo_resolve::{Resolution, SymbolId};
 
 pub use ty::{FloatKind, FnTy, InferVar, IntKind, Ty, WrapperKind};
 
+/// The declaration-context shape of one user struct: its type parameters
+/// (in declaration order) and its fields with their declared types.
+///
+/// Field types are expressed in terms of the struct's own type parameters
+/// ([`Ty::Param`]); consumers instantiate them by substituting the type
+/// arguments of a concrete [`Ty::Struct`].
+#[derive(Clone, Debug)]
+pub struct StructShape {
+    /// The struct's generic parameters, in declaration order.
+    pub type_params: Vec<SymbolId>,
+    /// The fields, in declaration order, with their declared types.
+    pub fields: Vec<(String, Ty)>,
+}
+
+/// The declaration-context shape of one user enum: its type parameters and
+/// each variant's payload fields (see [`StructShape`] for instantiation).
+#[derive(Clone, Debug)]
+pub struct EnumShape {
+    /// The enum's generic parameters, in declaration order.
+    pub type_params: Vec<SymbolId>,
+    /// Each variant (by symbol) with its payload fields, in declaration
+    /// order.
+    pub variants: Vec<(SymbolId, Vec<(String, Ty)>)>,
+}
+
 /// Everything type checking produced for one program snapshot.
 #[derive(Debug, Default)]
 pub struct TypeckResult {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) symbol_types: HashMap<SymbolId, Ty>,
+    pub(crate) struct_shapes: HashMap<SymbolId, StructShape>,
+    pub(crate) enum_shapes: HashMap<SymbolId, EnumShape>,
 }
 
 impl TypeckResult {
@@ -62,6 +89,20 @@ impl TypeckResult {
     #[must_use]
     pub fn type_of(&self, symbol: SymbolId) -> Option<&Ty> {
         self.symbol_types.get(&symbol)
+    }
+
+    /// The declared shape of a user struct, for downstream stages that walk
+    /// field types (the ownership checker derives `Copy`-ness and field-path
+    /// types from this).
+    #[must_use]
+    pub fn struct_shape(&self, symbol: SymbolId) -> Option<&StructShape> {
+        self.struct_shapes.get(&symbol)
+    }
+
+    /// The declared shape of a user enum (see [`Self::struct_shape`]).
+    #[must_use]
+    pub fn enum_shape(&self, symbol: SymbolId) -> Option<&EnumShape> {
+        self.enum_shapes.get(&symbol)
     }
 }
 

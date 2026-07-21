@@ -1,16 +1,85 @@
 //! Ownership and memory-safety analysis for tuonelang.
 //!
-//! Memory safety without a garbage collector is a core tuonelang goal. This
-//! crate will enforce the v0 ownership model — moves, derived `Copy`, the
-//! `in`/`mut`/`take` borrow modes, partial moves, conservative joins, and
-//! statically known drop points — using type information from [`tuo_types`].
+//! [`check`] enforces the v0 ownership model frozen in
+//! `specification/ownership.md` (adopted by ADR-0003): moves and derived
+//! `Copy`, the `in`/`mut`/`take` parameter modes, per-argument-list borrow
+//! conflicts, partial moves, conservative joins at branches and loop back
+//! edges, and statically known drop points ("no hidden drop flags"). There
+//! is **no user-written lifetime syntax**: a borrow lives exactly as long
+//! as the call that takes it, so the whole analysis is per-function and
+//! flow-sensitive over places (bindings, parameters, and their field
+//! paths).
 //!
-//! The model is **frozen before implementation**: the normative rules live
-//! in `specification/ownership.md` (adopted by ADR-0003), and their
-//! executable counterpart is the fixture corpus in
-//! `tests/ownership/fixtures/` (`ok/` must compile, `err/` must fail with
-//! the annotated `O0001`–`O0009` diagnostic). The checker implemented here
-//! must match that agreed pair exactly; the corpus is its acceptance suite.
+//! The checker runs after type checking and consumes its results (§16): a
+//! body containing a type error is not ownership-checked, and expressions
+//! the type checker poisons (method calls, pending the trait system) never
+//! produce ownership noise. Diagnostics use the reserved `O0001`–`O0009`
+//! codes of `specification/ownership.md` §15; each names the place, the
+//! earlier action that produced the state, and — where one exists — the
+//! local fix. The executable counterpart of the specification is the
+//! fixture corpus in `tests/ownership/fixtures/` (`ok/` must produce zero
+//! ownership diagnostics; each `err/` case exactly its annotated code),
+//! which `tests/fixtures.rs` enforces.
 //!
-//! No ownership analysis is implemented yet; only the crate boundary and
-//! the corpus guard (`tests/fixtures.rs`) exist.
+//! # Known conservative rejections
+//!
+//! Deliberate simplifications, frozen by ADR-0003 — each has a local
+//! rewrite and may be revisited by a future ADR:
+//!
+//! - **No drop flags (`O0008`)**: a place moved on some paths but not
+//!   others is rejected at its drop point even if never used again.
+//! - **No move-out of `mut` parameters (`O0003`)**, even when
+//!   reinitialized before returning.
+//! - **Loop-carried moves (`O0002`)**: a place moved in a loop body must
+//!   be reinitialized before the back edge; the responsible move is
+//!   reported even when only later iterations would observe it.
+//! - **A deferred `let` may not be initialized inside a loop body**
+//!   (`O0004`): the initialization could run once per iteration.
+//! - **Field assignment does not initialize a deferred binding**: a
+//!   deferred `let`/`var` must first be assigned as a whole.
+//! - **Index expressions are not places (`O0007`)**: nothing moves out of
+//!   or is assigned through `items[i]`; only `Copy` elements are read out
+//!   by value.
+//! - **Generic values are move-only**: `T` is treated as non-`Copy` inside
+//!   a generic body (checking is pre-monomorphization).
+//!
+//! Two constructs are deliberately *not* analyzed deeper than reads, and
+//! accept accordingly: method-call receivers/arguments (method signatures
+//! arrive with the trait system; the type checker poisons these calls the
+//! same way) and calls through function-typed values (v0 function types do
+//! not carry parameter modes). Both surfaces are unreachable in meaningful
+//! v0 programs today.
+
+mod check;
+mod env;
+mod place;
+
+use tuo_ast::Ast;
+use tuo_diagnostics::Diagnostic;
+use tuo_resolve::Resolution;
+use tuo_types::TypeckResult;
+
+pub use place::Place;
+
+/// Everything ownership checking produced for one program snapshot.
+#[derive(Debug, Default)]
+pub struct OwnershipResult {
+    diagnostics: Vec<Diagnostic>,
+}
+
+impl OwnershipResult {
+    /// Ownership diagnostics (`Oxxxx` codes), in discovery order per body.
+    #[must_use]
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+}
+
+/// Ownership-check `files` against `resolution` and `types` (produced by
+/// [`tuo_resolve::resolve`] and [`tuo_types::check`] over the same parse).
+#[must_use]
+pub fn check(files: &[Ast<'_>], resolution: &Resolution, types: &TypeckResult) -> OwnershipResult {
+    OwnershipResult {
+        diagnostics: check::run(files, resolution, types),
+    }
+}

@@ -1,8 +1,9 @@
 //! `tuo` — the command-line entry point for the tuonelang compiler and tooling.
 //!
-//! Implemented today: `tuo check <files>` (parse, resolve, and type-check a
-//! program — specs included — without generating code), `tuo fmt [--check]
-//! <files>` (the canonical source formatter), and the `tuo debug
+//! Implemented today: `tuo check <files>` (parse, resolve, type-check, and
+//! ownership-check a program — specs included — without generating code),
+//! `tuo fmt [--check] <files>` (the canonical source formatter), and the
+//! `tuo debug
 //! syntax|ast|hir <file>` developer tools (raw dumps of compiler-internal
 //! representations — unstable diagnostic output, not a language protocol),
 //! plus the built-in `--help` and `--version`. Compiler subcommands such as

@@ -5,10 +5,12 @@ live in `specification/ownership.md` (adopted by ADR-0003); this corpus is
 their executable counterpart — specification and fixtures are maintained
 together, and a behavioral change to one is a change to the other.
 
-The ownership checker (`tuo-ownership`) is **not implemented yet**. The
-corpus exists first, so that implementation begins only once specification
-and fixtures agree; `crates/tuo-ownership/tests/fixtures.rs` guards the
-conventions below until the checker consumes the corpus directly.
+The ownership checker (`tuo-ownership`) consumes this corpus as its
+**acceptance suite**: `crates/tuo-ownership/tests/fixtures.rs` runs the full
+pipeline over every fixture and enforces the contract below, and
+`crates/tuo-ownership/tests/property.rs` adds an exhaustive property sweep
+over small control-flow combinations (checker-accepted programs must be
+dynamically safe under path enumeration).
 
 ## Layout
 
@@ -37,9 +39,12 @@ zero diagnostics today — `err/` programs are ownership errors *only*.
 - Files group cases by the specification section they exercise; each file's
   header comment names it.
 
-## When the checker lands
+## Enforcement
 
-The harness gains the enforcement half: `ok/` fixtures must produce zero
-ownership diagnostics, and each `err/` case must produce exactly the
-annotated code at the annotated line. The annotation format above is chosen
-so that mapping (file, line, code) onto emitted diagnostics is mechanical.
+The harness enforces both halves: `ok/` fixtures must produce **zero**
+ownership diagnostics, and each `err/` fixture must produce **exactly** the
+annotated code on each annotated line — no more, no fewer. The annotation
+format above makes mapping (file, line, code) onto emitted diagnostics
+mechanical. A behavioral change to the checker that shifts a diagnostic is
+therefore a change to this corpus, and via ADR-0003 a change to
+`specification/ownership.md` as well.
