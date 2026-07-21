@@ -20,7 +20,7 @@ boundary each stub describes rather than reshaping the graph.
 cargo build                    # build the whole workspace
 cargo build -p tdg-cli         # build a single crate (produces the `tdg` binary)
 cargo run -p tdg-cli -- --help # run the CLI
-cargo run -p tdg-cli -- check file.tuo         # parse, resolve, and type-check (specs included)
+cargo run -p tdg-cli -- check file.tuo         # parse, resolve, type-check, ownership-check (specs included)
 cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
@@ -87,8 +87,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
 - **The CLI must never advertise behavior the compiler can't perform.** Subcommands
   (`build`, `run`, `spec`, `verify`) are deliberately absent until their
   functionality exists; the `Command` enum in `tdg-cli/src/cli.rs` is the extension
-  point. Implemented so far: `tdg check <files>` (the parse → resolve → type-check
-  front end, specs included per ADR-0002), `tdg fmt [--check] <files>` (the
+  point. Implemented so far: `tdg check <files>` (the parse → resolve → type-check →
+  ownership-check front end, specs included per ADR-0002), `tdg fmt [--check] <files>` (the
   canonical formatter — deterministic, idempotent, zero configuration), and
   `tdg debug syntax|ast|hir <file>` (diagnostic developer tools with unstable
   output, not language protocols).

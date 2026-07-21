@@ -1,10 +1,11 @@
-//! The `tuo check` command: parse, resolve, and type-check a program
-//! without generating code.
+//! The `tuo check` command: parse, resolve, type-check, and
+//! ownership-check a program without generating code.
 //!
 //! All given files form **one program snapshot** — files declaring the same
 //! `module` path share a scope, so cross-file references resolve. Specs are
-//! checked like every other item (parsed, attached to their targets, and
-//! type-checked, per ADR-0002); they are not executed.
+//! checked like every other item (parsed, attached to their targets,
+//! type-checked, and ownership-checked, per ADR-0002); they are not
+//! executed.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

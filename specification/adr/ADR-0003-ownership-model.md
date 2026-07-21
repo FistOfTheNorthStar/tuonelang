@@ -73,12 +73,14 @@ parameter modes are the only borrow formers). Everything else follows:
 - `tuo-ownership` implements exactly `specification/ownership.md`; the
   fixture corpus is its acceptance suite. The diagnostic namespace `O0001`–
   `O0009` is fixed there.
-- Until the checker exists, both `ok/` and `err/` fixtures must pass the
-  front end (`parse → resolve → type-check`) with zero diagnostics — err
-  fixtures fail only at the ownership stage. A harness in
-  `crates/tuo-ownership/tests/` enforces this and the corpus conventions
-  (documented in `tests/ownership/README.md`) so the corpus cannot rot
-  before the checker lands.
+- Both `ok/` and `err/` fixtures must pass the front end
+  (`parse → resolve → type-check`) with zero diagnostics — err fixtures
+  fail only at the ownership stage. The harness in
+  `crates/tuo-ownership/tests/` enforces this, the corpus conventions
+  (documented in `tests/ownership/README.md`), and — now that the checker
+  is implemented — the acceptance contract itself: `ok/` produces zero
+  ownership diagnostics, `err/` exactly the annotated code per annotated
+  line.
 - Programs relying on Rust-permitted patterns that v0 rejects (conditional
   moves healed by drop flags, move-out-and-restore of `mut` parameters,
   index-based moves) have local rewrites; the rejections are deliberate

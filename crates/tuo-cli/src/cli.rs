@@ -38,11 +38,12 @@ pub(crate) struct Cli {
 /// as new variants once their functionality exists.
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Parse, resolve, and type-check a program without generating code.
+    /// Parse, resolve, type-check, and ownership-check a program without
+    /// generating code.
     ///
     /// All given files are checked as one program: files declaring the same
     /// `module` path share a scope. Specs are parsed, attached to their
-    /// target functions, and type-checked like any other item (they do not
+    /// target functions, and checked like any other item (they do not
     /// execute — spec execution arrives with the MIR interpreter).
     /// Diagnostics go to stderr; the exit status is a failure if the
     /// program has errors.

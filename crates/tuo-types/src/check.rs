@@ -133,9 +133,37 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     for ast in files {
         checker.check_file(*ast);
     }
+    let struct_shapes = checker
+        .structs
+        .iter()
+        .map(|(&symbol, def)| {
+            (
+                symbol,
+                crate::StructShape {
+                    type_params: def.type_params.clone(),
+                    fields: def.fields.clone(),
+                },
+            )
+        })
+        .collect();
+    let enum_shapes = checker
+        .enums
+        .iter()
+        .map(|(&symbol, def)| {
+            (
+                symbol,
+                crate::EnumShape {
+                    type_params: def.type_params.clone(),
+                    variants: def.variants.clone(),
+                },
+            )
+        })
+        .collect();
     TypeckResult {
         diagnostics: checker.diagnostics,
         symbol_types: checker.symbol_types,
+        struct_shapes,
+        enum_shapes,
     }
 }
 

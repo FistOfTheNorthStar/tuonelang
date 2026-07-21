@@ -76,11 +76,10 @@ fn case_loop_reinit_after_use(take b: Box[Int], take c: Box[Int], in rounds: Int
     while i < rounds {
         peek(slot);
         consume(slot); // ERROR: O0002 `slot` is not restored before this move on the next pass
-        if i > 1 {
-            slot = c;
-        }
         i = i + 1;
     }
+    slot = c;
+    consume(slot);
 }
 
 fn case_for_loop_carried_move(take b: Box[Int], in limit: Int) {

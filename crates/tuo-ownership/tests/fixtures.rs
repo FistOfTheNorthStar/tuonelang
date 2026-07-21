@@ -1,23 +1,27 @@
-//! Guard for the ownership fixture corpus (`tests/ownership/fixtures/`).
+//! The acceptance suite of the ownership checker: the fixture corpus in
+//! `tests/ownership/fixtures/` (the executable counterpart of
+//! `specification/ownership.md`, per ADR-0003).
 //!
-//! The ownership checker is not implemented yet, so this harness does not
-//! run it. It enforces the corpus contract from ADR-0003 and
-//! `tests/ownership/README.md` instead, so that the executable examples of
-//! `specification/ownership.md` cannot rot before the checker lands:
+//! Corpus contract (see `tests/ownership/README.md`):
 //!
 //! - every fixture — `ok/` and `err/` alike — must pass the front end
 //!   (parse → resolve → type-check) with **zero** diagnostics, because
 //!   `err/` programs fail only at the ownership stage;
 //! - each corpus holds at least 100 cases (functions named `case_*`);
-//! - `ok/` fixtures carry no `// ERROR:` annotations;
+//! - `ok/` fixtures carry no `// ERROR:` annotations and must produce
+//!   **zero ownership diagnostics**;
 //! - in `err/` fixtures every case carries exactly one `// ERROR: O00NN …`
 //!   annotation citing a diagnostic code defined in
-//!   `specification/ownership.md` §15, and helper items carry none.
+//!   `specification/ownership.md` §15, helper items carry none, and the
+//!   checker must produce **exactly** the annotated codes at the annotated
+//!   lines — no more, no fewer.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
 
 use tuo_ast::Ast;
+use tuo_diagnostics::Diagnostic;
 use tuo_source::SourceMap;
 
 /// The ownership diagnostic codes fixed by `specification/ownership.md` §15.
@@ -42,8 +46,9 @@ fn fixture_paths(sub: &str) -> Vec<PathBuf> {
     paths
 }
 
-/// Assert the fixture passes the front end with zero diagnostics.
-fn assert_front_end_clean(name: &str, text: &str) {
+/// Run the full pipeline over a front-end-clean fixture and return the
+/// ownership diagnostics.
+fn check_ownership(name: &str, text: &str) -> Vec<Diagnostic> {
     let mut map = SourceMap::new();
     let file = map.intern_file("fixture.tuo");
     let id = map.add_source(file, text).expect("fixture fits");
@@ -60,13 +65,43 @@ fn assert_front_end_clean(name: &str, text: &str) {
         &[],
         "{name}: ownership fixtures must resolve cleanly"
     );
-    let result = tuo_types::check(&asts, &resolution);
+    let types = tuo_types::check(&asts, &resolution);
     assert_eq!(
-        result.diagnostics(),
+        types.diagnostics(),
         &[],
         "{name}: ownership fixtures target *ownership* errors, so they must \
          type-check cleanly"
     );
+    tuo_ownership::check(&asts, &resolution, &types)
+        .diagnostics()
+        .to_vec()
+}
+
+/// The 1-based line number a byte offset falls on.
+fn line_of(text: &str, offset: usize) -> usize {
+    text[..offset.min(text.len())].matches('\n').count() + 1
+}
+
+/// The `(line, code)` multiset a diagnostic list occupies.
+fn diagnostic_lines(text: &str, diagnostics: &[Diagnostic]) -> BTreeMap<(usize, String), usize> {
+    let mut out = BTreeMap::new();
+    for diagnostic in diagnostics {
+        let line = line_of(text, diagnostic.primary_span.range().start().as_usize());
+        *out.entry((line, diagnostic.code.to_string())).or_insert(0) += 1;
+    }
+    out
+}
+
+/// The `(line, code)` multiset the `// ERROR:` annotations claim.
+fn annotation_lines(text: &str) -> BTreeMap<(usize, String), usize> {
+    let mut out = BTreeMap::new();
+    for (index, line) in text.lines().enumerate() {
+        if let Some(rest) = line.split("// ERROR: ").nth(1) {
+            let code = rest.split_whitespace().next().unwrap_or("").to_owned();
+            *out.entry((index + 1, code)).or_insert(0) += 1;
+        }
+    }
+    out
 }
 
 /// Split a fixture into the prelude (before the first case function) and one
@@ -96,16 +131,21 @@ fn annotations(chunk: &str) -> Vec<&str> {
 }
 
 #[test]
-fn ok_fixtures_are_front_end_clean_and_unannotated() {
+fn ok_fixtures_produce_no_ownership_diagnostics() {
     let paths = fixture_paths("ok");
     let mut total = 0;
     for path in &paths {
         let name = path.file_name().expect("has name").to_string_lossy();
         let text = fs::read_to_string(path).expect("fixture is readable");
-        assert_front_end_clean(&name, &text);
         assert!(
             !text.contains("// ERROR:"),
             "{name}: ok fixtures must not carry ERROR annotations"
+        );
+        let diagnostics = check_ownership(&name, &text);
+        assert!(
+            diagnostics.is_empty(),
+            "{name}: ok fixtures must produce zero ownership diagnostics, got:\n{:#?}",
+            diagnostic_lines(&text, &diagnostics)
         );
         let (_, cases) = split_cases(&text);
         assert!(!cases.is_empty(), "{name}: no `fn case_*` cases found");
@@ -118,13 +158,19 @@ fn ok_fixtures_are_front_end_clean_and_unannotated() {
 }
 
 #[test]
-fn err_fixtures_are_front_end_clean_and_fully_annotated() {
+fn err_fixtures_produce_exactly_their_annotated_diagnostics() {
     let paths = fixture_paths("err");
     let mut total = 0;
     for path in &paths {
         let name = path.file_name().expect("has name").to_string_lossy();
         let text = fs::read_to_string(path).expect("fixture is readable");
-        assert_front_end_clean(&name, &text);
+        let diagnostics = check_ownership(&name, &text);
+        assert_eq!(
+            diagnostic_lines(&text, &diagnostics),
+            annotation_lines(&text),
+            "{name}: the checker must produce exactly the annotated code on each \
+             annotated line (left: produced, right: annotated)"
+        );
 
         let (prelude, cases) = split_cases(&text);
         assert_eq!(

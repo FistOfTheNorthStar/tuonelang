@@ -1103,7 +1103,6 @@ version = "0.0.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
- "tuo-hir",
  "tuo-parser",
  "tuo-resolve",
  "tuo-source",

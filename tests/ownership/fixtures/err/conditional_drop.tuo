@@ -61,7 +61,10 @@ fn case_reinit_missing_on_one_arm(take b: Box[Int], take c: Box[Int], in flag: B
             consume(slot);
             slot = c;
         },
-        false => consume(slot), // ERROR: O0008 `slot` is not restored on this arm
+        false => {
+            consume(slot); // ERROR: O0008 `slot` is not restored on this arm
+            consume(c);
+        }
     }
 }
 
