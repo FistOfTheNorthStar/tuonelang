@@ -154,7 +154,7 @@ struct Resolver {
     by_path: HashMap<Vec<String>, ModuleId>,
     /// Enum symbol → its variants by name.
     enum_variants: HashMap<SymbolId, HashMap<String, SymbolId>>,
-    /// Spec name-token span → the spec's own symbol (phase 1 → phase 3).
+    /// Spec block span → the spec's own symbol (phase 1 → phase 3).
     spec_symbols: HashMap<Span, SymbolId>,
 }
 
@@ -377,8 +377,8 @@ impl Resolver {
             false,
             target.map(|n| n.span),
         );
-        if let Some(name) = target {
-            self.spec_symbols.insert(name.span, symbol);
+        if let Some(span) = decl.span() {
+            self.spec_symbols.insert(span, symbol);
         }
     }
 
@@ -743,8 +743,13 @@ impl Resolver {
     }
 
     fn walk_spec(&mut self, module: ModuleId, decl: SpecDecl<'_>) {
+        let extent = decl.span();
+        let spec = extent
+            .and_then(|span| self.spec_symbols.get(&span))
+            .copied();
+        let first_reference = self.out.references.len();
         if let Some(name) = decl.target_name() {
-            self.attach_spec(module, name);
+            self.attach_spec(module, name, spec);
         }
         let mut scopes = Scopes::new(module);
         scopes.push();
@@ -787,12 +792,46 @@ impl Resolver {
             }
         }
         scopes.pop();
+        if let Some(spec) = spec {
+            let deps = self.spec_dependencies(first_reference, extent);
+            self.out.spec_deps.insert(spec, deps);
+        }
+    }
+
+    /// The module-level items a spec block referenced: every reference
+    /// recorded since `first_reference` (the target name included) whose
+    /// symbol is an item declared outside the block, deduplicated in
+    /// first-use order. See ADR-0002 "Dependency discovery".
+    fn spec_dependencies(&self, first_reference: usize, extent: Option<Span>) -> Vec<SymbolId> {
+        let mut deps: Vec<SymbolId> = Vec::new();
+        for reference in &self.out.references[first_reference..] {
+            let symbol = self.sym(reference.symbol);
+            let is_item = matches!(
+                symbol.kind,
+                SymbolKind::Function
+                    | SymbolKind::Struct
+                    | SymbolKind::Enum
+                    | SymbolKind::Variant
+                    | SymbolKind::Interface
+                    | SymbolKind::Const
+            );
+            let declared_inside = match (symbol.declaration, extent) {
+                (Some(declaration), Some(extent)) => {
+                    declaration.source() == extent.source()
+                        && extent.range().contains_range(declaration.range())
+                }
+                _ => false,
+            };
+            if is_item && !declared_inside && !deps.contains(&reference.symbol) {
+                deps.push(reference.symbol);
+            }
+        }
+        deps
     }
 
     /// Resolve an identifier-named spec's target to the module-level
     /// function of that name — the same symbol calls resolve to.
-    fn attach_spec(&mut self, module: ModuleId, name: Name<'_>) {
-        let spec = self.spec_symbols.get(&name.span).copied();
+    fn attach_spec(&mut self, module: ModuleId, name: Name<'_>, spec: Option<SymbolId>) {
         match self.lookup_module_scope(module, name) {
             // `lookup_module_scope` already recorded the reference.
             Hit::Symbol(target) if self.sym(target).kind == SymbolKind::Function => {

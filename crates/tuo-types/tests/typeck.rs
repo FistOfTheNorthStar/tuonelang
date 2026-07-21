@@ -320,6 +320,55 @@ fn specs_require_boolean_assertions() {
 }
 
 #[test]
+fn non_boolean_assert_and_then_expectations_are_rejected() {
+    let (_, result) = check_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         spec double {\n\
+             then double(3);\n\
+             assert double(2) + 1;\n\
+         }\n",
+    );
+    // One mismatch per non-`Bool` expectation.
+    assert_eq!(codes(&result), ["T0001", "T0001"]);
+}
+
+#[test]
+fn given_bindings_check_their_declared_type() {
+    let (_, result) = check_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         spec double {\n\
+             given n: Int = true;\n\
+             assert double(n) == 0;\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), ["T0001"]);
+}
+
+#[test]
+fn spec_bodies_check_calls_like_function_bodies() {
+    let (_, result) = check_one(
+        "fn add(in a: Int, in b: Int) -> Int { a + b }\n\
+         spec add {\n\
+             when let sum = add(1, true);\n\
+             assert sum == 2;\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), ["T0001"]);
+}
+
+#[test]
+fn every_spec_attached_to_a_function_is_checked() {
+    // Multiple specs on one target (ADR-0002): each is checked
+    // independently, so a broken second spec still reports.
+    let (_, result) = check_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         spec double { assert double(1) == 2; }\n\
+         spec double { assert double(1); }\n",
+    );
+    assert_eq!(codes(&result), ["T0001"]);
+}
+
+#[test]
 fn numeric_casts_are_explicit_and_allowed() {
     let (resolution, result) = check_one(
         "fn f(in n: Int) -> F64 {\n\

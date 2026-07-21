@@ -28,6 +28,7 @@ pub struct Resolution {
     pub(crate) modules: Vec<ModuleInfo>,
     pub(crate) references: Vec<Reference>,
     pub(crate) spec_targets: Vec<SpecTarget>,
+    pub(crate) spec_deps: HashMap<SymbolId, Vec<SymbolId>>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) variants: HashMap<SymbolId, Vec<SymbolId>>,
     pub(crate) prelude: Vec<(String, SymbolId)>,
@@ -111,6 +112,40 @@ impl Resolution {
     #[must_use]
     pub fn spec_targets(&self) -> &[SpecTarget] {
         &self.spec_targets
+    }
+
+    /// The specs attached to `function`, in source order (file order, then
+    /// declaration order). Multiple specs may attach to one function; empty
+    /// for symbols no spec targets. See ADR-0002.
+    #[must_use]
+    pub fn specs_for(&self, function: SymbolId) -> Vec<SymbolId> {
+        self.spec_targets
+            .iter()
+            .filter(|attachment| attachment.target == function)
+            .map(|attachment| attachment.spec)
+            .collect()
+    }
+
+    /// The function an identifier-named spec is attached to, or `None` for
+    /// string-named (free-standing) specs and specs whose target did not
+    /// resolve. See ADR-0002.
+    #[must_use]
+    pub fn target_of(&self, spec: SymbolId) -> Option<SymbolId> {
+        self.spec_targets
+            .iter()
+            .find(|attachment| attachment.spec == spec)
+            .map(|attachment| attachment.target)
+    }
+
+    /// The module-level items `spec`'s body depends on — its target plus
+    /// every function, type, enum variant, interface, and constant it
+    /// references — deduplicated, in first-use order. Items declared inside
+    /// the spec block itself are not dependencies. This is the seed of the
+    /// compilation closure a spec runner must lower before executing the
+    /// spec. See ADR-0002 "Dependency discovery".
+    #[must_use]
+    pub fn dependencies_of(&self, spec: SymbolId) -> &[SymbolId] {
+        self.spec_deps.get(&spec).map_or(&[], Vec::as_slice)
     }
 
     /// Resolution diagnostics (`Rxxxx` codes), in discovery order.

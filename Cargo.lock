@@ -1156,6 +1156,7 @@ dependencies = [
  "tuo-diagnostics",
  "tuo-mir",
  "tuo-mir-interp",
+ "tuo-resolve",
  "tuo-source",
 ]
 

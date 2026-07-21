@@ -20,9 +20,15 @@
 //!
 //! Implemented so far: the front-end re-exports below (source management,
 //! lexing, parsing, the lossless CST, typed AST views, name resolution,
-//! HIR lowering, and type checking), which the CLI's `tuo debug
-//! syntax` / `tuo debug ast` / `tuo debug hir` developer tools drive.
-//! Later stages are still stubs, so no further orchestration exists yet.
+//! HIR lowering, and type checking), plus the first orchestration seam —
+//! [`check_sources`], the parse → resolve → type-check pipeline behind
+//! `tuo check`. The CLI's `tuo debug syntax` / `tuo debug ast` /
+//! `tuo debug hir` developer tools drive the re-exports directly. Later
+//! stages are still stubs, so no further orchestration exists yet.
+
+mod check;
+
+pub use check::{CheckResult, check_sources};
 
 /// Typed AST views over the CST (re-export of [`tuo_ast`]).
 pub use tuo_ast as ast;

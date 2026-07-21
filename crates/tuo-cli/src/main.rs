@@ -1,15 +1,17 @@
 //! `tuo` — the command-line entry point for the tuonelang compiler and tooling.
 //!
-//! Implemented today: `tuo fmt [--check] <files>` (the canonical source
-//! formatter) and the `tuo debug syntax <file>` / `tuo debug ast <file>`
-//! developer tools (raw dumps of the CST and the typed AST views — unstable
-//! diagnostic output, not a language protocol), plus the built-in `--help`
-//! and `--version`. Compiler subcommands such as `build`, `run`, `check`,
-//! `spec`, and `verify` are intentionally **not** implemented: they are
-//! added as their underlying functionality exists, so that the CLI never
-//! advertises behavior the compiler cannot yet perform. See [`cli::Cli`]
-//! for the extension point.
+//! Implemented today: `tuo check <files>` (parse, resolve, and type-check a
+//! program — specs included — without generating code), `tuo fmt [--check]
+//! <files>` (the canonical source formatter), and the `tuo debug
+//! syntax|ast|hir <file>` developer tools (raw dumps of compiler-internal
+//! representations — unstable diagnostic output, not a language protocol),
+//! plus the built-in `--help` and `--version`. Compiler subcommands such as
+//! `build`, `run`, `spec`, and `verify` are intentionally **not**
+//! implemented: they are added as their underlying functionality exists, so
+//! that the CLI never advertises behavior the compiler cannot yet perform.
+//! See [`cli::Cli`] for the extension point.
 
+mod check;
 mod cli;
 mod debug;
 mod fmt;

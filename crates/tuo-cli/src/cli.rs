@@ -1,16 +1,18 @@
 //! CLI definition for `tuo`.
 //!
 //! The command surface is intentionally minimal: only functionality the
-//! compiler can actually perform is exposed. Today that is the `tuo debug`
-//! developer tools; compiler subcommands (`build`, `run`, `check`, `spec`,
-//! `verify`, …) are added as their functionality is implemented — a new
-//! [`Command`] variant plus a match arm in [`Cli::dispatch`].
+//! compiler can actually perform is exposed. Today that is `tuo check`,
+//! `tuo fmt`, and the `tuo debug` developer tools; further compiler
+//! subcommands (`build`, `run`, `spec`, `verify`, …) are added as their
+//! functionality is implemented — a new [`Command`] variant plus a match
+//! arm in [`Cli::dispatch`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory as _, Parser, Subcommand};
 
+use crate::check;
 use crate::debug::{self, Dump};
 use crate::fmt;
 
@@ -32,10 +34,23 @@ pub(crate) struct Cli {
 
 /// Top-level subcommands.
 ///
-/// Future compiler commands (`Build`, `Run`, `Check`, `Spec`, `Verify`, …)
-/// slot in as new variants once their functionality exists.
+/// Future compiler commands (`Build`, `Run`, `Spec`, `Verify`, …) slot in
+/// as new variants once their functionality exists.
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Parse, resolve, and type-check a program without generating code.
+    ///
+    /// All given files are checked as one program: files declaring the same
+    /// `module` path share a scope. Specs are parsed, attached to their
+    /// target functions, and type-checked like any other item (they do not
+    /// execute — spec execution arrives with the MIR interpreter).
+    /// Diagnostics go to stderr; the exit status is a failure if the
+    /// program has errors.
+    Check {
+        /// The tuonelang source files forming the program.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
     /// Diagnostic developer tools (unstable output, not a language protocol).
     #[command(subcommand)]
     Debug(DebugCommand),
@@ -93,6 +108,7 @@ impl Cli {
     /// Execute the parsed command.
     pub(crate) fn dispatch(self) -> ExitCode {
         match self.command {
+            Some(Command::Check { files }) => check::run(&files),
             Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
             Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
             Some(Command::Debug(DebugCommand::Hir { file })) => debug::run(Dump::Hir, &file),
