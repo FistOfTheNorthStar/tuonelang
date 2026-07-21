@@ -14,5 +14,6 @@ workspace = true
 [dependencies]
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
+tuo-resolve.workspace = true
 tuo-mir.workspace = true
 tuo-mir-interp.workspace = true

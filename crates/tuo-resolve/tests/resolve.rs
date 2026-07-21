@@ -512,6 +512,164 @@ fn spec_bodies_resolve_given_and_when_bindings() {
     assert_eq!(resolution.references_to(classify).count(), 3);
 }
 
+#[test]
+fn multiple_specs_may_attach_to_one_function_in_source_order() {
+    let resolution = resolve_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         spec double { assert double(0) == 0; }\n\
+         spec double { assert double(2) == 4; }\n",
+    );
+    assert_clean(&resolution);
+    let double = find(&resolution, "double", SymbolKind::Function);
+    let specs = resolution.specs_for(double);
+    assert_eq!(specs.len(), 2, "both specs attach");
+    assert!(specs[0] < specs[1], "attachments come back in source order");
+    for spec in specs {
+        assert_eq!(resolution.target_of(spec), Some(double));
+    }
+}
+
+#[test]
+fn duplicate_specs_are_distinct_and_all_attach() {
+    // Byte-identical spec blocks are two distinct specs (ADR-0002): spec
+    // names are not bindings, so nothing collides, merges, or errors.
+    let resolution = resolve_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         spec double { assert double(1) == 2; }\n\
+         spec double { assert double(1) == 2; }\n",
+    );
+    assert_clean(&resolution);
+    let double = find(&resolution, "double", SymbolKind::Function);
+    let specs = resolution.specs_for(double);
+    assert_eq!(specs.len(), 2);
+    assert_ne!(specs[0], specs[1], "each block is its own spec");
+}
+
+#[test]
+fn spec_attachment_is_source_order_independent() {
+    // A spec may precede its target in the same file …
+    let resolution = resolve_one(
+        "spec double { assert double(2) == 4; }\n\
+         fn double(in n: Int) -> Int { n * 2 }\n",
+    );
+    assert_clean(&resolution);
+    let double = find(&resolution, "double", SymbolKind::Function);
+    assert_eq!(resolution.specs_for(double).len(), 1);
+
+    // … or live in a different file of the same module.
+    let program = Program::parse(&[
+        "module m;\nspec double { assert double(2) == 4; }\n",
+        "module m;\nfn double(in n: Int) -> Int { n * 2 }\n",
+    ]);
+    let resolution = program.resolve();
+    assert_clean(&resolution);
+    let double = find(&resolution, "double", SymbolKind::Function);
+    let specs = resolution.specs_for(double);
+    assert_eq!(specs.len(), 1);
+    assert_eq!(resolution.target_of(specs[0]), Some(double));
+}
+
+#[test]
+fn target_of_is_none_for_free_standing_specs() {
+    let resolution = resolve_one(
+        "fn helper() -> Int { 1 }\n\
+         spec \"free standing\" { assert helper() == 1; }\n",
+    );
+    assert_clean(&resolution);
+    let spec = find(&resolution, "\"free standing\"", SymbolKind::Spec);
+    assert_eq!(resolution.target_of(spec), None);
+    assert_eq!(
+        resolution.dependencies_of(spec),
+        &[find(&resolution, "helper", SymbolKind::Function)],
+        "dependency discovery does not require a target"
+    );
+}
+
+#[test]
+fn specs_for_is_empty_for_untargeted_functions() {
+    let resolution = resolve_one(
+        "fn covered() -> Int { 1 }\n\
+         fn bare() -> Int { 2 }\n\
+         spec covered { assert covered() == 1; }\n",
+    );
+    assert_clean(&resolution);
+    let bare = find(&resolution, "bare", SymbolKind::Function);
+    assert_eq!(resolution.specs_for(bare), &[]);
+}
+
+#[test]
+fn spec_dependencies_cover_referenced_items_in_first_use_order() {
+    let resolution = resolve_one(
+        "fn double(in n: Int) -> Int { n * 2 }\n\
+         fn helper() -> Int { 3 }\n\
+         const LIMIT: Int = 10;\n\
+         spec double {\n\
+             given n: Int = helper();\n\
+             then double(n) < LIMIT;\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    let double = find(&resolution, "double", SymbolKind::Function);
+    let spec = resolution.specs_for(double)[0];
+    assert_eq!(
+        resolution.dependencies_of(spec),
+        &[
+            double, // the target name itself is the first use
+            find(&resolution, "helper", SymbolKind::Function),
+            find(&resolution, "LIMIT", SymbolKind::Const),
+        ],
+        "items in first-use order; the local `n` is not a dependency and \
+         the second `double` use deduplicates"
+    );
+}
+
+#[test]
+fn spec_dependencies_include_types_and_variants() {
+    let resolution = resolve_one(
+        "struct Point { x: Int, y: Int }\n\
+         enum Shape { Dot, Line }\n\
+         fn classify(in p: Point) -> Shape { Shape::Dot }\n\
+         spec classify {\n\
+             given p: Point = Point { x: 1, y: 2 };\n\
+             assert classify(p) == Shape::Dot;\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    let classify = find(&resolution, "classify", SymbolKind::Function);
+    let spec = resolution.specs_for(classify)[0];
+    let deps = resolution.dependencies_of(spec);
+    for (name, kind) in [
+        ("classify", SymbolKind::Function),
+        ("Point", SymbolKind::Struct),
+        ("Shape", SymbolKind::Enum),
+        ("Dot", SymbolKind::Variant),
+    ] {
+        assert!(
+            deps.contains(&find(&resolution, name, kind)),
+            "`{name}` should be a dependency"
+        );
+    }
+}
+
+#[test]
+fn spec_dependencies_exclude_items_declared_inside_the_block() {
+    let resolution = resolve_one(
+        "fn f() -> Int { 1 }\n\
+         spec f {\n\
+             when let x = { const K: Int = 2; K + f() };\n\
+             assert x == 3;\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    let f = find(&resolution, "f", SymbolKind::Function);
+    let spec = resolution.specs_for(f)[0];
+    assert_eq!(
+        resolution.dependencies_of(spec),
+        &[f],
+        "the block-local `K` and the local `x` are not dependencies"
+    );
+}
+
 // ----------------------------------------------------------------------
 // Rename-relevant references
 // ----------------------------------------------------------------------
