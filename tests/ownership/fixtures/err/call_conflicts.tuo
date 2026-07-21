@@ -1,0 +1,64 @@
+// ownership.md §6, O0005 — overlapping places passed to one argument list
+// with at least one `mut` borrow conflict.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Holder {
+    point: Point,
+}
+
+fn mut_and_in(mut a: Point, in b: Point) { }
+
+fn mut_and_mut(mut a: Point, in pad: Int, mut b: Point) { }
+
+fn mut_and_in_int(mut a: Int, in b: Int) { }
+
+fn mut_point_in_int(mut a: Point, in b: Int) { }
+
+fn mut_int_in_point(mut a: Int, in b: Point) { }
+
+fn triple(in a: Point, mut b: Point, in c: Point) { }
+
+fn case_same_place_mut_and_in(take p: Point) {
+    mut_and_in(p, p); // ERROR: O0005 `p` passed as `mut` and `in` in one call
+}
+
+fn case_same_place_in_and_mut(take p: Point) {
+    triple(p, p, p); // ERROR: O0005 `p` passed as `in` and `mut` in one call
+}
+
+fn case_same_place_mut_twice(take p: Point, in n: Int) {
+    mut_and_mut(p, n, p); // ERROR: O0005 `p` passed as `mut` twice in one call
+}
+
+fn case_same_field_mut_and_in(take p: Point) {
+    mut_and_in_int(p.x, p.x); // ERROR: O0005 `p.x` passed as `mut` and `in` in one call
+}
+
+fn case_whole_mut_field_in(take p: Point) {
+    mut_point_in_int(p, p.x); // ERROR: O0005 `p` as `mut` overlaps `p.x` as `in`
+}
+
+fn case_field_mut_whole_in(take p: Point) {
+    mut_int_in_point(p.x, p); // ERROR: O0005 `p.x` as `mut` overlaps `p` as `in`
+}
+
+fn case_nested_path_overlap(take h: Holder) {
+    mut_point_in_int(h.point, h.point.x); // ERROR: O0005 `h.point` as `mut` overlaps `h.point.x`
+}
+
+fn case_var_conflicts_like_param(in seed: Int) {
+    var p = Point { x: seed, y: seed };
+    mut_and_in(p, p); // ERROR: O0005 `p` passed as `mut` and `in` in one call
+}
+
+fn case_mut_param_forwarded_twice(mut p: Point, in n: Int) {
+    mut_and_mut(p, n, p); // ERROR: O0005 `p` forwarded as `mut` twice in one call
+}
+
+fn case_take_param_self_conflict(take p: Point) {
+    mut_and_in(p, p); // ERROR: O0005 owned places obey the same borrow rule
+}

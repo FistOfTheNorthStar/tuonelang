@@ -1,0 +1,111 @@
+// ownership.md §9, O0009 — a partially moved struct cannot be used, moved,
+// or borrowed as a whole until every moved field is restored.
+
+struct Pair {
+    left: Box[Int],
+    right: Box[Int],
+}
+
+struct Inner {
+    buf: String,
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Int,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_pair(take p: Pair) { }
+
+fn consume_string(take s: String) { }
+
+fn consume_outer(take o: Outer) { }
+
+fn peek_pair(in p: Pair) { }
+
+fn poke_pair(mut p: Pair) { }
+
+fn case_whole_use_after_field_move(take p: Pair) {
+    let l = p.left;
+    consume_pair(p); // ERROR: O0009 `p.left` was moved out
+    consume(l);
+}
+
+fn case_whole_borrow_after_field_move(take p: Pair) {
+    let l = p.left;
+    peek_pair(p); // ERROR: O0009 cannot borrow `p` while `p.left` is moved
+    consume(l);
+}
+
+fn case_whole_mut_borrow_after_field_move(take p: Pair) {
+    let l = p.left;
+    poke_pair(p); // ERROR: O0009 cannot borrow `p` while `p.left` is moved
+    consume(l);
+}
+
+fn case_return_partially_moved(take p: Pair) -> Pair {
+    let l = p.left;
+    consume(l);
+    p // ERROR: O0009 `p.left` was moved out
+}
+
+fn case_rebind_partially_moved(take p: Pair) {
+    let l = p.left;
+    let whole = p; // ERROR: O0009 `p.left` was moved out
+    consume(l);
+}
+
+fn case_both_fields_moved_whole_used(take p: Pair) {
+    let l = p.left;
+    let r = p.right;
+    consume_pair(p); // ERROR: O0009 `p.left` and `p.right` were moved out
+    consume(l);
+    consume(r);
+}
+
+fn case_restore_wrong_field(take p: Pair, take fresh: Box[Int]) {
+    let l = p.left;
+    p.right = fresh;
+    consume_pair(p); // ERROR: O0009 `p.left` is still moved out
+    consume(l);
+}
+
+fn case_nested_partial_move(take o: Outer) {
+    let buf = o.inner.buf;
+    consume_outer(o); // ERROR: O0009 `o.inner.buf` was moved out
+    consume_string(buf);
+}
+
+fn case_middle_of_path_unusable(take o: Outer) -> Inner {
+    let buf = o.inner.buf;
+    consume_string(buf);
+    o.inner // ERROR: O0009 `o.inner.buf` was moved out of `o.inner`
+}
+
+fn case_partial_move_into_struct_literal(take p: Pair) {
+    let l = p.left;
+    let nested = Nest { pair: p }; // ERROR: O0009 `p.left` was moved out
+    consume(l);
+}
+
+struct Nest {
+    pair: Pair,
+}
+
+fn case_partial_then_explicit_move(take p: Pair) {
+    let l = p.left;
+    let whole = move p; // ERROR: O0009 `p.left` was moved out
+    consume(l);
+}
+
+fn case_partial_move_survives_scope(take p: Pair, in flag: Bool) {
+    let l = p.left;
+    if flag {
+        consume(l);
+    } else {
+        consume(l);
+    }
+    consume_pair(p); // ERROR: O0009 `p.left` was moved out
+}

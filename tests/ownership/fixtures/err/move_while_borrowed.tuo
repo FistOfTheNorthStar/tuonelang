@@ -1,0 +1,54 @@
+// ownership.md §6, O0006 — a place moved by a `take` argument while the
+// same or an overlapping place is borrowed in the same argument list.
+
+struct Pair {
+    left: Box[Int],
+    right: Box[Int],
+}
+
+fn take_and_in(take a: Box[Int], in b: Box[Int]) { }
+
+fn in_and_take(in a: Box[Int], take b: Box[Int]) { }
+
+fn take_and_mut(take a: Box[Int], mut b: Box[Int]) { }
+
+fn take_pair_in_box(take p: Pair, in b: Box[Int]) { }
+
+fn take_box_in_pair(take b: Box[Int], in p: Pair) { }
+
+fn mut_and_take(mut a: Box[Int], take b: Box[Int]) { }
+
+fn take_and_take(take a: Box[Int], take b: Box[Int]) { }
+
+fn case_take_then_in_same_place(take b: Box[Int]) {
+    take_and_in(b, b); // ERROR: O0006 `b` moved while also borrowed in this call
+}
+
+fn case_in_then_take_same_place(take b: Box[Int]) {
+    in_and_take(b, b); // ERROR: O0006 `b` moved while also borrowed in this call
+}
+
+fn case_take_then_mut_same_place(take b: Box[Int]) {
+    take_and_mut(b, b); // ERROR: O0006 `b` moved while also `mut`-borrowed in this call
+}
+
+fn case_mut_then_take_same_place(take b: Box[Int]) {
+    mut_and_take(b, b); // ERROR: O0006 `b` moved while also `mut`-borrowed in this call
+}
+
+fn case_whole_taken_field_borrowed(take p: Pair) {
+    take_pair_in_box(p, p.left); // ERROR: O0006 `p` moved while `p.left` is borrowed
+}
+
+fn case_field_taken_whole_borrowed(take p: Pair) {
+    take_box_in_pair(p.left, p); // ERROR: O0006 `p.left` moved while `p` is borrowed
+}
+
+fn case_same_place_taken_twice(take b: Box[Int]) {
+    take_and_take(b, b); // ERROR: O0001 the second `take` argument uses the moved `b`
+}
+
+fn case_var_take_and_borrow(take a: Box[Int]) {
+    var slot = a;
+    take_and_in(slot, slot); // ERROR: O0006 `slot` moved while also borrowed in this call
+}

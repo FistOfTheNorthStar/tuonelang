@@ -1,0 +1,86 @@
+// ownership.md §3 — moves transfer ownership; each case moves every value
+// at most once along every path.
+
+struct Wrap {
+    buf: String,
+}
+
+enum Msg {
+    Text { body: String },
+    Ping,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn consume_msg(take m: Msg) { }
+
+fn renew(take b: Box[Int]) -> Box[Int] {
+    b
+}
+
+fn case_single_move_to_binding(take b: Box[Int]) {
+    let owned = b;
+}
+
+fn case_move_chain(take b: Box[Int]) -> Box[Int] {
+    let first = b;
+    let second = first;
+    let third = second;
+    third
+}
+
+fn case_move_by_shadowing(take b: Box[Int]) -> Box[Int] {
+    let b = renew(b);
+    let b = renew(b);
+    b
+}
+
+fn case_move_into_struct_literal(take s: String) -> Wrap {
+    Wrap { buf: s }
+}
+
+fn case_move_into_enum_literal(take s: String) -> Msg {
+    Msg::Text { body: s }
+}
+
+fn case_explicit_move(take b: Box[Int]) -> Box[Int] {
+    move b
+}
+
+fn case_explicit_move_to_take_argument(take b: Box[Int]) {
+    consume(move b)
+}
+
+fn case_move_string_param(take s: String) {
+    consume_string(s);
+}
+
+fn case_move_generic_value[T](take value: T) -> T {
+    let moved = value;
+    moved
+}
+
+fn case_move_out_of_block_expression(take b: Box[Int]) -> Box[Int] {
+    let a = {
+        let inner = b;
+        inner
+    };
+    a
+}
+
+fn case_move_then_reinit_var(take b: Box[Int], take c: Box[Int]) -> Box[Int] {
+    var slot = b;
+    consume(slot);
+    slot = c;
+    slot
+}
+
+fn case_return_moves(take m: Msg) -> Msg {
+    return m;
+}
+
+fn case_move_field_shorthand(take buf: String) -> Wrap {
+    Wrap { buf }
+}

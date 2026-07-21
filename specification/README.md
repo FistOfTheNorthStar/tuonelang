@@ -18,6 +18,7 @@ built for (colocated, executable specifications — see `CONSTITUTION.md` §27).
 | `grammar.ebnf` | The **normative** v0 grammar in EBNF: the lexical grammar `(A)` and the concrete grammar `(B)`–`(I)`, cross-referenced to the Constitution. The authoritative source the lexer/parser track. |
 | `lexical-grammar.md` | Prose companion to `grammar.ebnf (A)`: how bytes become tokens (encoding, trivia, identifiers, keywords, literals, operators). |
 | `syntax.md` | Prose companion to `grammar.ebnf (B)`–`(I)`: the concrete grammar, its design priorities, and the explicit boundary to the semantic layer (type checking is **not** in the grammar). |
+| `ownership.md` | The **normative** v0 ownership model (ADR-0003): moves, `Copy`, the `in`/`mut`/`take` borrow rules, joins, drops, wrappers, and the `O0001`–`O0009` diagnostics. Its executable counterpart is `tests/ownership/fixtures/`. |
 | `adr/` | Architecture Decision Records documenting *why* specific design and implementation choices were made. |
 
 ## Process

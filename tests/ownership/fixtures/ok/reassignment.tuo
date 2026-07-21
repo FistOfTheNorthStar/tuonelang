@@ -1,0 +1,95 @@
+// ownership.md §7, §11 — reassignment of mutable places: the old value is
+// dropped, moved-out places are restored, and deferred `let` initialization
+// is initialization rather than mutation.
+
+fn consume(take b: Box[Int]) { }
+
+fn renew(take b: Box[Int]) -> Box[Int] {
+    b
+}
+
+fn case_var_reassignment_drops_old(take a: Box[Int], take b: Box[Int]) {
+    var slot = a;
+    slot = b;
+}
+
+fn case_var_reused_after_reinit(take a: Box[Int], take b: Box[Int]) -> Box[Int] {
+    var slot = a;
+    consume(slot);
+    slot = b;
+    slot
+}
+
+fn case_self_reassignment_through_call(take b: Box[Int]) -> Box[Int] {
+    var slot = b;
+    slot = renew(slot);
+    slot = renew(slot);
+    slot
+}
+
+fn case_deferred_let_both_branches(in flag: Bool) -> Int {
+    let x: Int;
+    if flag {
+        x = 1;
+    } else {
+        x = 2;
+    }
+    x
+}
+
+fn case_deferred_let_from_match(in flag: Bool) -> Int {
+    let x: Int;
+    match flag {
+        true => x = 1,
+        false => x = 2,
+    }
+    x
+}
+
+fn case_deferred_let_owned_value(take a: Box[Int], take b: Box[Int], in flag: Bool) -> Box[Int] {
+    let chosen: Box[Int];
+    if flag {
+        chosen = a;
+        consume(b);
+    } else {
+        chosen = b;
+        consume(a);
+    }
+    chosen
+}
+
+fn case_deferred_var_then_mutated(in flag: Bool) -> Int {
+    var x: Int;
+    if flag {
+        x = 1;
+    } else {
+        x = 2;
+    }
+    x = x + 1;
+    x
+}
+
+fn case_var_copy_overwritten_in_loop(in limit: Int) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < limit {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+
+fn case_shadowing_replaces_binding(take b: Box[Int]) -> Box[Int] {
+    let b = renew(b);
+    let kept = b;
+    kept
+}
+
+fn case_reinit_inside_block(take a: Box[Int], take b: Box[Int]) -> Box[Int] {
+    var slot = a;
+    consume(slot);
+    {
+        slot = b;
+    }
+    slot
+}

@@ -1,0 +1,89 @@
+// ownership.md §9 — partial moves: siblings stay usable, moved paths can be
+// reassigned, and a fully restored struct is whole again.
+
+struct Pair {
+    left: Box[Int],
+    right: Box[Int],
+}
+
+struct Inner {
+    buf: String,
+}
+
+struct Outer {
+    inner: Inner,
+    tag: Int,
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn consume_pair(take p: Pair) { }
+
+fn peek(in b: Box[Int]) { }
+
+fn case_sibling_survives_field_move(take p: Pair) -> Box[Int] {
+    let l = p.left;
+    consume(l);
+    p.right
+}
+
+fn case_both_fields_moved_separately(take p: Pair) {
+    let l = p.left;
+    let r = p.right;
+    consume(l);
+    consume(r);
+}
+
+fn case_field_restored_then_whole_used(take p: Pair) -> Pair {
+    let l = p.left;
+    p.left = l;
+    p
+}
+
+fn case_full_restore_then_whole_moved(take p: Pair, take fresh: Box[Int]) {
+    consume(p.left);
+    p.left = fresh;
+    consume_pair(p);
+}
+
+fn case_copy_field_read_after_sibling_move(take o: Outer) -> Int {
+    let moved = o.inner;
+    consume_string(moved.buf);
+    o.tag
+}
+
+fn case_nested_path_move(take o: Outer) -> String {
+    o.inner.buf
+}
+
+fn case_nested_path_restore(take o: Outer, take s: String) -> Outer {
+    consume_string(o.inner.buf);
+    o.inner.buf = s;
+    o
+}
+
+fn case_sibling_borrow_after_field_move(take p: Pair) -> Box[Int] {
+    let l = p.left;
+    peek(p.right);
+    consume(l);
+    p.right
+}
+
+fn case_field_assignment_drops_old(take p: Pair, take fresh: Box[Int]) -> Pair {
+    p.left = fresh;
+    p
+}
+
+fn case_move_field_of_deferred_struct(take a: Pair, take b: Pair, in flag: Bool) -> Box[Int] {
+    let chosen: Pair;
+    if flag {
+        chosen = a;
+        consume_pair(b);
+    } else {
+        chosen = b;
+        consume_pair(a);
+    }
+    chosen.left
+}

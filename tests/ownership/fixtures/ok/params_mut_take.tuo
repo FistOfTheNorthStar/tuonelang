@@ -1,0 +1,92 @@
+// ownership.md §4, §6 — `mut` parameters are exclusive borrows that may be
+// mutated and forwarded; `take` parameters are owned, mutable places.
+
+struct Counter {
+    count: Int,
+    log: String,
+}
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn bump(mut c: Counter) {
+    c.count = c.count + 1;
+}
+
+fn read_counter(in c: Counter) -> Int {
+    c.count
+}
+
+fn set_coord(mut n: Int) {
+    n = 0;
+}
+
+fn consume_counter(take c: Counter) { }
+
+fn consume_string(take s: String) { }
+
+fn case_mut_param_assigned(mut n: Int) {
+    n = 42;
+}
+
+fn case_mut_param_assigned_twice(mut n: Int) {
+    n = 1;
+    n = 2;
+}
+
+fn case_mut_param_read_and_written(mut n: Int) {
+    n = n + 1;
+}
+
+fn case_mut_param_forwarded_as_in(mut c: Counter) -> Int {
+    read_counter(c)
+}
+
+fn case_mut_param_forwarded_as_mut(mut c: Counter) {
+    bump(c);
+    bump(c);
+}
+
+fn case_mut_param_field_assigned(mut c: Counter) {
+    c.count = 7;
+}
+
+fn case_mut_split_disjoint_fields(mut p: Point) {
+    move_both(p.x, p.y);
+}
+
+fn move_both(mut a: Int, mut b: Int) {
+    let held = a;
+    a = b;
+    b = held;
+}
+
+fn case_mut_field_forwarded_as_mut(mut p: Point) {
+    set_coord(p.x);
+    set_coord(p.y);
+}
+
+fn case_take_param_mutated(take c: Counter) -> Counter {
+    c.count = 0;
+    c
+}
+
+fn case_take_param_dropped_implicitly(take c: Counter) { }
+
+fn case_take_param_moved_on(take c: Counter) {
+    consume_counter(c);
+}
+
+fn case_take_param_reassigned(take c: Counter, take d: Counter) -> Counter {
+    consume_counter(c);
+    c = d;
+    c
+}
+
+fn case_take_param_field_replaced(take c: Counter, take s: String) -> Counter {
+    consume_string(c.log);
+    c.log = s;
+    c
+}

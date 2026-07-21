@@ -1,0 +1,55 @@
+// ownership.md §2 — a generic `T` is conservatively move-only inside a
+// generic body; these cases stay within move-only discipline.
+
+struct Holder[T] {
+    value: T,
+}
+
+fn consume_generic[T](take value: T) { }
+
+fn peek_generic[T](in value: T) { }
+
+fn case_generic_single_move[T](take value: T) -> T {
+    let moved = value;
+    moved
+}
+
+fn case_generic_borrow_then_move[T](take value: T) -> T {
+    peek_generic(value);
+    peek_generic(value);
+    value
+}
+
+fn case_generic_take_forwarded[T](take value: T) {
+    consume_generic(value);
+}
+
+fn case_generic_in_forwarded[T](in value: T) {
+    peek_generic(value);
+    peek_generic(value);
+}
+
+fn case_generic_field_move[T](take h: Holder[T]) -> T {
+    h.value
+}
+
+fn case_generic_struct_rebuilt[T](take h: Holder[T]) -> Holder[T] {
+    let value = h.value;
+    Holder { value }
+}
+
+fn case_generic_deferred_choice[T](take a: T, take b: T, in flag: Bool) -> T {
+    let chosen: T;
+    if flag {
+        chosen = a;
+        consume_generic(b);
+    } else {
+        chosen = b;
+        consume_generic(a);
+    }
+    chosen
+}
+
+fn case_generic_explicit_move[T](take value: T) -> T {
+    move value
+}

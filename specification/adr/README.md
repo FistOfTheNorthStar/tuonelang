@@ -52,6 +52,7 @@ the replacement, preserving the decision history.
 |-----|-------|--------|
 | [ADR-0001](ADR-parser-strategy.md) | Parser implementation strategy | accepted |
 | [ADR-0002](ADR-0002-spec-semantics.md) | First-class `spec` semantics | accepted |
+| [ADR-0003](ADR-0003-ownership-model.md) | The v0 ownership model | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above.)

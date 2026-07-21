@@ -70,17 +70,6 @@ remains in version control).
   is; over-implicit conversion hurts clarity, over-explicit hurts ergonomics.
 - **Blocks:** freezing §20; error-handling stdlib design.
 
-### Q-0004: `mut` borrow re-borrowing and splitting
-
-- **Status:** open
-- **Area:** ownership
-- **Constitution ref:** §22
-- **Question:** May an exclusive `mut` borrow be re-borrowed or split (e.g. to
-  pass a sub-borrow to a callee), and under what rules?
-- **Why it matters:** Affects ergonomics of mutation-heavy code and the
-  complexity of the ownership checker.
-- **Blocks:** finalizing the borrow checker rules in `tuo-ownership`.
-
 ### Q-0005: `Shared` atomicity (atomic-only vs. atomic + non-atomic sibling)
 
 - **Status:** open
@@ -146,3 +135,29 @@ remains in version control).
 - **Why it matters:** These are intentionally excluded from v0 to keep it small;
   each is a candidate for a later edition if experience justifies it.
 - **Blocks:** nothing in v0 — tracked so the exclusions are not forgotten.
+
+### Q-0011: User-written destructors
+
+- **Status:** open (deferred from v0 by ADR-0003)
+- **Area:** ownership / stdlib
+- **Constitution ref:** §21, §26
+- **Question:** How user types hook resource cleanup — a compiler-known `Drop`
+  interface, its receiver mode, what a destructor body may do (moves out of
+  `self`, panics), and how it interacts with partial moves.
+- **Why it matters:** RAII for user-defined resources needs it eventually; v0
+  drop glue is compiler-generated only, so dropping can never run user code.
+- **Blocks:** stdlib resource types beyond compiler-known ones; any user RAII
+  guard pattern.
+
+### Q-0012: `String` → `Str` view borrowing
+
+- **Status:** open (deferred from v0 by ADR-0003)
+- **Area:** ownership / types
+- **Constitution ref:** §10, §21
+- **Question:** The sound rule that lets a `Str` view borrow into a live
+  `String` without user lifetimes — in v0 every `Str` originates from a string
+  literal, so views cannot dangle by construction.
+- **Why it matters:** Reading string data without copying is basic ergonomics;
+  the lifetime-free ownership model needs a view-tracking rule before allowing
+  it.
+- **Blocks:** the `String`/`Str` stdlib API surface.

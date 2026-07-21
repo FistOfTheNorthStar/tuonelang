@@ -1,0 +1,109 @@
+// ownership.md §2 — Copy values duplicate on use; the source stays live.
+
+struct Point {
+    x: F64,
+    y: F64,
+}
+
+enum Toggle {
+    On,
+    Off,
+}
+
+fn take_int(take n: Int) { }
+
+fn take_point(take p: Point) { }
+
+fn case_int_reused_after_binding(in n: Int) -> Int {
+    let a = n;
+    let b = n;
+    a + b
+}
+
+fn case_float_reused_after_binding(in x: F64) -> F64 {
+    let a = x;
+    let b = x;
+    a + b
+}
+
+fn case_bool_reused_in_branches(in flag: Bool) -> Int {
+    let once = flag;
+    if flag {
+        1
+    } else if once {
+        2
+    } else {
+        3
+    }
+}
+
+fn case_char_copied_into_two_bindings(in c: Char) -> Bool {
+    let a = c;
+    let b = c;
+    a == b
+}
+
+fn case_str_is_copy() -> Str {
+    let s = "static text";
+    let t = s;
+    let u = s;
+    let keep = t;
+    let also = u;
+    s
+}
+
+fn case_unit_is_copy() {
+    let u = ();
+    let a = u;
+    let b = u;
+    let last = a;
+    let final_use = b;
+}
+
+fn case_copy_survives_take_call(in n: Int) -> Int {
+    take_int(n);
+    take_int(n);
+    n
+}
+
+fn case_copy_struct_reused(in p: Point) -> F64 {
+    let a = p;
+    let b = p;
+    a.x + b.y
+}
+
+fn case_copy_struct_survives_take_call(in p: Point) -> F64 {
+    take_point(p);
+    take_point(p);
+    p.x
+}
+
+fn case_copy_enum_matched_twice(in t: Toggle) -> Int {
+    let first = match t {
+        Toggle::On => 1,
+        Toggle::Off => 0,
+    };
+    let second = match t {
+        Toggle::On => 10,
+        Toggle::Off => 20,
+    };
+    first + second
+}
+
+fn case_copy_field_read_repeatedly(in p: Point) -> F64 {
+    let a = p.x;
+    let b = p.x;
+    let c = p.y;
+    a + b + c
+}
+
+fn case_range_of_copy_is_copy(in limit: Int) -> Int {
+    var total = 0;
+    for n in 0 .. limit {
+        total = total + n;
+    }
+    for n in 0 .. limit {
+        total = total + n;
+    }
+    total
+}

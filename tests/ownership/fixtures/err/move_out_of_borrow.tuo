@@ -1,0 +1,74 @@
+// ownership.md §5, O0003 — `in` and `mut` parameters are borrows; ownership
+// can never be transferred out of them or out of their fields.
+
+struct Wrap {
+    buf: String,
+}
+
+struct Pair {
+    left: Box[Int],
+    right: Box[Int],
+}
+
+fn consume(take b: Box[Int]) { }
+
+fn consume_string(take s: String) { }
+
+fn consume_wrap(take w: Wrap) { }
+
+fn case_return_in_param(in b: Box[Int]) -> Box[Int] {
+    b // ERROR: O0003 cannot move out of `in b`
+}
+
+fn case_return_mut_param(mut b: Box[Int]) -> Box[Int] {
+    b // ERROR: O0003 cannot move out of `mut b`
+}
+
+fn case_bind_in_param(in b: Box[Int]) {
+    let owned = b; // ERROR: O0003 cannot move out of `in b`
+}
+
+fn case_bind_mut_param(mut b: Box[Int]) {
+    let owned = b; // ERROR: O0003 cannot move out of `mut b`
+}
+
+fn case_pass_in_param_to_take(in b: Box[Int]) {
+    consume(b); // ERROR: O0003 cannot move out of `in b`
+}
+
+fn case_pass_mut_param_to_take(mut b: Box[Int]) {
+    consume(b); // ERROR: O0003 cannot move out of `mut b`
+}
+
+fn case_move_field_of_in_param(in w: Wrap) {
+    consume_string(w.buf); // ERROR: O0003 cannot move out of a field of `in w`
+}
+
+fn case_move_field_of_mut_param(mut w: Wrap) {
+    let buf = w.buf; // ERROR: O0003 cannot move out of a field of `mut w`
+}
+
+fn case_explicit_move_of_in_param(in b: Box[Int]) {
+    let owned = move b; // ERROR: O0003 cannot move out of `in b`
+}
+
+fn case_mut_param_move_then_restore(mut b: Box[Int], take fresh: Box[Int]) {
+    let held = b; // ERROR: O0003 move-out-then-restore of `mut b` is not permitted
+    b = fresh;
+    consume(held);
+}
+
+fn case_struct_literal_from_in_field(in w: Wrap) -> Wrap {
+    Wrap { buf: w.buf } // ERROR: O0003 cannot move `w.buf` into a literal
+}
+
+fn case_return_field_of_in_param(in p: Pair) -> Box[Int] {
+    p.left // ERROR: O0003 cannot move out of a field of `in p`
+}
+
+fn case_match_moves_in_param(in m: Option[Box[Int]], take fallback: Box[Int]) -> Box[Int] {
+    match m {
+        Some { value } => value, // ERROR: O0003 binding `value` moves out of `in m`
+        None => fallback,
+    }
+}
