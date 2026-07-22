@@ -1,0 +1,116 @@
+fn consume(_0: take Box[I64]) -> () {
+bb0:
+    drop _0
+    return const ()
+}
+
+fn peek(_0: in Box[I64]) -> I64 {
+bb0:
+    return const 42_i64
+}
+
+fn fill(_0: mut Box[I64]) -> () {
+bb0:
+    return const ()
+}
+
+fn pass_through(_0: take Box[I64]) -> Box[I64] {
+bb0:
+    return move _0
+}
+
+fn drop_at_scope_end(_0: take Box[I64]) -> () {
+    let _1: Box[I64]; // kept
+    let _2: I64;
+bb0:
+    _1 = move _0
+    _2 = call peek(borrow _1)
+    drop _1
+    return const ()
+}
+
+fn move_between_locals(_0: take Box[I64]) -> () {
+    let _1: Box[I64]; // first
+    let _2: Box[I64]; // second
+    let _3: ();
+bb0:
+    _1 = move _0
+    _2 = move _1
+    _3 = call consume(move _2)
+    return const ()
+}
+
+fn borrow_then_take(_0: take Box[I64]) -> () {
+    let _1: I64;
+    let _2: ();
+    let _3: ();
+bb0:
+    _1 = call peek(borrow _0)
+    _2 = call fill(borrow mut _0)
+    _3 = call consume(move _0)
+    return const ()
+}
+
+fn partial_move(_0: take Holder) -> I64 {
+    let _1: Box[I64]; // inner
+    let _2: I64; // tag
+    let _3: ();
+bb0:
+    _1 = move _0.0
+    _2 = copy _0.1
+    _3 = call consume(move _1)
+    return copy _2
+}
+
+fn reassign_drops_old(_0: take Box[I64], _1: take Box[I64]) -> () {
+    let _2: Box[I64]; // slot
+bb0:
+    _2 = move _0
+    drop _2
+    _2 = move _1
+    drop _2
+    return const ()
+}
+
+fn conditional_consume(_0: in Bool, _1: take Box[I64]) -> () {
+    let _2: ();
+    let _3: ();
+bb0:
+    branch copy _0 ? bb1 : bb2
+bb1:
+    _2 = call consume(move _1)
+    goto bb3
+bb2:
+    _3 = call consume(move _1)
+    goto bb3
+bb3:
+    return const ()
+}
+
+fn discard_result(_0: take Box[I64]) -> () {
+    let _1: Box[I64];
+bb0:
+    _1 = call pass_through(move _0)
+    drop _1
+    return const ()
+}
+
+fn deferred_init(_0: in Bool, _1: take Box[I64], _2: take Box[I64]) -> () {
+    let _3: Box[I64]; // chosen
+    let _4: ();
+    let _5: ();
+    let _6: ();
+bb0:
+    branch copy _0 ? bb1 : bb2
+bb1:
+    _3 = move _1
+    _4 = call consume(move _2)
+    goto bb3
+bb2:
+    _3 = move _2
+    _5 = call consume(move _1)
+    goto bb3
+bb3:
+    _6 = call consume(move _3)
+    return const ()
+}

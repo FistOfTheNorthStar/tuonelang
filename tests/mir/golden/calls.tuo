@@ -1,0 +1,50 @@
+// Calls in every parameter mode, constants, generics, and impl blocks.
+
+const LIMIT: Int = 100;
+const SCALE: Int = -3;
+
+struct Counter {
+    count: Int,
+}
+
+interface Stepper {
+    fn step(in self) -> Int;
+}
+
+impl Stepper for Counter {
+    fn step(in self) -> Int {
+        1
+    }
+}
+
+fn inspect(in value: Int) -> Int {
+    value + LIMIT
+}
+
+fn adjust(mut counter: Counter) {
+    counter.count = counter.count + 1;
+}
+
+fn absorb(take counter: Counter) -> Int {
+    counter.count
+}
+
+fn identity[T](take value: T) -> T {
+    value
+}
+
+fn chain(in start: Int) -> Int {
+    const BONUS: Int = 7;
+    var counter = Counter { count: start };
+    adjust(counter);
+    inspect(counter.count);
+    absorb(counter) + BONUS * SCALE
+}
+
+fn borrow_a_temporary() -> Int {
+    inspect(inspect(5))
+}
+
+fn generic_round_trip(in n: Int) -> Int {
+    identity(n)
+}

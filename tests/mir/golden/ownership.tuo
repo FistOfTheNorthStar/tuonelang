@@ -1,0 +1,74 @@
+// Moves, borrows, drops, partial moves — the ownership model made
+// explicit.
+
+struct Holder {
+    boxed: Box[Int],
+    tag: Int,
+}
+
+fn consume(take boxed: Box[Int]) {
+}
+
+fn peek(in boxed: Box[Int]) -> Int {
+    42
+}
+
+fn fill(mut slot: Box[Int]) {
+}
+
+fn pass_through(take boxed: Box[Int]) -> Box[Int] {
+    boxed
+}
+
+fn drop_at_scope_end(take boxed: Box[Int]) {
+    let kept = boxed;
+    peek(kept);
+}
+
+fn move_between_locals(take boxed: Box[Int]) {
+    let first = boxed;
+    let second = first;
+    consume(second);
+}
+
+fn borrow_then_take(take boxed: Box[Int]) {
+    peek(boxed);
+    fill(boxed);
+    consume(boxed);
+}
+
+fn partial_move(take holder: Holder) -> Int {
+    let inner = holder.boxed;
+    let tag = holder.tag;
+    consume(inner);
+    tag
+}
+
+fn reassign_drops_old(take first: Box[Int], take second: Box[Int]) {
+    var slot = first;
+    slot = second;
+}
+
+fn conditional_consume(in flag: Bool, take boxed: Box[Int]) {
+    if flag {
+        consume(boxed);
+    } else {
+        consume(boxed);
+    }
+}
+
+fn discard_result(take boxed: Box[Int]) {
+    pass_through(boxed);
+}
+
+fn deferred_init(in flag: Bool, take a: Box[Int], take b: Box[Int]) {
+    let chosen;
+    if flag {
+        chosen = a;
+        consume(b);
+    } else {
+        chosen = b;
+        consume(a);
+    }
+    consume(chosen);
+}

@@ -84,8 +84,12 @@ pub(crate) struct Checker<'a> {
     variant_owner: HashMap<SymbolId, SymbolId>,
     diagnostics: Vec<Diagnostic>,
     symbol_types: HashMap<SymbolId, Ty>,
+    expr_types: HashMap<Span, Ty>,
     // Per-body state.
     icx: InferCtx,
+    /// Types of the current body's expressions, recorded raw (inference
+    /// variables unresolved) and published — applied — by [`finish_body`].
+    body_exprs: Vec<(Span, Ty)>,
     locals: HashMap<SymbolId, Ty>,
     ret: Ty,
     frames: Vec<Frame>,
@@ -118,7 +122,9 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         variant_owner: HashMap::new(),
         diagnostics: Vec::new(),
         symbol_types: HashMap::new(),
+        expr_types: HashMap::new(),
         icx: InferCtx::default(),
+        body_exprs: Vec::new(),
         locals: HashMap::new(),
         ret: Ty::Unit,
         frames: Vec::new(),
@@ -162,6 +168,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     TypeckResult {
         diagnostics: checker.diagnostics,
         symbol_types: checker.symbol_types,
+        expr_types: checker.expr_types,
         struct_shapes,
         enum_shapes,
     }
@@ -568,6 +575,7 @@ impl<'a> Checker<'a> {
 
     fn begin_body(&mut self, ret: Ty, fallback: Span) {
         self.icx = InferCtx::default();
+        self.body_exprs = Vec::new();
         self.locals = HashMap::new();
         self.ret = ret;
         self.frames = Vec::new();
@@ -587,6 +595,11 @@ impl<'a> Checker<'a> {
         for (symbol, ty) in locals {
             let ty = self.icx.apply(&ty);
             self.symbol_types.insert(symbol, ty);
+        }
+        let exprs = std::mem::take(&mut self.body_exprs);
+        for (span, ty) in exprs {
+            let ty = self.icx.apply(&ty);
+            self.expr_types.insert(span, ty);
         }
     }
 
@@ -1085,11 +1098,14 @@ impl<'a> Checker<'a> {
                 let actual = self.expr(value);
                 self.expect_ty(&field_ty, &actual, value_at);
             } else {
-                // Shorthand `{ y }` reads the local `y`.
+                // Shorthand `{ y }` reads the local `y`; HIR expands it
+                // to a path expression carrying the field-name span, so
+                // record that span's type for downstream stages.
                 let actual = self
                     .symbol_at(init.name_ref())
                     .and_then(|symbol| self.locals.get(&symbol).cloned())
                     .unwrap_or(Ty::Error);
+                self.record(Some(name.span), &actual);
                 self.expect_ty(&field_ty, &actual, name.span);
             }
         }
@@ -1125,11 +1141,25 @@ impl<'a> Checker<'a> {
     // Expressions
     // ------------------------------------------------------------------
 
+    fn expr(&mut self, expr: Expr<'_>) -> Ty {
+        let ty = self.expr_kind(expr);
+        self.record(expr.span(), &ty);
+        ty
+    }
+
+    /// Record `ty` as the (raw) type of the expression at `span`, for the
+    /// per-expression type table downstream stages consume.
+    fn record(&mut self, span: Option<Span>, ty: &Ty) {
+        if let Some(span) = span {
+            self.body_exprs.push((span, ty.clone()));
+        }
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "one arm per expression form; the dispatch reads best in one place"
     )]
-    fn expr(&mut self, expr: Expr<'_>) -> Ty {
+    fn expr_kind(&mut self, expr: Expr<'_>) -> Ty {
         let span = self.at(expr.span());
         match expr {
             Expr::Literal(literal) => match literal.token_kind() {
@@ -1557,7 +1587,11 @@ impl<'a> Checker<'a> {
                 let (else_ty, else_span) = match branch {
                     ElseBranch::If(nested) => {
                         let nested_span = self.at(nested.span());
-                        (self.if_expr(nested, nested_span), nested_span)
+                        let ty = self.if_expr(nested, nested_span);
+                        // An `else if` is its own expression node in the
+                        // lowered tree; give it a table entry too.
+                        self.record(nested.span(), &ty);
+                        (ty, nested_span)
                     }
                     ElseBranch::Block(block) => {
                         let block_span = self.at(block.span());
@@ -1723,7 +1757,14 @@ impl<'a> Checker<'a> {
             SymbolKind::Param | SymbolKind::Local => {
                 self.locals.get(&symbol).cloned().unwrap_or(Ty::Error)
             }
-            SymbolKind::Const => self.consts.get(&symbol).cloned().unwrap_or(Ty::Error),
+            // Block-local `const`s live in the body's local table;
+            // top-level ones in the module table.
+            SymbolKind::Const => self
+                .locals
+                .get(&symbol)
+                .or_else(|| self.consts.get(&symbol))
+                .cloned()
+                .unwrap_or(Ty::Error),
             SymbolKind::Function => {
                 let (params, ret) = self.instantiate_fn(symbol, given_args, span);
                 Ty::Fn(Box::new(FnTy { params, ret }))

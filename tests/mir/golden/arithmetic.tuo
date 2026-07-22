@@ -1,0 +1,31 @@
+// Arithmetic, comparisons, logical operators, and casts.
+
+fn arith(in a: Int, in b: Int) -> Int {
+    let sum = a + b;
+    let diff = a - b;
+    let product = sum * diff;
+    let quotient = product / b;
+    quotient % a
+}
+
+fn compare(in a: Int, in b: Int) -> Bool {
+    let below = a < b;
+    let above = a > b;
+    below == above
+}
+
+fn logic(in p: Bool, in q: Bool) -> Bool {
+    let both = p && q;
+    let either = p || q;
+    !both != either
+}
+
+fn negate(in x: Int) -> Int {
+    -x + -128
+}
+
+fn shrink(in wide: Int) -> F64 {
+    let narrow = wide as I32;
+    let back = narrow as Int;
+    back as F64
+}

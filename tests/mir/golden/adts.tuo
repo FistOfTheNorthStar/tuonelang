@@ -1,0 +1,69 @@
+// Structs, enums, discriminants, `match`, `Option`/`Result`, and `?`.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Circle { radius: Int },
+    Rect { width: Int, height: Int },
+    Empty,
+}
+
+fn origin() -> Point {
+    Point { x: 0, y: 0 }
+}
+
+fn swap(in p: Point) -> Point {
+    Point { x: p.y, y: p.x }
+}
+
+fn area(in shape: Shape) -> Int {
+    match shape {
+        Shape::Circle { radius } => 3 * radius * radius,
+        Shape::Rect { width, height } => width * height,
+        Shape::Empty => 0,
+    }
+}
+
+fn is_wide(in shape: Shape) -> Bool {
+    match shape {
+        Shape::Rect { width, height } if width > height => true,
+        other => false,
+    }
+}
+
+fn find(in haystack: Int, in needle: Int) -> Option[Int] {
+    if haystack == needle {
+        Some { value: needle }
+    } else {
+        None
+    }
+}
+
+fn unwrap_or(in maybe: Option[Int], in fallback: Int) -> Int {
+    match maybe {
+        Some { value } => value,
+        fallthrough => fallback,
+    }
+}
+
+fn checked_sum(in a: Int, in b: Int) -> Option[Int] {
+    let first = find(a, a)?;
+    let second = find(b, b)?;
+    Some { value: first + second }
+}
+
+fn parse_pair(in good: Bool) -> Result[Int, Str] {
+    if good {
+        Ok { value: 7 }
+    } else {
+        Err { error: "bad" }
+    }
+}
+
+fn double_parse(in good: Bool) -> Result[Int, Str] {
+    let value = parse_pair(good)?;
+    Ok { value: value * 2 }
+}

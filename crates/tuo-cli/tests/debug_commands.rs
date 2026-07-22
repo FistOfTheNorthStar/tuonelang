@@ -1,4 +1,4 @@
-//! End-to-end tests for the `tuo debug syntax` / `tuo debug ast` developer
+//! End-to-end tests for the `tuo debug syntax` / `ast` / `mir` developer
 //! tools, run against the real binary.
 
 use std::path::PathBuf;
@@ -7,6 +7,12 @@ use std::process::{Command, Output};
 fn fixture(relative: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tests/parser/fixtures")
+        .join(relative)
+}
+
+fn mir_fixture(relative: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/mir/golden")
         .join(relative)
 }
 
@@ -59,6 +65,42 @@ fn malformed_files_still_dump_and_report_diagnostics_on_stderr() {
         stderr.contains("P0002"),
         "recovery diagnostics are reported"
     );
+}
+
+#[test]
+fn debug_mir_lowers_an_accepted_program() {
+    let path = mir_fixture("control_flow.tuo");
+    let output = run(&["debug", "mir", path.to_str().expect("utf-8 path")]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 dump");
+    // Functions, basic blocks, and terminators of the lowered MIR.
+    assert!(stdout.contains("fn max("), "functions are shown");
+    assert!(stdout.contains("bb0:"), "basic blocks are labeled");
+    assert!(stdout.contains("branch "), "terminators are shown");
+    assert!(output.stderr.is_empty());
+}
+
+#[test]
+fn debug_mir_can_restrict_to_one_function() {
+    let path = mir_fixture("control_flow.tuo");
+    let output = run(&["debug", "mir", path.to_str().expect("utf-8 path"), "max"]);
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf-8 dump");
+    assert!(stdout.contains("fn max("));
+    assert!(
+        !stdout.contains("fn classify("),
+        "other functions are filtered out"
+    );
+}
+
+#[test]
+fn debug_mir_refuses_a_program_with_front_end_errors() {
+    let path = fixture("err/broken_items.tuo");
+    let output = run(&["debug", "mir", path.to_str().expect("utf-8 path")]);
+    // MIR is only defined for accepted programs.
+    assert!(!output.status.success());
+    let stderr = String::from_utf8(output.stderr).expect("utf-8 diagnostics");
+    assert!(stderr.contains("cannot lower MIR"));
 }
 
 #[test]

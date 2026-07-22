@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use tuo_ast::Ast;
 use tuo_diagnostics::Diagnostic;
 use tuo_resolve::{Resolution, SymbolId};
+use tuo_source::Span;
 
 pub use ty::{FloatKind, FnTy, InferVar, IntKind, Ty, WrapperKind};
 
@@ -72,6 +73,7 @@ pub struct EnumShape {
 pub struct TypeckResult {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) symbol_types: HashMap<SymbolId, Ty>,
+    pub(crate) expr_types: HashMap<Span, Ty>,
     pub(crate) struct_shapes: HashMap<SymbolId, StructShape>,
     pub(crate) enum_shapes: HashMap<SymbolId, EnumShape>,
 }
@@ -89,6 +91,16 @@ impl TypeckResult {
     #[must_use]
     pub fn type_of(&self, symbol: SymbolId) -> Option<&Ty> {
         self.symbol_types.get(&symbol)
+    }
+
+    /// The checked type of the expression at `span` (the exact span the
+    /// expression covers in source), with the body's inference solution
+    /// applied. Every expression the checker visited has an entry; MIR
+    /// lowering reads operand and result types from this table instead of
+    /// re-running inference.
+    #[must_use]
+    pub fn expr_ty(&self, span: Span) -> Option<&Ty> {
+        self.expr_types.get(&span)
     }
 
     /// The declared shape of a user struct, for downstream stages that walk

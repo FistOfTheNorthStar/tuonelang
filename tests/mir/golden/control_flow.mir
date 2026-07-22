@@ -1,0 +1,125 @@
+fn max(_0: in I64, _1: in I64) -> I64 {
+    let _2: I64;
+    let _3: Bool;
+bb0:
+    _3 = gt(copy _0, copy _1)
+    branch copy _3 ? bb1 : bb2
+bb1:
+    _2 = copy _0
+    goto bb3
+bb2:
+    _2 = copy _1
+    goto bb3
+bb3:
+    return copy _2
+}
+
+fn classify(_0: in I64) -> I64 {
+    let _1: Bool;
+    let _2: I64;
+    let _3: Bool;
+bb0:
+    _1 = lt(copy _0, const 0_i64)
+    branch copy _1 ? bb1 : bb2
+bb1:
+    return const -1_i64
+bb2:
+    goto bb3
+bb3:
+    _3 = eq(copy _0, const 0_i64)
+    branch copy _3 ? bb4 : bb5
+bb4:
+    _2 = const 0_i64
+    goto bb6
+bb5:
+    _2 = const 1_i64
+    goto bb6
+bb6:
+    return copy _2
+}
+
+fn sum_to(_0: in I64) -> I64 {
+    let _1: I64; // total
+    let _2: I64; // current
+    let _3: Bool;
+    let _4: I64;
+    let _5: I64;
+    let _6: Bool;
+    let _7: I64;
+bb0:
+    _1 = const 0_i64
+    _2 = const 0_i64
+    goto bb1
+bb1:
+    _3 = lt(copy _2, copy _0)
+    branch copy _3 ? bb2 : bb3
+bb2:
+    _4 = add(copy _2, const 1_i64)
+    _2 = copy _4
+    _5 = rem(copy _2, const 2_i64)
+    _6 = eq(copy _5, const 0_i64)
+    branch copy _6 ? bb4 : bb5
+bb3:
+    return copy _1
+bb4:
+    goto bb1
+bb5:
+    goto bb6
+bb6:
+    _7 = add(copy _1, copy _2)
+    _1 = copy _7
+    goto bb1
+}
+
+fn sum_range(_0: in I64) -> I64 {
+    let _1: I64; // total
+    let _2: I64; // i
+    let _3: I64;
+    let _4: Bool;
+    let _5: I64;
+bb0:
+    _1 = const 0_i64
+    _2 = const 0_i64
+    _3 = copy _0
+    goto bb1
+bb1:
+    _4 = lt(copy _2, copy _3)
+    branch copy _4 ? bb2 : bb4
+bb2:
+    _5 = add(copy _1, copy _2)
+    _1 = copy _5
+    goto bb3
+bb3:
+    _2 = add(copy _2, const 1_i64)
+    goto bb1
+bb4:
+    return copy _1
+}
+
+fn first_square_above(_0: in I64) -> I64 {
+    let _1: I64; // candidate
+    let _2: I64;
+    let _3: I64;
+    let _4: I64; // square
+    let _5: Bool;
+    let _6: I64;
+bb0:
+    _1 = const 1_i64
+    goto bb1
+bb1:
+    _3 = mul(copy _1, copy _1)
+    _4 = copy _3
+    _5 = gt(copy _4, copy _0)
+    branch copy _5 ? bb3 : bb4
+bb2:
+    return copy _2
+bb3:
+    _2 = copy _4
+    goto bb2
+bb4:
+    goto bb5
+bb5:
+    _6 = add(copy _1, const 1_i64)
+    _1 = copy _6
+    goto bb1
+}

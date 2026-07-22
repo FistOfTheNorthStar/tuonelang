@@ -61,6 +61,19 @@ use tuo_types::TypeckResult;
 
 pub use place::Place;
 
+/// Is `ty` `Copy` under the v0 model (`specification/ownership.md` §2)?
+///
+/// `Copy`-ness is derived structurally, never user-written: scalars, `()`,
+/// `Char`, `Str`, and ranges are `Copy`; tuples, `Option`/`Result`, and
+/// user aggregates are `Copy` iff every component is; `String`, `Array`,
+/// the memory wrappers, and generic parameters never are. This crate owns
+/// the definition; MIR lowering consumes it to decide copies versus moves
+/// and which drops to emit.
+#[must_use]
+pub fn is_copy(types: &TypeckResult, ty: &tuo_types::Ty) -> bool {
+    env::TypeEnv::new(types).is_copy(ty)
+}
+
 /// Everything ownership checking produced for one program snapshot.
 #[derive(Debug, Default)]
 pub struct OwnershipResult {
