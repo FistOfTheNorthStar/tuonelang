@@ -20,10 +20,11 @@
 //!
 //! Implemented so far: the front-end re-exports below (source management,
 //! lexing, parsing, the lossless CST, typed AST views, name resolution,
-//! HIR lowering, and type checking), plus the first orchestration seam —
-//! [`check_sources`], the parse → resolve → type-check pipeline behind
-//! `tuo check`. The CLI's `tuo debug syntax` / `tuo debug ast` /
-//! `tuo debug hir` developer tools drive the re-exports directly. Later
+//! HIR lowering, type checking, and MIR lowering), plus the first
+//! orchestration seam — [`check_sources`], the parse → resolve →
+//! type-check → ownership-check pipeline behind `tuo check`. The CLI's
+//! `tuo debug syntax` / `tuo debug ast` / `tuo debug hir` /
+//! `tuo debug mir` developer tools drive the re-exports directly. Later
 //! stages are still stubs, so no further orchestration exists yet.
 
 mod check;
@@ -38,6 +39,8 @@ pub use tuo_diagnostics as diagnostics;
 pub use tuo_hir as hir;
 /// Lexing (re-export of [`tuo_lexer`]).
 pub use tuo_lexer as lexer;
+/// The mid-level IR and its HIR lowering (re-export of [`tuo_mir`]).
+pub use tuo_mir as mir;
 /// Parsing (re-export of [`tuo_parser`]).
 pub use tuo_parser as parser;
 /// Name resolution (re-export of [`tuo_resolve`]).

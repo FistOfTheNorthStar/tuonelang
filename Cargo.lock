@@ -1082,8 +1082,12 @@ dependencies = [
 name = "tuo-mir"
 version = "0.0.0"
 dependencies = [
+ "tuo-ast",
  "tuo-diagnostics",
+ "tuo-hir",
  "tuo-ownership",
+ "tuo-parser",
+ "tuo-resolve",
  "tuo-source",
  "tuo-types",
 ]

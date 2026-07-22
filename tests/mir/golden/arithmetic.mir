@@ -1,0 +1,92 @@
+fn arith(_0: in I64, _1: in I64) -> I64 {
+    let _2: I64;
+    let _3: I64; // sum
+    let _4: I64;
+    let _5: I64; // diff
+    let _6: I64;
+    let _7: I64; // product
+    let _8: I64;
+    let _9: I64; // quotient
+    let _10: I64;
+bb0:
+    _2 = add(copy _0, copy _1)
+    _3 = copy _2
+    _4 = sub(copy _0, copy _1)
+    _5 = copy _4
+    _6 = mul(copy _3, copy _5)
+    _7 = copy _6
+    _8 = div(copy _7, copy _1)
+    _9 = copy _8
+    _10 = rem(copy _9, copy _0)
+    return copy _10
+}
+
+fn compare(_0: in I64, _1: in I64) -> Bool {
+    let _2: Bool;
+    let _3: Bool; // below
+    let _4: Bool;
+    let _5: Bool; // above
+    let _6: Bool;
+bb0:
+    _2 = lt(copy _0, copy _1)
+    _3 = copy _2
+    _4 = gt(copy _0, copy _1)
+    _5 = copy _4
+    _6 = eq(copy _3, copy _5)
+    return copy _6
+}
+
+fn logic(_0: in Bool, _1: in Bool) -> Bool {
+    let _2: Bool;
+    let _3: Bool; // both
+    let _4: Bool;
+    let _5: Bool; // either
+    let _6: Bool;
+    let _7: Bool;
+bb0:
+    branch copy _0 ? bb1 : bb2
+bb1:
+    _2 = copy _1
+    goto bb3
+bb2:
+    _2 = const false
+    goto bb3
+bb3:
+    _3 = copy _2
+    branch copy _0 ? bb5 : bb4
+bb4:
+    _4 = copy _1
+    goto bb6
+bb5:
+    _4 = const true
+    goto bb6
+bb6:
+    _5 = copy _4
+    _6 = not(copy _3)
+    _7 = ne(copy _6, copy _5)
+    return copy _7
+}
+
+fn negate(_0: in I64) -> I64 {
+    let _1: I64;
+    let _2: I64;
+bb0:
+    _1 = neg(copy _0)
+    _2 = add(copy _1, const -128_i64)
+    return copy _2
+}
+
+fn shrink(_0: in I64) -> F64 {
+    let _1: I32;
+    let _2: I32; // narrow
+    let _3: I64;
+    let _4: I64; // back
+    let _5: F64;
+bb0:
+    _1 = cast int_to_int(copy _0)
+    _2 = copy _1
+    _3 = cast int_to_int(copy _2)
+    _4 = copy _3
+    _5 = cast int_to_float(copy _4)
+    return copy _5
+}

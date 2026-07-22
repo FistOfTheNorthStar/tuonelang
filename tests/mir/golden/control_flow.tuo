@@ -1,0 +1,52 @@
+// Branches, loops, break/continue, and early returns.
+
+fn max(in a: Int, in b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+fn classify(in n: Int) -> Int {
+    if n < 0 {
+        return -1;
+    }
+    if n == 0 {
+        0
+    } else {
+        1
+    }
+}
+
+fn sum_to(in limit: Int) -> Int {
+    var total = 0;
+    var current = 0;
+    while current < limit {
+        current = current + 1;
+        if current % 2 == 0 {
+            continue;
+        }
+        total = total + current;
+    }
+    total
+}
+
+fn sum_range(in limit: Int) -> Int {
+    var total = 0;
+    for i in 0 .. limit {
+        total = total + i;
+    }
+    total
+}
+
+fn first_square_above(in floor: Int) -> Int {
+    var candidate = 1;
+    loop {
+        let square = candidate * candidate;
+        if square > floor {
+            break square;
+        }
+        candidate = candidate + 1;
+    }
+}

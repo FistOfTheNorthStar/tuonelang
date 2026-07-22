@@ -26,6 +26,7 @@ cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev t
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
 cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
+cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo test                     # run all tests
 cargo test -p tdg-cli          # test one crate
 cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
@@ -90,8 +91,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   point. Implemented so far: `tdg check <files>` (the parse → resolve → type-check →
   ownership-check front end, specs included per ADR-0002), `tdg fmt [--check] <files>` (the
   canonical formatter — deterministic, idempotent, zero configuration), and
-  `tdg debug syntax|ast|hir <file>` (diagnostic developer tools with unstable
-  output, not language protocols).
+  `tdg debug syntax|ast|hir|mir <file>` (diagnostic developer tools with unstable
+  output, not language protocols; `mir` requires an accepted program, since MIR is
+  only defined once the front end passes).
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

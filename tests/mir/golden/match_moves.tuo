@@ -1,0 +1,46 @@
+// Owned scrutinees: payload extraction and husk drops.
+
+enum Message {
+    Quit,
+    Payload { data: Box[Int], priority: Int },
+    Pair { first: Box[Int], second: Box[Int] },
+}
+
+fn consume(take data: Box[Int]) {
+}
+
+fn open(take message: Message) -> Int {
+    match message {
+        Message::Quit => 0,
+        Message::Payload { data, priority } => {
+            consume(data);
+            priority
+        },
+        Message::Pair { first, second } => {
+            consume(first);
+            consume(second);
+            2
+        },
+    }
+}
+
+fn keep_first(take message: Message) -> Int {
+    match message {
+        Message::Pair { first, second: rest } => {
+            consume(first);
+            consume(rest);
+            1
+        },
+        leftover => 0,
+    }
+}
+
+fn unwrap_box(take maybe: Option[Box[Int]], take fallback: Box[Int]) -> Box[Int] {
+    match maybe {
+        Some { value } => {
+            consume(fallback);
+            value
+        },
+        None => fallback,
+    }
+}

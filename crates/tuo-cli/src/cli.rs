@@ -103,6 +103,18 @@ enum DebugCommand {
         /// The tuonelang source file to inspect.
         file: PathBuf,
     },
+    /// Print the lowered mid-level IR (MIR) of a source file.
+    ///
+    /// MIR is only defined for accepted programs, so the whole front end
+    /// (parse, resolve, type check, ownership check) runs first: any error
+    /// refuses the dump with a failure exit code. Function bodies outside
+    /// the v0 lowering subset are listed as `not lowered` with the reason.
+    Mir {
+        /// The tuonelang source file to inspect.
+        file: PathBuf,
+        /// Restrict the dump to the function with this name.
+        function: Option<String>,
+    },
 }
 
 impl Cli {
@@ -113,6 +125,9 @@ impl Cli {
             Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
             Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
             Some(Command::Debug(DebugCommand::Hir { file })) => debug::run(Dump::Hir, &file),
+            Some(Command::Debug(DebugCommand::Mir { file, function })) => {
+                debug::run(Dump::Mir(function), &file)
+            }
             Some(Command::Fmt { check, files }) => fmt::run(check, &files),
             // A bare `tuo` invocation prints help.
             None => match Self::command().print_help() {
