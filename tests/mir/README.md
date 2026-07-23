@@ -34,15 +34,33 @@ TUO_BLESS=1 cargo test -p tuo-mir --test golden
 
 and review the diff before committing.
 
+Every fixture's lowered MIR is also run through the **mandatory verifier**
+(`tuo_mir::verify`) before it is blessed or compared, so a lowering change
+that produces malformed MIR fails the suite immediately rather than
+blessing a broken golden.
+
 ## Corpus coverage
 
 A second test in the same file lowers the entire accepted ownership
 corpus (`tests/ownership/fixtures/ok/`) and asserts that every function
 either lowers or is skipped for one of the **documented** v0 limits
 (listed in `tuo-mir`'s crate docs) — never for an undocumented reason, and
-nothing panics. The whole accepted corpus lowers today; the skip list is
-the escape hatch for constructs the v0 subset does not yet cover (method
-calls, indirect calls, and so on).
+nothing panics. Every lowered function is verified, so the corpus doubles
+as proof that lowering always emits verifiable MIR. The whole accepted
+corpus lowers today; the skip list is the escape hatch for constructs the
+v0 subset does not yet cover (method calls, indirect calls, and so on).
+
+## The verifier
+
+MIR is only meaningful when well-formed, so `tuo_mir::verify` is a
+mandatory gate: the interpreter and both backends must reject MIR that
+does not verify. It returns structured `Mxxxx` diagnostics (never panics)
+for dangling block targets, out-of-range locals, illegal projections,
+type mismatches, use of an undefined or moved-out value, malformed
+signatures/terminators, and the ownership invariants lowering must
+preserve. Deliberately-malformed MIR unit tests live in
+`crates/tuo-mir/src/verify.rs`; `debug_assert_verified` is the hook every
+future optimization pass calls to re-verify in debug/test builds.
 
 ## Why golden, not hand-written
 

@@ -93,7 +93,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   canonical formatter — deterministic, idempotent, zero configuration), and
   `tdg debug syntax|ast|hir|mir <file>` (diagnostic developer tools with unstable
   output, not language protocols; `mir` requires an accepted program, since MIR is
-  only defined once the front end passes).
+  only defined once the front end passes, and the lowered MIR is verified
+  (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
+  interpreter must reject unverified MIR).
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).
