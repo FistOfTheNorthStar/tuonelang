@@ -67,5 +67,11 @@ future optimization pass calls to re-verify in debug/test builds.
 MIR is verbose and every instruction's meaning is fixed by the crate
 documentation, so the useful invariant is *stability*: a change to lowering
 shows up as a reviewable diff against the blessed output. Semantic
-execution tests belong to the MIR interpreter (`tuo-mir-interp`), which
-lands next.
+execution tests belong to the MIR interpreter (`tuo-mir-interp`), the
+language's initial semantic reference implementation: its conformance suite
+(`crates/tuo-mir-interp/tests/conformance.rs`) compiles small programs,
+lowers them, and *runs* the verified MIR, asserting computed values and
+structured traps for arithmetic, branches, recursion, structs, enums,
+`Option`, `Result`, and ownership-driven destruction. The interpreter runs
+only verified MIR — it enforces the same `tuo_mir::verify` gate every
+backend must.
