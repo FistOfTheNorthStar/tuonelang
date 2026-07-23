@@ -5,7 +5,8 @@
 //! language protocols — their output format may change at any time. The
 //! syntax dumps tolerate malformed input (the parser is total); the MIR
 //! dump requires an accepted program, since MIR is only defined once the
-//! front end passes.
+//! front end passes, and the lowered MIR is verified before it is printed
+//! (a consumer must never accept unverified MIR).
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -108,7 +109,17 @@ fn run_mir(map: &SourceMap, id: tuo_compiler::source::SourceId, filter: Option<&
     let parse = parser::parse(map.source(id));
     let asts = [Ast::new(&parse.tree, map.source(id).text())];
     let lowered_hir = hir::lower(&asts, &check.resolution);
-    let mut program = mir::lower(&lowered_hir, &check.resolution, &check.types);
+    let program = mir::lower(&lowered_hir, &check.resolution, &check.types);
+    // MIR is only meaningful when it verifies; a consumer must never accept
+    // unverified MIR, so refuse the dump if lowering produced malformed MIR
+    // (this would be a compiler bug, not a user error).
+    let problems = mir::verify(&program, &check.types);
+    if !problems.is_empty() {
+        eprint!("{}", diagnostics::render::render_all(&problems, map));
+        eprintln!("error: internal: lowered MIR failed verification");
+        return ExitCode::FAILURE;
+    }
+    let mut program = program;
     if let Some(name) = filter {
         program.functions.retain(|function| function.name == name);
         program.skipped.retain(|skipped| skipped.name == name);

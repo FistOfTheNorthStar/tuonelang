@@ -44,6 +44,17 @@ fn lower_to_text(name: &str, text: &str) -> String {
     );
     let hir = tuo_hir::lower(&asts, &resolution);
     let program = tuo_mir::lower(&hir, &resolution, &types);
+    // Lowering must always produce verifiable MIR (the mandatory gate).
+    let problems = tuo_mir::verify(&program, &types);
+    assert!(
+        problems.is_empty(),
+        "{name}: lowered MIR failed verification: {}",
+        problems
+            .iter()
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect::<Vec<_>>()
+            .join("; ")
+    );
     tuo_mir::render(&program, &resolution)
 }
 
@@ -139,6 +150,17 @@ fn ownership_ok_corpus_lowers_or_skips_for_documented_reasons() {
         let types = tuo_types::check(&asts, &resolution);
         let hir = tuo_hir::lower(&asts, &resolution);
         let program = tuo_mir::lower(&hir, &resolution, &types);
+        // Every lowered function of every accepted program must verify.
+        let problems = tuo_mir::verify(&program, &types);
+        assert!(
+            problems.is_empty(),
+            "{name}: lowered MIR failed verification: {}",
+            problems
+                .iter()
+                .map(|d| format!("{}: {}", d.code, d.message))
+                .collect::<Vec<_>>()
+                .join("; ")
+        );
         lowered += program.functions.len();
         skipped += program.skipped.len();
         for skip in &program.skipped {

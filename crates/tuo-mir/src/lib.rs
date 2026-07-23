@@ -23,6 +23,18 @@
 //! `tuo debug mir` and the golden tests — deterministic output, not a
 //! stable protocol.
 //!
+//! # Verification
+//!
+//! MIR is only meaningful when it is well-formed, so [`verify`] is a
+//! **mandatory** gate: it walks a [`Program`] and returns structured
+//! diagnostics (`Mxxxx`) for every malformed construct — dangling block
+//! targets, out-of-range locals, illegal projections, type mismatches,
+//! use of an undefined or moved-out value, and the ownership invariants
+//! lowering must preserve. The verifier is total (it never panics). Every
+//! consumer — the interpreter and both backends — must reject MIR that
+//! does not verify, and the verifier runs after lowering here and after
+//! every future optimization pass in debug/test configurations.
+//!
 //! # v0 lowering limits
 //!
 //! Constructs outside the v0 subset are never mis-lowered: the whole
@@ -48,6 +60,7 @@
 mod lower;
 mod mir;
 mod print;
+mod verify;
 
 pub use lower::lower;
 pub use mir::{
@@ -56,3 +69,4 @@ pub use mir::{
     UnOp,
 };
 pub use print::render;
+pub use verify::{debug_assert_verified, is_well_formed, verify};
