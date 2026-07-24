@@ -967,6 +967,7 @@ dependencies = [
  "clap",
  "tuo-compiler",
  "tuo-fmt",
+ "tuo-spec",
 ]
 
 [[package]]
@@ -1165,11 +1166,16 @@ version = "0.0.0"
 name = "tuo-spec"
 version = "0.0.0"
 dependencies = [
+ "tuo-ast",
  "tuo-diagnostics",
+ "tuo-hir",
  "tuo-mir",
  "tuo-mir-interp",
+ "tuo-ownership",
+ "tuo-parser",
  "tuo-resolve",
  "tuo-source",
+ "tuo-types",
 ]
 
 [[package]]

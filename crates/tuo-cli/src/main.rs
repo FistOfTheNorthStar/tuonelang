@@ -2,19 +2,22 @@
 //!
 //! Implemented today: `tuo check <files>` (parse, resolve, type-check, and
 //! ownership-check a program — specs included — without generating code),
+//! `tuo spec [target] <files>` and `tuo verify <files>` (execute the
+//! program's colocated specs through the reference MIR interpreter),
 //! `tuo fmt [--check] <files>` (the canonical source formatter), and the
 //! `tuo debug syntax|ast|hir|mir <file>` developer tools (raw dumps of
 //! compiler-internal representations — unstable diagnostic output, not a
 //! language protocol), plus the built-in `--help` and `--version`.
-//! Compiler subcommands such as `build`, `run`, `spec`, and `verify` are
-//! intentionally **not** implemented: they are added as their underlying
-//! functionality exists, so that the CLI never advertises behavior the
-//! compiler cannot yet perform. See [`cli::Cli`] for the extension point.
+//! Compiler subcommands such as `build` and `run` remain intentionally
+//! **not** implemented: they are added as their underlying functionality
+//! exists, so that the CLI never advertises behavior the compiler cannot yet
+//! perform. See [`cli::Cli`] for the extension point.
 
 mod check;
 mod cli;
 mod debug;
 mod fmt;
+mod spec;
 
 use std::process::ExitCode;
 

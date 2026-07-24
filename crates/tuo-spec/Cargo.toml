@@ -12,8 +12,16 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
+# The spec runner sits with the backends as a MIR consumer (below the
+# orchestration facade): it drives the front-end stages and the interpreter
+# directly, never through tuo-compiler.
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
+tuo-parser.workspace = true
+tuo-ast.workspace = true
 tuo-resolve.workspace = true
+tuo-hir.workspace = true
+tuo-types.workspace = true
+tuo-ownership.workspace = true
 tuo-mir.workspace = true
 tuo-mir-interp.workspace = true

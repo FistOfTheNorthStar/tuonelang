@@ -1,0 +1,11 @@
+// A program with one failing spec — `tuo spec` reports the mismatch and
+// exits with a failure status.
+
+fn double(take x: Int) -> Int {
+    x * 2
+}
+
+spec double {
+    // 10 doubled is 20, not 999.
+    assert double(10) == 999;
+}

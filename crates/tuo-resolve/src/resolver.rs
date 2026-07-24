@@ -379,6 +379,10 @@ impl Resolver {
         );
         if let Some(span) = decl.span() {
             self.spec_symbols.insert(span, symbol);
+            // Expose the spec's own symbol on the resolution so tooling (the
+            // spec runner) can name a spec's identity by its block span —
+            // free-standing string-named specs have no `SpecTarget` entry.
+            self.out.spec_symbols.insert(span, symbol);
         }
     }
 

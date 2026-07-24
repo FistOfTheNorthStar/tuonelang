@@ -31,7 +31,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use tuo_hir::{
     Arm, BindingDef, Block, Expr, ExprKind, Function as HirFunction, Hir, Item, Lit, ParamMode,
-    Pat, PatKind, Res, Stmt, StmtKind,
+    Pat, PatKind, Res, SpecStmt, Stmt, StmtKind,
 };
 use tuo_resolve::{Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
@@ -141,6 +141,16 @@ impl Cx<'_> {
         }
     }
 
+    /// Reject a poisoned or unsolved type at the program level (specs are
+    /// checked, so this is a defensive guard, not an expected path).
+    fn clean_ty_free(&self, ty: Ty) -> Result<Ty, Skip> {
+        if contains_error(&ty) {
+            Err("spec expression has type errors or unresolved types".to_owned())
+        } else {
+            Ok(ty)
+        }
+    }
+
     fn lower_fn(&self, function: &HirFunction, program: &mut Program) {
         if function.body.is_none() {
             return;
@@ -166,6 +176,226 @@ impl Cx<'_> {
             }),
         }
     }
+}
+
+/// Lower every `spec` block of a front-end-clean snapshot into runnable
+/// MIR.
+///
+/// The returned [`SpecProgram`] carries the ordinary program (the specs'
+/// dependencies) plus, appended to it, one synthetic function per `then` /
+/// `assert` clause (and, for `==` assertions, two more for the operands).
+/// The interpreter runs those functions by name; every function — real or
+/// synthetic — is ordinary verifiable MIR. Specs outside the v0 subset are
+/// recorded in [`SpecProgram::skipped`], never silently dropped. See
+/// [`crate::spec`] and ADR-0002.
+#[must_use]
+pub fn lower_specs(
+    hir: &Hir,
+    resolution: &Resolution,
+    types: &TypeckResult,
+) -> crate::spec::SpecProgram {
+    use crate::spec::{
+        AssertionKind, Comparison, SkippedSpec, SpecAssertion, SpecMir, SpecProgram,
+    };
+
+    let mut program = lower(hir, resolution, types);
+    let cx = Cx {
+        resolution,
+        types,
+        modes: {
+            // The synthetic assertion functions call the specs' dependency
+            // functions; their pass modes must be known just as `lower`
+            // registers them.
+            let mut modes = HashMap::new();
+            for item in &hir.items {
+                if let Item::Fn(function) = item {
+                    if let Res::Symbol(symbol) = function.symbol {
+                        modes.insert(
+                            symbol,
+                            function
+                                .params
+                                .iter()
+                                .map(|param| match param.mode {
+                                    ParamMode::In => PassMode::Borrow,
+                                    ParamMode::Mut => PassMode::BorrowMut,
+                                    ParamMode::Take => PassMode::Value,
+                                })
+                                .collect(),
+                        );
+                    }
+                }
+            }
+            modes
+        },
+        consts: HashMap::new(),
+    };
+    // Synthetic functions need fresh symbols that cannot collide with any
+    // real one; hand them out above the highest real symbol.
+    let mut next_symbol = resolution
+        .symbols()
+        .map(|(id, _)| id.as_u32())
+        .max()
+        .map_or(0, |max| max + 1);
+    let mut fresh_symbol = || {
+        let id = SymbolId::from_raw(next_symbol);
+        next_symbol += 1;
+        id
+    };
+
+    let mut specs = Vec::new();
+    let mut skipped = Vec::new();
+    for item in &hir.items {
+        let Item::Spec(spec) = item else { continue };
+        // A spec with no own symbol never resolved (malformed); the front
+        // end would have rejected the program, but guard defensively.
+        let Some(symbol) = spec.spec_symbol else {
+            continue;
+        };
+        // Split the body into setup clauses (given/when/plain statements)
+        // and the assertions, preserving source order: each assertion sees
+        // exactly the setup written before it.
+        let mut setup: Vec<Stmt> = Vec::new();
+        let mut assertions: Vec<SpecAssertion> = Vec::new();
+        let mut skip: Option<String> = None;
+        for statement in &spec.statements {
+            match statement {
+                SpecStmt::Given(bindings) => {
+                    for binding in bindings {
+                        setup.push(given_stmt(binding));
+                    }
+                }
+                SpecStmt::When(stmt) | SpecStmt::Stmt(stmt) => setup.push(stmt.clone()),
+                SpecStmt::Then(expr) | SpecStmt::Assert(expr) => {
+                    let kind = if matches!(statement, SpecStmt::Then(_)) {
+                        AssertionKind::Then
+                    } else {
+                        AssertionKind::Assert
+                    };
+                    match lower_assertion(
+                        &cx,
+                        symbol,
+                        &setup,
+                        expr,
+                        &mut fresh_symbol,
+                        &mut program,
+                    ) {
+                        Ok((condition, comparison)) => assertions.push(SpecAssertion {
+                            kind,
+                            span: expr.span,
+                            condition,
+                            comparison: comparison
+                                .map(|(actual, expected)| Comparison { actual, expected }),
+                        }),
+                        Err(reason) => {
+                            skip = Some(reason);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(reason) = skip {
+            skipped.push(SkippedSpec {
+                symbol,
+                name: spec.name.clone(),
+                reason,
+                span: spec.span,
+            });
+        } else {
+            specs.push(SpecMir {
+                symbol,
+                name: spec.name.clone(),
+                target: spec.target,
+                span: spec.span,
+                assertions,
+            });
+        }
+    }
+    SpecProgram {
+        program,
+        specs,
+        skipped,
+    }
+}
+
+/// Build a `let`-style statement lowering one `given` binding.
+fn given_stmt(binding: &tuo_hir::GivenBinding) -> Stmt {
+    Stmt {
+        kind: StmtKind::Binding(BindingDef {
+            mutable: false,
+            pat: Pat {
+                kind: PatKind::Binding(binding.symbol.clone()),
+                span: binding.span,
+            },
+            ty: binding.ty.clone(),
+            init: binding.init.clone(),
+        }),
+        span: binding.span,
+    }
+}
+
+/// Lower one assertion clause: a synthetic function returning its `Bool`
+/// value, plus — when it is `lhs == rhs` — two more returning the operands.
+/// Returns the condition function's name and, for a comparison, the
+/// `(actual, expected)` function names. Emits the functions into `program`.
+fn lower_assertion(
+    cx: &Cx<'_>,
+    spec: SymbolId,
+    setup: &[Stmt],
+    assertion: &Expr,
+    fresh_symbol: &mut impl FnMut() -> SymbolId,
+    program: &mut Program,
+) -> Result<(String, Option<(String, String)>), Skip> {
+    // The whole assertion, as a Bool-returning function.
+    let condition = emit_spec_fn(cx, spec, "cond", setup, assertion, fresh_symbol, program)?;
+    // If it is an equality comparison, also expose each side so a failure
+    // can report the actual and expected operands.
+    let comparison = match &assertion.kind {
+        ExprKind::Binary {
+            op: tuo_hir::BinOp::Eq,
+            lhs,
+            rhs,
+        } => {
+            let actual = emit_spec_fn(cx, spec, "actual", setup, lhs, fresh_symbol, program)?;
+            let expected = emit_spec_fn(cx, spec, "expected", setup, rhs, fresh_symbol, program)?;
+            Some((actual, expected))
+        }
+        _ => None,
+    };
+    Ok((condition, comparison))
+}
+
+/// Emit one synthetic no-argument function: run `setup`, then `return tail`.
+/// Its name is `spec$<spec>$<role>$<n>` — deterministic and collision-free.
+fn emit_spec_fn(
+    cx: &Cx<'_>,
+    spec: SymbolId,
+    role: &str,
+    setup: &[Stmt],
+    tail: &Expr,
+    fresh_symbol: &mut impl FnMut() -> SymbolId,
+    program: &mut Program,
+) -> Result<String, Skip> {
+    let symbol = fresh_symbol();
+    let name = format!("spec${}${role}${}", spec.as_u32(), symbol.as_u32());
+    let block = Block {
+        stmts: setup.to_vec(),
+        tail: Some(Box::new(tail.clone())),
+        span: tail.span,
+    };
+    let ret = cx.clean_ty_free(tail_ty(cx, tail)?)?;
+    let function =
+        FnLower::new_spec(cx, symbol, name.clone(), tail.span).run_spec_body(&block, ret)?;
+    program.functions.push(function);
+    Ok(name)
+}
+
+/// The checked type of a spec-clause tail expression.
+fn tail_ty(cx: &Cx<'_>, tail: &Expr) -> Result<Ty, Skip> {
+    cx.types
+        .expr_ty(tail.span)
+        .cloned()
+        .ok_or_else(|| "spec expression has no checked type".to_owned())
 }
 
 /// One loop being lowered: where `break`/`continue` jump, where a break
@@ -220,6 +450,9 @@ struct FnLower<'a> {
     local_consts: HashMap<SymbolId, Const>,
     ret: Ty,
     fn_span: Span,
+    /// The name of a synthetic spec function; `None` for a real function,
+    /// whose name comes from resolution.
+    spec_name: Option<String>,
 }
 
 struct BlockBuilder {
@@ -247,6 +480,74 @@ impl<'a> FnLower<'a> {
             local_consts: HashMap::new(),
             ret: Ty::Unit,
             fn_span: function.span,
+            spec_name: None,
+        }
+    }
+
+    /// A lowering context for a synthetic spec function: no HIR function
+    /// backs it, so it carries its own name, fresh symbol, and span.
+    fn new_spec(cx: &'a Cx<'a>, symbol: SymbolId, name: String, span: Span) -> Self {
+        Self {
+            cx,
+            symbol,
+            locals: Vec::new(),
+            blocks: vec![BlockBuilder {
+                statements: Vec::new(),
+                terminator: None,
+            }],
+            current: 0,
+            sym_locals: HashMap::new(),
+            scopes: vec![Vec::new()],
+            loops: Vec::new(),
+            uninit: BTreeSet::new(),
+            moved: BTreeSet::new(),
+            borrowed_params: BTreeSet::new(),
+            local_consts: HashMap::new(),
+            ret: Ty::Unit,
+            fn_span: span,
+            spec_name: Some(name),
+        }
+    }
+
+    /// Lower a synthetic spec-clause body: run `block`'s statements, then
+    /// `return` its tail expression (an assertion or an operand). Reuses the
+    /// ordinary block/statement/expression lowering, so setup clauses obey
+    /// the same move and drop rules as function-body code.
+    fn run_spec_body(mut self, block: &Block, ret: Ty) -> Result<Function, Skip> {
+        self.ret = ret;
+        if let Some(value) = self.block(block)? {
+            let ret_ty = self.ret.clone();
+            let operand = self.use_value(value, &ret_ty);
+            self.emit_return(operand)?;
+        }
+        // Synthetic spec functions take no parameters.
+        Ok(self.finish(Vec::new()))
+    }
+
+    /// Assemble the lowered function from the accumulated blocks.
+    fn finish(self, params: Vec<PassMode>) -> Function {
+        let name = self
+            .spec_name
+            .clone()
+            .unwrap_or_else(|| self.cx.resolution.symbol(self.symbol).name.clone());
+        let blocks = self
+            .blocks
+            .into_iter()
+            .map(|builder| BasicBlock {
+                statements: builder.statements,
+                terminator: builder
+                    .terminator
+                    .unwrap_or(Terminator::Trap(Trap::Unreachable)),
+            })
+            .collect();
+        Function {
+            symbol: self.symbol,
+            name,
+            params,
+            locals: self.locals,
+            blocks,
+            ret: self.ret,
+            span: self.fn_span,
         }
     }
 
@@ -289,27 +590,7 @@ impl<'a> FnLower<'a> {
             let operand = self.use_value(value, &ret_ty);
             self.emit_return(operand)?;
         }
-        let blocks = self
-            .blocks
-            .into_iter()
-            .map(|builder| BasicBlock {
-                statements: builder.statements,
-                // A block left open is one nothing jumps to (its lowering
-                // diverged before terminating it); close it explicitly.
-                terminator: builder
-                    .terminator
-                    .unwrap_or(Terminator::Trap(Trap::Unreachable)),
-            })
-            .collect();
-        Ok(Function {
-            symbol: self.symbol,
-            name: self.cx.resolution.symbol(self.symbol).name.clone(),
-            params,
-            locals: self.locals,
-            blocks,
-            ret: self.ret,
-            span: function.span,
-        })
+        Ok(self.finish(params))
     }
 
     // ------------------------------------------------------------------

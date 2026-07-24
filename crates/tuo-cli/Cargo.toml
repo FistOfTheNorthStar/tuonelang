@@ -22,3 +22,4 @@ clap.workspace = true
 # facade (like the formatter) are driven directly.
 tuo-compiler.workspace = true
 tuo-fmt.workspace = true
+tuo-spec.workspace = true

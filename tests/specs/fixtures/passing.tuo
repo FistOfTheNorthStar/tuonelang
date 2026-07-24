@@ -1,0 +1,19 @@
+// A program whose specs all pass — `tuo spec` and `tuo verify` succeed.
+
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+fn double(take x: Int) -> Int {
+    x * 2
+}
+
+spec add {
+    given a: Int = 2, b: Int = 3;
+    then add(a, b) == 5;
+    assert add(0, 0) == 0;
+}
+
+spec "doubling works" {
+    then double(21) == 42;
+}

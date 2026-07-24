@@ -28,6 +28,7 @@ pub struct Resolution {
     pub(crate) modules: Vec<ModuleInfo>,
     pub(crate) references: Vec<Reference>,
     pub(crate) spec_targets: Vec<SpecTarget>,
+    pub(crate) spec_symbols: HashMap<Span, SymbolId>,
     pub(crate) spec_deps: HashMap<SymbolId, Vec<SymbolId>>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) variants: HashMap<SymbolId, Vec<SymbolId>>,
@@ -112,6 +113,27 @@ impl Resolution {
     #[must_use]
     pub fn spec_targets(&self) -> &[SpecTarget] {
         &self.spec_targets
+    }
+
+    /// The **spec's own** symbol (a [`SymbolKind::Spec`](crate::SymbolKind))
+    /// for the `spec { … }` block occupying exactly `span`, if any. A spec's
+    /// name is a target reference, never a binding, so this is the only way
+    /// to name a spec's stable identity — [`spec_targets`](Self::spec_targets)
+    /// exposes it for attached specs, and this query covers every spec,
+    /// including free-standing (string-named) ones. The `span` is the whole
+    /// block's span, as carried by the AST/HIR spec declaration.
+    #[must_use]
+    pub fn spec_at(&self, span: Span) -> Option<SymbolId> {
+        self.spec_symbols.get(&span).copied()
+    }
+
+    /// Every spec block's `(span, own symbol)` pair, in unspecified order —
+    /// the enumerable form of [`spec_at`](Self::spec_at) for callers that
+    /// need to index specs by their block span.
+    pub fn spec_symbols(&self) -> impl Iterator<Item = (Span, SymbolId)> + '_ {
+        self.spec_symbols
+            .iter()
+            .map(|(&span, &symbol)| (span, symbol))
     }
 
     /// The specs attached to `function`, in source order (file order, then
