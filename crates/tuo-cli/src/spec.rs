@@ -11,37 +11,62 @@
 //! Neither command promises any particular latency; both report the measured
 //! execution time so it can be observed. A program with front-end errors is
 //! refused (a broken spec does not run — ADR-0002).
+//!
+//! In `human` mode results render to stderr. In a machine format the run is a
+//! [`crate::protocol`] event stream on stdout: `started`, a `progress` event
+//! per stage (spec execution is potentially long-running), one `item` event
+//! per executed spec as it finishes (payload `kind: "spec_result"`), then
+//! `finished` with a summary. Because `json-lines` flushes each event
+//! immediately, a consumer watches specs complete in real time.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
+use serde_json::{Value, json};
 use tuo_compiler::diagnostics;
 use tuo_compiler::source::{SourceId, SourceMap, Span};
-use tuo_spec::report::{Outcome, SpecReport, SpecRun, TrapReport};
+use tuo_spec::report::{AssertionResult, Outcome, SkippedSpec, SpecReport, SpecRun, TrapReport};
 use tuo_spec::{Limits, RunOutcome, Selection};
 
-/// Load `files` into one program snapshot, reporting a read error to stderr.
+use crate::output::OutputMode;
+use crate::protocol::{self, Emitter, Event, ProtocolCommand, Status};
+
+/// Load `files` into one program snapshot, reporting a read error through
+/// `mode`.
 #[expect(
     clippy::print_stderr,
-    reason = "this is the CLI presentation layer: stderr carries the diagnostics"
+    reason = "this is the CLI presentation layer: in human mode read errors go to stderr"
 )]
-fn load(files: &[PathBuf]) -> Result<(SourceMap, Vec<SourceId>), ExitCode> {
+fn load(
+    files: &[PathBuf],
+    command: ProtocolCommand,
+    mode: OutputMode,
+) -> Result<(SourceMap, Vec<SourceId>), ExitCode> {
     let mut map = SourceMap::new();
     let mut sources = Vec::new();
     for path in files {
+        let display = path.display().to_string();
         let text = match std::fs::read_to_string(path) {
             Ok(text) => text,
             Err(error) => {
-                eprintln!("error: cannot read {}: {error}", path.display());
+                if mode.is_machine() {
+                    protocol::io_error(command, mode, &display, &error.to_string());
+                } else {
+                    eprintln!("error: cannot read {display}: {error}");
+                }
                 return Err(ExitCode::FAILURE);
             }
         };
-        let file = map.intern_file(&path.display().to_string());
+        let file = map.intern_file(&display);
         match map.add_source(file, text.as_str()) {
             Ok(id) => sources.push(id),
             Err(error) => {
-                eprintln!("error: {}: {error}", path.display());
+                if mode.is_machine() {
+                    protocol::io_error(command, mode, &display, &error.to_string());
+                } else {
+                    eprintln!("error: {display}: {error}");
+                }
                 return Err(ExitCode::FAILURE);
             }
         }
@@ -49,14 +74,21 @@ fn load(files: &[PathBuf]) -> Result<(SourceMap, Vec<SourceId>), ExitCode> {
     Ok((map, sources))
 }
 
-/// `tuo spec [target] <files>`: execute the selected specs.
-pub(crate) fn run(target: Option<String>, files: &[PathBuf]) -> ExitCode {
-    let (map, sources) = match load(files) {
+/// `tuo spec [--target] <files>`: execute the selected specs.
+pub(crate) fn run(target: Option<String>, files: &[PathBuf], mode: OutputMode) -> ExitCode {
+    let (map, sources) = match load(files, ProtocolCommand::Spec, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
     let selection = target.map_or(Selection::All, Selection::Target);
-    execute(&map, &sources, &selection)
+    execute(
+        &map,
+        &sources,
+        &selection,
+        files,
+        ProtocolCommand::Spec,
+        mode,
+    )
 }
 
 /// `tuo verify <files>`: all static checks, then run every spec.
@@ -65,30 +97,54 @@ pub(crate) fn run(target: Option<String>, files: &[PathBuf]) -> ExitCode {
 /// so it *is* the static-plus-dynamic check; `verify` is its whole-program
 /// form (no target narrowing) and exists as the named command the workflow
 /// expects.
-pub(crate) fn verify(files: &[PathBuf]) -> ExitCode {
-    let (map, sources) = match load(files) {
+pub(crate) fn verify(files: &[PathBuf], mode: OutputMode) -> ExitCode {
+    let (map, sources) = match load(files, ProtocolCommand::Verify, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
-    execute(&map, &sources, &Selection::All)
+    execute(
+        &map,
+        &sources,
+        &Selection::All,
+        files,
+        ProtocolCommand::Verify,
+        mode,
+    )
 }
 
 /// Run the specs and present the outcome; the shared body of `spec`/`verify`.
+fn execute(
+    map: &SourceMap,
+    sources: &[SourceId],
+    selection: &Selection,
+    files: &[PathBuf],
+    command: ProtocolCommand,
+    mode: OutputMode,
+) -> ExitCode {
+    let outcome = tuo_spec::run(map, sources, selection, Limits::default());
+    if mode.is_machine() {
+        report_machine(&outcome, map, files, command, mode)
+    } else {
+        report_human(&outcome, map)
+    }
+}
+
+/// Human mode: render diagnostics or results to stderr; exit by outcome.
 #[expect(
     clippy::print_stderr,
     reason = "this is the CLI presentation layer: stderr carries diagnostics and results"
 )]
-fn execute(map: &SourceMap, sources: &[SourceId], selection: &Selection) -> ExitCode {
-    match tuo_spec::run(map, sources, selection, Limits::default()) {
+fn report_human(outcome: &RunOutcome, map: &SourceMap) -> ExitCode {
+    match outcome {
         RunOutcome::NotChecked(problems) => {
             if !problems.is_empty() {
-                eprint!("{}", diagnostics::render::render_all(&problems, map));
+                eprint!("{}", diagnostics::render::render_all(problems, map));
             }
             eprintln!("error: cannot run specs: the program has front-end errors");
             ExitCode::FAILURE
         }
         RunOutcome::Ran(report) => {
-            eprint!("{}", present(&report, map));
+            eprint!("{}", present(report, map));
             if report.passed() {
                 ExitCode::SUCCESS
             } else {
@@ -98,7 +154,166 @@ fn execute(map: &SourceMap, sources: &[SourceId], selection: &Selection) -> Exit
     }
 }
 
-/// Render a report as human-readable text (deterministic; not a protocol).
+/// Machine mode: drive the protocol event stream on stdout.
+fn report_machine(
+    outcome: &RunOutcome,
+    map: &SourceMap,
+    files: &[PathBuf],
+    command: ProtocolCommand,
+    mode: OutputMode,
+) -> ExitCode {
+    let Some(mut emitter) = mode.emitter(command) else {
+        return ExitCode::FAILURE;
+    };
+    let names: Vec<String> = files.iter().map(|p| p.display().to_string()).collect();
+    let write = (|| -> std::io::Result<()> {
+        emitter.emit(&Event::started(&names))?;
+        match outcome {
+            RunOutcome::NotChecked(problems) => emit_not_checked(&mut emitter, problems, map),
+            RunOutcome::Ran(report) => emit_ran(&mut emitter, report, map),
+        }
+    })();
+    if write.is_err() {
+        mode.log("protocol: stdout write failed");
+    }
+    let passed = match outcome {
+        RunOutcome::NotChecked(_) => false,
+        RunOutcome::Ran(report) => report.passed(),
+    };
+    if passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// Emit the stream for a program the front end rejected: each diagnostic as a
+/// `diagnostic` event, then `finished`/`error`.
+fn emit_not_checked(
+    emitter: &mut Emitter<std::io::Stdout>,
+    problems: &[diagnostics::Diagnostic],
+    map: &SourceMap,
+) -> std::io::Result<()> {
+    for problem in problems {
+        emitter.emit(&Event::diagnostic(problem, map))?;
+    }
+    let summary = json!({ "checked": false, "reason": "front-end errors" });
+    emitter.emit(&Event::finished(Status::Error, summary))?;
+    emitter.finish()
+}
+
+/// Emit the stream for an executed program: a `progress` event, one `item`
+/// event per run (and per skipped spec), then a `finished` summary.
+fn emit_ran(
+    emitter: &mut Emitter<std::io::Stdout>,
+    report: &SpecReport,
+    map: &SourceMap,
+) -> std::io::Result<()> {
+    emitter.emit(&Event::progress(
+        "executing",
+        format!("running {} spec(s)", report.runs.len()),
+    ))?;
+    for run in &report.runs {
+        let status = if run.passed() {
+            Status::Ok
+        } else {
+            Status::Error
+        };
+        emitter.emit(&Event::item(status, spec_run_payload(run, map)))?;
+    }
+    for skipped in &report.skipped {
+        emitter.emit(&Event::item(Status::Ok, skipped_payload(skipped, map)))?;
+    }
+    let ran = report.ran();
+    let failed = report.failures();
+    let summary = json!({
+        "passed": ran - failed,
+        "failed": failed,
+        "ran": ran,
+        "skipped": report.skipped.len(),
+        "duration_micros": report.total_duration().as_micros(),
+    });
+    let status = if report.passed() {
+        Status::Ok
+    } else {
+        Status::Error
+    };
+    emitter.emit(&Event::finished(status, summary))?;
+    emitter.finish()
+}
+
+/// The `item` event payload for one executed spec: its stable identity, source
+/// range, per-assertion results, and measured duration.
+fn spec_run_payload(run: &SpecRun, map: &SourceMap) -> Value {
+    json!({
+        "kind": "spec_result",
+        "id": run.symbol.to_string(),
+        "name": run.name,
+        "target": run.target.map(|symbol| symbol.to_string()),
+        "range": protocol::range(run.span, map),
+        "duration_micros": run.duration.as_micros(),
+        "passed": run.passed(),
+        "assertions": run
+            .assertions
+            .iter()
+            .map(|assertion| assertion_payload(assertion, map))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The payload for one assertion result.
+fn assertion_payload(assertion: &AssertionResult, map: &SourceMap) -> Value {
+    let (status, detail) = match &assertion.outcome {
+        Outcome::Passed => ("passed", Value::Null),
+        Outcome::Failed(failure) => (
+            "failed",
+            json!({
+                "expected": failure.expected,
+                "actual": failure.actual,
+            }),
+        ),
+        Outcome::Errored(trap) => ("errored", trap_payload(trap, map)),
+    };
+    json!({
+        "assertion": assertion.kind.keyword(),
+        "source": assertion.source,
+        "range": protocol::range(assertion.span, map),
+        "outcome": status,
+        "detail": detail,
+    })
+}
+
+/// The payload for a trap: its label, message, span, and TDG call trace.
+fn trap_payload(trap: &TrapReport, map: &SourceMap) -> Value {
+    json!({
+        "trap": trap.label,
+        "message": trap.message,
+        "range": protocol::range(trap.span, map),
+        "trace": trap
+            .trace
+            .iter()
+            .map(|frame| json!({
+                "function": frame.function,
+                "range": protocol::range(frame.span, map),
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
+/// The payload for a skipped (not-lowered) spec.
+fn skipped_payload(skipped: &SkippedSpec, map: &SourceMap) -> Value {
+    json!({
+        "kind": "spec_skipped",
+        "id": skipped.symbol.to_string(),
+        "name": skipped.name,
+        "reason": skipped.reason,
+        "range": protocol::range(skipped.span, map),
+    })
+}
+
+// ---- Human rendering (deterministic text; not a protocol) ----
+
+/// Render a report as human-readable text.
 fn present(report: &SpecReport, map: &SourceMap) -> String {
     let mut out = String::new();
     for run in &report.runs {

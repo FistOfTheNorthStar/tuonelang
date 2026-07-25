@@ -1,0 +1,5 @@
+fn double(take x: Int) -> Int { x * 2 }
+
+spec double {
+    assert double(10) == 999;
+}

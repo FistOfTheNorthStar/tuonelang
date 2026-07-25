@@ -12,11 +12,19 @@
 //! **not** implemented: they are added as their underlying functionality
 //! exists, so that the CLI never advertises behavior the compiler cannot yet
 //! perform. See [`cli::Cli`] for the extension point.
+//!
+//! Every result-producing command reports through a shared [`output`] mode
+//! selected by the global `--message-format` flag: `human` (default) for a
+//! terminal, or the versioned machine [`protocol`] as `json` (one envelope) or
+//! `json-lines` (streamed). In a machine format stdout carries protocol output
+//! only, and internal logging reaches stderr solely under `--log`.
 
 mod check;
 mod cli;
 mod debug;
 mod fmt;
+mod output;
+mod protocol;
 mod spec;
 
 use std::process::ExitCode;

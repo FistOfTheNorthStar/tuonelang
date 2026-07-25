@@ -1,0 +1,5 @@
+fn add(take a: Int, take b: Int) -> Int { a + b }
+
+spec add {
+    then add(2, 3) == 5;
+}

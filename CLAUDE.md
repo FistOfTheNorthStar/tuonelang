@@ -30,6 +30,8 @@ cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
 cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
+cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
+cargo run -p tdg-cli -- --message-format=json-lines spec file.tuo  # machine protocol: streamed, one event per line
 cargo test                     # run all tests
 cargo test -p tdg-cli          # test one crate
 cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
@@ -104,6 +106,21 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   requires an accepted program, since MIR is only defined once the front end passes,
   and the lowered MIR is verified (`tuo_mir::verify`, mandatory) before it is dumped —
   every backend and the interpreter must reject unverified MIR).
+- **Machine output is a versioned contract, human output is not.** A global
+  `--message-format` selects `human` (default), `json` (one envelope), or
+  `json-lines` (streamed, one event per line) for every result-producing command
+  (`check`, `spec`, `verify`, `fmt`). The wire shape lives in `tdg-cli`'s
+  `protocol` module, versioned by `PROTOCOL_VERSION`; every machine message
+  carries the protocol version, event kind, command, status, stable diagnostics
+  (serialized with the independently-versioned `tuo_diagnostics::json` schema),
+  relevant IDs, and source ranges. In a machine format **stdout carries protocol
+  output only**, and internal logging reaches **stderr only under `--log`**. The
+  `debug` dumps have no machine encoding (unstable developer output) and reject a
+  non-human format. The contract is pinned by `tests/cli/protocol/` fixtures and
+  the backwards-compatibility tests in `tdg-cli/tests/protocol_command.rs`:
+  additive changes are allowed without a bump, but dropping/renaming a guaranteed
+  field or changing the version must move `PROTOCOL_VERSION` and the schema
+  fixture together.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).
