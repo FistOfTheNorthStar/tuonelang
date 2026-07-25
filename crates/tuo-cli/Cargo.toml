@@ -18,7 +18,11 @@ workspace = true
 
 [dependencies]
 clap.workspace = true
+# The machine protocol builds its wire objects with serde_json, mirroring the
+# hand-built, versioned JSON of tuo-diagnostics.
+serde_json.workspace = true
 # The CLI drives the compiler through the facade; tooling surfaces above the
 # facade (like the formatter) are driven directly.
 tuo-compiler.workspace = true
 tuo-fmt.workspace = true
+tuo-spec.workspace = true

@@ -218,8 +218,11 @@ pub struct ConstDef {
 /// A `spec` block.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct SpecDef {
-    /// The spec's own symbol.
-    pub symbol: Res,
+    /// The spec's own stable symbol (a `Spec`-kind symbol), if resolution
+    /// assigned one. A spec's *name* is a target reference, never a binding,
+    /// so this — not the name — is the spec's identity; it distinguishes two
+    /// specs that share a name or target (ADR-0002).
+    pub spec_symbol: Option<SymbolId>,
     /// The whole block's span.
     pub span: Span,
     /// The spec's name as written (identifier or string form).

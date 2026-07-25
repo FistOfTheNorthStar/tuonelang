@@ -21,12 +21,17 @@ cargo build                    # build the whole workspace
 cargo build -p tdg-cli         # build a single crate (produces the `tdg` binary)
 cargo run -p tdg-cli -- --help # run the CLI
 cargo run -p tdg-cli -- check file.tuo         # parse, resolve, type-check, ownership-check (specs included)
+cargo run -p tdg-cli -- spec file.tuo          # execute the program's specs (MIR interpreter)
+cargo run -p tdg-cli -- spec --target f file.tuo # run only the specs of function `f`
+cargo run -p tdg-cli -- verify file.tuo        # all static checks + execute specs
 cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
 cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
+cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
+cargo run -p tdg-cli -- --message-format=json-lines spec file.tuo  # machine protocol: streamed, one event per line
 cargo test                     # run all tests
 cargo test -p tdg-cli          # test one crate
 cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
@@ -86,16 +91,36 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
 - `print_stdout`, `print_stderr`, `dbg_macro`, `todo`, and `unimplemented` are lint-warned
   (and CI is `-D warnings`). Don't leave them in committed code.
 - **The CLI must never advertise behavior the compiler can't perform.** Subcommands
-  (`build`, `run`, `spec`, `verify`) are deliberately absent until their
-  functionality exists; the `Command` enum in `tdg-cli/src/cli.rs` is the extension
-  point. Implemented so far: `tdg check <files>` (the parse → resolve → type-check →
-  ownership-check front end, specs included per ADR-0002), `tdg fmt [--check] <files>` (the
-  canonical formatter — deterministic, idempotent, zero configuration), and
-  `tdg debug syntax|ast|hir|mir <file>` (diagnostic developer tools with unstable
-  output, not language protocols; `mir` requires an accepted program, since MIR is
-  only defined once the front end passes, and the lowered MIR is verified
-  (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
-  interpreter must reject unverified MIR).
+  (`build`, `run`) are deliberately absent until their functionality exists; the
+  `Command` enum in `tdg-cli/src/cli.rs` is the extension point. Implemented so far:
+  `tdg check <files>` (the parse → resolve → type-check → ownership-check front end,
+  specs included per ADR-0002 — specs are checked but **not** executed here),
+  `tdg spec [--target <name>] <files>` and `tdg verify <files>` (execute the program's
+  colocated specs through the reference MIR interpreter — `spec` runs the selected
+  specs, `verify` runs all static checks *and* the specs; both refuse a program with
+  front-end errors, run each spec in the interpreter's deterministic sandbox with
+  configurable fuel/recursion/memory limits, and report measured timing with no latency
+  promise), `tdg fmt [--check] <files>` (the canonical formatter — deterministic,
+  idempotent, zero configuration), and `tdg debug syntax|ast|hir|mir <file>`
+  (diagnostic developer tools with unstable output, not language protocols; `mir`
+  requires an accepted program, since MIR is only defined once the front end passes,
+  and the lowered MIR is verified (`tuo_mir::verify`, mandatory) before it is dumped —
+  every backend and the interpreter must reject unverified MIR).
+- **Machine output is a versioned contract, human output is not.** A global
+  `--message-format` selects `human` (default), `json` (one envelope), or
+  `json-lines` (streamed, one event per line) for every result-producing command
+  (`check`, `spec`, `verify`, `fmt`). The wire shape lives in `tdg-cli`'s
+  `protocol` module, versioned by `PROTOCOL_VERSION`; every machine message
+  carries the protocol version, event kind, command, status, stable diagnostics
+  (serialized with the independently-versioned `tuo_diagnostics::json` schema),
+  relevant IDs, and source ranges. In a machine format **stdout carries protocol
+  output only**, and internal logging reaches **stderr only under `--log`**. The
+  `debug` dumps have no machine encoding (unstable developer output) and reject a
+  non-human format. The contract is pinned by `tests/cli/protocol/` fixtures and
+  the backwards-compatibility tests in `tdg-cli/tests/protocol_command.rs`:
+  additive changes are allowed without a bump, but dropping/renaming a guaranteed
+  field or changing the version must move `PROTOCOL_VERSION` and the schema
+  fixture together.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

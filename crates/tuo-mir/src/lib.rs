@@ -60,13 +60,15 @@
 mod lower;
 mod mir;
 mod print;
+pub mod spec;
 mod verify;
 
-pub use lower::lower;
+pub use lower::{lower, lower_specs};
 pub use mir::{
     AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, Function, LocalDecl, LocalId,
     Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, Terminator, Trap,
     UnOp,
 };
 pub use print::render;
+pub use spec::{AssertionKind, Comparison, SkippedSpec, SpecAssertion, SpecMir, SpecProgram};
 pub use verify::{debug_assert_verified, is_well_formed, verify};

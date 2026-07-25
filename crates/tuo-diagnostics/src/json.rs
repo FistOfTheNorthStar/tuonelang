@@ -143,7 +143,13 @@ fn value_to_json(value: &StructuredValue) -> Value {
     json!({ "kind": value.kind(), "value": rendered })
 }
 
-fn span_to_json(span: Span, sources: &SourceMap) -> Value {
+/// Serialize a [`Span`] as the versioned span object: canonical byte offsets
+/// plus derived line/column (null when the span does not resolve against
+/// `sources`). This is the one source-range representation the JSON schema
+/// uses everywhere, so protocol layers built on top of diagnostics attach
+/// ranges through it rather than inventing their own shape.
+#[must_use]
+pub fn span_to_json(span: Span, sources: &SourceMap) -> Value {
     let (file, start_lc, end_lc) = match sources.get_source(span.source()) {
         Some(text) => (
             json!(sources.file_name(text.file())),

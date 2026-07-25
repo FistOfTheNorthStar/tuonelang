@@ -1,0 +1,119 @@
+{
+  "$comment": "The stable v1 wire contract of the tuo CLI machine protocol (crates/tuo-cli/src/protocol.rs, PROTOCOL_VERSION = 1). This is a fixture, not a runtime input: the backwards-compatibility tests in crates/tuo-cli/tests/protocol_command.rs assert that live --message-format=json / json-lines output conforms to it, so a change that breaks a machine consumer fails a test until PROTOCOL_VERSION and this file are bumped together. Additive changes (new optional fields, new event/status/kind variants) are allowed WITHOUT a version bump — consumers ignore unknown fields and tolerate unknown variants — so the schema records the guaranteed-present fields, not a closed set.",
+  "protocol_version": 1,
+  "diagnostic_schema_version": 1,
+
+  "envelope": {
+    "$comment": "--message-format=json: the whole run buffered into one object on one line.",
+    "required": ["protocol_version", "command", "events"],
+    "fields": {
+      "protocol_version": "integer, always 1 for this schema",
+      "command": "one of the stable command names",
+      "events": "array of event objects, in emission order; last is `finished`"
+    }
+  },
+
+  "json_lines": {
+    "$comment": "--message-format=json-lines: one event object per line, flushed as it happens. Each line additionally carries protocol_version and command so it is self-describing.",
+    "per_line_required": ["protocol_version", "command", "event", "status"]
+  },
+
+  "commands": ["check", "spec", "verify", "fmt"],
+
+  "statuses": ["ok", "error", "running"],
+
+  "event": {
+    "$comment": "Every event object (inside the envelope's `events`, or a whole json-lines line) has at least these fields.",
+    "required": ["event", "status"],
+    "kinds": ["started", "diagnostic", "item", "progress", "finished"]
+  },
+
+  "events": {
+    "started": {
+      "status": "running",
+      "required": ["files"],
+      "fields": { "files": "array of input file paths (strings)" }
+    },
+    "diagnostic": {
+      "$comment": "One stable diagnostic. `status` is `error` for an error-severity diagnostic, else `ok`.",
+      "required": ["id", "diagnostic_schema_version", "diagnostic"],
+      "fields": {
+        "id": "the stable diagnostic code, e.g. \"R0002\"",
+        "diagnostic_schema_version": "integer; the tuo-diagnostics JSON schema version (versioned independently)",
+        "diagnostic": "the diagnostic object of the tuo-diagnostics JSON schema (carries the source ranges)"
+      }
+    },
+    "item": {
+      "$comment": "One per-result item. Its `kind` field names the shape: spec_result, spec_skipped, fmt_file.",
+      "required": ["kind"],
+      "kinds": {
+        "spec_result": {
+          "required": ["id", "name", "range", "duration_micros", "passed", "assertions"],
+          "fields": {
+            "id": "the spec's stable symbol id, e.g. \"sym9\"",
+            "name": "the spec's written name",
+            "target": "the targeted function's symbol id, or null for a free-standing spec",
+            "range": "a source-range object",
+            "duration_micros": "measured execution time in microseconds (no latency is promised)",
+            "passed": "boolean",
+            "assertions": "array of assertion-result objects"
+          }
+        },
+        "spec_skipped": {
+          "required": ["id", "name", "reason", "range"]
+        },
+        "fmt_file": {
+          "required": ["file", "outcome"],
+          "outcomes": ["unchanged", "reformatted", "would-reformat", "unsafe", "error"]
+        }
+      }
+    },
+    "progress": {
+      "status": "running",
+      "required": ["stage"],
+      "fields": {
+        "stage": "a stable stage name (e.g. \"executing\")",
+        "message": "a human-readable progress note"
+      }
+    },
+    "finished": {
+      "$comment": "Always the last event; status is `ok` or `error`, never `running`.",
+      "required": ["summary"],
+      "fields": { "summary": "a command-specific summary object (may carry an io_error object on a pre-run I/O failure)" }
+    }
+  },
+
+  "assertion_result": {
+    "required": ["assertion", "source", "range", "outcome"],
+    "fields": {
+      "assertion": "\"then\" or \"assert\"",
+      "source": "the clause's source text",
+      "range": "a source-range object",
+      "outcome": "\"passed\", \"failed\", or \"errored\"",
+      "detail": "null when passed; {expected, actual} when failed; a trap object when errored"
+    }
+  },
+
+  "trap": {
+    "required": ["trap", "message", "range", "trace"],
+    "fields": {
+      "trap": "the stable trap label, e.g. \"division_by_zero\"",
+      "message": "a human-readable explanation",
+      "range": "a source-range object",
+      "trace": "array of {function, range} frames, innermost first (the TDG call trace)"
+    }
+  },
+
+  "range": {
+    "$comment": "The versioned span object shared with the tuo-diagnostics JSON schema. Byte offsets are canonical; line/column are derived and null when a span does not resolve.",
+    "required": ["source", "start", "end"],
+    "fields": {
+      "source": "the source id (integer)",
+      "file": "the file name, or null if the span's source is unknown",
+      "start": "start byte offset (integer)",
+      "end": "end byte offset (integer)",
+      "start_line_col": "{line, column} 1-based, or null",
+      "end_line_col": "{line, column} 1-based, or null"
+    }
+  }
+}

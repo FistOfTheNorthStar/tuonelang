@@ -2,8 +2,8 @@
 //!
 //! The command surface is intentionally minimal: only functionality the
 //! compiler can actually perform is exposed. Today that is `tuo check`,
-//! `tuo fmt`, and the `tuo debug` developer tools; further compiler
-//! subcommands (`build`, `run`, `spec`, `verify`, …) are added as their
+//! `tuo spec`, `tuo verify`, `tuo fmt`, and the `tuo debug` developer tools;
+//! further compiler subcommands (`build`, `run`, …) are added as their
 //! functionality is implemented — a new [`Command`] variant plus a match
 //! arm in [`Cli::dispatch`].
 
@@ -15,6 +15,8 @@ use clap::{CommandFactory as _, Parser, Subcommand};
 use crate::check;
 use crate::debug::{self, Dump};
 use crate::fmt;
+use crate::output::{MessageFormat, OutputMode};
+use crate::spec;
 
 /// The `tuo` command-line interface.
 #[derive(Debug, Parser)]
@@ -28,14 +30,25 @@ use crate::fmt;
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
+    /// How to report results: `human` (default, for a terminal) or the
+    /// versioned machine protocol as `json` (one envelope) or `json-lines`
+    /// (streamed, one event per line). In a machine format stdout carries
+    /// protocol output only.
+    #[arg(long, global = true, value_enum, default_value_t = MessageFormat::Human)]
+    message_format: MessageFormat,
+    /// Emit internal logging to stderr. Off by default; in a machine format
+    /// stderr is silent unless this is set, so a consumer parsing stdout is
+    /// never disturbed by log noise.
+    #[arg(long, global = true)]
+    log: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
 
 /// Top-level subcommands.
 ///
-/// Future compiler commands (`Build`, `Run`, `Spec`, `Verify`, …) slot in
-/// as new variants once their functionality exists.
+/// Future compiler commands (`Build`, `Run`, …) slot in as new variants once
+/// their functionality exists.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Parse, resolve, type-check, and ownership-check a program without
@@ -48,6 +61,35 @@ enum Command {
     /// Diagnostics go to stderr; the exit status is a failure if the
     /// program has errors.
     Check {
+        /// The tuonelang source files forming the program.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Execute the program's colocated specs through the reference MIR
+    /// interpreter.
+    ///
+    /// Runs the front end, lowers each spec to verified MIR, and drives its
+    /// assertions in a deterministic sandbox bounded by instruction fuel,
+    /// recursion depth, and memory. A `target` argument narrows execution to
+    /// the specs of one function (or a free-standing spec of that name). A
+    /// program with front-end errors is refused. Results and per-spec timing
+    /// go to stderr; the exit status is a failure if any assertion fails or
+    /// traps. No latency is promised — the reported timing is measured.
+    Spec {
+        /// Run only the specs of this function (or the free-standing spec of
+        /// this name); omit to run every spec.
+        #[arg(long, short)]
+        target: Option<String>,
+        /// The tuonelang source files forming the program.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Perform every static check *and* execute the program's specs.
+    ///
+    /// A superset of `tuo check` and `tuo spec`: the whole front end runs,
+    /// and if it accepts the program, every spec is executed. The exit status
+    /// is a failure on any front-end error, failing assertion, or trap.
+    Verify {
         /// The tuonelang source files forming the program.
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -120,15 +162,27 @@ enum DebugCommand {
 impl Cli {
     /// Execute the parsed command.
     pub(crate) fn dispatch(self) -> ExitCode {
+        let mode = OutputMode::new(self.message_format, self.log);
         match self.command {
-            Some(Command::Check { files }) => check::run(&files),
-            Some(Command::Debug(DebugCommand::Syntax { file })) => debug::run(Dump::Syntax, &file),
-            Some(Command::Debug(DebugCommand::Ast { file })) => debug::run(Dump::Ast, &file),
-            Some(Command::Debug(DebugCommand::Hir { file })) => debug::run(Dump::Hir, &file),
-            Some(Command::Debug(DebugCommand::Mir { file, function })) => {
-                debug::run(Dump::Mir(function), &file)
+            Some(Command::Check { files }) => check::run(&files, mode),
+            Some(Command::Spec { target, files }) => spec::run(target, &files, mode),
+            Some(Command::Verify { files }) => spec::verify(&files, mode),
+            // The `debug` dumps are developer tools with deliberately unstable
+            // output, not a language protocol — so they have no machine
+            // encoding. Refuse a machine format here rather than emit
+            // unversioned JSON that consumers might come to depend on.
+            Some(Command::Debug(command)) => {
+                if mode.is_machine() {
+                    return reject_machine_debug(mode);
+                }
+                match command {
+                    DebugCommand::Syntax { file } => debug::run(Dump::Syntax, &file),
+                    DebugCommand::Ast { file } => debug::run(Dump::Ast, &file),
+                    DebugCommand::Hir { file } => debug::run(Dump::Hir, &file),
+                    DebugCommand::Mir { file, function } => debug::run(Dump::Mir(function), &file),
+                }
             }
-            Some(Command::Fmt { check, files }) => fmt::run(check, &files),
+            Some(Command::Fmt { check, files }) => fmt::run(check, &files, mode),
             // A bare `tuo` invocation prints help.
             None => match Self::command().print_help() {
                 Ok(()) => ExitCode::SUCCESS,
@@ -136,6 +190,21 @@ impl Cli {
             },
         }
     }
+}
+
+/// The `debug` tools have no machine protocol; a `--message-format` other than
+/// `human` is a usage error. Reports it on stderr (a usage error, not protocol
+/// output) and fails.
+#[expect(
+    clippy::print_stderr,
+    reason = "this is the CLI presentation layer: a usage error goes to stderr"
+)]
+fn reject_machine_debug(_mode: OutputMode) -> ExitCode {
+    eprintln!(
+        "error: `tuo debug` has no machine protocol (its output is an unstable developer aid); \
+         run it with --message-format=human"
+    );
+    ExitCode::FAILURE
 }
 
 #[cfg(test)]

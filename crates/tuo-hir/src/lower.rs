@@ -55,10 +55,12 @@ pub fn lower(files: &[Ast<'_>], resolution: &Resolution) -> Hir {
     for attachment in resolution.spec_targets() {
         spec_targets.insert(attachment.spec, attachment.target);
     }
+    let spec_symbols: HashMap<Span, SymbolId> = resolution.spec_symbols().collect();
     let cx = Cx {
         refs,
         decls,
         spec_targets,
+        spec_symbols,
     };
     let mut items = Vec::new();
     for ast in files {
@@ -89,6 +91,8 @@ struct Cx {
     decls: HashMap<Span, SymbolId>,
     /// Spec symbol → targeted function symbol.
     spec_targets: HashMap<SymbolId, SymbolId>,
+    /// Spec block span → the spec's own symbol.
+    spec_symbols: HashMap<Span, SymbolId>,
 }
 
 impl Cx {
@@ -333,13 +337,17 @@ impl Cx {
 
     fn spec_def(&self, decl: ast::SpecDecl<'_>, fallback: Span) -> SpecDef {
         let span = decl.span().unwrap_or(fallback);
-        let symbol = self.declared(decl.target_name());
-        let target = match symbol {
+        // The spec's own identity comes from its block span; its target
+        // (identifier-named specs only) from resolving the target name.
+        let spec_symbol = decl
+            .span()
+            .and_then(|span| self.spec_symbols.get(&span).copied());
+        let target = match self.declared(decl.target_name()) {
             Res::Symbol(id) => self.spec_targets.get(&id).copied(),
             _ => None,
         };
         SpecDef {
-            symbol,
+            spec_symbol,
             span,
             // A string-named spec's name token includes its quotes; the
             // HIR name is the contents either way.
