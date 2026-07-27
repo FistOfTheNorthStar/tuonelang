@@ -8,5 +8,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[dependencies]
+# The ABI layouts are computed from the type universe. `tuo-types` sits below
+# `tuo-runtime` in the pipeline, so this is a legal downward edge; nothing here
+# reaches toward a backend, MIR execution, or CLI presentation.
+tuo-types.workspace = true
+
 [lints]
 workspace = true

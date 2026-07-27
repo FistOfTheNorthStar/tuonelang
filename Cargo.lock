@@ -1201,6 +1201,7 @@ dependencies = [
  "tuo-mir-interp",
  "tuo-runtime",
  "tuo-spec",
+ "tuo-types",
 ]
 
 [[package]]
@@ -1399,6 +1400,9 @@ dependencies = [
 [[package]]
 name = "tuo-runtime"
 version = "0.0.0"
+dependencies = [
+ "tuo-types",
+]
 
 [[package]]
 name = "tuo-source"
