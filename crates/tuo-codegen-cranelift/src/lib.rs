@@ -1,8 +1,195 @@
 //! Cranelift backend for tuonelang.
 //!
-//! This crate will lower verified [`tuo_mir`] to native code via Cranelift,
-//! implementing the backend-agnostic interface in [`tuo_codegen`]. Cranelift
-//! itself will be wrapped behind tuonelang-owned abstractions rather than exposed
-//! throughout the compiler.
+//! This crate lowers **verified** [`tuo_mir`] to native code with Cranelift,
+//! implementing the tuonelang-owned [`CodegenBackend`](tuo_codegen::CodegenBackend)
+//! interface. Cranelift is wrapped entirely behind that interface: no Cranelift
+//! type appears in anything this crate exports, so it cannot leak into MIR, type
+//! checking, the CLI protocol, or the runtime's public surface. Everything that
+//! crosses the boundary is a plain tuonelang value.
 //!
-//! No backend is implemented yet; only the crate boundary is established.
+//! # What it lowers (v0)
+//!
+//! The reference semantics of a program is what [`tuo_mir_interp`] computes for
+//! its MIR; this backend must agree with the interpreter instruction for
+//! instruction. v0 lowers the **scalar, control-flow core** that the language
+//! already exercises end to end:
+//!
+//! - integer, boolean, and `Char` values (scalars held in machine registers);
+//! - integer arithmetic with **trapping overflow** (Constitution §24), and
+//!   trapping division/remainder by zero and `MIN / -1`;
+//! - unary negation (trapping on `MIN`) and boolean `not`;
+//! - the full comparison suite;
+//! - integer-to-integer casts (wrapping/extension);
+//! - `Goto`, two-way `Branch`, multi-way `Switch`, `Return`;
+//! - explicit `Assert` and `Trap` terminators, lowered to a call into the
+//!   [runtime trap](tuo_runtime::TRAP_SYMBOL);
+//! - direct calls and recursion.
+//!
+//! Aggregates, arrays, strings, floats, borrows, and drops are **not** lowered
+//! yet: a program that reaches one is refused with
+//! [`CodegenError::unsupported`](tuo_codegen::CodegenError), and the caller can
+//! fall back to the interpreter (the reference). Correctness on this core comes
+//! first; broadening the subset and optimizing come later.
+//!
+//! # Output
+//!
+//! [`CraneliftBackend::compile`] returns a relocatable object exporting the
+//! entry (and every function it transitively calls). It also synthesizes a C
+//! `main` shim that calls the entry and returns its value as the process exit
+//! status, so the linked executable's exit code is the program's result — the
+//! same value the interpreter observes running the same entry. Linking (with
+//! the runtime's trap object) is the caller's job, per the interface.
+
+mod abi;
+mod lower;
+
+use cranelift_codegen::settings::{self, Configurable as _};
+use cranelift_codegen::{Context, isa};
+use cranelift_module::{Linkage, Module};
+use cranelift_object::{ObjectBuilder, ObjectModule};
+use target_lexicon::Triple;
+
+use tuo_codegen::{CodegenBackend, CodegenError, EntryAbi, ObjectArtifact, TargetSpec};
+use tuo_mir::Program;
+use tuo_types::TypeckResult;
+
+use crate::abi::entry_returns_int;
+
+/// The tuonelang Cranelift native backend.
+///
+/// It holds no state — a fresh Cranelift module is built per [`compile`] call —
+/// so one instance may compile many programs.
+///
+/// [`compile`]: CodegenBackend::compile
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CraneliftBackend;
+
+impl CraneliftBackend {
+    /// A new backend.
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl CodegenBackend for CraneliftBackend {
+    fn name(&self) -> &'static str {
+        "cranelift"
+    }
+
+    fn compile(
+        &self,
+        program: &Program,
+        types: &TypeckResult,
+        entry: &str,
+        abi: EntryAbi,
+        target: &TargetSpec,
+    ) -> Result<ObjectArtifact, CodegenError> {
+        // Locate the entry; a missing entry is a distinct, non-"unsupported"
+        // error so the caller can tell "not implemented" from "no such function".
+        let Some(entry_fn) = program.functions.iter().find(|f| f.name == entry) else {
+            return Err(CodegenError::no_such_entry(entry));
+        };
+
+        // The v0 entry ABI: a nullary function returning an integer, whose
+        // value becomes the process exit status.
+        let entry_kind = match abi {
+            EntryAbi::IntReturn => {
+                match (entry_fn.params.is_empty(), entry_returns_int(&entry_fn.ret)) {
+                    (true, Some(kind)) => kind,
+                    _ => {
+                        return Err(CodegenError::unsupported(format!(
+                            "the Cranelift backend can only build a nullary entry returning an \
+                         integer; `{entry}` does not match that shape"
+                        )));
+                    }
+                }
+            }
+        };
+
+        let mut module = build_module(target)?;
+        let ids = lower::lower_program(&mut module, program, types)?;
+        let entry_id = ids[&entry_fn.symbol];
+        lower::emit_main_shim(&mut module, entry_id, entry_kind)?;
+
+        let product = module.finish();
+        let bytes = product
+            .emit()
+            .map_err(|error| CodegenError::backend(format!("object emission failed: {error}")))?;
+
+        Ok(ObjectArtifact {
+            bytes,
+            entry_symbol: "main".to_owned(),
+            target: target.clone(),
+        })
+    }
+}
+
+/// Build a fresh object module for `target`.
+///
+/// v0 supports the host target only; a different triple is refused as
+/// unsupported rather than silently mis-targeted.
+fn build_module(target: &TargetSpec) -> Result<ObjectModule, CodegenError> {
+    let host = TargetSpec::host();
+    if target.triple != host.triple {
+        return Err(CodegenError::unsupported(format!(
+            "the Cranelift backend targets the host ({}) only in v0; requested `{}`",
+            host.triple, target.triple
+        )));
+    }
+
+    let triple: Triple = target
+        .triple
+        .parse()
+        .map_err(|error| CodegenError::backend(format!("unrecognized target triple: {error}")))?;
+
+    // Unoptimized, correct code first: opt_level stays at "none". PIC is
+    // required for a position-independent executable on the supported hosts.
+    let mut flag_builder = settings::builder();
+    flag_builder
+        .set("opt_level", "none")
+        .map_err(|error| CodegenError::backend(format!("setting opt_level: {error}")))?;
+    flag_builder
+        .set("is_pic", "true")
+        .map_err(|error| CodegenError::backend(format!("setting is_pic: {error}")))?;
+
+    let isa_builder = isa::lookup(triple)
+        .map_err(|error| CodegenError::backend(format!("no backend for the host: {error}")))?;
+    let isa = isa_builder
+        .finish(settings::Flags::new(flag_builder))
+        .map_err(|error| CodegenError::backend(format!("building the target ISA: {error}")))?;
+
+    let builder = ObjectBuilder::new(
+        isa,
+        "tuo_program",
+        cranelift_module::default_libcall_names(),
+    )
+    .map_err(|error| CodegenError::backend(format!("creating the object module: {error}")))?;
+    Ok(ObjectModule::new(builder))
+}
+
+/// A prepared, reusable Cranelift codegen context. Kept as a thin newtype so
+/// the lowering module can borrow it without importing the Cranelift name.
+pub(crate) struct CodegenCtx {
+    ctx: Context,
+}
+
+impl CodegenCtx {
+    pub(crate) fn new(module: &ObjectModule) -> Self {
+        Self {
+            ctx: module.make_context(),
+        }
+    }
+
+    pub(crate) fn context_mut(&mut self) -> &mut Context {
+        &mut self.ctx
+    }
+
+    pub(crate) fn clear(&mut self, module: &ObjectModule) {
+        module.clear_context(&mut self.ctx);
+    }
+}
+
+/// The linkage a compiled tuonelang function gets: exported, so the entry (and
+/// the `main` shim) are visible to the linker and inter-function calls resolve.
+pub(crate) const FUNCTION_LINKAGE: Linkage = Linkage::Export;

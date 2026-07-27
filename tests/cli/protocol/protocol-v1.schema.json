@@ -18,7 +18,7 @@
     "per_line_required": ["protocol_version", "command", "event", "status"]
   },
 
-  "commands": ["check", "spec", "verify", "fmt"],
+  "commands": ["check", "spec", "verify", "fmt", "build", "run"],
 
   "statuses": ["ok", "error", "running"],
 
@@ -77,9 +77,9 @@
       }
     },
     "finished": {
-      "$comment": "Always the last event; status is `ok` or `error`, never `running`.",
+      "$comment": "Always the last event; status is `ok` or `error`, never `running`. The summary shape is command-specific: check → {errors, warnings}; spec/verify → {passed, failed, ran, skipped, duration_micros} or {checked:false, reason}; fmt → {check, reformatted, would_reformat}; build → {artifact} (the executable path) or {stage, message, unsupported} on a codegen/link failure; run → {exit_status, trapped} (the built program's exit code; `trapped` is true iff it aborted via the runtime trap, which is the only case run reports as `error`). Any command may carry {io_error:{path,message}} on a pre-run I/O failure.",
       "required": ["summary"],
-      "fields": { "summary": "a command-specific summary object (may carry an io_error object on a pre-run I/O failure)" }
+      "fields": { "summary": "a command-specific summary object (see the comment above)" }
     }
   },
 

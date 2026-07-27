@@ -1,0 +1,2 @@
+fn square(take n: Int) -> Int { n * n }
+fn main() -> Int { square(6) + square(1) }
