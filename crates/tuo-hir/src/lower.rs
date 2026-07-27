@@ -576,10 +576,26 @@ impl Cx {
                 }),
                 span,
             },
-            ast::Pattern::Binding(binding) => Pat {
-                kind: PatKind::Binding(self.declared(binding.name_ref())),
-                span,
-            },
+            ast::Pattern::Binding(binding) => {
+                // Resolution decides whether a bare identifier binds a fresh
+                // name or refers to a unit enum variant (`None`, `Empty`, …).
+                // When it recorded a *reference* (not a declaration) here, the
+                // name is that variant — lower it as a payload-less constructor
+                // pattern so matching tests the discriminant, exactly like a
+                // qualified `Shape::Empty`.
+                let name = binding.name_ref();
+                let referenced = name.and_then(|name| self.refs.get(&name.span).copied());
+                let kind = if let Some(variant) = referenced {
+                    PatKind::Ctor {
+                        ctor: Res::Symbol(variant),
+                        fields: Vec::new(),
+                        rest: false,
+                    }
+                } else {
+                    PatKind::Binding(self.declared(name))
+                };
+                Pat { kind, span }
+            }
             ast::Pattern::Path(path) => {
                 let segments: Vec<Name<'_>> = path.segment_names().collect();
                 Pat {

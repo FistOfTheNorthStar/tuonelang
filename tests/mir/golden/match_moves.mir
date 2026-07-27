@@ -97,13 +97,14 @@ fn unwrap_box(_0: take Option[Box[I64]], _1: take Box[I64]) -> Box[I64] {
     let _4: Usize;
     let _5: Box[I64]; // value
     let _6: ();
-    let _7: Option[Box[I64]]; // None
+    let _7: Usize;
 bb0:
     _2 = move _0
     _4 = discriminant(_2)
     switch copy _4 { 0 => bb3, otherwise => bb1 }
 bb1:
-    goto bb6
+    _7 = discriminant(_2)
+    switch copy _7 { 1 => bb7, otherwise => bb5 }
 bb2:
     _5 = move _2.v0.0
     _6 = call consume(move _1)
@@ -116,8 +117,9 @@ bb4:
 bb5:
     trap [unreachable]
 bb6:
-    _7 = move _2
+    drop _2
     _3 = move _1
-    drop _7
     goto bb4
+bb7:
+    goto bb6
 }

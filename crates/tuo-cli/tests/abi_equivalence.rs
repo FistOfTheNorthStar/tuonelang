@@ -98,8 +98,10 @@ fn main() -> I32 {
 /// The ABI's enum discriminant is the variant's declaration-order index, stored
 /// as an explicit [`DISCRIMINANT_SIZE`] tag — the numbering the interpreter uses
 /// in `Value::Variant { variant, .. }`, so a native `match` reading the tag
-/// would branch identically. This asserts the *layout* contract structurally
-/// (the executable `match` path is exercised by the spec suite, not here).
+/// branches identically. This asserts the layout contract structurally *and*
+/// exercises the interpreter's `match` discriminant behavior, tying the two
+/// together: the interpreter selects the arm keyed by the same index the ABI
+/// would store in the tag.
 #[test]
 fn the_enum_discriminant_layout_matches_the_documented_numbering() {
     let t = &TypeckResult::default();
@@ -121,5 +123,38 @@ fn the_enum_discriminant_layout_matches_the_documented_numbering() {
         layout_of(&res, t).unwrap(),
         layout,
         "same shape as Option[Int]"
+    );
+
+    // The interpreter branches by that same discriminant: `Option`'s variants
+    // are `Some = 0`, `None = 1` in declaration order, so a `match` reaches the
+    // `Some` arm for a `Some` value and the `None` arm for `None`. If a native
+    // backend read the ABI tag it would pick the same arm.
+    let matches_some = "\
+fn main() -> Int {
+    let v: Option[Int] = Some { value: 5 };
+    match v {
+        Some { value } => value,
+        None => -1,
+    }
+}
+";
+    assert_eq!(
+        interpret_main_value(matches_some),
+        Value::Int(5, IntKind::I64),
+        "a Some value selects the Some arm (discriminant 0)"
+    );
+    let matches_none = "\
+fn main() -> Int {
+    let v: Option[Int] = None;
+    match v {
+        Some { value } => value,
+        None => -1,
+    }
+}
+";
+    assert_eq!(
+        interpret_main_value(matches_none),
+        Value::Int(-1, IntKind::I64),
+        "a None value selects the None arm (discriminant 1)"
     );
 }
