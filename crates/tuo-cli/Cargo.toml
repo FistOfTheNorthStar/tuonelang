@@ -26,3 +26,15 @@ serde_json.workspace = true
 tuo-compiler.workspace = true
 tuo-fmt.workspace = true
 tuo-spec.workspace = true
+# `tuo build` / `tuo run` drive the code generator: the backend-agnostic
+# interface plus the Cranelift backend behind it, and the runtime whose trap
+# object is linked into the produced executable.
+tuo-codegen.workspace = true
+tuo-codegen-cranelift.workspace = true
+tuo-runtime.workspace = true
+
+[dev-dependencies]
+# The end-to-end differential tests compute the reference result with the MIR
+# interpreter and compare it against the native executable `tuo run` produces.
+tuo-mir.workspace = true
+tuo-mir-interp.workspace = true

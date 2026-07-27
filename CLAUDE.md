@@ -28,6 +28,9 @@ cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
 cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
+cargo run -p tdg-cli -- build file.tuo         # compile to a native executable (Cranelift backend)
+cargo run -p tdg-cli -- build -o out file.tuo  # …to a chosen path
+cargo run -p tdg-cli -- run file.tuo           # compile and run; exit status = the program's result
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
@@ -90,9 +93,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (`[workspace.lints]`); `clippy.toml` only holds tunables.
 - `print_stdout`, `print_stderr`, `dbg_macro`, `todo`, and `unimplemented` are lint-warned
   (and CI is `-D warnings`). Don't leave them in committed code.
-- **The CLI must never advertise behavior the compiler can't perform.** Subcommands
-  (`build`, `run`) are deliberately absent until their functionality exists; the
-  `Command` enum in `tdg-cli/src/cli.rs` is the extension point. Implemented so far:
+- **The CLI must never advertise behavior the compiler can't perform.** New
+  subcommands appear only once their functionality exists; the `Command` enum in
+  `tdg-cli/src/cli.rs` is the extension point. Implemented so far:
   `tdg check <files>` (the parse → resolve → type-check → ownership-check front end,
   specs included per ADR-0002 — specs are checked but **not** executed here),
   `tdg spec [--target <name>] <files>` and `tdg verify <files>` (execute the program's
@@ -101,15 +104,37 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   front-end errors, run each spec in the interpreter's deterministic sandbox with
   configurable fuel/recursion/memory limits, and report measured timing with no latency
   promise), `tdg fmt [--check] <files>` (the canonical formatter — deterministic,
-  idempotent, zero configuration), and `tdg debug syntax|ast|hir|mir <file>`
+  idempotent, zero configuration), `tdg build [-o <path>] <files>` and
+  `tdg run <files>` (compile the accepted program to verified MIR and then to native
+  code via the Cranelift backend, linking the runtime trap shim into an executable —
+  `run` additionally executes it and exits with the program's own status, the integer
+  its nullary `main` returns; the backend lowers the **scalar, control-flow core**
+  today and *refuses* — never mis-compiles — anything outside it, pointing the user
+  back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir <file>`
   (diagnostic developer tools with unstable output, not language protocols; `mir`
   requires an accepted program, since MIR is only defined once the front end passes,
   and the lowered MIR is verified (`tuo_mir::verify`, mandatory) before it is dumped —
   every backend and the interpreter must reject unverified MIR).
+- **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
+  `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
+  relocatable `ObjectArtifact`) and the plain values that cross the boundary
+  (`TargetSpec`, `ObjectArtifact`, `CodegenError`, `EntryAbi`). `tdg-codegen-cranelift`
+  implements it; **no Cranelift type appears in anything it exports**, so it cannot
+  leak into MIR, type checking, the CLI protocol, or the runtime's public surface. A
+  backend consumes only *verified* MIR (it never re-checks) and must agree with the
+  MIR interpreter instruction for instruction — where they diverge, the backend is
+  wrong. The reference semantics stays the interpreter; correctness on the supported
+  subset comes before any backend-specific optimization (the Cranelift backend emits
+  unoptimized code, `opt_level=none`). The interpreter-vs-native agreement is pinned by
+  the differential suite in `tdg-cli/tests/codegen_differential.rs` over
+  `tests/codegen/fixtures/`. `tdg-runtime` is the minimal native runtime linked into
+  every built binary: it owns the deterministic trap (a stable `TrapCode` → stderr
+  message → `abort()` with a fixed status), emitted as C so a generated executable
+  needs no Rust runtime.
 - **Machine output is a versioned contract, human output is not.** A global
   `--message-format` selects `human` (default), `json` (one envelope), or
   `json-lines` (streamed, one event per line) for every result-producing command
-  (`check`, `spec`, `verify`, `fmt`). The wire shape lives in `tdg-cli`'s
+  (`check`, `spec`, `verify`, `fmt`, `build`, `run`). The wire shape lives in `tdg-cli`'s
   `protocol` module, versioned by `PROTOCOL_VERSION`; every machine message
   carries the protocol version, event kind, command, status, stable diagnostics
   (serialized with the independently-versioned `tuo_diagnostics::json` schema),

@@ -75,6 +75,10 @@ pub(crate) enum ProtocolCommand {
     Verify,
     /// `tuo fmt` (and `fmt --check`).
     Fmt,
+    /// `tuo build`.
+    Build,
+    /// `tuo run`.
+    Run,
 }
 
 impl ProtocolCommand {
@@ -85,6 +89,8 @@ impl ProtocolCommand {
             Self::Spec => "spec",
             Self::Verify => "verify",
             Self::Fmt => "fmt",
+            Self::Build => "build",
+            Self::Run => "run",
         }
     }
 }

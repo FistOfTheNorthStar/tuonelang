@@ -67,6 +67,16 @@ unicode-normalization = "0.1"
 criterion = "0.5"
 # - chumsky powers the prototype parser behind tuo-parser's TDG-owned interface.
 chumsky = "0.10"
+# - the cranelift stack backs the first native backend (tuo-codegen-cranelift).
+#   It stays entirely behind that crate's TDG-owned CodegenBackend implementation;
+#   no cranelift type appears in MIR, type checking, the CLI protocol, or the
+#   runtime's public surface. `cranelift-object` emits a relocatable object and
+#   `target-lexicon` names the host target.
+cranelift-codegen = "0.124"
+cranelift-frontend = "0.124"
+cranelift-module = "0.124"
+cranelift-object = "0.124"
+target-lexicon = "0.13"
 # - dhat measures heap use for the parser architecture decision gate
 #   (ADR-parser-strategy); dev-dependency only.
 dhat = "0.3"

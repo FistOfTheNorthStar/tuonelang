@@ -2,10 +2,10 @@
 //!
 //! The command surface is intentionally minimal: only functionality the
 //! compiler can actually perform is exposed. Today that is `tuo check`,
-//! `tuo spec`, `tuo verify`, `tuo fmt`, and the `tuo debug` developer tools;
-//! further compiler subcommands (`build`, `run`, …) are added as their
-//! functionality is implemented — a new [`Command`] variant plus a match
-//! arm in [`Cli::dispatch`].
+//! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, and the
+//! `tuo debug` developer tools. Further compiler subcommands are added as
+//! their functionality is implemented — a new [`Command`] variant plus a
+//! match arm in [`Cli::dispatch`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -13,6 +13,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory as _, Parser, Subcommand};
 
 use crate::check;
+use crate::codegen;
 use crate::debug::{self, Dump};
 use crate::fmt;
 use crate::output::{MessageFormat, OutputMode};
@@ -47,8 +48,8 @@ pub(crate) struct Cli {
 
 /// Top-level subcommands.
 ///
-/// Future compiler commands (`Build`, `Run`, …) slot in as new variants once
-/// their functionality exists.
+/// Further compiler commands slot in as new variants once their functionality
+/// exists.
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Parse, resolve, type-check, and ownership-check a program without
@@ -90,6 +91,34 @@ enum Command {
     /// and if it accepts the program, every spec is executed. The exit status
     /// is a failure on any front-end error, failing assertion, or trap.
     Verify {
+        /// The tuonelang source files forming the program.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Compile a program to a native executable.
+    ///
+    /// Runs the front end, lowers the accepted program to verified MIR, and
+    /// generates native code with the Cranelift backend, linking the result
+    /// (with the tuonelang runtime) into an executable. The program's entry is
+    /// the function named `main`, which must be nullary and return an integer —
+    /// its value is the process exit status. A program using a feature outside
+    /// the native backend's current subset is refused with a clear note (the
+    /// interpreter, via `tuo spec`/`tuo verify`, remains the reference).
+    Build {
+        /// Write the executable here (defaults to the first input's name).
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+        /// The tuonelang source files forming the program.
+        #[arg(required = true)]
+        files: Vec<PathBuf>,
+    },
+    /// Compile a program and run it, propagating its exit status.
+    ///
+    /// A superset of `tuo build`: it compiles to a temporary executable, runs
+    /// it, and exits with the program's own status — the integer its `main`
+    /// entry returns. That value equals what the reference interpreter yields
+    /// running the same entry, so a native run and an interpreted run agree.
+    Run {
         /// The tuonelang source files forming the program.
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -167,6 +196,8 @@ impl Cli {
             Some(Command::Check { files }) => check::run(&files, mode),
             Some(Command::Spec { target, files }) => spec::run(target, &files, mode),
             Some(Command::Verify { files }) => spec::verify(&files, mode),
+            Some(Command::Build { output, files }) => codegen::build(output, &files, mode),
+            Some(Command::Run { files }) => codegen::run(&files, mode),
             // The `debug` dumps are developer tools with deliberately unstable
             // output, not a language protocol — so they have no machine
             // encoding. Refuse a machine format here rather than emit

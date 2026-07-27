@@ -15,4 +15,13 @@ workspace = true
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
 tuo-mir.workspace = true
+tuo-resolve.workspace = true
+tuo-types.workspace = true
+tuo-runtime.workspace = true
 tuo-codegen.workspace = true
+
+cranelift-codegen.workspace = true
+cranelift-frontend.workspace = true
+cranelift-module.workspace = true
+cranelift-object.workspace = true
+target-lexicon.workspace = true

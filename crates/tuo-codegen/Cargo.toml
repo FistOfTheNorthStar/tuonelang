@@ -15,3 +15,4 @@ workspace = true
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
 tuo-mir.workspace = true
+tuo-types.workspace = true
