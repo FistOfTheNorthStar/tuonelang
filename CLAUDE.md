@@ -131,6 +131,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   every built binary: it owns the deterministic trap (a stable `TrapCode` → stderr
   message → `abort()` with a fixed status), emitted as C so a generated executable
   needs no Rust runtime.
+- **The runtime ABI is TDG-owned, backend-independent, and versioned before it is
+  frozen.** `tdg-runtime` is the single normative home of the ABI compiled programs
+  obey — value layouts, panic/trap, startup/exit, the allocation boundary,
+  destruction, and internal calling conventions — specified in prose in
+  `specification/abi.md` and implemented in the crate's `abi` and `alloc` modules.
+  Layouts (`abi::layout_of` → `Layout{size,align}`, computed from `tdg-types` alone;
+  `#[repr(C)]` packing, explicit `u32` enum discriminants numbered in declaration
+  order to match the interpreter's `Value::Variant`, no niche packing in v0) carry no
+  Cranelift or LLVM type: a backend *consults* them, never defines its own, so the two
+  backends and the interpreter cannot drift into incompatible memory models. The ABI
+  carries an explicit `abi::ABI_VERSION` (currently `0`), bumped on any
+  layout-affecting change in the same commit that moves the pinning tests. The heap
+  allocator is one swappable seam — the C-ABI `tuo_rt_alloc`/`tuo_rt_dealloc`
+  (`alloc_runtime_c_source`, OOM traps, never returns null) — through which every
+  `Box`/`Shared`/`String`/`Array` allocation flows. ABI layout tests
+  (`tdg-runtime/tests/abi_layout.rs`, checked against real `#[repr(C)]` Rust types) and
+  interpreter⇄ABI equivalence tests (`tdg-cli/tests/abi_equivalence.rs`) pin the
+  contract; the crate stays independent of any concrete backend.
 - **Machine output is a versioned contract, human output is not.** A global
   `--message-format` selects `human` (default), `json` (one envelope), or
   `json-lines` (streamed, one event per line) for every result-producing command

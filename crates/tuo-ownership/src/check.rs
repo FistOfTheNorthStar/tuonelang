@@ -1212,11 +1212,17 @@ impl<'a> Body<'a> {
         for arm in match_expr.arms() {
             if let Some(pattern) = arm.pattern() {
                 for name in collect_bindings(pattern) {
+                    // Only a real binding (recorded as a declaration) can move
+                    // out of the scrutinee. A bare name that resolved to a unit
+                    // variant (`None`) is a discriminant test, not a binding, so
+                    // it binds nothing and never forces a move.
+                    let Some(&symbol) = self.cx.decls.get(&name.span) else {
+                        continue;
+                    };
                     let is_copy = self
                         .cx
-                        .decls
-                        .get(&name.span)
-                        .and_then(|symbol| self.cx.types.type_of(*symbol))
+                        .types
+                        .type_of(symbol)
                         .is_some_and(|ty| self.cx.env.is_copy(ty));
                     if !is_copy && noncopy_binding.is_none() {
                         noncopy_binding = Some(name);

@@ -437,6 +437,57 @@ fn enum_variant_paths_resolve_to_variant_symbols() {
 }
 
 #[test]
+fn a_bare_prelude_variant_pattern_resolves_to_the_variant_not_a_binding() {
+    // Regression: a bare `None` in a pattern is the unit-variant pattern, so it
+    // must resolve to the prelude `None` variant — recorded as a *reference* —
+    // rather than declaring a fresh local named "None" (which would make the
+    // arm an irrefutable catch-all).
+    let resolution = resolve_one(
+        "fn tag(in v: Option[Int]) -> Int {\n\
+             match v {\n\
+                 None => 0,\n\
+                 Some { value } => value,\n\
+             }\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+
+    // `None` resolved to the prelude variant, and it was referenced once.
+    let none = find(&resolution, "None", SymbolKind::Variant);
+    assert_eq!(resolution.references_to(none).count(), 1);
+
+    // Crucially, no local binding named `None` was declared.
+    assert!(
+        resolution
+            .symbols()
+            .all(|(_, symbol)| !(symbol.name == "None" && symbol.kind == SymbolKind::Local)),
+        "a bare `None` pattern must not declare a local binding"
+    );
+
+    // A genuine catch-all name (`value`) is still a local binding, unaffected.
+    let _ = find(&resolution, "value", SymbolKind::Local);
+}
+
+#[test]
+fn a_local_shadows_a_bare_variant_name_in_a_pattern() {
+    // If a name in scope binds a local, a bare pattern of that name is a fresh
+    // binding, not a variant — the variant interpretation only applies when the
+    // name is not otherwise bound. `None` here is not shadowed, so this checks
+    // the ordinary case stays a binding for a non-variant name.
+    let resolution = resolve_one(
+        "fn f(in n: Int) -> Int {\n\
+             match n {\n\
+                 anything => anything,\n\
+             }\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    // `anything` is a plain binding (not a variant), used once in the arm body.
+    let binding = find(&resolution, "anything", SymbolKind::Local);
+    assert_eq!(resolution.references_to(binding).count(), 1);
+}
+
+#[test]
 fn unknown_enum_variants_are_r0002() {
     let resolution = resolve_one(
         "enum Shape { Dot }\n\

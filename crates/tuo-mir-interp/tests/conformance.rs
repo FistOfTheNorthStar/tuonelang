@@ -523,6 +523,83 @@ fn option_constructs_matches_and_propagates() {
     );
 }
 
+#[test]
+fn a_bare_unit_variant_pattern_tests_the_discriminant() {
+    // Regression: a bare `None` arm is the *variant* pattern, not a catch-all
+    // binding named "None". It must test the discriminant so `Some` and `None`
+    // reach different arms — the earlier lowering treated `None` as an
+    // irrefutable binding and every value fell into that arm.
+    let src = "
+        fn tag(in v: Option[Int]) -> Int {
+            match v {
+                None => 0,
+                Some { value } => value,
+            }
+        }
+    ";
+    // `Some { value: 7 }` (variant 0) selects the `Some` arm and yields 7.
+    assert_eq!(
+        value(
+            src,
+            "tag",
+            vec![Value::Variant {
+                variant: 0,
+                fields: vec![int(7)]
+            }]
+        ),
+        int(7)
+    );
+    // `None` (variant 1) selects the `None` arm and yields 0.
+    assert_eq!(
+        value(
+            src,
+            "tag",
+            vec![Value::Variant {
+                variant: 1,
+                fields: vec![]
+            }]
+        ),
+        int(0)
+    );
+}
+
+#[test]
+fn a_bare_none_arm_ordered_first_still_discriminates() {
+    // The arm order must not matter: with `None` written before `Some`, a
+    // `Some` value must still skip the `None` arm and reach `Some`.
+    let src = "
+        fn is_some(in v: Option[Int]) -> Int {
+            match v {
+                None => 0,
+                Some { value } => 1,
+            }
+        }
+    ";
+    assert_eq!(
+        value(
+            src,
+            "is_some",
+            vec![Value::Variant {
+                variant: 0,
+                fields: vec![int(99)]
+            }]
+        ),
+        int(1),
+        "a Some value reaches the Some arm even when None is written first"
+    );
+    assert_eq!(
+        value(
+            src,
+            "is_some",
+            vec![Value::Variant {
+                variant: 1,
+                fields: vec![]
+            }]
+        ),
+        int(0)
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Result
 // ---------------------------------------------------------------------------

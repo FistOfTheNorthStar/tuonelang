@@ -1,34 +1,54 @@
-//! Runtime support for compiled tuonelang programs.
+//! Runtime support for compiled tuonelang programs, and the definition of the
+//! tuonelang **runtime ABI**.
 //!
 //! This crate is the minimal native runtime that generated tuonelang binaries
-//! link against. It is deliberately tiny and deliberately independent of the
-//! compiler front-end: it holds only what a *running* program needs, not
-//! anything about how the program was compiled.
+//! link against *and* the single normative home of the ABI those binaries
+//! obey — how values are laid out in memory, how a program traps, starts, and
+//! exits, how it acquires and releases memory, and the internal calling
+//! conventions. It is deliberately independent of the compiler front-end and of
+//! any backend: it holds only what a *running* program needs and the contract a
+//! backend must satisfy, never anything Cranelift- or LLVM-specific. The prose
+//! specification is [`specification/abi.md`](../../../specification/abi.md);
+//! this crate is its implementation, and the two are kept in step.
 //!
 //! # What it provides
 //!
-//! v0 programs need exactly one runtime service: a deterministic **trap** — the
-//! native counterpart of the interpreter's structured abort. When generated
-//! code reaches a language trap (integer overflow, division by zero, an
-//! out-of-bounds index, or a proved-unreachable point — Constitution §24), it
-//! calls [`TRAP_SYMBOL`] with a [`TrapCode`]. The runtime prints a stable
-//! one-line message to stderr and aborts the process with
-//! [`TRAP_EXIT_STATUS`], **without unwinding** (§24: no destructors run). This
-//! mirrors the interpreter, whose traps likewise abort a run deterministically.
+//! - **The ABI layouts** ([`abi`]) — the backend-independent size, alignment,
+//!   field offsets, and enum discriminant numbering of every tuonelang type,
+//!   computed from `tuo-types` alone. A backend consults these; it never
+//!   defines its own. The ABI carries an explicit [`abi::ABI_VERSION`], bumped
+//!   on any layout-affecting change (versioned before it is frozen).
+//! - **The trap** ([`TRAP_SYMBOL`], [`TrapCode`]) — the native counterpart of
+//!   the interpreter's structured abort. At a language trap (integer overflow,
+//!   division by zero, an out-of-bounds index, or a proved-unreachable point —
+//!   Constitution §24), generated code calls [`TRAP_SYMBOL`] with a
+//!   [`TrapCode`]; the runtime prints a stable one-line message to stderr and
+//!   aborts with [`TRAP_EXIT_STATUS`], **without unwinding** (§24: no
+//!   destructors run). This mirrors the interpreter, whose traps likewise abort
+//!   a run deterministically.
+//! - **The allocation boundary** ([`alloc`]) — the two C-ABI symbols
+//!   ([`alloc::ALLOC_SYMBOL`], [`alloc::DEALLOC_SYMBOL`]) through which every
+//!   heap allocation (`Box`, `Shared`, `String`, `Array`) flows, so the
+//!   allocator is one swappable seam.
 //!
 //! # How it reaches a generated binary
 //!
 //! The runtime's C-ABI symbols must be present in the final executable, but the
 //! runtime is a Rust library, not something a generated object links to
-//! directly. So this crate exposes its trap implementation as portable **C
-//! source** ([`trap_runtime_c_source`]) that the build driver compiles and
-//! links alongside the backend's object. Keeping it as C (a) needs no
-//! Rust-runtime machinery in the target binary and (b) makes the ABI contract
-//! between backend and runtime explicit and inspectable.
+//! directly. So this crate exposes its trap and its allocator as portable **C
+//! source** ([`trap_runtime_c_source`], [`alloc::alloc_runtime_c_source`]) that
+//! the build driver compiles and links alongside the backend's object. Keeping
+//! them as C (a) needs no Rust-runtime machinery in the target binary and (b)
+//! makes the ABI contract between backend and runtime explicit and
+//! inspectable.
 //!
-//! The same contract is exercised natively by [`report_trap`], the Rust
-//! implementation of the identical behavior, so this crate's own tests pin the
-//! exit status and message shape without invoking a C compiler.
+//! The same contracts are pinned natively — [`report_trap`] for the trap and
+//! [`alloc::alloc_decision`] for the allocator's policy — so this crate's own
+//! tests fix the exit status, message shape, and allocation policy without
+//! invoking a C compiler.
+
+pub mod abi;
+pub mod alloc;
 
 use std::process::abort;
 

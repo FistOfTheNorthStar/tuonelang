@@ -955,7 +955,18 @@ impl Resolver {
             Pattern::Literal(_) | Pattern::Wildcard(_) => {}
             Pattern::Binding(binding) => {
                 if let Some(name) = binding.name_ref() {
-                    self.declare_pattern_binding(scopes, name, seen);
+                    // A bare identifier pattern is ambiguous in the grammar: it
+                    // is a fresh binding *unless* the name refers to a unit
+                    // (payload-less) enum variant in scope, in which case it is
+                    // that variant's pattern (`None`, `Empty`, …). Resolve it as
+                    // a variant first — recording a reference, not a binding —
+                    // so matching tests the discriminant instead of always
+                    // succeeding. Anything else is a binding, as before.
+                    if let Some(variant) = self.bare_unit_variant(scopes, name.text) {
+                        self.record(name, variant);
+                    } else {
+                        self.declare_pattern_binding(scopes, name, seen);
+                    }
                 }
             }
             Pattern::Path(path) => {
@@ -984,6 +995,29 @@ impl Resolver {
                 }
             }
         }
+    }
+
+    /// If a bare name refers to a unit (payload-less) enum variant that a
+    /// pattern binding should resolve *to* rather than shadow, return it.
+    ///
+    /// Resolution mirrors a value-position bare path but is side-effect-free
+    /// (no reference recorded, no diagnostic) and succeeds only for a variant:
+    /// a user scope binding of the same name is a local that shadows any
+    /// variant, so it suppresses this; otherwise the name is looked up in the
+    /// enclosing module scope and then the prelude (`None`, `Ok`, …).
+    fn bare_unit_variant(&self, scopes: &Scopes, name: &str) -> Option<SymbolId> {
+        // A local/param binding in scope shadows a variant — then it is a
+        // binding, not a variant pattern.
+        if scopes.lookup(name).is_some() {
+            return None;
+        }
+        let symbol = match self.scope(scopes.module).get(name) {
+            Some(Binding::Decl(id)) => Some(*id),
+            // Imports and ambiguities are not resolved here; a variant reaches
+            // patterns as a module declaration or a prelude name.
+            _ => self.prelude_lookup(name),
+        }?;
+        (self.sym(symbol).kind == SymbolKind::Variant).then_some(symbol)
     }
 
     fn declare_pattern_binding(

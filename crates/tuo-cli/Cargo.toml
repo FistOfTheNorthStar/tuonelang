@@ -38,3 +38,6 @@ tuo-runtime.workspace = true
 # interpreter and compare it against the native executable `tuo run` produces.
 tuo-mir.workspace = true
 tuo-mir-interp.workspace = true
+# The ABI-equivalence tests assert the runtime ABI layouts (`tuo_runtime::abi`,
+# over `tuo_types` types) agree with the interpreter's value model.
+tuo-types.workspace = true
