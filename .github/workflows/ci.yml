@@ -17,6 +17,20 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # The LLVM release backend (`tuo-codegen-llvm`) links against LLVM 19
+      # through inkwell/`llvm-sys` (pinned by the `llvm19-1` feature), and the
+      # three-way differential gate compiles programs with it. Install LLVM 19's
+      # development libraries and point `llvm-sys` at their prefix. This value is
+      # set in the process environment, so it overrides the Homebrew default in
+      # `.cargo/config.toml` (which targets a local macOS dev box). Bumping the
+      # pinned LLVM major means changing this version and the inkwell feature
+      # together, in one commit.
+      - name: Install LLVM 19
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y llvm-19-dev libpolly-19-dev
+          echo "LLVM_SYS_191_PREFIX=$(llvm-config-19 --prefix)" >> "$GITHUB_ENV"
+
       # rust-toolchain.toml pins the stable channel and the rustfmt + clippy
       # components. rustup honors that file automatically, so we only need to
       # ensure the pinned toolchain is installed. Each component needs its own

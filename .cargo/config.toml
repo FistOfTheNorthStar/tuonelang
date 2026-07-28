@@ -1,0 +1,17 @@
+# Workspace Cargo configuration.
+#
+# The LLVM release backend (`tuo-codegen-llvm`) links against LLVM 19 through
+# inkwell/`llvm-sys` (pinned by the `llvm19-1` feature). `llvm-sys` locates the
+# toolchain from `LLVM_SYS_191_PREFIX`; its fall-back search (`llvm-config` on
+# `PATH`, or a Homebrew probe) does not work reliably inside a build script's
+# sandboxed environment, so we point it at the toolchain explicitly here.
+#
+# This default targets a Homebrew `llvm@19` on Apple Silicon — the local
+# development setup. `[env]` values do NOT override a variable already present
+# in the environment (the default `force = false`), so any other machine — CI in
+# particular, which installs LLVM 19 to a different prefix — sets its own
+# `LLVM_SYS_191_PREFIX` and that wins. On a machine with neither this path nor
+# the variable set, only the LLVM backend crate fails to build; the rest of the
+# workspace is unaffected.
+[env]
+LLVM_SYS_191_PREFIX = { value = "/opt/homebrew/opt/llvm@19", force = false, relative = false }

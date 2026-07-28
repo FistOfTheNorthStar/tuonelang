@@ -1,17 +1,25 @@
 //! Cross-engine semantic differential suite — a **mandatory CI gate**.
 //!
 //! The reference meaning of a tuonelang program is what the MIR interpreter
-//! computes; the native Cranelift backend must agree with it on every observable
-//! behavior. This suite is the machine that enforces that agreement across a
-//! whole population of programs rather than a handful of hand-written fixtures:
+//! computes; **both** native backends — Cranelift (the default debug build) and
+//! LLVM (`--release`) — must agree with it on every observable behavior. This
+//! suite is the machine that enforces that agreement across a whole population of
+//! programs rather than a handful of hand-written fixtures:
 //!
-//! 1. it **generates** small, well-typed programs inside the backend's scalar
-//!    subset ([`generator`]) from a fixed, deterministic range of seeds;
-//! 2. it runs each through **both engines** and compares the full observable
-//!    outcome — return value and deterministic traps ([`harness`]); and
+//! 1. it **generates** small, well-typed programs inside the backends' shared
+//!    scalar subset ([`generator`]) from a fixed, deterministic range of seeds;
+//! 2. it runs each through the interpreter and a native backend and compares the
+//!    full observable outcome — return value and deterministic traps
+//!    ([`harness`]); and
 //! 3. on any disagreement it **minimizes** the program to a small reproduction
 //!    and saves it to disk ([`shrink`]), then fails the test with the reduced
 //!    program inline.
+//!
+//! The core sweep runs the default backend over a wide seed range; a second
+//! sweep runs the LLVM release backend over a (smaller, because a release build
+//! is slower) range, so both backends are pinned to the interpreter — and, since
+//! both equal the interpreter, to each other. A dedicated three-way fixture suite
+//! lives in `codegen_three_way.rs`.
 //!
 //! **Any disagreement is a compiler-correctness failure**, full stop — the
 //! backend is wrong wherever it parts from the interpreter. Because these are
@@ -38,7 +46,7 @@ mod shrink;
 
 use std::path::PathBuf;
 
-use harness::diff_program;
+use harness::{Backend, diff_program, diff_program_with};
 
 /// A per-test scratch directory under the target dir (never `/tmp` hard-coded),
 /// isolated by name so parallel tests don't collide.
@@ -54,6 +62,13 @@ fn scratch_dir(name: &str) -> PathBuf {
 /// the range is sized to give broad coverage while keeping the gate's wall-clock
 /// reasonable; the interpreter-only corpus test below sweeps far wider cheaply.
 const SEED_RANGE: std::ops::Range<u64> = 0..150;
+
+/// The seed range the LLVM (`--release`) sweep covers. A release build runs
+/// LLVM's optimizer and is slower per program than a Cranelift build, so this
+/// range is smaller than [`SEED_RANGE`] while still exercising a broad, fixed
+/// population against the reference. The two ranges overlap deliberately: the
+/// same low seeds are checked against *both* backends.
+const LLVM_SEED_RANGE: std::ops::Range<u64> = 0..60;
 
 /// The (much wider) seed range the interpreter-only corpus checks sweep — no
 /// native build per program, so it is cheap to cover a large population.
@@ -85,6 +100,42 @@ fn generated_programs_agree_across_engines() {
                 shrink::save_repro(&minimized, &scratch_dir("repro"), &format!("seed-{seed}"));
             panic!(
                 "differential failure on seed {seed}. Minimized reproduction saved to {}.\n\n{}",
+                repro.display(),
+                minimized.report(),
+            );
+        }
+    }
+}
+
+/// The same gate for the LLVM (`--release`) backend: generate a population of
+/// well-typed programs and require the optimizing backend to agree with the
+/// reference interpreter on every one. Because both native backends must equal
+/// the interpreter, this also pins them equal to each other. A divergence here is
+/// a **release blocker**; it is minimized and saved exactly as the Cranelift
+/// sweep does. The range is smaller ([`LLVM_SEED_RANGE`]) because a release build
+/// runs LLVM's optimizer per program.
+#[test]
+fn generated_programs_agree_with_the_llvm_backend() {
+    let dir = scratch_dir("sweep-llvm");
+    let scratch = dir.join("candidate.tuo");
+
+    for seed in LLVM_SEED_RANGE {
+        let source = generator::program(seed);
+        assert!(
+            harness::accepts(&source),
+            "generator emitted a program the front end rejects (seed {seed}):\n{source}"
+        );
+
+        if let Some(divergence) = diff_program_with(&source, &scratch, Backend::Llvm) {
+            let minimized = shrink::minimize_for(&divergence, &scratch, Backend::Llvm);
+            let repro = shrink::save_repro(
+                &minimized,
+                &scratch_dir("repro-llvm"),
+                &format!("llvm-seed-{seed}"),
+            );
+            panic!(
+                "LLVM (--release) differential failure on seed {seed} — a release blocker. \
+                 Minimized reproduction saved to {}.\n\n{}",
                 repro.display(),
                 minimized.report(),
             );

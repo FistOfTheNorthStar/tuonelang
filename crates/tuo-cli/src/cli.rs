@@ -98,16 +98,26 @@ enum Command {
     /// Compile a program to a native executable.
     ///
     /// Runs the front end, lowers the accepted program to verified MIR, and
-    /// generates native code with the Cranelift backend, linking the result
-    /// (with the tuonelang runtime) into an executable. The program's entry is
-    /// the function named `main`, which must be nullary and return an integer —
-    /// its value is the process exit status. A program using a feature outside
-    /// the native backend's current subset is refused with a clear note (the
-    /// interpreter, via `tuo spec`/`tuo verify`, remains the reference).
+    /// generates native code, linking the result (with the tuonelang runtime)
+    /// into an executable. The program's entry is the function named `main`,
+    /// which must be nullary and return an integer — its value is the process
+    /// exit status. A program using a feature outside the native backend's
+    /// current subset is refused with a clear note (the interpreter, via
+    /// `tuo spec`/`tuo verify`, remains the reference).
+    ///
+    /// The default (debug) build uses the Cranelift backend, which emits
+    /// unoptimized code quickly. `--release` selects the LLVM backend and runs
+    /// LLVM's standard optimization pipeline; the two backends and the
+    /// interpreter agree on every program's result (pinned by the differential
+    /// suite), so `--release` changes only speed, never meaning.
     Build {
         /// Write the executable here (defaults to the first input's name).
         #[arg(long, short)]
         output: Option<PathBuf>,
+        /// Build an optimized release binary with the LLVM backend instead of
+        /// the default debug build with Cranelift.
+        #[arg(long)]
+        release: bool,
         /// The tuonelang source files forming the program.
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -118,7 +128,12 @@ enum Command {
     /// it, and exits with the program's own status — the integer its `main`
     /// entry returns. That value equals what the reference interpreter yields
     /// running the same entry, so a native run and an interpreted run agree.
+    /// `--release` uses the optimized LLVM backend, exactly as `tuo build`.
     Run {
+        /// Compile with the optimized LLVM backend instead of the default
+        /// debug Cranelift backend.
+        #[arg(long)]
+        release: bool,
         /// The tuonelang source files forming the program.
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -196,8 +211,12 @@ impl Cli {
             Some(Command::Check { files }) => check::run(&files, mode),
             Some(Command::Spec { target, files }) => spec::run(target, &files, mode),
             Some(Command::Verify { files }) => spec::verify(&files, mode),
-            Some(Command::Build { output, files }) => codegen::build(output, &files, mode),
-            Some(Command::Run { files }) => codegen::run(&files, mode),
+            Some(Command::Build {
+                output,
+                release,
+                files,
+            }) => codegen::build(output, release, &files, mode),
+            Some(Command::Run { release, files }) => codegen::run(release, &files, mode),
             // The `debug` dumps are developer tools with deliberately unstable
             // output, not a language protocol — so they have no machine
             // encoding. Refuse a machine format here rather than emit

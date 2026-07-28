@@ -77,6 +77,13 @@ cranelift-frontend = "0.124"
 cranelift-module = "0.124"
 cranelift-object = "0.124"
 target-lexicon = "0.13"
+# - inkwell is the safe Rust wrapper over LLVM behind tuo-codegen-llvm (the
+#   release backend). LLVM is a versioned external toolchain; the `llvm19-1`
+#   feature pins the *supported LLVM major to 19* (see tuo-codegen-llvm's crate
+#   docs and its build.rs for how the toolchain is located and the pin is
+#   enforced). Like cranelift, inkwell/LLVM stay entirely behind that crate's
+#   TDG-owned CodegenBackend implementation — no inkwell or LLVM type escapes it.
+inkwell = { version = "0.9", features = ["llvm19-1"] }
 # - dhat measures heap use for the parser architecture decision gate
 #   (ADR-parser-strategy); dev-dependency only.
 dhat = "0.3"
