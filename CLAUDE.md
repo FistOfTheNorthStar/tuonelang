@@ -35,6 +35,7 @@ cargo run -p tdg-cli -- run file.tuo           # compile and run; exit status = 
 cargo run -p tdg-cli -- run --release file.tuo # …compile with the optimizing LLVM backend, then run
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
+cargo run -p tdg-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
 cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
 cargo run -p tdg-cli -- --message-format=json-lines spec file.tuo  # machine protocol: streamed, one event per line
 cargo test                     # run all tests
@@ -107,17 +108,19 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   configurable fuel/recursion/memory limits, and report measured timing with no latency
   promise), `tdg fmt [--check] <files>` (the canonical formatter — deterministic,
   idempotent, zero configuration), `tdg build [-o <path>] [--release] <files>` and
-  `tdg run [--release] <files>` (compile the accepted program to verified MIR and then
-  to native code, linking the runtime trap shim into an executable — the default debug
-  build uses the Cranelift backend, `--release` uses the optimizing LLVM backend;
-  `run` additionally executes it and exits with the program's own status, the integer
-  its nullary `main` returns; both backends lower the **scalar, control-flow core**
-  today and *refuse* — never mis-compile — anything outside it, pointing the user
-  back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir <file>`
-  (diagnostic developer tools with unstable output, not language protocols; `mir`
-  requires an accepted program, since MIR is only defined once the front end passes,
-  and the lowered MIR is verified (`tuo_mir::verify`, mandatory) before it is dumped —
-  every backend and the interpreter must reject unverified MIR).
+  `tdg run [--release] <files>` (compile the accepted program to verified MIR, run the
+  TDG-native MIR optimization passes over it, and then to native code, linking the
+  runtime trap shim into an executable — the default debug build uses the Cranelift
+  backend, `--release` uses the optimizing LLVM backend; `run` additionally executes it
+  and exits with the program's own status, the integer its nullary `main` returns; both
+  backends lower the **scalar, control-flow core** today and *refuse* — never
+  mis-compile — anything outside it, pointing the user back to the interpreter as the
+  reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  tools with unstable output, not language protocols; `mir` requires an accepted
+  program, since MIR is only defined once the front end passes, and the lowered MIR is
+  verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
+  interpreter must reject unverified MIR; `mir --opt` shows the MIR after the
+  optimization passes the native build applies).
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
@@ -143,6 +146,25 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   every built binary: it owns the deterministic trap (a stable `TrapCode` → stderr
   message → `abort()` with a fixed status), emitted as C so a generated executable
   needs no Rust runtime.
+- **MIR optimization is a set of isolated, meaning-preserving, re-verified passes;
+  the interpreter stays the reference on _unoptimized_ MIR.** `tdg-mir`'s `opt` module
+  (`tuo_mir::optimize`) runs a small pipeline — constant folding, simple copy
+  propagation, unreachable-block removal, dead-local elimination — to a bounded fixed
+  point on the native build path (`tdg build`/`tdg run`), before the backend and *after*
+  the mandatory verifier. Each pass is one `Pass` with a declared purpose and
+  preconditions; the driver calls `tuo_mir::debug_assert_verified` after every pass, so a
+  pass that corrupts MIR panics (named) in debug/test rather than reaching a backend.
+  Every pass is a rewrite that leaves observable behavior (return value, and which/whether
+  it traps) unchanged — in particular constant folding **never** folds a trapping
+  operation (`1/0`, `MIN/-1`, overflow, `MIN` negation), since that would erase an
+  observable abort. Nothing speculative lives here (no inlining, no loop transforms); the
+  release backend layers LLVM's own optimizer on top. The contract is pinned by the
+  before/after golden suite (`tests/mir/opt/fixtures/*.mir` / `*.opt.mir`,
+  `tdg-mir/tests/opt_golden.rs`), the MIR-level semantic differential and compile-time /
+  code-size **measurement** (`tdg-cli/tests/opt_semantics.rs`, interpreter agrees on raw
+  vs optimized MIR), and the existing native differential suites — which now compile
+  *optimized* MIR, so they pin interpreter (unopt) == Cranelift (opt) == LLVM (opt +
+  LLVM O2). Any divergence is a bug in the pass, never the interpreter.
 - **The runtime ABI is TDG-owned, backend-independent, and versioned before it is
   frozen.** `tdg-runtime` is the single normative home of the ABI compiled programs
   obey — value layouts, panic/trap, startup/exit, the allocation boundary,

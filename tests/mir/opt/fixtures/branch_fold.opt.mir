@@ -1,0 +1,8 @@
+fn main() -> I64 {
+bb0:
+    branch const true ? bb1 : bb2
+bb1:
+    return const 10_i64
+bb2:
+    return const 20_i64
+}

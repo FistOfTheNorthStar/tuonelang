@@ -195,11 +195,19 @@ enum DebugCommand {
     /// (parse, resolve, type check, ownership check) runs first: any error
     /// refuses the dump with a failure exit code. Function bodies outside
     /// the v0 lowering subset are listed as `not lowered` with the reason.
+    ///
+    /// With `--opt` the MIR optimization passes (the ones the native build
+    /// runs) are applied before printing, so the dump shows the optimized MIR
+    /// a backend consumes rather than the raw lowering.
     Mir {
         /// The tuonelang source file to inspect.
         file: PathBuf,
         /// Restrict the dump to the function with this name.
         function: Option<String>,
+        /// Run the MIR optimization passes before printing (show the
+        /// optimized MIR the native backend consumes).
+        #[arg(long)]
+        opt: bool,
     },
 }
 
@@ -229,7 +237,17 @@ impl Cli {
                     DebugCommand::Syntax { file } => debug::run(Dump::Syntax, &file),
                     DebugCommand::Ast { file } => debug::run(Dump::Ast, &file),
                     DebugCommand::Hir { file } => debug::run(Dump::Hir, &file),
-                    DebugCommand::Mir { file, function } => debug::run(Dump::Mir(function), &file),
+                    DebugCommand::Mir {
+                        file,
+                        function,
+                        opt,
+                    } => debug::run(
+                        Dump::Mir {
+                            filter: function,
+                            opt,
+                        },
+                        &file,
+                    ),
                 }
             }
             Some(Command::Fmt { check, files }) => fmt::run(check, &files, mode),

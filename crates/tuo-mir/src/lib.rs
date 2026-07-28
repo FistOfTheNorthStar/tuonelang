@@ -15,13 +15,26 @@
 //! (moves, borrow-mode call arguments, explicit drops), and explicit
 //! traps and checks ([`mir::Terminator::Assert`], [`mir::Terminator::Trap`]).
 //! Every instruction's semantics are fully defined on its type — there
-//! is no undefined behavior in MIR, and no optimization is performed.
+//! is no undefined behavior in MIR.
 //!
 //! [`lower`] translates the typed HIR of a **front-end-clean** program
 //! (parse, resolve, type check, and ownership check all passed) into
 //! MIR; [`render`] is the development pretty-printer behind
 //! `tuo debug mir` and the golden tests — deterministic output, not a
 //! stable protocol.
+//!
+//! # Optimization
+//!
+//! [`optimize`] runs a small, conservative pass pipeline ([`opt`]) that
+//! rewrites MIR into equivalent, smaller MIR — constant folding, copy
+//! propagation, unreachable-block removal, and dead-local elimination.
+//! Optimization is **not** part of the reference semantics: the interpreter
+//! executes *unoptimized* MIR, and every pass is a meaning-preserving
+//! rewrite that leaves the program's observable behavior (its return value
+//! and which/whether it traps) unchanged. Each pass re-verifies its output
+//! (see [`debug_assert_verified`]), so the optimized MIR a backend consumes
+//! is verified MIR. It is applied on the native path (`tuo build`/`tuo run`)
+//! and inspectable with `tuo debug mir --opt`.
 //!
 //! # Verification
 //!
@@ -59,6 +72,7 @@
 
 mod lower;
 mod mir;
+pub mod opt;
 mod print;
 pub mod spec;
 mod verify;
@@ -69,6 +83,7 @@ pub use mir::{
     Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, Terminator, Trap,
     UnOp,
 };
+pub use opt::{OptReport, PassReport, optimize, pass_descriptions};
 pub use print::render;
 pub use spec::{AssertionKind, Comparison, SkippedSpec, SpecAssertion, SpecMir, SpecProgram};
 pub use verify::{debug_assert_verified, is_well_formed, verify};

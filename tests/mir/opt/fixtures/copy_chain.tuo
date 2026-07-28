@@ -1,0 +1,9 @@
+fn add_one(take x: I64) -> I64 {
+    let y: I64 = x;
+    let z: I64 = y;
+    return z + 1;
+}
+
+fn main() -> I64 {
+    return add_one(41);
+}
