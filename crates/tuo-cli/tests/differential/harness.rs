@@ -198,20 +198,42 @@ pub fn interpret(source: &str) -> Outcome {
     }
 }
 
-/// Compute the native outcome of the program at `path` with the real `tuo`
-/// binary: `tuo run <path>`, classified by exit status.
+/// Which native backend a differential run exercises. Cranelift is the default
+/// `tuo run`; LLVM is `tuo run --release`. Both must agree with the interpreter,
+/// so both can drive the same generated population.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Backend {
+    /// The default debug backend (`tuo run`).
+    Cranelift,
+    /// The optimizing release backend (`tuo run --release`).
+    Llvm,
+}
+
+impl Backend {
+    /// A short name for reports.
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Cranelift => "cranelift",
+            Self::Llvm => "llvm (--release)",
+        }
+    }
+}
+
+/// Compute the native outcome of the program at `path` with `backend`.
 ///
 /// A native run either returns (exit byte) or traps (the fixed trap status). Any
 /// other exit — a build refusal, a signal — is a harness/environment failure,
 /// not a differential finding, and panics with the captured stderr so the cause
 /// is visible.
 #[must_use]
-pub fn run_native(path: &Path) -> Outcome {
-    let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
-        .arg("run")
-        .arg(path)
-        .output()
-        .expect("the tuo binary runs");
+pub fn run_native_with(path: &Path, backend: Backend) -> Outcome {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("run");
+    if backend == Backend::Llvm {
+        command.arg("--release");
+    }
+    let output = command.arg(path).output().expect("the tuo binary runs");
     let code = output
         .status
         .code()
@@ -232,20 +254,29 @@ pub fn run_native(path: &Path) -> Outcome {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("subset") && !stderr.contains("does not lower"),
-        "`tuo run` refused the program as outside the backend subset (exit {code}); \
-         the generator must only emit programs inside it. stderr:\n{stderr}"
+        "the {} backend refused the program as outside the backend subset (exit {code}); \
+         the generator must only emit programs inside it. stderr:\n{stderr}",
+        backend.label()
     );
     Outcome::returned(code)
 }
 
-/// Run one program through both engines and return `Some(Divergence)` iff they
-/// disagree. The program must already be accepted and inside the backend subset;
-/// the harness writes it to `path` for the native run.
+/// Run one program through the interpreter and the default (Cranelift) backend,
+/// returning `Some(Divergence)` iff they disagree. The program must already be
+/// accepted and inside the backend subset; the harness writes it to `path` for
+/// the native run.
 #[must_use]
 pub fn diff_program(source: &str, path: &Path) -> Option<Divergence> {
+    diff_program_with(source, path, Backend::Cranelift)
+}
+
+/// Run one program through the interpreter and `backend`, returning
+/// `Some(Divergence)` iff they disagree.
+#[must_use]
+pub fn diff_program_with(source: &str, path: &Path, backend: Backend) -> Option<Divergence> {
     std::fs::write(path, source).expect("scratch program is writable");
     let interpreter = interpret(source);
-    let native = run_native(path);
+    let native = run_native_with(path, backend);
     if interpreter.agrees_with(&native) {
         None
     } else {

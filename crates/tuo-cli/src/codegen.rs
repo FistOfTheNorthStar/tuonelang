@@ -1,11 +1,19 @@
 //! The `tuo build` and `tuo run` commands: native compilation via the backend.
 //!
 //! Both drive the same pipeline: run the front end, lower the accepted program
-//! to **verified** MIR, hand it to the [Cranelift backend](tuo_codegen_cranelift)
-//! behind the tuonelang-owned [`CodegenBackend`](tuo_codegen::CodegenBackend)
-//! interface, then link the emitted object together with the runtime's trap
-//! shim (compiled from [`tuo_runtime::trap_runtime_c_source`]) into a native
-//! executable using the platform `cc`.
+//! to **verified** MIR, hand it to a native backend behind the tuonelang-owned
+//! [`CodegenBackend`](tuo_codegen::CodegenBackend) interface, then link the
+//! emitted object together with the runtime's trap shim (compiled from
+//! [`tuo_runtime::trap_runtime_c_source`]) into a native executable using the
+//! platform `cc`.
+//!
+//! Which backend runs is a `--release` choice, and the *only* thing it changes
+//! is speed: the default debug build uses the [Cranelift
+//! backend](tuo_codegen_cranelift) (fast, unoptimized), and `--release` uses the
+//! optimizing [LLVM backend](tuo_codegen_llvm). Both agree with the reference
+//! interpreter — and each other — on every program's observable result, pinned
+//! by the three-way differential suite. The CLI selects between them through the
+//! shared interface and never sees a Cranelift or LLVM type.
 //!
 //! - `tuo build` writes the executable to disk (next to the first input, or to
 //!   `-o <path>`) and stops.
@@ -28,9 +36,10 @@ use std::process::{Command, ExitCode};
 use serde_json::json;
 use tuo_codegen::{CodegenBackend, CodegenError, EntryAbi, ObjectArtifact, TargetSpec};
 use tuo_codegen_cranelift::CraneliftBackend;
+use tuo_codegen_llvm::LlvmBackend;
 use tuo_compiler::ast::Ast;
 use tuo_compiler::source::{SourceId, SourceMap};
-use tuo_compiler::{diagnostics, hir, mir, parser};
+use tuo_compiler::{diagnostics, hir, mir, parser, types};
 
 use crate::output::OutputMode;
 use crate::protocol::{self, Emitter, Event, ProtocolCommand, Status};
@@ -38,14 +47,63 @@ use crate::protocol::{self, Emitter, Event, ProtocolCommand, Status};
 /// The entry function a built program starts at.
 const ENTRY: &str = "main";
 
-/// `tuo build [-o out] <files>`: compile to a native executable.
-pub(crate) fn build(output: Option<PathBuf>, files: &[PathBuf], mode: OutputMode) -> ExitCode {
-    drive(files, output, Mode::Build, mode)
+/// `tuo build [-o out] [--release] <files>`: compile to a native executable.
+pub(crate) fn build(
+    output: Option<PathBuf>,
+    release: bool,
+    files: &[PathBuf],
+    mode: OutputMode,
+) -> ExitCode {
+    drive(files, output, Backend::select(release), Mode::Build, mode)
 }
 
-/// `tuo run <files>`: compile to a temporary executable and run it.
-pub(crate) fn run(files: &[PathBuf], mode: OutputMode) -> ExitCode {
-    drive(files, None, Mode::Run, mode)
+/// `tuo run [--release] <files>`: compile to a temporary executable and run it.
+pub(crate) fn run(release: bool, files: &[PathBuf], mode: OutputMode) -> ExitCode {
+    drive(files, None, Backend::select(release), Mode::Run, mode)
+}
+
+/// Which native backend a build uses. The debug build favors fast compilation
+/// (Cranelift, unoptimized); the release build favors fast *output* (LLVM's
+/// standard optimization pipeline). Both implement the same
+/// [`CodegenBackend`](tuo_codegen::CodegenBackend) and must produce a program
+/// that agrees with the reference interpreter.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Backend {
+    /// The default: the Cranelift backend, emitting unoptimized code quickly.
+    Cranelift,
+    /// `--release`: the LLVM backend, running LLVM's standard optimizer.
+    Llvm,
+}
+
+impl Backend {
+    /// The backend `--release` selects: LLVM when set, Cranelift otherwise.
+    fn select(release: bool) -> Self {
+        if release { Self::Llvm } else { Self::Cranelift }
+    }
+
+    /// Compile `program` with this backend behind the shared interface.
+    fn compile(
+        self,
+        program: &mir::Program,
+        types: &types::TypeckResult,
+        target: &TargetSpec,
+    ) -> Result<ObjectArtifact, CodegenError> {
+        // Each backend is a distinct concrete type; both are driven only through
+        // the `CodegenBackend` trait, so no Cranelift or LLVM type is named here.
+        let backend: &dyn CodegenBackend = match self {
+            Self::Cranelift => &CraneliftBackend::new(),
+            Self::Llvm => &LlvmBackend::release(),
+        };
+        backend.compile(program, types, ENTRY, EntryAbi::IntReturn, target)
+    }
+
+    /// The stable backend name for the progress/summary reporting.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Cranelift => "cranelift",
+            Self::Llvm => "llvm",
+        }
+    }
 }
 
 /// Which command is being driven.
@@ -65,14 +123,20 @@ impl Mode {
 }
 
 /// The shared body of `build` and `run`.
-fn drive(files: &[PathBuf], output: Option<PathBuf>, kind: Mode, mode: OutputMode) -> ExitCode {
+fn drive(
+    files: &[PathBuf],
+    output: Option<PathBuf>,
+    backend: Backend,
+    kind: Mode,
+    mode: OutputMode,
+) -> ExitCode {
     let command = kind.command();
     let (map, sources) = match load(files, command, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
 
-    match compile_and_finish(&map, &sources, files, output, kind, mode) {
+    match compile_and_finish(&map, &sources, files, output, backend, kind, mode) {
         Ok(code) => code,
         Err(outcome) => report_failure(&map, files, command, mode, outcome),
     }
@@ -96,6 +160,7 @@ fn compile_and_finish(
     sources: &[SourceId],
     files: &[PathBuf],
     output: Option<PathBuf>,
+    backend: Backend,
     kind: Mode,
     mode: OutputMode,
 ) -> Result<ExitCode, Failure> {
@@ -135,11 +200,15 @@ fn compile_and_finish(
 
     // Backend → object. The backend receives the real, verified MIR and the
     // real type-check result — no leaked placeholders.
-    emit_progress(&mut emitter, mode, "codegen", "generating native code");
+    emit_progress(
+        &mut emitter,
+        mode,
+        "codegen",
+        &format!("generating native code ({} backend)", backend.name()),
+    );
     let target = TargetSpec::host();
-    let backend = CraneliftBackend::new();
     let artifact = backend
-        .compile(&program, &check.types, ENTRY, EntryAbi::IntReturn, &target)
+        .compile(&program, &check.types, &target)
         .map_err(codegen_failure)?;
 
     // Link object + runtime → executable.
@@ -153,7 +222,10 @@ fn compile_and_finish(
 
     match kind {
         Mode::Build => {
-            let summary = json!({ "artifact": exe_path.display().to_string() });
+            let summary = json!({
+                "artifact": exe_path.display().to_string(),
+                "backend": backend.name(),
+            });
             emit_finished(&mut emitter, mode, Status::Ok, summary);
             report_build_human(mode, &exe_path);
             Ok(ExitCode::SUCCESS)
@@ -175,7 +247,11 @@ fn compile_and_finish(
             // trap is the exception: it is an abnormal termination, so the run
             // is reported as an error.
             let trapped = code == tuo_runtime::TRAP_EXIT_STATUS;
-            let summary = json!({ "exit_status": code, "trapped": trapped });
+            let summary = json!({
+                "exit_status": code,
+                "trapped": trapped,
+                "backend": backend.name(),
+            });
             let overall = if trapped { Status::Error } else { Status::Ok };
             emit_finished(&mut emitter, mode, overall, summary);
             // Clean up the temporary executable; ignore removal errors.

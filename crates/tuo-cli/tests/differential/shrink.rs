@@ -20,21 +20,28 @@
 
 use std::path::Path;
 
-use crate::harness::{self, Divergence, Outcome};
+use crate::harness::{self, Backend, Divergence, Outcome};
 
-/// Reduce `divergence` to a minimal still-diverging program.
+/// Reduce a Cranelift-backend `divergence` to a minimal still-diverging program.
 ///
 /// The oracle is the real one: a reduced candidate is kept only if it still
-/// type-checks *and* the two engines still disagree on it. Returns the smallest
-/// program the shrinker reached (at worst the original), so a caller can rely on
-/// the result reproducing the failure.
+/// type-checks *and* the interpreter and the default backend still disagree on
+/// it. Returns the smallest program the shrinker reached (at worst the original),
+/// so a caller can rely on the result reproducing the failure.
 #[must_use]
 pub fn minimize(divergence: &Divergence, scratch: &Path) -> Divergence {
+    minimize_for(divergence, scratch, Backend::Cranelift)
+}
+
+/// Reduce a `divergence` found against `backend` to a minimal still-diverging
+/// program, re-checking each candidate against that same backend.
+#[must_use]
+pub fn minimize_for(divergence: &Divergence, scratch: &Path, backend: Backend) -> Divergence {
     minimize_by(divergence, |candidate| {
         if !harness::accepts(candidate) {
             return None;
         }
-        harness::diff_program(candidate, scratch)
+        harness::diff_program_with(candidate, scratch, backend)
     })
 }
 

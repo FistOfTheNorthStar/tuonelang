@@ -28,9 +28,11 @@ cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
 cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
-cargo run -p tdg-cli -- build file.tuo         # compile to a native executable (Cranelift backend)
+cargo run -p tdg-cli -- build file.tuo         # compile to a native executable (Cranelift, debug)
 cargo run -p tdg-cli -- build -o out file.tuo  # …to a chosen path
+cargo run -p tdg-cli -- build --release file.tuo # …optimized, via the LLVM backend
 cargo run -p tdg-cli -- run file.tuo           # compile and run; exit status = the program's result
+cargo run -p tdg-cli -- run --release file.tuo # …compile with the optimizing LLVM backend, then run
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
@@ -104,12 +106,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   front-end errors, run each spec in the interpreter's deterministic sandbox with
   configurable fuel/recursion/memory limits, and report measured timing with no latency
   promise), `tdg fmt [--check] <files>` (the canonical formatter — deterministic,
-  idempotent, zero configuration), `tdg build [-o <path>] <files>` and
-  `tdg run <files>` (compile the accepted program to verified MIR and then to native
-  code via the Cranelift backend, linking the runtime trap shim into an executable —
+  idempotent, zero configuration), `tdg build [-o <path>] [--release] <files>` and
+  `tdg run [--release] <files>` (compile the accepted program to verified MIR and then
+  to native code, linking the runtime trap shim into an executable — the default debug
+  build uses the Cranelift backend, `--release` uses the optimizing LLVM backend;
   `run` additionally executes it and exits with the program's own status, the integer
-  its nullary `main` returns; the backend lowers the **scalar, control-flow core**
-  today and *refuses* — never mis-compiles — anything outside it, pointing the user
+  its nullary `main` returns; both backends lower the **scalar, control-flow core**
+  today and *refuse* — never mis-compile — anything outside it, pointing the user
   back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir <file>`
   (diagnostic developer tools with unstable output, not language protocols; `mir`
   requires an accepted program, since MIR is only defined once the front end passes,
@@ -118,16 +121,25 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
-  (`TargetSpec`, `ObjectArtifact`, `CodegenError`, `EntryAbi`). `tdg-codegen-cranelift`
-  implements it; **no Cranelift type appears in anything it exports**, so it cannot
-  leak into MIR, type checking, the CLI protocol, or the runtime's public surface. A
-  backend consumes only *verified* MIR (it never re-checks) and must agree with the
-  MIR interpreter instruction for instruction — where they diverge, the backend is
-  wrong. The reference semantics stays the interpreter; correctness on the supported
-  subset comes before any backend-specific optimization (the Cranelift backend emits
-  unoptimized code, `opt_level=none`). The interpreter-vs-native agreement is pinned by
-  the differential suite in `tdg-cli/tests/codegen_differential.rs` over
-  `tests/codegen/fixtures/`. `tdg-runtime` is the minimal native runtime linked into
+  (`TargetSpec`, `ObjectArtifact`, `CodegenError`, `EntryAbi`). Two backends implement
+  it — `tdg-codegen-cranelift` (the default debug build) and `tdg-codegen-llvm` (the
+  `--release` build, wrapping LLVM 19 via inkwell, pinned by the `llvm19-1` feature and
+  located at build time through `LLVM_SYS_191_PREFIX` / `llvm-config-19` / a Homebrew
+  `llvm@19`; the local default prefix is set in `.cargo/config.toml`, CI installs LLVM
+  19 and sets the env var); **no Cranelift, inkwell, or LLVM type appears in anything
+  either exports**, so neither can leak into MIR, type checking, the CLI protocol, or
+  the runtime's public surface. A backend consumes only *verified* MIR (it never
+  re-checks) and must agree with the MIR interpreter instruction for instruction —
+  where they diverge, the backend is wrong. The reference semantics stays the
+  interpreter; correctness comes before optimization — the Cranelift backend emits
+  unoptimized code, and the LLVM backend prioritizes semantic equivalence, using LLVM's
+  **standard** `default<O2>` pipeline (`OptLevel::Release`) rather than a custom pass
+  stack. The interpreter-vs-native agreement is pinned by the differential suites in
+  `tdg-cli/tests/codegen_differential.rs` (interpreter vs default backend), the
+  **three-way** `tdg-cli/tests/codegen_three_way.rs` (interpreter == Cranelift == LLVM),
+  and the randomized `tdg-cli/tests/differential.rs` (both backends over generated
+  programs), all over `tests/codegen/fixtures/`; any mismatch is a release blocker.
+  `tdg-runtime` is the minimal native runtime linked into
   every built binary: it owns the deterministic trap (a stable `TrapCode` → stderr
   message → `abort()` with a fixed status), emitted as C so a generated executable
   needs no Rust runtime.

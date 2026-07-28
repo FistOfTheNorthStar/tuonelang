@@ -27,10 +27,13 @@ tuo-compiler.workspace = true
 tuo-fmt.workspace = true
 tuo-spec.workspace = true
 # `tuo build` / `tuo run` drive the code generator: the backend-agnostic
-# interface plus the Cranelift backend behind it, and the runtime whose trap
-# object is linked into the produced executable.
+# interface plus both backends behind it (Cranelift for the default debug build,
+# LLVM for `--release`), and the runtime whose trap object is linked into the
+# produced executable. Both backends stay behind the TDG-owned `CodegenBackend`
+# interface; the CLI selects between them but never sees a Cranelift or LLVM type.
 tuo-codegen.workspace = true
 tuo-codegen-cranelift.workspace = true
+tuo-codegen-llvm.workspace = true
 tuo-runtime.workspace = true
 
 [dev-dependencies]
