@@ -187,7 +187,7 @@ fn compile_and_finish(
         .map(|(parse, &id)| Ast::new(&parse.tree, map.source(id).text()))
         .collect();
     let lowered_hir = hir::lower(&asts, &check.resolution);
-    let program = mir::lower(&lowered_hir, &check.resolution, &check.types);
+    let mut program = mir::lower(&lowered_hir, &check.resolution, &check.types);
     // A backend must never consume unverified MIR; refuse if lowering somehow
     // produced malformed MIR (a compiler bug, not a user error).
     if !mir::verify(&program, &check.types).is_empty() {
@@ -197,6 +197,20 @@ fn compile_and_finish(
             unsupported: false,
         });
     }
+
+    // Optimize the verified MIR before handing it to the backend. Every pass
+    // is a meaning-preserving rewrite (the interpreter's result on the
+    // *unoptimized* MIR is the reference the differential suites pin against),
+    // and the driver re-verifies after each pass, so `program` remains
+    // verified MIR a backend may consume. Both backends run over the optimized
+    // MIR; the release backend layers LLVM's own optimizer on top.
+    emit_progress(
+        &mut emitter,
+        mode,
+        "optimizing",
+        "running MIR optimization passes",
+    );
+    let _opt = mir::optimize(&mut program, &check.types);
 
     // Backend → object. The backend receives the real, verified MIR and the
     // real type-check result — no leaked placeholders.

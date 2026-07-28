@@ -6,7 +6,10 @@
 //! syntax dumps tolerate malformed input (the parser is total); the MIR
 //! dump requires an accepted program, since MIR is only defined once the
 //! front end passes, and the lowered MIR is verified before it is printed
-//! (a consumer must never accept unverified MIR).
+//! (a consumer must never accept unverified MIR). `debug mir --opt`
+//! additionally runs the MIR optimization passes (the ones the native build
+//! applies) before printing, so the dump shows the optimized MIR a backend
+//! consumes; the passes re-verify their output, so it is still verified MIR.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -23,8 +26,14 @@ pub(crate) enum Dump {
     Ast,
     /// The lowered high-level IR.
     Hir,
-    /// The lowered mid-level IR, optionally restricted to one function.
-    Mir(Option<String>),
+    /// The lowered mid-level IR, optionally restricted to one function and
+    /// optionally after the MIR optimization passes.
+    Mir {
+        /// Restrict the dump to the function with this name.
+        filter: Option<String>,
+        /// Run the optimization passes before printing.
+        opt: bool,
+    },
 }
 
 /// Dump `file`'s syntax or AST to stdout; parse diagnostics go to stderr.
@@ -54,8 +63,8 @@ pub(crate) fn run(dump: Dump, path: &Path) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Dump::Mir(function) = &dump {
-        return run_mir(&map, id, function.as_deref());
+    if let Dump::Mir { filter, opt } = &dump {
+        return run_mir(&map, id, filter.as_deref(), *opt);
     }
     let result = parser::parse(map.source(id));
 
@@ -75,7 +84,7 @@ pub(crate) fn run(dump: Dump, path: &Path) -> ExitCode {
             }
             rendered
         }
-        Dump::Mir(_) => unreachable!("handled above"),
+        Dump::Mir { .. } => unreachable!("handled above"),
     };
     print!("{rendered}");
 
@@ -94,7 +103,12 @@ pub(crate) fn run(dump: Dump, path: &Path) -> ExitCode {
     clippy::print_stderr,
     reason = "this is the CLI presentation layer: stdout carries the dump, stderr the diagnostics"
 )]
-fn run_mir(map: &SourceMap, id: tuo_compiler::source::SourceId, filter: Option<&str>) -> ExitCode {
+fn run_mir(
+    map: &SourceMap,
+    id: tuo_compiler::source::SourceId,
+    filter: Option<&str>,
+    opt: bool,
+) -> ExitCode {
     let check = tuo_compiler::check_sources(map, &[id]);
     if !check.diagnostics.is_empty() {
         eprint!(
@@ -109,7 +123,7 @@ fn run_mir(map: &SourceMap, id: tuo_compiler::source::SourceId, filter: Option<&
     let parse = parser::parse(map.source(id));
     let asts = [Ast::new(&parse.tree, map.source(id).text())];
     let lowered_hir = hir::lower(&asts, &check.resolution);
-    let program = mir::lower(&lowered_hir, &check.resolution, &check.types);
+    let mut program = mir::lower(&lowered_hir, &check.resolution, &check.types);
     // MIR is only meaningful when it verifies; a consumer must never accept
     // unverified MIR, so refuse the dump if lowering produced malformed MIR
     // (this would be a compiler bug, not a user error).
@@ -119,7 +133,11 @@ fn run_mir(map: &SourceMap, id: tuo_compiler::source::SourceId, filter: Option<&
         eprintln!("error: internal: lowered MIR failed verification");
         return ExitCode::FAILURE;
     }
-    let mut program = program;
+    // With `--opt`, apply the optimization passes the native build runs. The
+    // driver re-verifies after each pass, so the printed MIR is still verified.
+    if opt {
+        let _ = mir::optimize(&mut program, &check.types);
+    }
     if let Some(name) = filter {
         program.functions.retain(|function| function.name == name);
         program.skipped.retain(|skipped| skipped.name == name);

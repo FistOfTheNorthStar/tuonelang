@@ -1,0 +1,13 @@
+fn add_one(_0: take I64) -> I64 {
+    let _1: I64;
+bb0:
+    _1 = add(copy _0, const 1_i64)
+    return copy _1
+}
+
+fn main() -> I64 {
+    let _0: I64;
+bb0:
+    _0 = call add_one(const 41_i64)
+    return copy _0
+}

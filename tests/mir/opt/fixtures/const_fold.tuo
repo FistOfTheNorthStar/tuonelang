@@ -1,0 +1,5 @@
+fn main() -> I64 {
+    let a: I64 = 2 + 3 * 4;
+    let b: I64 = a - 4;
+    return b;
+}

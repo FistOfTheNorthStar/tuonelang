@@ -1,0 +1,8 @@
+fn main() -> I64 {
+    let flag: Bool = 1 < 2;
+    if flag {
+        return 10;
+    } else {
+        return 20;
+    }
+}

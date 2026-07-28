@@ -1,0 +1,5 @@
+fn main() -> I64 {
+    let z: I64 = 0;
+    let d: I64 = 10 / z;
+    return d;
+}

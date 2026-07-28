@@ -1,0 +1,5 @@
+fn main() -> I64 {
+    let unused: I64 = 99;
+    let result: I64 = 7;
+    return result;
+}

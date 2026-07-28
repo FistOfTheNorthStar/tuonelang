@@ -1,0 +1,12 @@
+fn main() -> I64 {
+    let _0: Bool;
+    let _1: Bool; // flag
+bb0:
+    _0 = lt(const 1_i64, const 2_i64)
+    _1 = copy _0
+    branch copy _1 ? bb1 : bb2
+bb1:
+    return const 10_i64
+bb2:
+    return const 20_i64
+}

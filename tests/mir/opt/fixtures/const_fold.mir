@@ -1,0 +1,14 @@
+fn main() -> I64 {
+    let _0: I64;
+    let _1: I64;
+    let _2: I64; // a
+    let _3: I64;
+    let _4: I64; // b
+bb0:
+    _0 = mul(const 3_i64, const 4_i64)
+    _1 = add(const 2_i64, copy _0)
+    _2 = copy _1
+    _3 = sub(copy _2, const 4_i64)
+    _4 = copy _3
+    return copy _4
+}
