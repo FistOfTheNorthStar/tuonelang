@@ -232,7 +232,31 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Affected-spec selection (`IncrementalSession::affected_specs`, `Selection::Affected` in
   `tdg-spec`, `tdg verify --affected-by`) runs only the specs an edit may have changed and
   is proven sound, precise, and verdict-preserving in
-  `tdg-compiler/tests/affected_specs.rs`.
+  `tdg-compiler/tests/affected_specs.rs`. Interactive hosts read the snapshot's semantic
+  results — resolution, types, the source map, and diagnostics with their spans — through
+  the scoped-closure accessor `IncrementalSession::with_semantics(|Semantics| …)`; the
+  snapshot retains the full `Vec<Diagnostic>` (not just an `accepted` boolean) so spans
+  survive to the surface.
+- **The LSP is a projection of the shared query engine, never a second
+  front end.** `tdg-lsp` implements every language feature — diagnostics, hover,
+  go-to-definition, find-references, rename, document symbols, completion, signature help,
+  semantic tokens, quick-fix code actions, and navigation both ways between a function and
+  its colocated specs — as a read-only translation of what `IncrementalSession` already
+  computed. It **reimplements no stage**: each feature delegates to an existing query
+  (`Resolution::resolved_at` / `references_to` / `rename_spans` / `specs_for` / `target_of`,
+  `TypeckResult::type_of` / `expr_ty`, `Ty::render`, the collected diagnostics), so the CLI,
+  the LSP, and the future agent server all drive the *same* compiler queries — the whole
+  point of the shared engine. The crate is three layers: `wire` (the LSP JSON vocabulary,
+  `serde`-serializable, carrying no compiler types), `convert` (the **only** place UTF-8
+  byte `Span`s meet LSP's UTF-16 line/character `Position`s — both directions, clamping
+  out-of-range input rather than failing), and `analysis` (the `Analysis` request surface,
+  one method per feature over the session). Code actions offer **only** compiler-authored,
+  machine-applicable suggestions — the server never invents a fix the compiler did not
+  vouch for. `Analysis` is the testable semantic core (answers are plain typed values,
+  pinned in `tdg-lsp/tests/features.rs`); a JSON-RPC/stdio transport is a thin future
+  addition, so no wire server is advertised before it exists. The read-only
+  `SourceMap::file_id(name)` lookup lets a host resolve a document URI to its `FileId`
+  without mutating the map.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

@@ -55,6 +55,16 @@ impl SourceMap {
         &self.file_names[file.as_raw() as usize]
     }
 
+    /// The [`FileId`] a file `name` was interned under, if this map has seen it.
+    /// The read-only counterpart of [`SourceMap::intern_file`] — it never
+    /// creates a file, so a consumer holding a map by shared reference (a
+    /// tooling query, a language server) can resolve a document name to its id
+    /// without mutating the map.
+    #[must_use]
+    pub fn file_id(&self, name: &str) -> Option<FileId> {
+        self.file_ids.get(name).copied()
+    }
+
     /// Add a new immutable text snapshot for `file` at the file's next
     /// revision, returning its identity.
     ///
@@ -124,6 +134,15 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(map.file_name(a), "main.tuo");
+    }
+
+    #[test]
+    fn file_id_looks_up_without_creating() {
+        let mut map = SourceMap::new();
+        let a = map.intern_file("main.tuo");
+        assert_eq!(map.file_id("main.tuo"), Some(a));
+        // An unseen name is not created — the read-only lookup returns None.
+        assert_eq!(map.file_id("absent.tuo"), None);
     }
 
     #[test]

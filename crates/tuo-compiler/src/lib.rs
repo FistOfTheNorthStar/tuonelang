@@ -31,7 +31,7 @@ mod check;
 mod incremental;
 
 pub use check::{CheckResult, check_sources};
-pub use incremental::IncrementalSession;
+pub use incremental::{IncrementalSession, Semantics};
 
 /// Typed AST views over the CST (re-export of [`tuo_ast`]).
 pub use tuo_ast as ast;
