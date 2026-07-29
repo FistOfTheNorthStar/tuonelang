@@ -90,7 +90,17 @@ enum Command {
     /// A superset of `tuo check` and `tuo spec`: the whole front end runs,
     /// and if it accepts the program, every spec is executed. The exit status
     /// is a failure on any front-end error, failing assertion, or trap.
+    ///
+    /// `--affected-by <file>` restricts execution to the specs whose semantic
+    /// dependencies touch a symbol defined in `<file>` (which must be one of
+    /// the input files) — the specs an edit to that file could have changed,
+    /// selected through the incremental dependency graph. Omit it to run every
+    /// spec.
     Verify {
+        /// Run only the specs affected by an edit to this file (one of the
+        /// input files); omit to run every spec.
+        #[arg(long = "affected-by", value_name = "FILE")]
+        affected_by: Option<PathBuf>,
         /// The tuonelang source files forming the program.
         #[arg(required = true)]
         files: Vec<PathBuf>,
@@ -218,7 +228,9 @@ impl Cli {
         match self.command {
             Some(Command::Check { files }) => check::run(&files, mode),
             Some(Command::Spec { target, files }) => spec::run(target, &files, mode),
-            Some(Command::Verify { files }) => spec::verify(&files, mode),
+            Some(Command::Verify { affected_by, files }) => {
+                spec::verify(affected_by.as_deref(), &files, mode)
+            }
             Some(Command::Build {
                 output,
                 release,

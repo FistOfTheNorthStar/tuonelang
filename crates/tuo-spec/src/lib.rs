@@ -48,3 +48,7 @@ pub use report::{
     AssertionResult, Failure, Outcome, SkippedSpec, SpecReport, SpecRun, TraceFrame, TrapReport,
 };
 pub use runner::{Limits, RunOutcome, Selection, run};
+
+/// The stable identity of a spec (or its target), re-exported so callers can
+/// build a [`Selection::Affected`] set (re-export of [`tuo_resolve::SymbolId`]).
+pub use tuo_resolve::SymbolId;

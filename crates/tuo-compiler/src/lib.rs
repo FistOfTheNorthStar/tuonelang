@@ -28,11 +28,15 @@
 //! stages are still stubs, so no further orchestration exists yet.
 
 mod check;
+mod incremental;
 
 pub use check::{CheckResult, check_sources};
+pub use incremental::IncrementalSession;
 
 /// Typed AST views over the CST (re-export of [`tuo_ast`]).
 pub use tuo_ast as ast;
+/// The incremental query database (re-export of [`tuo_db`]).
+pub use tuo_db as db;
 /// Structured diagnostics (re-export of [`tuo_diagnostics`]).
 pub use tuo_diagnostics as diagnostics;
 /// The desugared high-level IR (re-export of [`tuo_hir`]).

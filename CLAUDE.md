@@ -24,6 +24,7 @@ cargo run -p tdg-cli -- check file.tuo         # parse, resolve, type-check, own
 cargo run -p tdg-cli -- spec file.tuo          # execute the program's specs (MIR interpreter)
 cargo run -p tdg-cli -- spec --target f file.tuo # run only the specs of function `f`
 cargo run -p tdg-cli -- verify file.tuo        # all static checks + execute specs
+cargo run -p tdg-cli -- verify --affected-by a.tuo a.tuo b.tuo # …only specs an edit to a.tuo could affect
 cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
 cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
 cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
@@ -63,7 +64,11 @@ Crates, lowest layer first:
 - **`tdg-diagnostics`** — structured, machine-readable diagnostics.
 - **`tdg-db`** — incremental, query-based compiler database. The shared computation layer
   that CLI, LSP, and the agent protocol all drive, so semantics are computed once. Depends
-  only on `tdg-source` and `tdg-diagnostics`.
+  only on `tdg-source` and `tdg-diagnostics`, so it owns the *stage-agnostic* red-green
+  engine (`QueryEngine`, driven by a host's `QueryHost::compute`), **not** the stage wiring —
+  the real per-stage queries are registered by `tdg-compiler` (which sees every stage). No
+  engine type leaks into a host's public API; the boundary speaks source identities, plain
+  values, and `QueryError`.
 - **`tdg-lexer`** → **`tdg-syntax`** (lossless CST) → **`tdg-parser`** → **`tdg-ast`**.
 - **`tdg-hir`** — desugared HIR lowered from the AST; shared input to resolution and typing.
 - **`tdg-resolve`** (name/path resolution) → **`tdg-types`** (inference/checking) →
@@ -101,12 +106,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tdg-cli/src/cli.rs` is the extension point. Implemented so far:
   `tdg check <files>` (the parse → resolve → type-check → ownership-check front end,
   specs included per ADR-0002 — specs are checked but **not** executed here),
-  `tdg spec [--target <name>] <files>` and `tdg verify <files>` (execute the program's
-  colocated specs through the reference MIR interpreter — `spec` runs the selected
-  specs, `verify` runs all static checks *and* the specs; both refuse a program with
-  front-end errors, run each spec in the interpreter's deterministic sandbox with
-  configurable fuel/recursion/memory limits, and report measured timing with no latency
-  promise), `tdg fmt [--check] <files>` (the canonical formatter — deterministic,
+  `tdg spec [--target <name>] <files>` and `tdg verify [--affected-by <file>] <files>`
+  (execute the program's colocated specs through the reference MIR interpreter — `spec`
+  runs the selected specs, `verify` runs all static checks *and* the specs; both refuse a
+  program with front-end errors, run each spec in the interpreter's deterministic sandbox
+  with configurable fuel/recursion/memory limits, and report measured timing with no
+  latency promise; `verify --affected-by <file>` runs only the specs whose semantic
+  dependency closure touches a symbol defined in `<file>` — the specs an edit to it could
+  have changed, selected through the incremental dependency graph — and a cold `verify`
+  with no such flag runs every spec), `tdg fmt [--check] <files>` (the canonical
+  formatter — deterministic,
   idempotent, zero configuration), `tdg build [-o <path>] [--release] <files>` and
   `tdg run [--release] <files>` (compile the accepted program to verified MIR, run the
   TDG-native MIR optimization passes over it, and then to native code, linking the
@@ -198,6 +207,32 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   additive changes are allowed without a bump, but dropping/renaming a guaranteed
   field or changing the version must move `PROTOCOL_VERSION` and the schema
   fixture together.
+- **Incremental compilation is fine-grained at the query-graph level, and
+  correctness beats invalidation reduction.** `tdg-db` owns a generic red-green
+  engine (`QueryEngine`): opaque `QueryKey`s, opaque host-comparable `StoredValue`s
+  (the host's own `PartialEq` decides **early cutoff**), dependency recording, cycle
+  detection, and cooperative cancellation — pinned by `tdg-db/tests/incremental.rs`.
+  Because `tdg-db` may not see a stage crate, the real stage wiring lives in
+  `tdg-compiler`'s `IncrementalSession`, which implements `QueryHost` and registers the
+  seven tracked queries — source file, parse, module interface, resolution, per-function
+  type-check, per-function MIR, and per-spec dependency graph. The whole-program stage
+  passes (`resolve`, `check`, `lower`) are not yet internally per-item incremental, so the
+  session recomputes each **whole-program** result at most once per revision (memoized by
+  revision) and slices per-symbol results out of it; the per-symbol queries store
+  comparable values (a signature `Ty`, a rendered MIR string, a dependency list) so early
+  cutoff fires. Two deliberate precision seams shield downstream work: the
+  signature-level **module interface** (bodies excluded, so a body edit does not re-check
+  callers) and a per-function **body fingerprint** (so a one-function body edit re-lowers
+  only that function's MIR), plus a spec-graph digest kept separate from the resolution
+  digest (so a spec's dependency change never re-checks function typing). Everywhere else
+  the session errs toward recomputing. The five edit scenarios — no-change,
+  function-body-only, function-signature, unrelated-file, spec-only — are pinned as **hard
+  assertions on which queries re-execute** (`tdg-compiler/tests/incremental_stages.rs`) and
+  reported with measured timing (`.../incremental_measure.rs`, run with `--nocapture`).
+  Affected-spec selection (`IncrementalSession::affected_specs`, `Selection::Affected` in
+  `tdg-spec`, `tdg verify --affected-by`) runs only the specs an edit may have changed and
+  is proven sound, precise, and verdict-preserving in
+  `tdg-compiler/tests/affected_specs.rs`.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

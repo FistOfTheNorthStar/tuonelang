@@ -144,6 +144,38 @@ fn target_selection_runs_only_the_named_function_s_specs() {
 }
 
 #[test]
+fn affected_selection_runs_only_the_specs_in_the_set() {
+    let source = concat!(
+        "fn a(take x: Int) -> Int { x }\n",
+        "fn b(take x: Int) -> Int { x }\n",
+        "spec a { then a(1) == 1; }\n",
+        "spec b { then b(1) == 1; }\n",
+    );
+    // First, run all specs to learn each spec's stable symbol identity.
+    let all = run(source);
+    assert_eq!(all.ran(), 2);
+    let a_spec = all
+        .runs
+        .iter()
+        .find(|r| r.name == "a")
+        .expect("spec a ran")
+        .symbol;
+
+    // Now select only spec `a`'s symbol: exactly that spec runs.
+    let report = run_with(
+        source,
+        &Selection::Affected(vec![a_spec]),
+        Limits::default(),
+    );
+    assert_eq!(report.ran(), 1, "only the affected spec should run");
+    assert_eq!(report.runs[0].name, "a");
+
+    // An empty affected set runs nothing.
+    let empty = run_with(source, &Selection::Affected(vec![]), Limits::default());
+    assert_eq!(empty.ran(), 0, "an empty affected set runs no specs");
+}
+
+#[test]
 fn a_string_named_spec_is_selectable_by_its_written_name() {
     let source = "spec \"arithmetic holds\" { then 1 + 1 == 2; }\n";
     let report = run_with(
