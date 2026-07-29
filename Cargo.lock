@@ -1397,10 +1397,14 @@ dependencies = [
 name = "tuo-lsp"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tuo-compiler",
  "tuo-db",
  "tuo-diagnostics",
+ "tuo-resolve",
  "tuo-source",
+ "tuo-types",
 ]
 
 [[package]]

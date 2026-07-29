@@ -179,6 +179,38 @@ struct Snapshot {
     fn_body: BTreeMap<u32, u64>,
     /// Whether the front end accepted the program (no error diagnostics).
     accepted: bool,
+    /// Every diagnostic the front end produced for this snapshot, in stage
+    /// order (parse, resolve, type, ownership). Retained — not just reduced to
+    /// the `accepted` boolean — so interactive hosts (the LSP, the agent
+    /// protocol) can surface diagnostics with their spans.
+    diagnostics: Vec<tuo_diagnostics::Diagnostic>,
+}
+
+/// A read-only view of one program snapshot's semantic results, handed to a
+/// closure by [`IncrementalSession::with_semantics`].
+///
+/// It bundles the compiler's answers an interactive host reads — resolution,
+/// types, the source map, and diagnostics — all anchored to the *same*
+/// revision, so spans, symbols, and line/column conversion are mutually
+/// consistent. The borrows are scoped to the closure: the view never outlives
+/// the snapshot it describes.
+pub struct Semantics<'a> {
+    /// The source map the snapshot's spans are anchored to. Line/column
+    /// conversion for any span in `resolution`/`types`/`diagnostics` must go
+    /// through this map.
+    pub map: &'a SourceMap,
+    /// Whole-program name resolution: symbols, references, spec attachments and
+    /// dependencies. The seam for go-to-definition, find-references, rename, and
+    /// spec navigation.
+    pub resolution: &'a Resolution,
+    /// Whole-program type checking: symbol and expression types. The seam for
+    /// hover.
+    pub types: &'a TypeckResult,
+    /// Every diagnostic the front end produced, in stage order (parse, resolve,
+    /// type, ownership), each carrying its span(s).
+    pub diagnostics: &'a [tuo_diagnostics::Diagnostic],
+    /// Whether the front end accepted the program (no error diagnostics).
+    pub accepted: bool,
 }
 
 /// A fine-grained incremental compiler session over the real pipeline stages.
@@ -312,6 +344,34 @@ impl IncrementalSession {
     #[must_use]
     pub fn is_accepted(&self) -> bool {
         self.with_snapshot(|snap| snap.accepted)
+    }
+
+    /// Run `f` with a read-only view of the current program's *semantic*
+    /// results — name resolution, type checking, the source map, and every
+    /// diagnostic — computed once per revision and shared by every interactive
+    /// query.
+    ///
+    /// This is the seam through which a language server or agent protocol reads
+    /// the compiler's answers: go-to-definition and rename off
+    /// [`Resolution`](tuo_resolve::Resolution), hover off
+    /// [`TypeckResult`](tuo_types::TypeckResult), diagnostics with their spans,
+    /// and span↔position conversion through the [`SourceMap`](tuo_source::SourceMap).
+    /// It is deliberately a scoped-closure accessor: the semantics borrow the
+    /// memoized snapshot, so they never outlive the revision they describe.
+    ///
+    /// The `SourceMap` handed to `f` is the snapshot's own map — spans produced
+    /// by resolution and typing are anchored to *its* [`SourceId`]s, so line/
+    /// column conversion must go through this same map.
+    pub fn with_semantics<R>(&self, f: impl FnOnce(Semantics<'_>) -> R) -> R {
+        self.with_snapshot(|snap| {
+            f(Semantics {
+                map: &snap.map,
+                resolution: &snap.resolution,
+                types: &snap.types,
+                diagnostics: &snap.diagnostics,
+                accepted: snap.accepted,
+            })
+        })
     }
 
     /// Every spec symbol in the current program, in declaration order.
@@ -462,14 +522,16 @@ impl IncrementalSession {
         let types = tuo_types::check(&asts, &resolution);
         let ownership = tuo_ownership::check(&asts, &resolution, &types);
 
-        let parse_errors = parses
+        // Collect every diagnostic, in stage order — the same sequence the
+        // `check_sources` front end reports, retained for interactive hosts.
+        let mut diagnostics: Vec<tuo_diagnostics::Diagnostic> = parses
             .iter()
             .flat_map(tuo_parser::ParseResult::all_diagnostics)
-            .any(|d| d.severity == tuo_diagnostics::Severity::Error);
-        let accepted = !parse_errors
-            && !has_errors(resolution.diagnostics())
-            && !has_errors(types.diagnostics())
-            && !has_errors(ownership.diagnostics());
+            .collect();
+        diagnostics.extend_from_slice(resolution.diagnostics());
+        diagnostics.extend_from_slice(types.diagnostics());
+        diagnostics.extend_from_slice(ownership.diagnostics());
+        let accepted = !has_errors(&diagnostics);
 
         // Lower MIR only for an accepted program (MIR is defined only then).
         let mut mir = BTreeMap::new();
@@ -502,6 +564,7 @@ impl IncrementalSession {
             mir,
             fn_body,
             accepted,
+            diagnostics,
         }
     }
 }
