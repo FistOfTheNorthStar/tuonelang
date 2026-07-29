@@ -22,7 +22,7 @@ use tuo_ast::Ast;
 use tuo_diagnostics::{Diagnostic, Severity};
 use tuo_mir::{SpecAssertion, SpecMir};
 use tuo_mir_interp::{Interpreter, RuntimeError};
-use tuo_resolve::Resolution;
+use tuo_resolve::{Resolution, SymbolId};
 use tuo_source::{SourceId, SourceMap, Span};
 
 pub use tuo_mir_interp::Limits;
@@ -40,6 +40,12 @@ pub enum Selection {
     /// Only specs attached to the function named `target`, plus free-standing
     /// specs whose written name equals `target`.
     Target(String),
+    /// Only the specs whose own symbol is in this set — the *affected* specs an
+    /// edit may have changed, computed from their semantic dependency graphs
+    /// (see `tuo_compiler::IncrementalSession::affected_specs`). A spec not in
+    /// the set is skipped because nothing it depends on changed; this lets
+    /// `tuo verify` re-run only the specs an edit could have invalidated.
+    Affected(Vec<SymbolId>),
 }
 
 /// The outcome of attempting a spec run.
@@ -140,6 +146,8 @@ fn selects(selection: &Selection, spec: &SpecMir, resolution: &Resolution) -> bo
                 .is_some_and(|function| resolution.symbol(function).name == *target);
             by_target || spec.name == *target
         }
+        // A spec matches when its own symbol is in the affected set.
+        Selection::Affected(symbols) => symbols.contains(&spec.symbol),
     }
 }
 

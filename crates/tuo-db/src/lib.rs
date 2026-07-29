@@ -9,39 +9,46 @@
 //! # The query surface (architecture)
 //!
 //! The public architecture expresses the pipeline as queries over the
-//! database. The intended surface is:
+//! database. The intended stage surface is:
 //!
 //! ```text
-//! source_text(file)          → the current source snapshot         [implemented]
-//! lex(file)                  → tokens                              [awaits tuo-lexer]
-//! parse(file)                → syntax tree                         [awaits tuo-parser]
-//! lower_ast(file)            → AST → HIR lowering                  [awaits tuo-hir]
-//! module_items(module)       → the items a module declares         [awaits tuo-hir]
-//! resolve_name(scope, name)  → what a name refers to               [awaits tuo-resolve]
-//! type_of(item)              → an item's type                      [awaits tuo-types]
-//! mir_of(function)           → a function's MIR                    [awaits tuo-mir]
-//! specs_for(function)        → the specs colocated with a function [awaits tuo-spec]
+//! source_text(file)          → the current source snapshot
+//! parse(file)                → syntax tree
+//! module_interface(file)     → a file's signature-level summary
+//! resolve()                  → name/path resolution
+//! type_of(function)          → a function's type-check result
+//! mir_of(function)           → a function's MIR
+//! spec_dependencies(spec)    → a spec's semantic dependency closure
 //! ```
 //!
-//! Per the project rule that no surface advertises behavior the compiler
-//! cannot perform, only the queries whose backing stages exist are
-//! implemented today: the `source_text` input plus two small real derived
-//! queries over it (`line_count`, `total_line_count`) that exercise the
-//! incremental engine end to end. Stage queries slot in as their crates gain
-//! functionality, replacing nothing.
+//! These are **not** implemented in this crate, and cannot be: `tuo-db` sits at
+//! its dependency layer with visibility of only [`tuo_source`] and
+//! `tuo-diagnostics`, while every backing stage crate (`tuo-parser`,
+//! `tuo-resolve`, `tuo-types`, `tuo-mir`, `tuo-spec`) is layered strictly above
+//! it. So this crate provides the *engine*, not the stage wiring: the reusable,
+//! stage-agnostic [`QueryEngine`] (module [`engine`]), driven by any host that
+//! implements [`QueryHost`]. The real stage queries are registered by
+//! `tuo-compiler`'s incremental session, which does depend on every stage. In
+//! this crate the [`Database`] facade is the worked example — the `source_text`
+//! input plus two small derived queries (`line_count`, `total_line_count`) that
+//! exercise memoization, invalidation, early cutoff, and cancellation end to
+//! end.
 //!
 //! # Incremental engine
 //!
-//! The engine is a TDG-owned salsa-style red-green implementation
-//! (`Database` in [`db`]): a global revision counter, per-query memos with
+//! The engine ([`QueryEngine`]) is a TDG-owned salsa-style red-green
+//! implementation: a global revision counter, per-query memos with
 //! `changed_at`/`verified_at` stamps and recorded dependencies, dependency
 //! revalidation before recomputation, and **early cutoff** — a recomputation
 //! that produces an equal value keeps its old `changed_at`, so downstream
-//! queries are not invalidated. A third-party engine (Salsa) could replace
+//! queries are not invalidated. It is generic: it stores results as opaque
+//! [`StoredValue`]s (equality, hence early cutoff, is decided by the host's own
+//! `PartialEq`) keyed by opaque [`QueryKey`]s, and drives recomputation through
+//! the host's [`QueryHost::compute`]. A third-party engine (Salsa) could replace
 //! this implementation behind the same boundary, but no engine-specific type
-//! (Salsa's or this one's — keys, memos, revisions) ever appears in the
-//! public API: the boundary speaks [`tuo_source`] identities, plain values,
-//! and [`QueryError`].
+//! (Salsa's or this one's — keys, memos, revisions) ever appears in a host's
+//! public API: the boundary speaks [`tuo_source`] identities, plain values, and
+//! [`QueryError`].
 //!
 //! # Query purity requirements
 //!
@@ -69,6 +76,40 @@
 //!    [`QueryError`]; it must not panic on malformed *source* (that is what
 //!    diagnostics are for — errors are values here).
 
-mod db;
+use std::error::Error;
+use std::fmt;
 
-pub use db::{Database, QueryError};
+use tuo_source::FileId;
+
+mod db;
+pub mod engine;
+
+pub use db::Database;
+pub use engine::{
+    Computed, QueryCtx, QueryEngine, QueryHost, QueryKey, StoredValue, downcast, stored,
+};
+
+/// Error returned by queries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum QueryError {
+    /// The computation was abandoned because cancellation was requested.
+    /// Nothing was corrupted: completed sub-results remain valid, and the
+    /// query can simply be asked again after [`Database::clear_cancellation`].
+    Cancelled,
+    /// The file has no source text set.
+    NoText {
+        /// The file that has no text.
+        file: FileId,
+    },
+}
+
+impl fmt::Display for QueryError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Cancelled => f.write_str("query cancelled"),
+            Self::NoText { file } => write!(f, "no source text set for {file}"),
+        }
+    }
+}
+
+impl Error for QueryError {}

@@ -30,3 +30,9 @@ tuo-ownership.workspace = true
 tuo-mir.workspace = true
 tuo-mir-interp.workspace = true
 tuo-codegen.workspace = true
+
+[dev-dependencies]
+# The affected-spec selection tests drive the spec runner over the set the
+# incremental session selects. tuo-spec sits strictly below the facade
+# (layer 90 < 100), so this dev-only edge respects the dependency layering.
+tuo-spec.workspace = true

@@ -1,108 +1,37 @@
-//! The database: inputs, memoized queries, and the red-green engine.
+//! The database: inputs, memoized queries, and the red-green engine facade.
 //!
-//! Everything in this module is TDG-owned. The engine internals (`Key`,
-//! `Value`, `Memo`, revisions) are private; the public surface speaks
-//! [`tuo_source`] identities, plain values, and [`QueryError`].
+//! Everything in this module is TDG-owned. The reusable engine lives in
+//! [`crate::engine`]; this [`Database`] is a thin **typed facade** over it — the
+//! in-crate worked example of a host implementing [`QueryHost`]. It exposes the
+//! source input plus two small derived queries (`line_count`,
+//! `total_line_count`) that exercise memoization, precise invalidation, early
+//! cutoff, and cancellation end to end. Real compiler-stage queries live in a
+//! host that may depend on the stage crates (`tuo-compiler`), never here: the
+//! public surface speaks [`tuo_source`] identities, plain values, and
+//! [`QueryError`].
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
-use std::error::Error;
-use std::fmt;
 use std::sync::Arc;
 
 use tuo_source::{FileId, SourceId, SourceMap, SourceText, SourceTooLarge};
 
-/// A revision of the database: bumped once per input change.
-type Revision = u64;
+use crate::QueryError;
+use crate::engine::{Computed, QueryCtx, QueryEngine, QueryHost, QueryKey, downcast, stored};
 
-/// Internal identity of one query instance (a query plus its arguments).
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-enum Key {
-    /// Input: the current text snapshot of a file.
-    SourceText(FileId),
-    /// Input: the files that currently have text, in insertion order.
-    FileList,
-    /// Derived: number of lines in a file.
-    LineCount(FileId),
-    /// Derived: total number of lines across all files.
-    TotalLineCount,
+/// Query-kind tags for this facade's queries (see [`QueryKey`]).
+mod kind {
+    /// Input: the current text snapshot of a file (arg = `FileId` raw).
+    pub(super) const SOURCE_TEXT: u32 = 0;
+    /// Input: the files that currently have text (arg = 0).
+    pub(super) const FILE_LIST: u32 = 1;
+    /// Derived: number of lines in a file (arg = `FileId` raw).
+    pub(super) const LINE_COUNT: u32 = 2;
+    /// Derived: total number of lines across all files (arg = 0).
+    pub(super) const TOTAL_LINE_COUNT: u32 = 3;
 }
 
-impl Key {
-    const fn is_input(self) -> bool {
-        matches!(self, Self::SourceText(_) | Self::FileList)
-    }
-}
-
-impl fmt::Display for Key {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::SourceText(file) => write!(f, "source_text({file})"),
-            Self::FileList => write!(f, "file_list()"),
-            Self::LineCount(file) => write!(f, "line_count({file})"),
-            Self::TotalLineCount => write!(f, "total_line_count()"),
-        }
-    }
-}
-
-/// Internal result value of a query. Cheap to clone.
-#[derive(Clone, Debug)]
-enum Value {
-    Source(Arc<SourceText>),
-    Files(Vec<FileId>),
-    Count(u64),
-}
-
-impl PartialEq for Value {
-    /// Semantic equality, used for early cutoff. Two source snapshots are
-    /// equal when their **text** is equal — a re-set of identical text yields
-    /// a new snapshot identity but does not invalidate downstream results.
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::Source(a), Self::Source(b)) => a.text() == b.text(),
-            (Self::Files(a), Self::Files(b)) => a == b,
-            (Self::Count(a), Self::Count(b)) => a == b,
-            _ => false,
-        }
-    }
-}
-
-/// A memoized query result with its red-green bookkeeping.
-#[derive(Clone, Debug)]
-struct Memo {
-    value: Value,
-    /// Revision at which the value last actually changed.
-    changed_at: Revision,
-    /// Revision at which the value was last confirmed up to date.
-    verified_at: Revision,
-    /// The queries this result read, in fetch order.
-    deps: Vec<Key>,
-}
-
-/// Error returned by queries.
+/// A line count stored as a derived-query result.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum QueryError {
-    /// The computation was abandoned because cancellation was requested.
-    /// Nothing was corrupted: completed sub-results remain valid, and the
-    /// query can simply be asked again after [`Database::clear_cancellation`].
-    Cancelled,
-    /// The file has no source text set.
-    NoText {
-        /// The file that has no text.
-        file: FileId,
-    },
-}
-
-impl fmt::Display for QueryError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Cancelled => f.write_str("query cancelled"),
-            Self::NoText { file } => write!(f, "no source text set for {file}"),
-        }
-    }
-}
-
-impl Error for QueryError {}
+struct CountValue(u64);
 
 /// The tuonelang compiler database: source inputs plus memoized, dependency-
 /// tracked queries. See the crate docs for the query surface, the engine
@@ -118,20 +47,8 @@ pub struct Database {
     sources: SourceMap,
     /// Files that currently have text, in insertion order.
     files_with_text: Vec<FileId>,
-    /// Current revision; bumped once per input change.
-    revision: Revision,
-    /// Revision at which each *input* last changed.
-    input_changed: HashMap<Key, Revision>,
-    /// Memoized derived-query results.
-    memos: RefCell<HashMap<Key, Memo>>,
-    /// Derived queries currently executing (cycle detection).
-    active: RefCell<Vec<Key>>,
-    /// Dependency-recording frames, one per executing/validating query.
-    frames: RefCell<Vec<Vec<Key>>>,
-    /// Instrumentation: derived-query executions, in order.
-    log: RefCell<Vec<String>>,
-    /// Cooperative cancellation flag.
-    cancelled: Cell<bool>,
+    /// The generic incremental engine backing every query.
+    engine: QueryEngine,
 }
 
 impl Database {
@@ -177,12 +94,10 @@ impl Database {
     ) -> Result<SourceId, SourceTooLarge> {
         let first_text = self.sources.latest(file).is_none();
         let snapshot = self.sources.add_source(file, text)?;
-        self.revision += 1;
-        self.input_changed
-            .insert(Key::SourceText(file), self.revision);
+        self.engine.bump_input(source_key(file));
         if first_text {
             self.files_with_text.push(file);
-            self.input_changed.insert(Key::FileList, self.revision);
+            self.engine.bump_input(file_list_key());
         }
         Ok(snapshot)
     }
@@ -198,10 +113,10 @@ impl Database {
     /// [`QueryError::NoText`] if the file has no text; [`QueryError::Cancelled`]
     /// if cancellation was requested.
     pub fn source_text(&self, file: FileId) -> Result<Arc<SourceText>, QueryError> {
-        match self.fetch(Key::SourceText(file))? {
-            (Value::Source(text), _) => Ok(text),
-            _ => unreachable!("source_text produces a Source value"),
+        if self.engine.is_cancelled() {
+            return Err(QueryError::Cancelled);
         }
+        self.source_input(file)
     }
 
     /// Query: the number of lines in `file` (as defined by
@@ -212,10 +127,10 @@ impl Database {
     /// [`QueryError::NoText`] if the file has no text; [`QueryError::Cancelled`]
     /// if cancellation was requested.
     pub fn line_count(&self, file: FileId) -> Result<u64, QueryError> {
-        match self.fetch(Key::LineCount(file))? {
-            (Value::Count(count), _) => Ok(count),
-            _ => unreachable!("line_count produces a Count value"),
-        }
+        let value = self.engine.query(line_count_key(file), self)?;
+        Ok(downcast::<CountValue>(&value)
+            .expect("line_count stores a count")
+            .0)
     }
 
     /// Query: the total number of lines across every file with text.
@@ -224,10 +139,10 @@ impl Database {
     ///
     /// [`QueryError::Cancelled`] if cancellation was requested.
     pub fn total_line_count(&self) -> Result<u64, QueryError> {
-        match self.fetch(Key::TotalLineCount)? {
-            (Value::Count(count), _) => Ok(count),
-            _ => unreachable!("total_line_count produces a Count value"),
-        }
+        let value = self.engine.query(total_line_count_key(), self)?;
+        Ok(downcast::<CountValue>(&value)
+            .expect("total stores a count")
+            .0)
     }
 
     // ------------------------------------------------------------------
@@ -236,15 +151,15 @@ impl Database {
 
     /// Request cooperative cancellation: every query entered from now on
     /// returns [`QueryError::Cancelled`] until [`Database::clear_cancellation`].
-    /// Abandoning a computation never corrupts the database — no memo is
-    /// written for an unfinished query, and finished sub-results stay valid.
+    /// Abandoning a computation never corrupts the database — no memo is written
+    /// for an unfinished query, and finished sub-results stay valid.
     pub fn request_cancellation(&self) {
-        self.cancelled.set(true);
+        self.engine.request_cancellation();
     }
 
     /// Clear a previously requested cancellation.
     pub fn clear_cancellation(&self) {
-        self.cancelled.set(false);
+        self.engine.clear_cancellation();
     }
 
     // ------------------------------------------------------------------
@@ -257,153 +172,74 @@ impl Database {
     /// human-oriented and not a stable API.
     #[must_use]
     pub fn executions(&self) -> Vec<String> {
-        self.log.borrow().clone()
+        self.engine.executions()
     }
 
     /// Instrumentation: forget the recorded executions.
     pub fn clear_executions(&self) {
-        self.log.borrow_mut().clear();
+        self.engine.clear_executions();
     }
 
     // ------------------------------------------------------------------
-    // Engine.
+    // Facade helpers.
     // ------------------------------------------------------------------
 
-    /// Fetch a query result, memoizing and revalidating as needed. Returns
-    /// the value and the revision at which it last changed.
-    fn fetch(&self, key: Key) -> Result<(Value, Revision), QueryError> {
-        if self.cancelled.get() {
-            return Err(QueryError::Cancelled);
-        }
-        // The caller (if any) depends on `key`.
-        if let Some(frame) = self.frames.borrow_mut().last_mut() {
-            frame.push(key);
-        }
-
-        if key.is_input() {
-            let value = self.read_input(key)?;
-            let changed_at = self.input_changed.get(&key).copied().unwrap_or(0);
-            return Ok((value, changed_at));
-        }
-
-        assert!(
-            !self.active.borrow().contains(&key),
-            "query cycle detected at {key}",
-        );
-
-        // Green path: an existing memo may be reusable.
-        let existing = self.memos.borrow().get(&key).cloned();
-        if let Some(memo) = &existing {
-            if memo.verified_at == self.revision {
-                return Ok((memo.value.clone(), memo.changed_at));
-            }
-            if self.deps_unchanged_since(&memo.deps, memo.verified_at)? {
-                let mut memos = self.memos.borrow_mut();
-                let memo = memos.get_mut(&key).expect("memo exists on green path");
-                memo.verified_at = self.revision;
-                return Ok((memo.value.clone(), memo.changed_at));
-            }
-        }
-
-        // Red path: (re)compute, recording dependencies.
-        self.active.borrow_mut().push(key);
-        self.frames.borrow_mut().push(Vec::new());
-        let result = self.compute(key);
-        let deps = self.frames.borrow_mut().pop().expect("own frame present");
-        self.active.borrow_mut().pop();
-        let value = result?;
-        self.log.borrow_mut().push(key.to_string());
-
-        // Early cutoff: an equal value keeps its old changed_at, so
-        // dependents of this query are not invalidated.
-        let changed_at = match &existing {
-            Some(memo) if memo.value == value => memo.changed_at,
-            _ => self.revision,
-        };
-        self.memos.borrow_mut().insert(
-            key,
-            Memo {
-                value: value.clone(),
-                changed_at,
-                verified_at: self.revision,
-                deps,
-            },
-        );
-        Ok((value, changed_at))
-    }
-
-    /// Whether every dependency's value is unchanged since `verified_at`.
-    /// Fetches happen inside a throwaway frame so revalidation does not leak
-    /// transitive dependencies into the caller's frame.
-    fn deps_unchanged_since(
-        &self,
-        deps: &[Key],
-        verified_at: Revision,
-    ) -> Result<bool, QueryError> {
-        self.frames.borrow_mut().push(Vec::new());
-        let mut unchanged = true;
-        let mut outcome = Ok(());
-        for &dep in deps {
-            match self.fetch(dep) {
-                Ok((_, dep_changed_at)) => {
-                    if dep_changed_at > verified_at {
-                        unchanged = false;
-                        break;
-                    }
-                }
-                Err(error) => {
-                    outcome = Err(error);
-                    break;
-                }
-            }
-        }
-        self.frames.borrow_mut().pop();
-        outcome.map(|()| unchanged)
-    }
-
-    /// Read an input's current value.
-    fn read_input(&self, key: Key) -> Result<Value, QueryError> {
-        match key {
-            Key::SourceText(file) => match self.sources.latest(file) {
-                Some(snapshot) => Ok(Value::Source(Arc::clone(self.sources.source(snapshot)))),
-                None => Err(QueryError::NoText { file }),
-            },
-            Key::FileList => Ok(Value::Files(self.files_with_text.clone())),
-            Key::LineCount(_) | Key::TotalLineCount => {
-                unreachable!("{key} is a derived query, not an input")
-            }
+    /// Read the source snapshot input for `file` directly.
+    fn source_input(&self, file: FileId) -> Result<Arc<SourceText>, QueryError> {
+        match self.sources.latest(file) {
+            Some(snapshot) => Ok(Arc::clone(self.sources.source(snapshot))),
+            None => Err(QueryError::NoText { file }),
         }
     }
+}
 
-    /// Execute a derived query. Every read goes through [`Database::fetch`]
-    /// so it is recorded as a dependency (purity rule 2).
-    fn compute(&self, key: Key) -> Result<Value, QueryError> {
-        match key {
-            Key::LineCount(file) => {
-                let (value, _) = self.fetch(Key::SourceText(file))?;
-                let Value::Source(text) = value else {
-                    unreachable!("source_text produces a Source value")
-                };
-                Ok(Value::Count(u64::from(text.line_count())))
+impl QueryHost for Database {
+    fn compute(&self, key: QueryKey, ctx: &QueryCtx<'_>) -> Result<Computed, QueryError> {
+        match key.kind() {
+            kind::LINE_COUNT => {
+                let file = FileId::from_raw(u32::try_from(key.arg()).expect("file id fits"));
+                let _ = ctx.depend_on_input(source_key(file))?;
+                let text = self.source_input(file)?;
+                Ok(Computed::new(
+                    stored(CountValue(u64::from(text.line_count()))),
+                    format!("line_count(file#{})", file.as_raw()),
+                ))
             }
-            Key::TotalLineCount => {
-                let (value, _) = self.fetch(Key::FileList)?;
-                let Value::Files(files) = value else {
-                    unreachable!("file_list produces a Files value")
-                };
+            kind::TOTAL_LINE_COUNT => {
+                let _ = ctx.depend_on_input(file_list_key())?;
                 let mut total = 0u64;
-                for file in files {
-                    let (value, _) = self.fetch(Key::LineCount(file))?;
-                    let Value::Count(count) = value else {
-                        unreachable!("line_count produces a Count value")
-                    };
-                    total += count;
+                for &file in &self.files_with_text {
+                    let value = ctx.query(line_count_key(file))?;
+                    total += downcast::<CountValue>(&value)
+                        .expect("line_count stores a count")
+                        .0;
                 }
-                Ok(Value::Count(total))
+                Ok(Computed::new(
+                    stored(CountValue(total)),
+                    "total_line_count()".to_owned(),
+                ))
             }
-            Key::SourceText(_) | Key::FileList => {
-                unreachable!("{key} is an input, not a derived query")
-            }
+            other => unreachable!("Database has no derived query of kind {other}"),
         }
     }
+}
+
+// ----------------------------------------------------------------------
+// Key constructors.
+// ----------------------------------------------------------------------
+
+fn source_key(file: FileId) -> QueryKey {
+    QueryKey::new(kind::SOURCE_TEXT, u64::from(file.as_raw()))
+}
+
+fn file_list_key() -> QueryKey {
+    QueryKey::new(kind::FILE_LIST, 0)
+}
+
+fn line_count_key(file: FileId) -> QueryKey {
+    QueryKey::new(kind::LINE_COUNT, u64::from(file.as_raw()))
+}
+
+fn total_line_count_key() -> QueryKey {
+    QueryKey::new(kind::TOTAL_LINE_COUNT, 0)
 }

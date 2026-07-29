@@ -19,11 +19,12 @@
 //! `finished` with a summary. Because `json-lines` flushes each event
 //! immediately, a consumer watches specs complete in real time.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+use tuo_compiler::IncrementalSession;
 use tuo_compiler::diagnostics;
 use tuo_compiler::source::{SourceId, SourceMap, Span};
 use tuo_spec::report::{AssertionResult, Outcome, SkippedSpec, SpecReport, SpecRun, TrapReport};
@@ -91,25 +92,92 @@ pub(crate) fn run(target: Option<String>, files: &[PathBuf], mode: OutputMode) -
     )
 }
 
-/// `tuo verify <files>`: all static checks, then run every spec.
+/// `tuo verify [--affected-by <file>] <files>`: all static checks, then run
+/// the selected specs.
 ///
 /// `tuo spec` already runs the front end and refuses a program with errors,
 /// so it *is* the static-plus-dynamic check; `verify` is its whole-program
-/// form (no target narrowing) and exists as the named command the workflow
-/// expects.
-pub(crate) fn verify(files: &[PathBuf], mode: OutputMode) -> ExitCode {
+/// form and exists as the named command the workflow expects. With
+/// `affected_by` set, only the specs whose semantic dependencies touch a symbol
+/// defined in that file execute — the specs an edit to it could have changed,
+/// selected through the incremental dependency graph. Without it, every spec
+/// runs.
+pub(crate) fn verify(affected_by: Option<&Path>, files: &[PathBuf], mode: OutputMode) -> ExitCode {
     let (map, sources) = match load(files, ProtocolCommand::Verify, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
+    let selection = match affected_by {
+        Some(path) => match affected_selection(files, path, mode) {
+            Ok(selection) => selection,
+            Err(code) => return code,
+        },
+        None => Selection::All,
+    };
     execute(
         &map,
         &sources,
-        &Selection::All,
+        &selection,
         files,
         ProtocolCommand::Verify,
         mode,
     )
+}
+
+/// Build a [`Selection::Affected`] for the specs whose dependencies touch a
+/// symbol defined in `changed` (which must be one of `files`), driving the
+/// incremental session's `affected_specs`.
+#[expect(
+    clippy::print_stderr,
+    reason = "this is the CLI presentation layer: usage errors go to stderr in human mode"
+)]
+fn affected_selection(
+    files: &[PathBuf],
+    changed: &Path,
+    mode: OutputMode,
+) -> Result<Selection, ExitCode> {
+    let mut session = IncrementalSession::new();
+    let mut changed_file = None;
+    for path in files {
+        let display = path.display().to_string();
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) => {
+                if mode.is_machine() {
+                    protocol::io_error(ProtocolCommand::Verify, mode, &display, &error.to_string());
+                } else {
+                    eprintln!("error: cannot read {display}: {error}");
+                }
+                return Err(ExitCode::FAILURE);
+            }
+        };
+        let file = session.set_file(&display, &text);
+        if same_path(path, changed) {
+            changed_file = Some(file);
+        }
+    }
+    let Some(changed_file) = changed_file else {
+        if !mode.is_machine() {
+            eprintln!(
+                "error: --affected-by {} is not one of the input files",
+                changed.display()
+            );
+        }
+        return Err(ExitCode::FAILURE);
+    };
+    match session.affected_specs(&[changed_file]) {
+        Ok(symbols) => Ok(Selection::Affected(symbols)),
+        Err(_) => Ok(Selection::All),
+    }
+}
+
+/// Whether two paths refer to the same file (canonicalizing when possible, so
+/// `./a.tuo` matches `a.tuo`; falls back to a literal compare).
+fn same_path(a: &Path, b: &Path) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    }
 }
 
 /// Run the specs and present the outcome; the shared body of `spec`/`verify`.
