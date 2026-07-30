@@ -286,6 +286,33 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   the agent's own dependency layer and cannot be imported there) and is pinned end-to-end by
   `tdg-cli/tests/agent_command.rs`. `--stdio` is required, so the CLI never advertises a
   transport it does not have.
+- **The agent's generation queries help an agent write the *next* token, and keep
+  syntactic guidance strictly apart from semantic guidance — never over-claiming.**
+  `tdg-agent`'s `generation` module (`GenerationQueries`, implemented for `Session`)
+  adds seven compiler-guided methods on top of the descriptive ones: `context_at`,
+  `expected_type_at`, `visible_symbols_at`, `valid_members_of`, `call_signature`,
+  `imports_for_symbol`, `expected_syntax_at`. Like every other method they **reimplement
+  no stage** — the *semantic* answers (`expected_type_at`, `visible_symbols_at`,
+  `valid_members_of`, `call_signature`, `imports_for_symbol`, and `context_at`'s semantic
+  block) are read-only projections of the shared `Resolution`/`TypeckResult`. Two honesty
+  rules are load-bearing and pinned by tests (`tdg-agent/tests/generation.rs`): (1)
+  **syntactic** guidance (`expected_syntax_at`, `context_at`'s `syntactic` block) is a
+  **conservative lexical heuristic** over raw text, *always* flagged `"exhaustive": false`
+  with a note that the compiler does **not** enumerate every valid next token — because the
+  pipeline exposes no grammar-recovery/expected-token oracle, so claiming one would be
+  dishonest; and (2) queries that can only approximate say so in-band — `visible_symbols_at`
+  is an over-approximation (`"complete": false`, block-scoping unmodeled) and
+  `expected_type_at` reports the type the checker *recorded* for the enclosing expression or,
+  as a fallback, the enclosing function's declared return type (its `source` field names
+  which), never a general hole-typing power the compiler lacks. `valid_members_of` is precise
+  (`"exhaustive": true`) because the type checker's struct/enum shapes are complete. Whether
+  the queries actually raise an agent's **Compile@1**/**Repair@1** is measured
+  deterministically in `tdg-agent/tests/generation_benchmark.rs` (`--nocapture`): a fixed
+  task corpus where the naive text-only guess is wrong, scored by *really* compiling each
+  pick through `check_sources` under a baseline (no guidance) vs a guided policy (keep only
+  candidates consistent with the queries' evidence) — the test asserts guidance is never
+  worse and, on that corpus, strictly better. It is a proxy for the queries' discriminative
+  power, not a live-LLM eval (no provider is embedded); the doc says so plainly.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

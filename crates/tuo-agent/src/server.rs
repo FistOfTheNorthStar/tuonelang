@@ -15,6 +15,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::convert::{Position, Range};
+use crate::generation::GenerationQueries;
 use crate::protocol::{ErrorCode, PROTOCOL_VERSION, Request, Response, ResponseError};
 use crate::session::{Formatter, Session};
 
@@ -111,6 +112,37 @@ impl Server {
                 let params = FixParams::parse(&request.params)?;
                 self.session.apply_safe_fix(&params.uri, params.range)
             }
+            // ---- Compiler-guided generation queries. ----
+            "context_at" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session.context_at(&params.uri, params.position)
+            }
+            "expected_type_at" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session.expected_type_at(&params.uri, params.position)
+            }
+            "visible_symbols_at" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session
+                    .visible_symbols_at(&params.uri, params.position)
+            }
+            "valid_members_of" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session.valid_members_of(&params.uri, params.position)
+            }
+            "call_signature" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session.call_signature(&params.uri, params.position)
+            }
+            "imports_for_symbol" => {
+                let params = NameParams::parse(&request.params)?;
+                Ok(self.session.imports_for_symbol(&params.name))
+            }
+            "expected_syntax_at" => {
+                let params = PositionParams::parse(&request.params)?;
+                self.session
+                    .expected_syntax_at(&params.uri, params.position)
+            }
             other => Err(ResponseError::new(
                 ErrorCode::UnknownMethod,
                 format!("unknown method `{other}`"),
@@ -173,6 +205,14 @@ const METHODS: &[&str] = &[
     "specs_for",
     "run_spec",
     "apply_safe_fix",
+    // Compiler-guided generation queries.
+    "context_at",
+    "expected_type_at",
+    "visible_symbols_at",
+    "valid_members_of",
+    "call_signature",
+    "imports_for_symbol",
+    "expected_syntax_at",
 ];
 
 // ----------------------------------------------------------------------
@@ -207,6 +247,18 @@ struct DocParams {
 }
 
 impl DocParams {
+    fn parse(params: &Value) -> Result<Self, ResponseError> {
+        parse_params(params)
+    }
+}
+
+/// `{name}` — a query by symbol name (e.g. `imports_for_symbol`).
+#[derive(Deserialize)]
+struct NameParams {
+    name: String,
+}
+
+impl NameParams {
     fn parse(params: &Value) -> Result<Self, ResponseError> {
         parse_params(params)
     }
