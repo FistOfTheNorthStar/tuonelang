@@ -2,16 +2,17 @@
 //!
 //! The command surface is intentionally minimal: only functionality the
 //! compiler can actually perform is exposed. Today that is `tuo check`,
-//! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, and the
-//! `tuo debug` developer tools. Further compiler subcommands are added as
-//! their functionality is implemented — a new [`Command`] variant plus a
-//! match arm in [`Cli::dispatch`].
+//! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`,
+//! `tuo agent --stdio`, and the `tuo debug` developer tools. Further compiler
+//! subcommands are added as their functionality is implemented — a new
+//! [`Command`] variant plus a match arm in [`Cli::dispatch`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{CommandFactory as _, Parser, Subcommand};
 
+use crate::agent;
 use crate::check;
 use crate::codegen;
 use crate::debug::{self, Dump};
@@ -26,7 +27,8 @@ use crate::spec;
     version,
     about = "tuonelang — an experimental statically typed, memory-safe native language.",
     long_about = "tuonelang is an experimental compiler project. Compiler subcommands are added \
-                  as their functionality is implemented; today the CLI exposes only the \
+                  as their functionality is implemented; today the CLI exposes check, spec, \
+                  verify, fmt, build, run, the agent protocol (`agent --stdio`), and the \
                   `debug` developer tools.",
     disable_help_subcommand = true
 )]
@@ -148,6 +150,24 @@ enum Command {
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
+    /// Serve the tuonelang agent protocol over stdio.
+    ///
+    /// Speaks a versioned, JSON-lines request/response protocol: a coding agent
+    /// writes one request per line to stdin and reads one response per line
+    /// from stdout. The server keeps one compiler database alive across every
+    /// request, so an agent editing a program does not restart the compiler
+    /// per edit. It answers compiler-intelligence queries — diagnostics,
+    /// types, definitions, references, symbols, signatures, importable names,
+    /// specs, and safe fixes — reusing the same shared queries as `tuo check`
+    /// and the language server; it embeds no LLM and is not itself an AI model.
+    ///
+    /// `--stdio` selects the (only, today) transport; it is required so the CLI
+    /// never advertises a transport it does not have.
+    Agent {
+        /// Serve the protocol over standard input/output.
+        #[arg(long, required = true)]
+        stdio: bool,
+    },
     /// Diagnostic developer tools (unstable output, not a language protocol).
     #[command(subcommand)]
     Debug(DebugCommand),
@@ -237,6 +257,11 @@ impl Cli {
                 files,
             }) => codegen::build(output, release, &files, mode),
             Some(Command::Run { release, files }) => codegen::run(release, &files, mode),
+            // The agent protocol is its own versioned JSON-lines contract on
+            // stdio, independent of `--message-format` (which governs the
+            // result-producing commands' output). `mode` is passed only so
+            // internal logging honors `--log`.
+            Some(Command::Agent { stdio: _ }) => agent::run(mode),
             // The `debug` dumps are developer tools with deliberately unstable
             // output, not a language protocol — so they have no machine
             // encoding. Refuse a machine format here rather than emit

@@ -26,6 +26,10 @@ serde_json.workspace = true
 tuo-compiler.workspace = true
 tuo-fmt.workspace = true
 tuo-spec.workspace = true
+# `tuo agent --stdio` hosts the agent protocol server; the CLI is its transport
+# and supplies the canonical formatter (tuo-fmt sits at the agent's own layer,
+# so the agent takes it through an injected seam) to the protocol core.
+tuo-agent.workspace = true
 # `tuo build` / `tuo run` drive the code generator: the backend-agnostic
 # interface plus both backends behind it (Cranelift for the default debug build,
 # LLVM for `--release`), and the runtime whose trap object is linked into the

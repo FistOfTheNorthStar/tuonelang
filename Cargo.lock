@@ -1239,10 +1239,15 @@ dependencies = [
 name = "tuo-agent"
 version = "0.0.0"
 dependencies = [
+ "serde",
+ "serde_json",
  "tuo-compiler",
  "tuo-db",
  "tuo-diagnostics",
+ "tuo-resolve",
  "tuo-source",
+ "tuo-spec",
+ "tuo-types",
 ]
 
 [[package]]
@@ -1268,6 +1273,7 @@ version = "0.0.0"
 dependencies = [
  "clap",
  "serde_json",
+ "tuo-agent",
  "tuo-codegen",
  "tuo-codegen-cranelift",
  "tuo-codegen-llvm",
