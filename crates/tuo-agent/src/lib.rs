@@ -27,6 +27,13 @@
 //! - [`session`] — the [`Session`], a long-lived database over
 //!   [`IncrementalSession`](tuo_compiler::IncrementalSession) that answers every
 //!   method, and [`server`]'s [`Server`], the transport-agnostic dispatcher.
+//! - [`generation`] — the compiler-guided *generation* queries
+//!   ([`GenerationQueries`]), what an agent asks before writing the next token:
+//!   the expected type, visible names, valid members, and — kept strictly
+//!   separate and flagged non-exhaustive — a lexical read of syntactic context.
+//!   Semantic answers project the shared [`Semantics`](tuo_compiler::Semantics);
+//!   syntactic answers are conservative heuristics, never a claim that the
+//!   compiler enumerates every valid next token.
 //!
 //! # Database reuse across requests
 //!
@@ -55,10 +62,12 @@
 //! before the transport exists.
 
 pub mod convert;
+pub mod generation;
 pub mod protocol;
 pub mod server;
 pub mod session;
 
+pub use generation::GenerationQueries;
 pub use protocol::{ErrorCode, PROTOCOL_VERSION, Request, Response, ResponseError};
 pub use server::Server;
 pub use session::{FormatResult, Formatter, Session};

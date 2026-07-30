@@ -546,8 +546,15 @@ impl Session {
     // Internals.
     // ------------------------------------------------------------------
 
+    /// Read the shared compiler semantics through the incremental session's
+    /// scoped accessor. Exposed to the crate's [`generation`](crate::generation)
+    /// module so the generation queries drive the *same* engine.
+    pub(crate) fn with_semantics<R>(&self, f: impl FnOnce(Semantics<'_>) -> R) -> R {
+        self.session.with_semantics(f)
+    }
+
     /// The [`FileId`] of `uri`, or an [`ErrorCode::UnknownDocument`] error.
-    fn require_file(&self, uri: &str) -> Result<FileId, ResponseError> {
+    pub(crate) fn require_file(&self, uri: &str) -> Result<FileId, ResponseError> {
         self.file_of(uri).ok_or_else(|| {
             ResponseError::new(
                 ErrorCode::UnknownDocument,

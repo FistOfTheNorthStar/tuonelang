@@ -139,6 +139,49 @@ fn run_spec_executes_over_the_transport() {
 }
 
 #[test]
+fn generation_queries_flow_through_the_transport() {
+    // A compiler-guided generation query (visible symbols at a cursor) answers
+    // over the real stdio transport, and its syntactic sibling is honestly
+    // flagged non-exhaustive.
+    let prog = "\
+fn helper(in n: Int) -> Int {
+    n + 1
+}
+
+fn main() -> Int {
+    let found = 1;
+    helper(found)
+}
+";
+    let output = drive(&[
+        req(1, "set_document", json!({ "uri": "g.tuo", "text": prog })),
+        req(
+            2,
+            "visible_symbols_at",
+            json!({ "uri": "g.tuo", "position": { "line": 7, "column": 5 } }),
+        ),
+        req(
+            3,
+            "expected_syntax_at",
+            json!({ "uri": "g.tuo", "position": { "line": 7, "column": 5 } }),
+        ),
+    ]);
+    let responses = responses(&output);
+    // visible_symbols_at sees the helper and is marked an over-approximation.
+    let visible = &responses[1]["result"];
+    assert_eq!(visible["complete"], false);
+    let names: Vec<&str> = visible["visible_symbols"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"helper"), "sees the helper: {names:?}");
+    // expected_syntax_at is honestly non-exhaustive.
+    assert_eq!(responses[2]["result"]["exhaustive"], false);
+}
+
+#[test]
 fn a_blank_line_is_skipped() {
     // Blank lines between requests are ignored (not a parse error).
     let mut child = Command::new(env!("CARGO_BIN_EXE_tuo"))
