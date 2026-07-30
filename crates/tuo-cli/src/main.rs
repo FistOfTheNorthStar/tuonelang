@@ -20,6 +20,7 @@
 //! `json-lines` (streamed). In a machine format stdout carries protocol output
 //! only, and internal logging reaches stderr solely under `--log`.
 
+mod agent;
 mod check;
 mod cli;
 mod codegen;

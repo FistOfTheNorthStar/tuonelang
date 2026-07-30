@@ -129,7 +129,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
   interpreter must reject unverified MIR; `mir --opt` shows the MIR after the
-  optimization passes the native build applies).
+  optimization passes the native build applies), and `tdg agent --stdio` (serve the
+  versioned JSON-lines agent protocol over stdio — a long-lived compiler-intelligence
+  server reusing one database across requests; see the agent-protocol convention below).
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
@@ -245,7 +247,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   computed. It **reimplements no stage**: each feature delegates to an existing query
   (`Resolution::resolved_at` / `references_to` / `rename_spans` / `specs_for` / `target_of`,
   `TypeckResult::type_of` / `expr_ty`, `Ty::render`, the collected diagnostics), so the CLI,
-  the LSP, and the future agent server all drive the *same* compiler queries — the whole
+  the LSP, and the agent server all drive the *same* compiler queries — the whole
   point of the shared engine. The crate is three layers: `wire` (the LSP JSON vocabulary,
   `serde`-serializable, carrying no compiler types), `convert` (the **only** place UTF-8
   byte `Span`s meet LSP's UTF-16 line/character `Position`s — both directions, clamping
@@ -257,6 +259,33 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   addition, so no wire server is advertised before it exists. The read-only
   `SourceMap::file_id(name)` lookup lets a host resolve a document URI to its `FileId`
   without mutating the map.
+- **The agent protocol is the third projection of the shared engine — a compiler
+  intelligence protocol, not an AI model.** `tdg agent --stdio` speaks a versioned,
+  JSON-lines request/response protocol (`tdg-agent`'s `protocol` module,
+  `PROTOCOL_VERSION`) so a coding agent drives the compiler by writing one request per
+  line and reading one response per line. Like the LSP it **reimplements no stage**: every
+  method is a read-only projection of what `IncrementalSession` already computed —
+  `initialize`, `check`, `verify`, `format`, `diagnostics`, `type_at`, `definition`,
+  `references`, `symbols`, `signature`, `members`, `available_imports`, `specs_for`,
+  `run_spec`, and `apply_safe_fix` (which offers **only** compiler-authored,
+  machine-applicable fixes, never an invented one). The crate is three layers mirroring the
+  LSP's: `protocol` (the versioned `Request`/`Response`/`ResponseError` envelopes, carrying
+  no compiler types), `convert` (the one place wire positions meet compiler byte offsets —
+  a wire `Position` carries an `offset` **and** a one-based `line:column`, so an agent may
+  anchor either way, and clamps out-of-range input rather than failing), and `session` (the
+  `Session`/`Server`, a long-lived database over `IncrementalSession` answering every
+  method). **The compiler database is reused across requests**: one `Server` owns one
+  `Session` owns one incremental engine, kept alive for the process's life, so an agent
+  editing a program never restarts the compiler per edit. Every response is **deterministic
+  where the underlying operation is** — the same request against the same open-document
+  state yields the same `result`; the only non-deterministic field is a *measured* spec
+  duration, reported as an observation in its own field, never a promise. **No LLM provider
+  is embedded** anywhere. The protocol core is transport-agnostic and directly testable
+  (`tdg-agent/tests/protocol.rs`); the `tdg agent --stdio` transport lives in the CLI (which
+  also injects the canonical formatter through a `Formatter` seam, since `tdg-fmt` sits at
+  the agent's own dependency layer and cannot be imported there) and is pinned end-to-end by
+  `tdg-cli/tests/agent_command.rs`. `--stdio` is required, so the CLI never advertises a
+  transport it does not have.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).
