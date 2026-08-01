@@ -1,0 +1,176 @@
+// std::time — durations and instants.
+//
+// Two honestly separated tiers, like the rest of the effectful standard
+// library:
+//
+//   Executable tier — `Duration`, a plain span of nanoseconds, and its pure
+//   arithmetic. Constructing and combining durations is ordinary computation;
+//   it runs, and its specs run.
+//
+//   Contract tier — reading the clock (`now`, `elapsed`). Observing real time
+//   is an *effect*, and v0 has no native effect boundary (no FFI, no syscall
+//   surface): the interpreter and both backends deliberately implement only the
+//   scalar, control-flow core. So the clock entry points below are exact
+//   signatures with documented contracts and **no** executable spec — they are
+//   marked `CONTRACT:` and cannot run today. The reference interpreter remains
+//   the source of truth for everything that does run.
+
+module std::time;
+
+// ----------------------------------------------------------------------------
+// Duration — a span of time in nanoseconds. Executable tier.
+//
+// One representation (nanoseconds as an `Int`), one set of constructors, one
+// set of combinators. No competing "millis vs micros" duration types.
+// ----------------------------------------------------------------------------
+
+/// A span of time, stored as a whole number of nanoseconds.
+pub struct Duration {
+    nanos: Int,
+}
+
+/// A duration of `n` nanoseconds.
+///
+/// # Example
+/// ```tuo
+/// let d = std::time::from_nanos(500);
+/// ```
+pub fn from_nanos(take n: Int) -> Duration {
+    Duration { nanos: n }
+}
+
+/// A duration of `n` milliseconds.
+///
+/// # Example
+/// ```tuo
+/// let d = std::time::from_millis(2); // 2_000_000 ns
+/// ```
+pub fn from_millis(take n: Int) -> Duration {
+    Duration { nanos: n * 1000000 }
+}
+
+/// A duration of `n` seconds.
+///
+/// # Example
+/// ```tuo
+/// let d = std::time::from_secs(1); // 1_000_000_000 ns
+/// ```
+pub fn from_secs(take n: Int) -> Duration {
+    Duration { nanos: n * 1000000000 }
+}
+
+/// The zero duration.
+///
+/// # Example
+/// ```tuo
+/// let d = std::time::zero();
+/// ```
+pub fn zero() -> Duration {
+    Duration { nanos: 0 }
+}
+
+/// This duration expressed in whole nanoseconds.
+///
+/// # Example
+/// ```tuo
+/// let n = std::time::as_nanos(std::time::from_millis(2)); // 2_000_000
+/// ```
+pub fn as_nanos(in d: Duration) -> Int {
+    d.nanos
+}
+
+/// This duration expressed in whole milliseconds (truncating).
+///
+/// # Example
+/// ```tuo
+/// let n = std::time::as_millis(std::time::from_secs(1)); // 1000
+/// ```
+pub fn as_millis(in d: Duration) -> Int {
+    d.nanos / 1000000
+}
+
+/// The sum of two durations.
+///
+/// # Example
+/// ```tuo
+/// let d = std::time::add(std::time::from_millis(1), std::time::from_millis(2));
+/// ```
+pub fn add(in a: Duration, in b: Duration) -> Duration {
+    Duration { nanos: a.nanos + b.nanos }
+}
+
+/// Is duration `a` shorter than duration `b`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::time::lt(std::time::from_millis(1), std::time::from_secs(1));
+/// ```
+pub fn lt(in a: Duration, in b: Duration) -> Bool {
+    a.nanos < b.nanos
+}
+
+// ----------------------------------------------------------------------------
+// Instant — a monotonic timestamp. Contract tier.
+//
+// An `Instant` is an opaque point on the monotonic clock. It is a value type,
+// so it type-checks, but *reading* the clock is an effect the v0 core cannot
+// perform, so `now` and `elapsed` are contracts, not executable code.
+// ----------------------------------------------------------------------------
+
+/// A point on the monotonic clock, as nanoseconds since an unspecified epoch.
+pub struct Instant {
+    nanos: Int,
+}
+
+/// CONTRACT (not executable in v0): the current monotonic instant.
+///
+/// Reading the clock is an effect; v0 exposes no native time source, so this
+/// signature is the stable contract and does not run yet. Every caller obtains
+/// an `Instant` here and measures spans with `elapsed`.
+pub fn now() -> Instant {
+    // Contract placeholder. When the effect boundary lands this returns the
+    // real monotonic clock; the signature will not change.
+    Instant { nanos: 0 }
+}
+
+/// CONTRACT (not executable in v0): the duration from `earlier` to `later`.
+///
+/// Pure given two instants (this body *is* executable), but its only real
+/// source of instants is `now`, which is a contract — so `elapsed` is documented
+/// alongside the contract tier and left unspecced until the clock exists.
+///
+/// # Example
+/// ```tuo
+/// // let span = std::time::elapsed(start, std::time::now());
+/// ```
+pub fn elapsed(in earlier: Instant, in later: Instant) -> Duration {
+    Duration { nanos: later.nanos - earlier.nanos }
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only. The clock contracts stay unspecced.
+// ----------------------------------------------------------------------------
+
+spec from_nanos {
+    then as_nanos(from_nanos(500)) == 500;
+    then as_nanos(zero()) == 0;
+}
+
+spec from_millis {
+    then as_nanos(from_millis(2)) == 2000000;
+    then as_millis(from_millis(2)) == 2;
+}
+
+spec from_secs {
+    then as_nanos(from_secs(1)) == 1000000000;
+    then as_millis(from_secs(1)) == 1000;
+}
+
+spec add {
+    then as_millis(add(from_millis(1), from_millis(2))) == 3;
+}
+
+spec lt {
+    then lt(from_millis(1), from_secs(1));
+    then !lt(from_secs(1), from_millis(1));
+}

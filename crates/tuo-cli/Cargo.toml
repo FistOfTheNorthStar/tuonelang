@@ -48,3 +48,7 @@ tuo-mir-interp.workspace = true
 # The ABI-equivalence tests assert the runtime ABI layouts (`tuo_runtime::abi`,
 # over `tuo_types` types) agree with the interpreter's value model.
 tuo-types.workspace = true
+# The standard-library integration tests really compile every stdlib module and
+# run every spec; the hallucination benchmark compiles real vs. invented APIs.
+# (tuo-spec and tuo-compiler are already normal dependencies above.)
+tuo-stdlib.workspace = true

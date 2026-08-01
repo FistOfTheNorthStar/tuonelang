@@ -1,0 +1,215 @@
+// std::collections — value collections and the array-operation contract.
+//
+// This module has two honestly separated tiers.
+//
+//   Executable tier — `Pair[A, B]` and the counted-range helpers. These are
+//   flat value types and pure functions; every one runs, and every spec below
+//   executes through the reference interpreter.
+//
+//   Contract tier — the `Array[T]` operations at the bottom. `Array[T]` is the
+//   language's growable indexed sequence, but v0 has no array *constructor*
+//   expression, so these functions are type-checked signatures with documented
+//   contracts and no executable specs yet. They are marked `CONTRACT:` so a
+//   reader (human or machine) is never misled into thinking they run today. The
+//   single obvious array API lives here; it will gain specs the moment array
+//   literals land, with no signature change.
+
+module std::collections;
+
+// ----------------------------------------------------------------------------
+// Pair[A, B] — the canonical two-element product.
+//
+// One product type, used everywhere a function must return two values (there
+// are no tuples-as-return in the executable subset). Construct with `pair`,
+// read with `first`/`second`, transform with `swap`.
+// ----------------------------------------------------------------------------
+
+/// A pair of a `first: A` and a `second: B`.
+pub struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+/// Build a pair from its two components.
+///
+/// # Example
+/// ```tuo
+/// let p = std::collections::pair(3, 8);
+/// ```
+pub fn pair(take a: Int, take b: Int) -> Pair[Int, Int] {
+    Pair { first: a, second: b }
+}
+
+/// The first component of a pair.
+///
+/// # Example
+/// ```tuo
+/// let n = std::collections::first(std::collections::pair(3, 8)); // 3
+/// ```
+pub fn first(in p: Pair[Int, Int]) -> Int {
+    p.first
+}
+
+/// The second component of a pair.
+///
+/// # Example
+/// ```tuo
+/// let n = std::collections::second(std::collections::pair(3, 8)); // 8
+/// ```
+pub fn second(in p: Pair[Int, Int]) -> Int {
+    p.second
+}
+
+/// A pair with its components exchanged.
+///
+/// # Example
+/// ```tuo
+/// let p = std::collections::swap(std::collections::pair(3, 8)); // (8, 3)
+/// ```
+pub fn swap(in p: Pair[Int, Int]) -> Pair[Int, Int] {
+    Pair { first: p.second, second: p.first }
+}
+
+// ----------------------------------------------------------------------------
+// Counted ranges — the executable stand-in for iteration until iterators land.
+//
+// A half-open range `[start, end)` of integers, summarised without ever
+// materialising a sequence. These are the obvious folds a caller reaches for.
+// ----------------------------------------------------------------------------
+
+/// The number of integers in the half-open range `[start, end)`.
+///
+/// Empty when `end <= start`.
+///
+/// # Example
+/// ```tuo
+/// let n = std::collections::range_len(2, 7); // 5
+/// ```
+pub fn range_len(take start: Int, take end: Int) -> Int {
+    if end <= start {
+        0
+    } else {
+        end - start
+    }
+}
+
+/// The sum of every integer in the half-open range `[start, end)`.
+///
+/// # Example
+/// ```tuo
+/// let n = std::collections::range_sum(1, 5); // 1 + 2 + 3 + 4 = 10
+/// ```
+pub fn range_sum(take start: Int, take end: Int) -> Int {
+    var total = 0;
+    var i = start;
+    while i < end {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+
+/// Does the half-open range `[start, end)` contain `value`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::collections::range_contains(2, 7, 5); // true
+/// ```
+pub fn range_contains(take start: Int, take end: Int, take value: Int) -> Bool {
+    value >= start && value < end
+}
+
+// ----------------------------------------------------------------------------
+// Array[T] operations — the CONTRACT tier.
+//
+// `Array[T]` is the language's indexed sequence. Each function below has an
+// exact signature and a documented contract, but no executable spec: v0 offers
+// no array-literal expression, so an `Array[T]` value cannot yet be built to
+// feed a spec. These signatures are the single, stable array API; they are not
+// executable today and say so.
+// ----------------------------------------------------------------------------
+
+/// CONTRACT (not executable in v0): the element at `index`.
+///
+/// Traps if `index >= len`. Once array literals exist this gains a spec with no
+/// change to this signature.
+///
+/// # Example
+/// ```tuo
+/// // let x = std::collections::get(items, 0);
+/// ```
+pub fn get(in items: Array[Int], take index: Usize) -> Int {
+    items[index]
+}
+
+/// CONTRACT (not executable in v0): the sum of `count` leading elements.
+///
+/// The caller supplies `count` because v0 exposes no length query on an
+/// `Array[T]` value yet; `count` must not exceed the array's length.
+///
+/// # Example
+/// ```tuo
+/// // let total = std::collections::sum(items, n);
+/// ```
+pub fn sum(in items: Array[Int], take count: Usize) -> Int {
+    var total = 0;
+    var i: Usize = 0;
+    while i < count {
+        total = total + items[i];
+        i = i + 1;
+    }
+    total
+}
+
+/// CONTRACT (not executable in v0): does any of `count` leading elements equal
+/// `needle`?
+///
+/// # Example
+/// ```tuo
+/// // let found = std::collections::contains(items, n, 42);
+/// ```
+pub fn contains(in items: Array[Int], take count: Usize, take needle: Int) -> Bool {
+    var i: Usize = 0;
+    while i < count {
+        if items[i] == needle {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only. The contract tier above is intentionally
+// unspecced until array construction exists (never claim an unrun contract
+// passed).
+// ----------------------------------------------------------------------------
+
+spec first {
+    then first(pair(3, 8)) == 3;
+    then second(pair(3, 8)) == 8;
+}
+
+spec swap {
+    then first(swap(pair(3, 8))) == 8;
+    then second(swap(pair(3, 8))) == 3;
+}
+
+spec range_len {
+    then range_len(2, 7) == 5;
+    then range_len(7, 2) == 0;
+    then range_len(4, 4) == 0;
+}
+
+spec range_sum {
+    then range_sum(1, 5) == 10;
+    then range_sum(0, 0) == 0;
+    then range_sum(3, 4) == 3;
+}
+
+spec range_contains {
+    then range_contains(2, 7, 5);
+    then range_contains(2, 7, 2);
+    then !range_contains(2, 7, 7);
+    then !range_contains(2, 7, 1);
+}
