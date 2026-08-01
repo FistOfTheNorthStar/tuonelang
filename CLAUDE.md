@@ -313,6 +313,41 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   candidates consistent with the queries' evidence) — the test asserts guidance is never
   worse and, on that corpus, strictly better. It is a proxy for the queries' discriminative
   power, not a live-LLM eval (no provider is embedded); the doc says so plainly.
+- **The standard library is written in tuonelang, consumed as input, and split
+  into an honest executable tier and a contract tier — it never advertises an
+  effect the v0 core cannot perform.** `tdg-stdlib` is a *catalog* crate (no
+  compiler machinery, layer 90): each of the eight initial modules — `std::core`,
+  `std::collections`, `std::io`, `std::fs`, `std::time`, `std::process`,
+  `std::sync`, `std::test` — is a `.tuo` source file under `src/std/`, embedded
+  via `include_str!` and exposed as `Module { path, name, source }`
+  (`MODULES`, `module(path)`), so any host loads them into its own `SourceMap`
+  and runs its own pipeline. Every public API carries an exact signature, a doc
+  comment, a worked example, machine-queryable symbol information (the same
+  `Resolution` symbols the agent/LSP project), and — where executable — an
+  executable `spec`; there is deliberately **one** obvious API per fundamental
+  task, never competing spellings. Because v0 has **no native effect boundary**
+  (no FFI/syscalls; interpreter and both backends implement only the scalar,
+  control-flow core) and **methods are not lowered** (`impl` method calls are v0
+  no-ops pending the trait system), the library is *free functions only* and each
+  module separates an **executable tier** (pure computation — ordering,
+  `Option`/`Result` combinators, `Duration` arithmetic, error classification, the
+  pure state models of a latch/lock — which runs and whose specs run) from a
+  **contract tier** (the effectful entry points `println`/`read`/`now`/`exit`/
+  `lock`, given as exact signatures + documented contracts marked `CONTRACT:`,
+  with **no** executable spec so nothing claims to run that cannot). The promise
+  is enforced, not asserted: `tdg-cli/tests/stdlib.rs` really compiles every
+  module (alone and together) with zero errors and runs every shipped spec to
+  green with **no skips** (a skipped spec would mean a dishonest, unrunnable
+  contract slipped into the executable tier), and
+  `tdg-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
+  benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
+  plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by
+  *really* compiling each pick, showing a baseline (priors only) at 0% versus a
+  grounded policy (keep only calls to functions the module's real symbols export)
+  at 100%. It is a proxy for the symbol surface's discriminative power, not a
+  live-LLM eval (no provider is embedded); the doc says so plainly. The
+  dependency-policy guard pins `tdg-compiler → tdg-stdlib` (the stdlib is input,
+  never the reverse) and keeps the catalog crate free of any stage dependency.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

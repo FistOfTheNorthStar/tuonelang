@@ -1,0 +1,171 @@
+// std::fs — the file system.
+//
+//   Executable tier — the error vocabulary (`FsError`) and pure classification
+//   over it, plus pure path helpers that are just string reasoning.
+//
+//   Contract tier — the operations that actually touch the disk (`read`,
+//   `write`, `exists`, `remove`). Touching the disk is an effect; the v0 core
+//   performs no effects, so these are exact signatures with documented
+//   contracts and no executable spec, marked `CONTRACT:`.
+//
+// One file-error type; one obvious open/read/write shape.
+
+module std::fs;
+
+// ----------------------------------------------------------------------------
+// FsError — the outcome vocabulary for file operations. Executable tier.
+// ----------------------------------------------------------------------------
+
+/// Why a file-system operation failed.
+pub enum FsError {
+    /// No file or directory at the given path.
+    NotFound,
+    /// The operation was refused for lack of permission.
+    PermissionDenied,
+    /// A file was expected but a directory was found (or vice versa).
+    NotAFile,
+    /// Any other failure not distinguished above.
+    Other,
+}
+
+/// A stable numeric code for an `FsError`.
+///
+/// Fixed mapping: `NotFound`=0, `PermissionDenied`=1, `NotAFile`=2, `Other`=3.
+///
+/// # Example
+/// ```tuo
+/// let c = std::fs::error_code(FsError::NotFound); // 0
+/// ```
+pub fn error_code(in e: FsError) -> Int {
+    match e {
+        FsError::NotFound => 0,
+        FsError::PermissionDenied => 1,
+        FsError::NotAFile => 2,
+        FsError::Other => 3,
+    }
+}
+
+/// Is this failure a missing path, as opposed to a real error?
+///
+/// # Example
+/// ```tuo
+/// let b = std::fs::is_not_found(FsError::NotFound); // true
+/// ```
+pub fn is_not_found(in e: FsError) -> Bool {
+    match e {
+        FsError::NotFound => true,
+        FsError::PermissionDenied => false,
+        FsError::NotAFile => false,
+        FsError::Other => false,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Path helpers — pure string reasoning. Executable tier.
+//
+// A path is a `Str`; these ask questions about it without touching the disk.
+// ----------------------------------------------------------------------------
+
+/// Is `path` absolute (does it begin at the root `/`)?
+///
+/// Pure text inspection — it never consults the file system. v0 has no string
+/// indexing yet, so this recognises the canonical root path itself; it will
+/// generalise to a prefix check when string slicing lands, with no signature
+/// change.
+///
+/// # Example
+/// ```tuo
+/// let b = std::fs::is_absolute("/"); // true
+/// ```
+pub fn is_absolute(in path: Str) -> Bool {
+    path == "/"
+}
+
+/// Is `path` the empty path?
+///
+/// # Example
+/// ```tuo
+/// let b = std::fs::is_empty_path(""); // true
+/// ```
+pub fn is_empty_path(in path: Str) -> Bool {
+    path == ""
+}
+
+// ----------------------------------------------------------------------------
+// Disk operations — the CONTRACT tier.
+//
+// Each returns `Result[T, FsError]`. The bodies are type-satisfying
+// placeholders; the real effect lands with the native boundary and these
+// signatures will not change.
+// ----------------------------------------------------------------------------
+
+/// CONTRACT (not executable in v0): read the whole file at `path` as a string.
+///
+/// # Example
+/// ```tuo
+/// // let text = std::fs::read("notes.txt");
+/// ```
+pub fn read(in path: Str) -> Result[Str, FsError] {
+    // Contract placeholder: the real implementation reads the file.
+    Ok { value: "" }
+}
+
+/// CONTRACT (not executable in v0): write `contents` to the file at `path`,
+/// creating or truncating it. Returns the number of bytes written.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::fs::write("notes.txt", "hello");
+/// ```
+pub fn write(in path: Str, in contents: Str) -> Result[Int, FsError] {
+    // Contract placeholder.
+    Ok { value: 0 }
+}
+
+/// CONTRACT (not executable in v0): does a file or directory exist at `path`?
+///
+/// # Example
+/// ```tuo
+/// // let there = std::fs::exists("notes.txt");
+/// ```
+pub fn exists(in path: Str) -> Result[Bool, FsError] {
+    // Contract placeholder.
+    Ok { value: false }
+}
+
+/// CONTRACT (not executable in v0): remove the file at `path`.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::fs::remove("notes.txt");
+/// ```
+pub fn remove(in path: Str) -> Result[Int, FsError] {
+    // Contract placeholder.
+    Ok { value: 0 }
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only.
+// ----------------------------------------------------------------------------
+
+spec error_code {
+    then error_code(FsError::NotFound) == 0;
+    then error_code(FsError::PermissionDenied) == 1;
+    then error_code(FsError::NotAFile) == 2;
+    then error_code(FsError::Other) == 3;
+}
+
+spec is_not_found {
+    then is_not_found(FsError::NotFound);
+    then !is_not_found(FsError::PermissionDenied);
+}
+
+spec is_absolute {
+    then is_absolute("/");
+    then !is_absolute("notes.txt");
+}
+
+spec is_empty_path {
+    then is_empty_path("");
+    then !is_empty_path("/");
+}

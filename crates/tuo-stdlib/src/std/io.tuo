@@ -1,0 +1,134 @@
+// std::io — standard input and output.
+//
+//   Executable tier — the error vocabulary (`IoError`) and pure classification
+//   helpers over it. Deciding what an error means is computation; it runs.
+//
+//   Contract tier — the actual reads and writes (`print`, `println`,
+//   `read_line`). Writing to a stream is an effect, and the v0 core performs no
+//   effects (no FFI, no syscalls), so these are exact signatures with documented
+//   contracts and no executable spec. They are marked `CONTRACT:`.
+//
+// One I/O error type, one obvious way to test it — no parallel error hierarchies.
+
+module std::io;
+
+// ----------------------------------------------------------------------------
+// IoError — the outcome vocabulary for I/O. Executable tier.
+// ----------------------------------------------------------------------------
+
+/// Why an I/O operation failed.
+///
+/// A closed, ordered enumeration; every I/O contract below reports failure as
+/// one of these. `Ok` is not a member — success is carried by `Result`'s `Ok`.
+pub enum IoError {
+    /// The stream reached end-of-file before the request completed.
+    Eof,
+    /// The operation was refused for lack of permission.
+    PermissionDenied,
+    /// The stream was closed or broken.
+    BrokenPipe,
+    /// Any other failure not distinguished above.
+    Other,
+}
+
+/// A stable numeric code for an `IoError`, for machine-readable reporting.
+///
+/// The mapping is fixed: `Eof`=0, `PermissionDenied`=1, `BrokenPipe`=2,
+/// `Other`=3.
+///
+/// # Example
+/// ```tuo
+/// let c = std::io::error_code(IoError::Eof); // 0
+/// ```
+pub fn error_code(in e: IoError) -> Int {
+    match e {
+        IoError::Eof => 0,
+        IoError::PermissionDenied => 1,
+        IoError::BrokenPipe => 2,
+        IoError::Other => 3,
+    }
+}
+
+/// Is this failure end-of-file, as opposed to a real error?
+///
+/// A clean read that simply ran out of input is often not an error at the call
+/// site; this is the one obvious way to ask.
+///
+/// # Example
+/// ```tuo
+/// let b = std::io::is_eof(IoError::Eof); // true
+/// ```
+pub fn is_eof(in e: IoError) -> Bool {
+    match e {
+        IoError::Eof => true,
+        IoError::PermissionDenied => false,
+        IoError::BrokenPipe => false,
+        IoError::Other => false,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Reads and writes — the CONTRACT tier.
+//
+// Each returns `Result[T, IoError]`: success or a classified failure. The
+// bodies are placeholders that satisfy the type checker; the real effect lands
+// with the native boundary, and these signatures will not change.
+// ----------------------------------------------------------------------------
+
+/// CONTRACT (not executable in v0): write `text` to standard output.
+///
+/// Returns the number of bytes written on success. Performing the write is an
+/// effect the v0 core cannot do, so this is a contract, not runnable code.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::io::print("hello");
+/// ```
+pub fn print(in text: Str) -> Result[Int, IoError] {
+    // Contract placeholder: the real implementation writes to stdout.
+    Ok { value: 0 }
+}
+
+/// CONTRACT (not executable in v0): write `text` followed by a newline to
+/// standard output.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::io::println("hello");
+/// ```
+pub fn println(in text: Str) -> Result[Int, IoError] {
+    // Contract placeholder.
+    Ok { value: 0 }
+}
+
+/// CONTRACT (not executable in v0): read one line from standard input.
+///
+/// Returns the line (without its trailing newline) on success, or an `IoError`
+/// — `Eof` when input is exhausted.
+///
+/// # Example
+/// ```tuo
+/// // let line = std::io::read_line();
+/// ```
+pub fn read_line() -> Result[Str, IoError] {
+    // Contract placeholder: the real implementation reads from stdin.
+    Ok { value: "" }
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only. The read/write contracts stay unspecced (never
+// claim an effect that cannot run passed a test).
+// ----------------------------------------------------------------------------
+
+spec error_code {
+    then error_code(IoError::Eof) == 0;
+    then error_code(IoError::PermissionDenied) == 1;
+    then error_code(IoError::BrokenPipe) == 2;
+    then error_code(IoError::Other) == 3;
+}
+
+spec is_eof {
+    then is_eof(IoError::Eof);
+    then !is_eof(IoError::BrokenPipe);
+    then !is_eof(IoError::Other);
+}

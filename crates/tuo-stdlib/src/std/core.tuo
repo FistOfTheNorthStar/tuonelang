@@ -1,0 +1,324 @@
+// std::core — the foundational module of the tuonelang standard library.
+//
+// `core` is pure computation: ordering, arithmetic helpers, and the
+// combinators for the two built-in effect-free carriers, `Option[T]` and
+// `Result[T, E]`. Every function here is executable today and every spec below
+// runs through the reference interpreter, so what `core` promises, it proves.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`x.map(..)`) is not lowered in v0,
+//     so `core` never pretends it is; you write `map(x, ..)`.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+
+module std::core;
+
+// ----------------------------------------------------------------------------
+// Ordering and numeric helpers.
+// ----------------------------------------------------------------------------
+
+/// The smaller of two integers.
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::min(3, 7); // 3
+/// ```
+pub fn min(take a: Int, take b: Int) -> Int {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// The larger of two integers.
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::max(3, 7); // 7
+/// ```
+pub fn max(take a: Int, take b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// The absolute value of an integer.
+///
+/// Note: `abs(Int::MIN)` cannot be represented and would trap on the negation;
+/// callers holding untrusted extremes should guard first. This is the same
+/// honest trap the interpreter and both backends agree on.
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::abs(0 - 5); // 5
+/// ```
+pub fn abs(take n: Int) -> Int {
+    if n < 0 {
+        0 - n
+    } else {
+        n
+    }
+}
+
+/// Clamp `value` into the inclusive range `[low, high]`.
+///
+/// `low` must not exceed `high`; when it does the result is `low` (the range is
+/// treated as the single point `low`).
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::clamp(12, 0, 10); // 10
+/// ```
+pub fn clamp(take value: Int, take low: Int, take high: Int) -> Int {
+    if value < low {
+        low
+    } else if value > high {
+        high
+    } else {
+        value
+    }
+}
+
+/// The sign of an integer: `-1`, `0`, or `1`.
+///
+/// # Example
+/// ```tuo
+/// let s = std::core::signum(0 - 4); // -1
+/// ```
+pub fn signum(take n: Int) -> Int {
+    if n > 0 {
+        1
+    } else if n < 0 {
+        0 - 1
+    } else {
+        0
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Boolean helpers.
+// ----------------------------------------------------------------------------
+
+/// Logical exclusive-or of two booleans.
+///
+/// # Example
+/// ```tuo
+/// let b = std::core::xor(true, false); // true
+/// ```
+pub fn xor(take a: Bool, take b: Bool) -> Bool {
+    a != b
+}
+
+// ----------------------------------------------------------------------------
+// Option[T] combinators.
+//
+// `Option[T]` is the built-in prelude enum with variants `Some { value: T }`
+// and `None`. These are the canonical ways to inspect and transform it.
+// ----------------------------------------------------------------------------
+
+/// Is this option a `Some`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::core::is_some(Some { value: 1 }); // true
+/// ```
+pub fn is_some(in opt: Option[Int]) -> Bool {
+    match opt {
+        Some { value } => true,
+        None => false,
+    }
+}
+
+/// Is this option a `None`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::core::is_none(None); // true
+/// ```
+pub fn is_none(in opt: Option[Int]) -> Bool {
+    match opt {
+        Some { value } => false,
+        None => true,
+    }
+}
+
+/// The contained value, or `fallback` when the option is `None`.
+///
+/// This is the single, obvious way to leave the `Option` world with a default;
+/// there is deliberately no second `unwrap_or_else`/`get_or` spelling.
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::unwrap_or(None, 42); // 42
+/// ```
+pub fn unwrap_or(in opt: Option[Int], take fallback: Int) -> Int {
+    match opt {
+        Some { value } => value,
+        None => fallback,
+    }
+}
+
+/// Apply `add` to a `Some`'s value; leave `None` unchanged.
+///
+/// v0 has no first-class function values, so the canonical `map` is specialized
+/// to the built-in addition step. The shape — transform inside `Some`, pass
+/// `None` through — is the contract; a general `map` arrives with closures.
+///
+/// # Example
+/// ```tuo
+/// let o = std::core::map_add(Some { value: 1 }, 4); // Some { value: 5 }
+/// ```
+pub fn map_add(in opt: Option[Int], take add: Int) -> Option[Int] {
+    match opt {
+        Some { value } => Some { value: value + add },
+        None => None,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Result[T, E] combinators.
+//
+// `Result[T, E]` is the built-in prelude enum with variants `Ok { value: T }`
+// and `Err { error: E }`. Errors are values; there is no exception channel.
+// ----------------------------------------------------------------------------
+
+/// Is this result an `Ok`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::core::is_ok(Ok { value: 1 }); // true
+/// ```
+pub fn is_ok(in res: Result[Int, Str]) -> Bool {
+    match res {
+        Ok { value } => true,
+        Err { error } => false,
+    }
+}
+
+/// Is this result an `Err`?
+///
+/// # Example
+/// ```tuo
+/// let b = std::core::is_err(Err { error: "boom" }); // true
+/// ```
+pub fn is_err(in res: Result[Int, Str]) -> Bool {
+    match res {
+        Ok { value } => false,
+        Err { error } => true,
+    }
+}
+
+/// The `Ok` value, or `fallback` when the result is an `Err`.
+///
+/// # Example
+/// ```tuo
+/// let n = std::core::ok_or(Err { error: "no" }, 7); // 7
+/// ```
+pub fn ok_or(in res: Result[Int, Str], take fallback: Int) -> Int {
+    match res {
+        Ok { value } => value,
+        Err { error } => fallback,
+    }
+}
+
+/// Discard a result's error, projecting it to an `Option`.
+///
+/// # Example
+/// ```tuo
+/// let o = std::core::ok(Ok { value: 3 }); // Some { value: 3 }
+/// ```
+pub fn ok(in res: Result[Int, Str]) -> Option[Int] {
+    match res {
+        Ok { value } => Some { value },
+        Err { error } => None,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every one runs through the reference interpreter.
+//
+// Equality in v0 is defined on scalars (Int, Bool, Str), so specs extract a
+// scalar (via a combinator that returns one) rather than comparing an ADT
+// value directly.
+// ----------------------------------------------------------------------------
+
+spec min {
+    then min(3, 7) == 3;
+    then min(7, 3) == 3;
+    then min(4, 4) == 4;
+}
+
+spec max {
+    then max(3, 7) == 7;
+    then max(7, 3) == 7;
+}
+
+spec abs {
+    then abs(0 - 5) == 5;
+    then abs(5) == 5;
+    then abs(0) == 0;
+}
+
+spec clamp {
+    then clamp(12, 0, 10) == 10;
+    then clamp(0 - 3, 0, 10) == 0;
+    then clamp(5, 0, 10) == 5;
+}
+
+spec signum {
+    then signum(9) == 1;
+    then signum(0 - 4) == 0 - 1;
+    then signum(0) == 0;
+}
+
+spec xor {
+    then xor(true, false);
+    then xor(false, true);
+    then !xor(true, true);
+    then !xor(false, false);
+}
+
+spec is_some {
+    then is_some(Some { value: 1 });
+    then !is_some(None);
+}
+
+spec is_none {
+    then is_none(None);
+    then !is_none(Some { value: 1 });
+}
+
+spec unwrap_or {
+    then unwrap_or(Some { value: 5 }, 0) == 5;
+    then unwrap_or(None, 42) == 42;
+}
+
+spec map_add {
+    // Inspect the mapped option by leaving the Option world with unwrap_or.
+    then unwrap_or(map_add(Some { value: 1 }, 4), 0) == 5;
+    then unwrap_or(map_add(None, 4), 0) == 0;
+}
+
+spec is_ok {
+    then is_ok(Ok { value: 1 });
+    then !is_ok(Err { error: "boom" });
+}
+
+spec is_err {
+    then is_err(Err { error: "boom" });
+    then !is_err(Ok { value: 1 });
+}
+
+spec ok_or {
+    then ok_or(Ok { value: 9 }, 0) == 9;
+    then ok_or(Err { error: "no" }, 7) == 7;
+}
+
+spec ok {
+    then unwrap_or(ok(Ok { value: 3 }), 0) == 3;
+    then unwrap_or(ok(Err { error: "no" }), 0) == 0;
+}

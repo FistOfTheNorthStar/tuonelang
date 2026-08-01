@@ -1283,6 +1283,7 @@ dependencies = [
  "tuo-mir-interp",
  "tuo-runtime",
  "tuo-spec",
+ "tuo-stdlib",
  "tuo-types",
 ]
 

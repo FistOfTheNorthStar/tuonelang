@@ -1,0 +1,148 @@
+// std::sync — synchronization primitives.
+//
+// Synchronization is inherently about *effects* — threads observing and
+// changing shared state — and v0 has no threads and no native effect boundary.
+// So this module is mostly contract, and it says so plainly rather than
+// pretending to synchronize anything.
+//
+//   Executable tier — the pure *state models*: whether a one-shot latch has
+//   fired, whether a lock is held. Reasoning about the state is computation and
+//   runs; performing the synchronization is not and does not.
+//
+//   Contract tier — `lock`, `unlock`, `spawn`. These are exact signatures with
+//   documented contracts and no executable spec, marked `CONTRACT:`.
+//
+// One lock model, one one-shot latch model — no competing primitives.
+
+module std::sync;
+
+// ----------------------------------------------------------------------------
+// Once — a one-shot latch's state. Executable tier.
+//
+// A `Once` records whether its single action has run. The *state transition* is
+// pure and runs; the real `Once` also provides mutual exclusion across threads,
+// which is the contract part.
+// ----------------------------------------------------------------------------
+
+/// The state of a one-shot latch: has its action already run?
+pub struct Once {
+    fired: Bool,
+}
+
+/// A fresh, unfired latch.
+///
+/// # Example
+/// ```tuo
+/// let o = std::sync::once_new();
+/// ```
+pub fn once_new() -> Once {
+    Once { fired: false }
+}
+
+/// Has this latch already fired?
+///
+/// # Example
+/// ```tuo
+/// let b = std::sync::has_fired(std::sync::once_new()); // false
+/// ```
+pub fn has_fired(in o: Once) -> Bool {
+    o.fired
+}
+
+/// The latch after firing (its action has now run).
+///
+/// Pure state transition: firing an already-fired latch leaves it fired.
+///
+/// # Example
+/// ```tuo
+/// let o = std::sync::fire(std::sync::once_new());
+/// ```
+pub fn fire(in o: Once) -> Once {
+    Once { fired: true }
+}
+
+// ----------------------------------------------------------------------------
+// Mutex state — the pure held/free model. Executable tier.
+// ----------------------------------------------------------------------------
+
+/// The state of a lock: held or free.
+pub struct LockState {
+    held: Bool,
+}
+
+/// A free lock.
+///
+/// # Example
+/// ```tuo
+/// let s = std::sync::unlocked();
+/// ```
+pub fn unlocked() -> LockState {
+    LockState { held: false }
+}
+
+/// Is this lock currently held?
+///
+/// # Example
+/// ```tuo
+/// let b = std::sync::is_held(std::sync::unlocked()); // false
+/// ```
+pub fn is_held(in s: LockState) -> Bool {
+    s.held
+}
+
+// ----------------------------------------------------------------------------
+// Synchronization operations — the CONTRACT tier.
+// ----------------------------------------------------------------------------
+
+/// CONTRACT (not executable in v0): acquire the lock, returning the held state.
+///
+/// The real operation blocks until the lock is available; v0 has no threads and
+/// no effect boundary, so this is a contract and does not run.
+///
+/// # Example
+/// ```tuo
+/// // let held = std::sync::lock(state);
+/// ```
+pub fn lock(in state: LockState) -> LockState {
+    // Contract placeholder: the real implementation blocks until acquired.
+    LockState { held: true }
+}
+
+/// CONTRACT (not executable in v0): release the lock, returning the free state.
+///
+/// # Example
+/// ```tuo
+/// // let free = std::sync::unlock(state);
+/// ```
+pub fn unlock(in state: LockState) -> LockState {
+    // Contract placeholder.
+    LockState { held: false }
+}
+
+/// CONTRACT (not executable in v0): run `task_id` on a new thread, returning a
+/// handle id.
+///
+/// Threads are an effect the v0 core cannot create, so this is a contract.
+///
+/// # Example
+/// ```tuo
+/// // let handle = std::sync::spawn(0);
+/// ```
+pub fn spawn(take task_id: Int) -> Int {
+    // Contract placeholder: the real implementation starts a thread.
+    task_id
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only (the pure state models).
+// ----------------------------------------------------------------------------
+
+spec "once latch fires exactly once" {
+    then !has_fired(once_new());
+    then has_fired(fire(once_new()));
+    then has_fired(fire(fire(once_new())));
+}
+
+spec "a fresh lock is free" {
+    then !is_held(unlocked());
+}

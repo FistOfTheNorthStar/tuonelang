@@ -1,0 +1,114 @@
+// std::process — the running process and its children.
+//
+//   Executable tier — `ExitStatus`, the meaning of a process exit code, and the
+//   pure reasoning over it (success, failure, the code itself).
+//
+//   Contract tier — the operations that affect the real process (`exit`,
+//   `args`, `env`). Ending or inspecting the OS process is an effect the v0
+//   core cannot perform, so these are exact signatures with documented
+//   contracts and no executable spec, marked `CONTRACT:`.
+//
+// One exit-status model — a wrapped integer code — used everywhere.
+
+module std::process;
+
+// ----------------------------------------------------------------------------
+// ExitStatus — the result of a finished process. Executable tier.
+//
+// A process exits with an integer code; 0 means success, anything else is a
+// failure code. This is the single obvious model.
+// ----------------------------------------------------------------------------
+
+/// The exit status of a process: its integer code.
+pub struct ExitStatus {
+    code: Int,
+}
+
+/// The success status (code 0).
+///
+/// # Example
+/// ```tuo
+/// let s = std::process::success();
+/// ```
+pub fn success() -> ExitStatus {
+    ExitStatus { code: 0 }
+}
+
+/// A failure status with the given non-zero code.
+///
+/// # Example
+/// ```tuo
+/// let s = std::process::failure(2);
+/// ```
+pub fn failure(take code: Int) -> ExitStatus {
+    ExitStatus { code }
+}
+
+/// The integer exit code of a status.
+///
+/// # Example
+/// ```tuo
+/// let c = std::process::code(std::process::failure(2)); // 2
+/// ```
+pub fn code(in status: ExitStatus) -> Int {
+    status.code
+}
+
+/// Did the process succeed (exit code 0)?
+///
+/// # Example
+/// ```tuo
+/// let b = std::process::is_success(std::process::success()); // true
+/// ```
+pub fn is_success(in status: ExitStatus) -> Bool {
+    status.code == 0
+}
+
+// ----------------------------------------------------------------------------
+// Process control — the CONTRACT tier.
+// ----------------------------------------------------------------------------
+
+/// CONTRACT (not executable in v0): terminate the current process with `status`.
+///
+/// This never returns; its declared return type `ExitStatus` exists only to
+/// satisfy the type checker for the contract. Ending the process is an effect
+/// the v0 core cannot perform, so this does not run yet.
+///
+/// # Example
+/// ```tuo
+/// // std::process::exit(std::process::failure(1));
+/// ```
+pub fn exit(in status: ExitStatus) -> ExitStatus {
+    // Contract placeholder: the real implementation terminates the process.
+    status
+}
+
+/// CONTRACT (not executable in v0): the number of command-line arguments.
+///
+/// # Example
+/// ```tuo
+/// // let n = std::process::arg_count();
+/// ```
+pub fn arg_count() -> Int {
+    // Contract placeholder.
+    0
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only.
+// ----------------------------------------------------------------------------
+
+spec success {
+    then code(success()) == 0;
+    then is_success(success());
+}
+
+spec failure {
+    then code(failure(2)) == 2;
+    then !is_success(failure(2));
+}
+
+spec is_success {
+    then is_success(success());
+    then !is_success(failure(1));
+}

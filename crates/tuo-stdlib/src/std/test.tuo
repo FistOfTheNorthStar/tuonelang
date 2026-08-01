@@ -1,0 +1,132 @@
+// std::test — assertion helpers for use inside specs.
+//
+// tuonelang's testing story is the built-in `spec` block: you write
+// `then <bool-expr>;` and `assert <bool-expr>;`, and `tuo spec` / `tuo verify`
+// run them through the reference interpreter. `std::test` does not replace that
+// — it provides the small, obvious *predicates* you compose inside a `then`, so
+// intent reads clearly and there is one canonical spelling for each check.
+//
+// Every helper returns a `Bool`, so it drops straight into a `then`:
+//
+//   then std::test::eq(add(2, 3), 5);
+//
+// All executable, all specced.
+
+module std::test;
+
+/// Are two integers equal? The canonical equality check for a spec.
+///
+/// # Example
+/// ```tuo
+/// then std::test::eq(2 + 3, 5);
+/// ```
+pub fn eq(take actual: Int, take expected: Int) -> Bool {
+    actual == expected
+}
+
+/// Are two integers unequal?
+///
+/// # Example
+/// ```tuo
+/// then std::test::ne(2 + 2, 5);
+/// ```
+pub fn ne(take actual: Int, take expected: Int) -> Bool {
+    actual != expected
+}
+
+/// Is `value` within `tolerance` of `target` (inclusive)?
+///
+/// The obvious "close enough" check for computed integers.
+///
+/// # Example
+/// ```tuo
+/// then std::test::near(98, 100, 5); // |98 - 100| = 2 <= 5
+/// ```
+pub fn near(take value: Int, take target: Int, take tolerance: Int) -> Bool {
+    let low = target - tolerance;
+    let high = target + tolerance;
+    value >= low && value <= high
+}
+
+/// Is `value` in the half-open range `[low, high)`?
+///
+/// # Example
+/// ```tuo
+/// then std::test::in_range(5, 0, 10);
+/// ```
+pub fn in_range(take value: Int, take low: Int, take high: Int) -> Bool {
+    value >= low && value < high
+}
+
+/// Is `condition` true? A named identity, so a spec can read
+/// `then is_true(some_flag);` instead of a bare expression when that aids
+/// clarity.
+///
+/// # Example
+/// ```tuo
+/// then std::test::is_true(1 < 2);
+/// ```
+pub fn is_true(take condition: Bool) -> Bool {
+    condition
+}
+
+/// Is `condition` false?
+///
+/// # Example
+/// ```tuo
+/// then std::test::is_false(2 < 1);
+/// ```
+pub fn is_false(take condition: Bool) -> Bool {
+    !condition
+}
+
+/// Do two strings match exactly?
+///
+/// # Example
+/// ```tuo
+/// then std::test::str_eq("ok", "ok");
+/// ```
+pub fn str_eq(in actual: Str, in expected: Str) -> Bool {
+    actual == expected
+}
+
+// ----------------------------------------------------------------------------
+// Specs — the assertion helpers, checking themselves.
+// ----------------------------------------------------------------------------
+
+spec eq {
+    then eq(5, 5);
+    then !eq(5, 6);
+}
+
+spec ne {
+    then ne(5, 6);
+    then !ne(5, 5);
+}
+
+spec near {
+    then near(98, 100, 5);
+    then near(100, 100, 0);
+    then !near(90, 100, 5);
+}
+
+spec in_range {
+    then in_range(5, 0, 10);
+    then in_range(0, 0, 10);
+    then !in_range(10, 0, 10);
+}
+
+spec is_true {
+    then is_true(true);
+    then !is_true(false);
+}
+
+spec is_false {
+    then is_false(false);
+    then !is_false(true);
+}
+
+spec str_eq {
+    then str_eq("ok", "ok");
+    then !str_eq("ok", "no");
+}
