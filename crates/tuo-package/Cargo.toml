@@ -12,5 +12,7 @@ authors.workspace = true
 workspace = true
 
 [dependencies]
-tuo-source.workspace = true
-tuo-diagnostics.workspace = true
+# The package system is data-and-filesystem only: it models the manifest and
+# lockfile, resolves a path-dependency graph off disk, and computes content
+# checksums, all in plain values. It holds no compiler machinery — a host loads
+# the resolved sources into its own pipeline — so it needs no tuonelang crate.

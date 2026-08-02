@@ -31,11 +31,25 @@ pub(crate) fn run(files: &[PathBuf], mode: OutputMode) -> ExitCode {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
-    let result = check_sources(&map, &sources);
+    report(&map, &sources, files, ProtocolCommand::Check, mode)
+}
+
+/// Check an already-loaded program snapshot and present the result. Shared by
+/// `tuo check` (which loads files) and the package-aware `tuo check` (which
+/// loads a resolved package graph). `names` labels the inputs in machine
+/// output; `command` is the protocol command to report under.
+pub(crate) fn report(
+    map: &SourceMap,
+    sources: &[SourceId],
+    names: &[PathBuf],
+    command: ProtocolCommand,
+    mode: OutputMode,
+) -> ExitCode {
+    let result = check_sources(map, sources);
     if mode.is_machine() {
-        report_machine(&result, &map, files, mode)
+        report_machine(&result, map, names, command, mode)
     } else {
-        report_human(&result, &map)
+        report_human(&result, map)
     }
 }
 
@@ -98,9 +112,10 @@ fn report_machine(
     result: &CheckResult,
     map: &SourceMap,
     files: &[PathBuf],
+    command: ProtocolCommand,
     mode: OutputMode,
 ) -> ExitCode {
-    let Some(mut emitter) = mode.emitter(ProtocolCommand::Check) else {
+    let Some(mut emitter) = mode.emitter(command) else {
         // `is_machine()` was true, so an emitter is always produced here; this
         // branch is unreachable but avoids an unwrap.
         return ExitCode::FAILURE;

@@ -1281,6 +1281,7 @@ dependencies = [
  "tuo-fmt",
  "tuo-mir",
  "tuo-mir-interp",
+ "tuo-package",
  "tuo-runtime",
  "tuo-spec",
  "tuo-stdlib",
@@ -1458,10 +1459,6 @@ dependencies = [
 [[package]]
 name = "tuo-package"
 version = "0.0.0"
-dependencies = [
- "tuo-diagnostics",
- "tuo-source",
-]
 
 [[package]]
 name = "tuo-parser"

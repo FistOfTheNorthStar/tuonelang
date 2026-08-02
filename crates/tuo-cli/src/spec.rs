@@ -180,8 +180,10 @@ fn same_path(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Run the specs and present the outcome; the shared body of `spec`/`verify`.
-fn execute(
+/// Run the specs and present the outcome; the shared body of `spec`/`verify`
+/// and the package-aware `tuo test`/`tuo verify`, which pre-load a resolved
+/// package graph into `map`/`sources`.
+pub(crate) fn execute(
     map: &SourceMap,
     sources: &[SourceId],
     selection: &Selection,

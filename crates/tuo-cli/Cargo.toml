@@ -39,6 +39,10 @@ tuo-codegen.workspace = true
 tuo-codegen-cranelift.workspace = true
 tuo-codegen-llvm.workspace = true
 tuo-runtime.workspace = true
+# `tuo new/add/remove/check/build/verify/test` drive the package system: it
+# models the manifest/lockfile and resolves a path-dependency graph off disk,
+# and the CLI loads the resolved sources into the shared compiler pipeline.
+tuo-package.workspace = true
 
 [dev-dependencies]
 # The end-to-end differential tests compute the reference result with the MIR
