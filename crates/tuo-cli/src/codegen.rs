@@ -135,11 +135,47 @@ fn drive(
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
+    drive_loaded(&map, &sources, files, output, backend, kind, mode)
+}
 
-    match compile_and_finish(&map, &sources, files, output, backend, kind, mode) {
+/// Compile and finish an already-loaded program snapshot. Shared by `tuo build`
+/// (which loads files) and the package-aware `tuo build` (which loads a
+/// resolved package graph). `names` labels the inputs in machine output.
+fn drive_loaded(
+    map: &SourceMap,
+    sources: &[SourceId],
+    names: &[PathBuf],
+    output: Option<PathBuf>,
+    backend: Backend,
+    kind: Mode,
+    mode: OutputMode,
+) -> ExitCode {
+    let command = kind.command();
+    match compile_and_finish(map, sources, names, output, backend, kind, mode) {
         Ok(code) => code,
-        Err(outcome) => report_failure(&map, files, command, mode, outcome),
+        Err(outcome) => report_failure(map, names, command, mode, outcome),
     }
+}
+
+/// The package-aware `tuo build`: compile an already-resolved package graph to
+/// a native executable. `release` selects the LLVM backend as usual.
+pub(crate) fn build_loaded(
+    map: &SourceMap,
+    sources: &[SourceId],
+    names: &[PathBuf],
+    output: Option<PathBuf>,
+    release: bool,
+    mode: OutputMode,
+) -> ExitCode {
+    drive_loaded(
+        map,
+        sources,
+        names,
+        output,
+        Backend::select(release),
+        Mode::Build,
+        mode,
+    )
 }
 
 /// A failure carrying enough to report through either output mode.

@@ -79,6 +79,11 @@ pub(crate) enum ProtocolCommand {
     Build,
     /// `tuo run`.
     Run,
+    /// A package-management command (`tuo new`/`add`/`remove`), reported under
+    /// the stable `package` wire name.
+    Package,
+    /// `tuo test` — the package-aware spec run.
+    Test,
 }
 
 impl ProtocolCommand {
@@ -91,6 +96,8 @@ impl ProtocolCommand {
             Self::Fmt => "fmt",
             Self::Build => "build",
             Self::Run => "run",
+            Self::Package => "package",
+            Self::Test => "test",
         }
     }
 }

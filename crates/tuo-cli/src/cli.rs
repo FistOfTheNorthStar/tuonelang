@@ -2,10 +2,12 @@
 //!
 //! The command surface is intentionally minimal: only functionality the
 //! compiler can actually perform is exposed. Today that is `tuo check`,
-//! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`,
-//! `tuo agent --stdio`, and the `tuo debug` developer tools. Further compiler
-//! subcommands are added as their functionality is implemented — a new
-//! [`Command`] variant plus a match arm in [`Cli::dispatch`].
+//! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, the package
+//! commands (`tuo new`/`add`/`remove`/`test` and the package-aware forms of
+//! `check`/`build`/`verify`, plus `tuo package symbols`), `tuo agent --stdio`,
+//! and the `tuo debug` developer tools. Further compiler subcommands are added
+//! as their functionality is implemented — a new [`Command`] variant plus a
+//! match arm in [`Cli::dispatch`].
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,6 +20,7 @@ use crate::codegen;
 use crate::debug::{self, Dump};
 use crate::fmt;
 use crate::output::{MessageFormat, OutputMode};
+use crate::package;
 use crate::spec;
 
 /// The `tuo` command-line interface.
@@ -64,9 +67,14 @@ enum Command {
     /// Diagnostics go to stderr; the exit status is a failure if the
     /// program has errors.
     Check {
-        /// The tuonelang source files forming the program.
-        #[arg(required = true)]
+        /// The tuonelang source files forming the program. Omit to check the
+        /// package in the manifest directory (`--manifest`, default `.`)
+        /// instead, resolving its dependency graph first.
         files: Vec<PathBuf>,
+        /// Operate on the package rooted at this directory (its `tdg.toml`)
+        /// rather than a bare file list. Ignored when files are given.
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
     },
     /// Execute the program's colocated specs through the reference MIR
     /// interpreter.
@@ -100,12 +108,17 @@ enum Command {
     /// spec.
     Verify {
         /// Run only the specs affected by an edit to this file (one of the
-        /// input files); omit to run every spec.
+        /// input files); omit to run every spec. Only applies to the file-list
+        /// form.
         #[arg(long = "affected-by", value_name = "FILE")]
         affected_by: Option<PathBuf>,
-        /// The tuonelang source files forming the program.
-        #[arg(required = true)]
+        /// The tuonelang source files forming the program. Omit to verify the
+        /// package in the manifest directory instead.
         files: Vec<PathBuf>,
+        /// Operate on the package rooted at this directory. Ignored when files
+        /// are given.
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
     },
     /// Compile a program to a native executable.
     ///
@@ -123,16 +136,21 @@ enum Command {
     /// interpreter agree on every program's result (pinned by the differential
     /// suite), so `--release` changes only speed, never meaning.
     Build {
-        /// Write the executable here (defaults to the first input's name).
+        /// Write the executable here (defaults to the first input's name, or
+        /// the package name in package mode).
         #[arg(long, short)]
         output: Option<PathBuf>,
         /// Build an optimized release binary with the LLVM backend instead of
         /// the default debug build with Cranelift.
         #[arg(long)]
         release: bool,
-        /// The tuonelang source files forming the program.
-        #[arg(required = true)]
+        /// The tuonelang source files forming the program. Omit to build the
+        /// package in the manifest directory instead.
         files: Vec<PathBuf>,
+        /// Operate on the package rooted at this directory. Ignored when files
+        /// are given.
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
     },
     /// Compile a program and run it, propagating its exit status.
     ///
@@ -185,6 +203,79 @@ enum Command {
         /// The tuonelang source files to format.
         #[arg(required = true)]
         files: Vec<PathBuf>,
+    },
+    /// Scaffold a new package.
+    ///
+    /// Creates a directory named after the package (or `--path <dir>`)
+    /// containing a `tdg.toml` manifest and a starter `main` module under the
+    /// default module root. The new package checks and runs immediately.
+    New {
+        /// The package name (lowercase letters, digits, and underscores;
+        /// must start with a letter).
+        name: String,
+        /// Create the package here instead of in a directory named after it.
+        #[arg(long, value_name = "DIR")]
+        path: Option<PathBuf>,
+    },
+    /// Add a path dependency to the package manifest.
+    ///
+    /// Records `<name> = { path = "<path>" }` under `[dependencies]`, then
+    /// re-resolves the graph and rewrites `tdg.lock`. v0 supports only path
+    /// dependencies; a remote registry is a later addition.
+    Add {
+        /// The dependency's package name (must match the dependency's own
+        /// manifest name).
+        name: String,
+        /// The path to the dependency package, relative to this manifest.
+        #[arg(long, value_name = "PATH")]
+        path: String,
+        /// The directory holding the manifest to edit (default `.`).
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
+    },
+    /// Remove a dependency from the package manifest.
+    ///
+    /// Drops the named entry from `[dependencies]`, then re-resolves and
+    /// rewrites `tdg.lock`.
+    Remove {
+        /// The dependency's package name.
+        name: String,
+        /// The directory holding the manifest to edit (default `.`).
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
+    },
+    /// Run the package's tests: its colocated specs, across the resolved graph.
+    ///
+    /// Resolves the package's dependencies, loads the whole graph as one
+    /// program, and executes every spec through the reference interpreter —
+    /// the same execution `tuo verify` performs. In v0 a package's tests *are*
+    /// its specs, so `test` and `verify` run the same set; `test` is the
+    /// conventionally-named command.
+    Test {
+        /// The directory holding the package manifest (default `.`).
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
+    },
+    /// Query a resolved package (machine protocol only).
+    #[command(subcommand)]
+    Package(PackageCommand),
+}
+
+/// The `tuo package` queries: read-only projections of a resolved package.
+#[derive(Debug, Subcommand)]
+enum PackageCommand {
+    /// List a package's public, module-level symbols.
+    ///
+    /// Resolves and compiles the package's real sources and reports the actual
+    /// exported functions, structs, and enums the front end produced — the same
+    /// symbols the agent protocol and LSP project, so a tool can query what a
+    /// package offers **without guessing**. Available only in a machine format
+    /// (`--message-format=json`); it is a protocol for tools, not a human
+    /// report.
+    Symbols {
+        /// The directory holding the package manifest (default `.`).
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
     },
 }
 
@@ -246,17 +337,51 @@ impl Cli {
     pub(crate) fn dispatch(self) -> ExitCode {
         let mode = OutputMode::new(self.message_format, self.log);
         match self.command {
-            Some(Command::Check { files }) => check::run(&files, mode),
+            Some(Command::Check { files, manifest }) => {
+                if files.is_empty() {
+                    package::check(&manifest_dir(manifest), mode)
+                } else {
+                    check::run(&files, mode)
+                }
+            }
             Some(Command::Spec { target, files }) => spec::run(target, &files, mode),
-            Some(Command::Verify { affected_by, files }) => {
-                spec::verify(affected_by.as_deref(), &files, mode)
+            Some(Command::Verify {
+                affected_by,
+                files,
+                manifest,
+            }) => {
+                if files.is_empty() {
+                    package::verify(&manifest_dir(manifest), mode)
+                } else {
+                    spec::verify(affected_by.as_deref(), &files, mode)
+                }
             }
             Some(Command::Build {
                 output,
                 release,
                 files,
-            }) => codegen::build(output, release, &files, mode),
+                manifest,
+            }) => {
+                if files.is_empty() {
+                    package::build(&manifest_dir(manifest), output, release, mode)
+                } else {
+                    codegen::build(output, release, &files, mode)
+                }
+            }
             Some(Command::Run { release, files }) => codegen::run(release, &files, mode),
+            Some(Command::New { name, path }) => package::new(&name, path, mode),
+            Some(Command::Add {
+                name,
+                path,
+                manifest,
+            }) => package::add(&name, &path, &manifest_dir(manifest), mode),
+            Some(Command::Remove { name, manifest }) => {
+                package::remove(&name, &manifest_dir(manifest), mode)
+            }
+            Some(Command::Test { manifest }) => package::test(&manifest_dir(manifest), mode),
+            Some(Command::Package(PackageCommand::Symbols { manifest })) => {
+                package::symbols(&manifest_dir(manifest), mode)
+            }
             // The agent protocol is its own versioned JSON-lines contract on
             // stdio, independent of `--message-format` (which governs the
             // result-producing commands' output). `mode` is passed only so
@@ -295,6 +420,12 @@ impl Cli {
             },
         }
     }
+}
+
+/// The directory a package command operates on: the given `--manifest <dir>`,
+/// or the current directory when omitted.
+fn manifest_dir(manifest: Option<PathBuf>) -> PathBuf {
+    manifest.unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// The `debug` tools have no machine protocol; a `--message-format` other than

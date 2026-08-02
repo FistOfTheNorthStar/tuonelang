@@ -34,6 +34,14 @@ cargo run -p tdg-cli -- build -o out file.tuo  # …to a chosen path
 cargo run -p tdg-cli -- build --release file.tuo # …optimized, via the LLVM backend
 cargo run -p tdg-cli -- run file.tuo           # compile and run; exit status = the program's result
 cargo run -p tdg-cli -- run --release file.tuo # …compile with the optimizing LLVM backend, then run
+cargo run -p tdg-cli -- new app                # scaffold a new package (tdg.toml + src/main.tuo)
+cargo run -p tdg-cli -- add util --path ../util # add a path dependency; re-resolve tdg.lock
+cargo run -p tdg-cli -- remove util            # drop a dependency; re-resolve tdg.lock
+cargo run -p tdg-cli -- check                  # …with no files: resolve+check the package in `.`
+cargo run -p tdg-cli -- build [--release]      # …resolve+compile the package (checksum-verified deps)
+cargo run -p tdg-cli -- verify                 # …resolve+static-check+run the package's specs
+cargo run -p tdg-cli -- test                   # run the package's tests (its specs) across the graph
+cargo run -p tdg-cli -- --message-format=json package symbols # a package's real exported symbols
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo run -p tdg-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
@@ -129,9 +137,15 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
   interpreter must reject unverified MIR; `mir --opt` shows the MIR after the
-  optimization passes the native build applies), and `tdg agent --stdio` (serve the
+  optimization passes the native build applies), `tdg agent --stdio` (serve the
   versioned JSON-lines agent protocol over stdio — a long-lived compiler-intelligence
-  server reusing one database across requests; see the agent-protocol convention below).
+  server reusing one database across requests; see the agent-protocol convention below),
+  and the **package commands** — `tdg new <name>`, `tdg add <name> --path <p>`,
+  `tdg remove <name>`, `tdg test`, the package-aware forms of `check`/`build`/`verify`
+  (invoked with no file arguments, optionally `--manifest <dir>`, they resolve the
+  package graph rooted at that directory and drive the same front end / backend / spec
+  runner over its loaded sources), and `tdg package symbols` (a machine-only query of a
+  package's real exported symbols); see the package-system convention below.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
@@ -348,6 +362,46 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   live-LLM eval (no provider is embedded); the doc says so plainly. The
   dependency-policy guard pins `tdg-compiler → tdg-stdlib` (the stdlib is input,
   never the reverse) and keeps the catalog crate free of any stage dependency.
+- **The package format is data-and-filesystem only; the compiler and agent query a
+  package's real symbols by compiling its resolved sources, never by guessing.**
+  `tdg-package` (layer 110) owns tuonelang's first package format and holds **no
+  compiler machinery** — it models the manifest and lockfile, resolves a path-dependency
+  graph off disk, and computes content checksums, all as plain values, so it depends on
+  no tuonelang stage crate. A **package** is a directory with a `tdg.toml` manifest and a
+  **module root** (`[modules].root`, default `src`) of `.tuo` sources. The format defines:
+  **identity** — `(name, version)`, the name validated (`PackageName`: `[a-z][a-z0-9_]*`)
+  so it is a safe directory name, module prefix, and CLI token; **module roots** — the
+  one directory whose `.tuo` files are the package's modules; **dependency resolution** —
+  `resolve::resolve` follows path dependencies transitively, detecting cycles and
+  duplicate names, and returns the whole graph (`ResolvedGraph`) in deterministic name
+  order; **lockfile semantics** — `Lockfile` (`tdg.lock`, format `LOCKFILE_VERSION`) pins
+  every resolved package's checksum and direct dependencies and is always written in name
+  order, so a workspace resolves to a byte-identical lock; **checksums** — each package's
+  content is SHA-256'd (`sha256`, a hand-rolled, FIPS-180-4-vector-pinned implementation,
+  no new dependency) over its module names+text, and a compile refuses a **dependency**
+  whose bytes drifted from the lock (`verify_against_lock`) while deliberately exempting
+  the **root** package under active development; **edition selection** — `[package].edition`
+  (`Edition`, only `2024` in v0) is an enum so an unknown edition is a load-time error,
+  never silently accepted. v0 supports **local/path dependencies only** — a remote
+  registry is a later addition and the format advertises no dependency kind the resolver
+  cannot fetch. The manifest/lockfile use a small **hand-rolled TOML subset** codec
+  (`toml`) — top-level key/values, `[table]`/`[[array-of-tables]]` headers, strings,
+  non-negative integers, string arrays, inline tables — that reports a precise error on
+  anything outside the subset rather than a silent misparse (no full-TOML dependency).
+  The CLI (`tdg-cli`, layer 120) is the only host that reaches up to the compiler: its
+  package commands resolve the graph, load every module source across it into one
+  `SourceMap`, and drive the **exact same** `check_sources` / codegen / `tuo_spec::run`
+  the file-based commands use — the package layer only decides *which sources* form the
+  program. `tdg package symbols` compiles the resolved sources and reports the actual
+  public, module-level symbols (`Resolution::symbols()`, the same surface the agent
+  protocol and LSP project), which is what lets a tool *query installed package symbols
+  without guessing*. Pinned by `tdg-package`'s unit tests + `tdg-package/tests/resolve.rs`
+  (transitive graphs, cycle/duplicate/missing-dep detection, checksum drift vs. root-edit
+  exemption, deterministic re-resolution) and `tdg-cli/tests/package_command.rs`
+  (the whole lifecycle through the real binary: scaffold → check/test green, add/remove,
+  a build resolving a dependency graph and running its specs, dependency-drift refusal,
+  and the machine `symbols` query). The dependency-policy guard keeps `tdg-package` free
+  of any stage dependency.
 - Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).

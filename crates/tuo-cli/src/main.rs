@@ -27,6 +27,7 @@ mod codegen;
 mod debug;
 mod fmt;
 mod output;
+mod package;
 mod protocol;
 mod spec;
 
