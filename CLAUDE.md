@@ -42,6 +42,9 @@ cargo run -p tdg-cli -- build [--release]      # …resolve+compile the package 
 cargo run -p tdg-cli -- verify                 # …resolve+static-check+run the package's specs
 cargo run -p tdg-cli -- test                   # run the package's tests (its specs) across the graph
 cargo run -p tdg-cli -- --message-format=json package symbols # a package's real exported symbols
+cargo run -p tdg-cli -- corpus validate file.tuo # validate a program through the compiler-validated corpus pipeline
+cargo run -p tdg-cli -- corpus validate --category type-repair a.tuo # …proving it fails at exactly one stage
+cargo run -p tdg-cli -- --message-format=json corpus validate file.tuo # …with the full metadata record as a protocol item
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo run -p tdg-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
@@ -96,7 +99,8 @@ backend and never on CLI presentation**. Keep it to orchestration + re-exports; 
 Tooling surfaces on top of the facade: **`tdg-cli`** (the `tdg` binary), **`tdg-lsp`**
 (language server), **`tdg-agent`** (exposes compiler feedback to coding agents),
 **`tdg-fmt`** (formatter), **`tdg-package`** (package/build orchestration),
-**`tdg-stdlib`**, **`tdg-spec`** (colocated executable specs), and **`tdg-bench`**.
+**`tdg-stdlib`**, **`tdg-spec`** (colocated executable specs), **`tdg-bench`**,
+and **`tdg-corpus`** (the compiler-validated corpus pipeline).
 
 Test corpora and fixtures live in top-level `tests/` (by stage: `lexer`, `parser`,
 `types`, `ownership`, `mir`, `codegen`, `diagnostics`, `differential`, `specs`),
@@ -146,6 +150,43 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   package graph rooted at that directory and drive the same front end / backend / spec
   runner over its loaded sources), and `tdg package symbols` (a machine-only query of a
   package's real exported symbols); see the package-system convention below.
+  Also `tdg corpus validate [--category <c>] [--origin <o>] <files>` (run a program
+  through the compiler-validated corpus pipeline and report its per-stage results plus
+  metadata; see the corpus-pipeline convention below).
+- **The trusted corpus is compiler-validated, six-cornered, and self-honest —
+  no program enters on assertion.** `tdg-corpus` (layer 115, just above the
+  layer-110 tools it composes — the formatter and the research harness's
+  tokenizers — and below the CLI) owns tuonelang's official corpus pipeline. A candidate is
+  admitted only after clearing the required, ordered gauntlet driven over the **real**
+  compiler stages — format → parse → resolve → type check → ownership → MIR verify →
+  specs/tests → **native execution where applicable** — short-circuiting at the first
+  failure (every later stage recorded as skipped). Native execution is the one stage the
+  crate cannot perform alone (it needs a concrete backend and the `cc` linker), so it is
+  a **host-injected `NativeExecutor` seam** — the CLI wires in its compile-link-run
+  machinery (`codegen::native_run`), mirroring how the agent injects a `Formatter`; the
+  crate itself names no concrete backend, only the backend-agnostic `tdg-codegen`
+  interface. Candidates come from four origins (human, generator, LLM, transformed
+  benchmark) and are sorted into **six corpora**, each with its own admission contract:
+  **correct** (passes everything), **syntax-error / type-error / ownership-error /
+  failing-spec repair**, and **repository-level changes** (multi-file, validated as a
+  whole). A repair candidate is admitted **only if it fails at exactly the stage its
+  category names** (a "type-error" entry is a real type error, not a mislabeled parse
+  error), and, when a corrected program is attached, only if that fix validates clean —
+  so the corpus stores real (broken → repaired) pairs, never an unverified claim. Every
+  admitted entry carries a full `EntryMetadata` record: **language version**, **source
+  origin**, the **features used** (exact for declarations from the resolved symbol table,
+  conservative/token-based for the rest, skipping prelude symbols so nothing false is
+  reported), the **per-stage validation results**, a coarse **complexity** measure, and
+  **token counts** under every deterministic tokenizer the research harness ships (reused
+  from `tdg-bench`, so there is one measurement of record). The promise is *enforced*, not
+  asserted: `crates/tuo-corpus/tests/shipped_corpus.rs` re-admits every fixture under
+  top-level `corpus/` to the category its directory names (so the shipped corpus can never
+  drift into dishonesty), `crates/tuo-corpus/tests/validation.rs` pins the pipeline and the
+  admission contracts, and `tdg-cli/tests/corpus_command.rs` drives the whole thing through
+  the real binary including live native execution. The dependency-policy guard keeps
+  `tdg-corpus` at layer 115 (it may drive the compiler facade and every crate below it,
+  including the layer-110 tools it composes, and injects native execution from the CLI
+  above).
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary

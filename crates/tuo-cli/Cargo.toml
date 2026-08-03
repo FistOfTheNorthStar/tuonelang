@@ -43,6 +43,10 @@ tuo-runtime.workspace = true
 # models the manifest/lockfile and resolves a path-dependency graph off disk,
 # and the CLI loads the resolved sources into the shared compiler pipeline.
 tuo-package.workspace = true
+# `tuo corpus validate` drives the compiler-validated corpus pipeline: the corpus
+# crate runs the real stages (format → … → specs) and this CLI injects native
+# execution (compile-link-run) through the corpus's `NativeExecutor` seam.
+tuo-corpus.workspace = true
 
 [dev-dependencies]
 # The end-to-end differential tests compute the reference result with the MIR

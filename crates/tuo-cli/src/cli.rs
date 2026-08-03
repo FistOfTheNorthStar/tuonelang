@@ -4,7 +4,8 @@
 //! compiler can actually perform is exposed. Today that is `tuo check`,
 //! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, the package
 //! commands (`tuo new`/`add`/`remove`/`test` and the package-aware forms of
-//! `check`/`build`/`verify`, plus `tuo package symbols`), `tuo agent --stdio`,
+//! `check`/`build`/`verify`, plus `tuo package symbols`), `tuo corpus validate`,
+//! `tuo agent --stdio`,
 //! and the `tuo debug` developer tools. Further compiler subcommands are added
 //! as their functionality is implemented — a new [`Command`] variant plus a
 //! match arm in [`Cli::dispatch`].
@@ -17,6 +18,7 @@ use clap::{CommandFactory as _, Parser, Subcommand};
 use crate::agent;
 use crate::check;
 use crate::codegen;
+use crate::corpus::{self, CorpusCategory, CorpusOrigin};
 use crate::debug::{self, Dump};
 use crate::fmt;
 use crate::output::{MessageFormat, OutputMode};
@@ -259,6 +261,35 @@ enum Command {
     /// Query a resolved package (machine protocol only).
     #[command(subcommand)]
     Package(PackageCommand),
+    /// Run programs through the compiler-validated corpus pipeline.
+    #[command(subcommand)]
+    Corpus(CorpusCommand),
+}
+
+/// The `tuo corpus` commands: drive the compiler-validated corpus pipeline.
+#[derive(Debug, Subcommand)]
+enum CorpusCommand {
+    /// Validate one or more source files through the full corpus pipeline.
+    ///
+    /// Runs the required, ordered gauntlet — format → parse → resolve → type
+    /// check → ownership → MIR verify → specs/tests → native execution — driving
+    /// the real compiler stages, and reports the per-stage results together with
+    /// the entry's metadata (language version, origin, features, complexity, and
+    /// token counts). `--category` names which corpus contract to check against
+    /// (default `correct`); the command *proves* the candidate meets it rather
+    /// than trusting the label. In a machine format the full metadata is emitted
+    /// as a protocol item.
+    Validate {
+        /// Which corpus contract to validate against.
+        #[arg(long, value_enum, default_value_t = CorpusCategory::Correct)]
+        category: CorpusCategory,
+        /// The candidate's stated source origin (recorded in the metadata).
+        #[arg(long, value_enum, default_value_t = CorpusOrigin::Human)]
+        origin: CorpusOrigin,
+        /// The tuonelang source files forming the candidate program.
+        #[arg(required = true, value_name = "FILE")]
+        files: Vec<PathBuf>,
+    },
 }
 
 /// The `tuo package` queries: read-only projections of a resolved package.
@@ -382,6 +413,11 @@ impl Cli {
             Some(Command::Package(PackageCommand::Symbols { manifest })) => {
                 package::symbols(&manifest_dir(manifest), mode)
             }
+            Some(Command::Corpus(CorpusCommand::Validate {
+                category,
+                origin,
+                files,
+            })) => corpus::validate(category, origin, &files, mode),
             // The agent protocol is its own versioned JSON-lines contract on
             // stdio, independent of `--message-format` (which governs the
             // result-producing commands' output). `mode` is passed only so

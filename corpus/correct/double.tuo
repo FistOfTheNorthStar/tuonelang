@@ -1,0 +1,8 @@
+fn double(take x: Int) -> Int {
+    x + x
+}
+
+spec double {
+    then double(3) == 6;
+    then double(0) == 0;
+}

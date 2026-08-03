@@ -163,6 +163,10 @@ const LAYERS: &[(&str, u32)] = &[
     ("tuo-lsp", 110),
     ("tuo-agent", 110),
     ("tuo-bench", 110),
+    // The corpus pipeline composes the layer-110 tools (it reuses the formatter
+    // and the research harness's tokenizers) on top of the compiler facade, so
+    // it sits strictly above them and below the CLI.
+    ("tuo-corpus", 115),
     // The `tuo` binary: may orchestrate anything below it.
     ("tuo-cli", 120),
 ];

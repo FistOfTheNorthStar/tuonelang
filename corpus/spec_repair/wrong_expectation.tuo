@@ -1,0 +1,11 @@
+// A failing-spec repair candidate: the program is statically valid (it parses,
+// resolves, type-checks, ownership-checks, and lowers to verified MIR), but its
+// spec asserts the wrong value — `double(3)` is `6`, not `7`. A repair corrects
+// the expected value (or the function).
+fn double(take x: Int) -> Int {
+    x + x
+}
+
+spec double {
+    then double(3) == 7;
+}

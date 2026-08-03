@@ -311,6 +311,83 @@ fn compile_and_finish(
     }
 }
 
+/// The outcome of a self-contained native compile-link-run (used by the corpus
+/// validator's [`NativeExecutor`] seam). Unlike the `build`/`run` commands, this
+/// helper emits no protocol events and prints nothing; it just reports what
+/// happened so a caller can record it.
+pub(crate) enum NativeRunResult {
+    /// The program compiled, linked, ran, and terminated with this exit status.
+    Ran { exit_status: i32 },
+    /// A compile, link, or run step failed.
+    Failed { reason: String },
+}
+
+/// Compile the already-loaded program to native code with the default
+/// (Cranelift) backend, link it with the runtime, run the produced binary in a
+/// temporary location, and report the outcome. Never panics and never prints:
+/// every failure is a [`NativeRunResult::Failed`].
+///
+/// This is the machinery the corpus pipeline cannot perform on its own (it needs
+/// a concrete backend and `cc`), exposed as a reusable helper so the CLI can
+/// inject it as the corpus validator's native-execution seam.
+pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResult {
+    // Front end → verified, optimized MIR (the same path `build`/`run` take,
+    // without the protocol emission).
+    let check = tuo_compiler::check_sources(map, sources);
+    if check.has_errors() {
+        return NativeRunResult::Failed {
+            reason: "the program does not pass the front end".to_owned(),
+        };
+    }
+    let parses: Vec<_> = sources
+        .iter()
+        .map(|&id| parser::parse(map.source(id)))
+        .collect();
+    let asts: Vec<Ast<'_>> = parses
+        .iter()
+        .zip(sources)
+        .map(|(parse, &id)| Ast::new(&parse.tree, map.source(id).text()))
+        .collect();
+    let lowered_hir = hir::lower(&asts, &check.resolution);
+    let mut program = mir::lower(&lowered_hir, &check.resolution, &check.types);
+    if !mir::verify(&program, &check.types).is_empty() {
+        return NativeRunResult::Failed {
+            reason: "lowered MIR failed verification".to_owned(),
+        };
+    }
+    let _opt = mir::optimize(&mut program, &check.types);
+
+    let target = TargetSpec::host();
+    let artifact = match Backend::Cranelift.compile(&program, &check.types, &target) {
+        Ok(artifact) => artifact,
+        Err(error) => {
+            return NativeRunResult::Failed {
+                reason: format!("codegen: {}", error.message),
+            };
+        }
+    };
+
+    // Link + run in a unique temp path so concurrent validations don't collide.
+    let mut exe_path = std::env::temp_dir();
+    exe_path.push(format!("tuo-corpus-{}", std::process::id()));
+    if let Err(message) = link(&artifact, &exe_path) {
+        return NativeRunResult::Failed {
+            reason: format!("linking: {message}"),
+        };
+    }
+    let status = Command::new(&exe_path).status();
+    let _ = std::fs::remove_file(&exe_path);
+    match status {
+        Ok(status) => {
+            let code = status.code().unwrap_or_else(|| signal_exit_code(&status));
+            NativeRunResult::Ran { exit_status: code }
+        }
+        Err(error) => NativeRunResult::Failed {
+            reason: format!("running the built executable: {error}"),
+        },
+    }
+}
+
 /// Map a [`CodegenError`] to a reportable failure, preserving "unsupported".
 fn codegen_failure(error: CodegenError) -> Failure {
     let unsupported = error.is_unsupported();

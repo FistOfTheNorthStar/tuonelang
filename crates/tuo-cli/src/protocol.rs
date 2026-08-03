@@ -84,6 +84,8 @@ pub(crate) enum ProtocolCommand {
     Package,
     /// `tuo test` — the package-aware spec run.
     Test,
+    /// `tuo corpus validate` — the compiler-validated corpus pipeline.
+    Corpus,
 }
 
 impl ProtocolCommand {
@@ -98,6 +100,7 @@ impl ProtocolCommand {
             Self::Run => "run",
             Self::Package => "package",
             Self::Test => "test",
+            Self::Corpus => "corpus",
         }
     }
 }

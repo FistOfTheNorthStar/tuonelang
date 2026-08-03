@@ -1,0 +1,13 @@
+fn min(take a: Int, take b: Int) -> Int {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+spec min {
+    then min(3, 7) == 3;
+    then min(7, 3) == 3;
+    then min(4, 4) == 4;
+}

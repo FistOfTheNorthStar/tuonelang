@@ -1,0 +1,5 @@
+// A syntax-error repair candidate: the `+` has no right operand, so the parser
+// cannot form the body expression. A repair adds the missing operand.
+fn broken(take x: Int) -> Int {
+    x +
+}

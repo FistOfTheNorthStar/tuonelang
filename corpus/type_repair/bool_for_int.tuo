@@ -1,0 +1,6 @@
+// A type-error repair candidate: the function is declared to return `Int` but
+// its body is a `Bool`. It parses and resolves cleanly and fails only at type
+// checking. A repair returns an `Int`.
+fn wrong() -> Int {
+    true
+}
