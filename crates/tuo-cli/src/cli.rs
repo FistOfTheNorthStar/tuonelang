@@ -5,7 +5,7 @@
 //! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, the package
 //! commands (`tuo new`/`add`/`remove`/`test` and the package-aware forms of
 //! `check`/`build`/`verify`, plus `tuo package symbols`), `tuo corpus validate`,
-//! `tuo agent --stdio`,
+//! `tuo bench report`, `tuo agent --stdio`,
 //! and the `tuo debug` developer tools. Further compiler subcommands are added
 //! as their functionality is implemented — a new [`Command`] variant plus a
 //! match arm in [`Cli::dispatch`].
@@ -16,6 +16,7 @@ use std::process::ExitCode;
 use clap::{CommandFactory as _, Parser, Subcommand};
 
 use crate::agent;
+use crate::bench;
 use crate::check;
 use crate::codegen;
 use crate::corpus::{self, CorpusCategory, CorpusOrigin};
@@ -264,6 +265,32 @@ enum Command {
     /// Run programs through the compiler-validated corpus pipeline.
     #[command(subcommand)]
     Corpus(CorpusCommand),
+    /// Score a recorded code-generation benchmark run.
+    #[command(subcommand)]
+    Bench(BenchCommand),
+}
+
+/// The `tuo bench` commands: the code-generation evaluation harness.
+#[derive(Debug, Subcommand)]
+enum BenchCommand {
+    /// Score a recorded benchmark run by re-compiling the model's outputs.
+    ///
+    /// The evaluation harness embeds no LLM: an external runner records a model's
+    /// generations into a run file, and this command *proves* that run's metrics
+    /// by recompiling every recorded output through the real front end and spec
+    /// runner (never trusting the recorded booleans). It first verifies the task
+    /// set's content-digest pins, so a silently-edited benchmark is refused. It
+    /// reports Parse@1, Check@1, SpecPass@1, TestPass@1, Repair@1, repair cycles,
+    /// generated tokens, feedback latency, invented symbols, and the unrelated-edit
+    /// rate, in a machine format as a protocol item and in human mode as a table.
+    Report {
+        /// The pinned task-set file (JSON) the run was produced against.
+        #[arg(value_name = "TASKS")]
+        tasks: PathBuf,
+        /// The recorded benchmark-run file (JSON) to score.
+        #[arg(value_name = "RUN")]
+        run: PathBuf,
+    },
 }
 
 /// The `tuo corpus` commands: drive the compiler-validated corpus pipeline.
@@ -418,6 +445,9 @@ impl Cli {
                 origin,
                 files,
             })) => corpus::validate(category, origin, &files, mode),
+            Some(Command::Bench(BenchCommand::Report { tasks, run })) => {
+                bench::report(&tasks, &run, mode)
+            }
             // The agent protocol is its own versioned JSON-lines contract on
             // stdio, independent of `--message-format` (which governs the
             // result-producing commands' output). `mode` is passed only so

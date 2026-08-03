@@ -1275,6 +1275,7 @@ dependencies = [
  "serde_json",
  "tuo-agent",
  "tuo-codegen",
+ "tuo-codegen-bench",
  "tuo-codegen-cranelift",
  "tuo-codegen-llvm",
  "tuo-compiler",
@@ -1297,6 +1298,22 @@ dependencies = [
  "tuo-mir",
  "tuo-source",
  "tuo-types",
+]
+
+[[package]]
+name = "tuo-codegen-bench"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tuo-bench",
+ "tuo-codegen-cranelift",
+ "tuo-compiler",
+ "tuo-corpus",
+ "tuo-diagnostics",
+ "tuo-resolve",
+ "tuo-source",
+ "tuo-spec",
 ]
 
 [[package]]

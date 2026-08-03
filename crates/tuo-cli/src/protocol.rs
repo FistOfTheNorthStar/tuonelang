@@ -86,6 +86,8 @@ pub(crate) enum ProtocolCommand {
     Test,
     /// `tuo corpus validate` — the compiler-validated corpus pipeline.
     Corpus,
+    /// `tuo bench report` — the code-generation evaluation harness.
+    Bench,
 }
 
 impl ProtocolCommand {
@@ -101,6 +103,7 @@ impl ProtocolCommand {
             Self::Package => "package",
             Self::Test => "test",
             Self::Corpus => "corpus",
+            Self::Bench => "bench",
         }
     }
 }

@@ -47,6 +47,10 @@ tuo-package.workspace = true
 # crate runs the real stages (format → … → specs) and this CLI injects native
 # execution (compile-link-run) through the corpus's `NativeExecutor` seam.
 tuo-corpus.workspace = true
+# `tuo bench report` re-scores a recorded code-generation benchmark by really
+# compiling the model's outputs through the evaluation harness (which embeds no
+# LLM); the CLI loads the run + pinned task set and renders the reports.
+tuo-codegen-bench.workspace = true
 
 [dev-dependencies]
 # The end-to-end differential tests compute the reference result with the MIR

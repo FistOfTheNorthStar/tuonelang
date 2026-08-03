@@ -167,6 +167,11 @@ const LAYERS: &[(&str, u32)] = &[
     // and the research harness's tokenizers) on top of the compiler facade, so
     // it sits strictly above them and below the CLI.
     ("tuo-corpus", 115),
+    // The code-generation evaluation harness drives the compiler facade and the
+    // spec runner to score generations, and composes the layer-110 research
+    // schema/tokenizers (tuo-bench) and the layer-115 corpus's feature
+    // extraction (tuo-corpus), so it sits strictly above them and below the CLI.
+    ("tuo-codegen-bench", 116),
     // The `tuo` binary: may orchestrate anything below it.
     ("tuo-cli", 120),
 ];
