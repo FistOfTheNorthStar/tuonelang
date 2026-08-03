@@ -1,0 +1,35 @@
+[package]
+name = "tuo-codegen-bench"
+description = "The TDG code-generation evaluation harness: drives the real compiler to measure LLM code-generation reliability through pluggable model adapters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The evaluation harness *drives the real compiler* to score each generation —
+# it never re-implements a stage. It reaches up to the compiler facade for the
+# front end, the spec runner for specs/tests, tuo-bench for the version-controlled
+# metric schema and the tokenizers of record, and tuo-corpus for the shared
+# feature/complexity extraction. Native execution, the one stage this crate
+# cannot perform alone, is a host-injected `NativeRunner` seam (the CLI wires in
+# its compile-link-run machinery), mirroring how tuo-corpus injects native
+# execution and the agent injects a formatter — so this crate names no concrete
+# backend.
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-resolve.workspace = true
+tuo-compiler.workspace = true
+tuo-spec.workspace = true
+tuo-bench.workspace = true
+tuo-corpus.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tuo-codegen-cranelift.workspace = true

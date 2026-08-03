@@ -21,6 +21,7 @@
 //! only, and internal logging reaches stderr solely under `--log`.
 
 mod agent;
+mod bench;
 mod check;
 mod cli;
 mod codegen;

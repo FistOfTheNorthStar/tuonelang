@@ -45,6 +45,8 @@ cargo run -p tdg-cli -- --message-format=json package symbols # a package's real
 cargo run -p tdg-cli -- corpus validate file.tuo # validate a program through the compiler-validated corpus pipeline
 cargo run -p tdg-cli -- corpus validate --category type-repair a.tuo # …proving it fails at exactly one stage
 cargo run -p tdg-cli -- --message-format=json corpus validate file.tuo # …with the full metadata record as a protocol item
+cargo run -p tdg-cli -- bench report tasks.json run.json # score a code-gen benchmark by recompiling the model's outputs
+cargo run -p tdg-cli -- --message-format=json bench report tasks.json run.json # …the metric summary as a protocol item
 cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
 cargo run -p tdg-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
@@ -100,7 +102,8 @@ Tooling surfaces on top of the facade: **`tdg-cli`** (the `tdg` binary), **`tdg-
 (language server), **`tdg-agent`** (exposes compiler feedback to coding agents),
 **`tdg-fmt`** (formatter), **`tdg-package`** (package/build orchestration),
 **`tdg-stdlib`**, **`tdg-spec`** (colocated executable specs), **`tdg-bench`**,
-and **`tdg-corpus`** (the compiler-validated corpus pipeline).
+**`tdg-corpus`** (the compiler-validated corpus pipeline), and
+**`tdg-codegen-bench`** (the code-generation evaluation harness).
 
 Test corpora and fixtures live in top-level `tests/` (by stage: `lexer`, `parser`,
 `types`, `ownership`, `mir`, `codegen`, `diagnostics`, `differential`, `specs`),
@@ -153,6 +156,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Also `tdg corpus validate [--category <c>] [--origin <o>] <files>` (run a program
   through the compiler-validated corpus pipeline and report its per-stage results plus
   metadata; see the corpus-pipeline convention below).
+  And `tdg bench report <tasks> <run>` (score a recorded code-generation benchmark
+  run by recompiling the model's outputs through the real compiler — never trusting
+  the recorded verdicts — and report the metric summary; see the codegen-benchmark
+  convention below).
 - **The trusted corpus is compiler-validated, six-cornered, and self-honest —
   no program enters on assertion.** `tdg-corpus` (layer 115, just above the
   layer-110 tools it composes — the formatter and the research harness's
@@ -187,6 +194,46 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tdg-corpus` at layer 115 (it may drive the compiler facade and every crate below it,
   including the layer-110 tools it composes, and injects native execution from the CLI
   above).
+- **The code-generation benchmark drives the real compiler for every metric,
+  embeds no model, and never changes a task silently.** `tdg-codegen-bench`
+  (layer 116, just above `tdg-corpus` and below the CLI) owns tuonelang's complete
+  LLM code-generation evaluation harness. It benchmarks a model through a
+  **pluggable `ModelAdapter`** seam — an LLM behind an API, a local runner, or a
+  deterministic generator — and **no LLM provider is embedded** anywhere; the
+  adapter turns a `Prompt` (and, on repair turns, the compiler's diagnostics) into
+  tuonelang source, and the harness compiles that source itself, so a metric is
+  only ever claimed when the *real* compiler produced it (mirroring how the corpus
+  injects a `NativeExecutor` and the agent a `Formatter`). For each task
+  `run_task` drives a repair loop and records every turn; `BenchmarkSummary`
+  aggregates the metrics the prompt names — **Parse@1 / Check@1 / SpecPass@1 /
+  TestPass@1** (the last scored against **held-out** tests the model was not
+  shown), **Repair@1**, repair cycles, generated tokens (the model's own
+  accounting), wall-clock **feedback latency** (measured, never promised),
+  **invented symbols** (undefined-name `R0002` diagnostics — the compiler is the
+  authority on which names do not exist), and the **unrelated-edit rate**
+  (repairs that touched code the compiler had not flagged, judged by comparing the
+  edited lines against the previous turn's error lines). A `BenchmarkRun` keeps
+  full **provenance** — the exact prompts, the `ModelConfig`, the compiler and
+  language versions, the model's outputs, and the compiler's per-turn results —
+  and both a machine report (`BenchmarkSummary::to_json`, versioned by the crate's
+  `SCHEMA_VERSION`) and a human report (`render_human`) come from the one summary.
+  Benchmark **tasks are never changed silently**: a `BenchTask` is pinned by a
+  content digest and a `TaskSet` verifies every pin on load, so an edit without a
+  re-pin is a loud error; tasks may carry comparable **syntax variants** so a
+  language-design decision can be evaluated empirically across spellings. The CLI
+  cannot generate live (no model is embedded), so `tdg bench report <tasks> <run>`
+  *proves* a recorded run's metrics instead: it verifies the task-set pins
+  (refusing a silently-edited benchmark), then **recompiles every recorded output**
+  (`tuo_codegen_bench::rescore`) and computes the summary from the compiler's
+  verdicts, never the recorded booleans — a fabricated result cannot survive. The
+  promise is pinned by `tdg-codegen-bench`'s unit tests, its end-to-end
+  `tests/harness.rs` (a scripted, offline `ModelAdapter` driving the real compiler
+  through a fail-then-repair loop, held-out-test scoring, variants, and provenance
+  round-trip), `tests/shipped_tasks.rs` (every task under
+  `benchmarks/llm/codegen/tasks/` re-verifies its pin), and
+  `tdg-cli/tests/bench_command.rs` (the whole thing through the real binary,
+  including a run whose recorded verdict is a *lie* that recompilation exposes).
+  The dependency-policy guard keeps `tdg-codegen-bench` at layer 116.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary

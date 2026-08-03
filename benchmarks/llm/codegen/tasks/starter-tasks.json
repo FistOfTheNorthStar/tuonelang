@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "description": "Starter code-generation tasks for the executable TDG evaluation harness. Each task is pinned by a content digest so it cannot be edited silently.",
+  "tasks": [
+    {
+      "digest": "4909242b7981199c",
+      "task": {
+        "id": "double",
+        "instruction": "Write a function `double` taking an Int by `take` and returning it doubled.",
+        "specs": [
+          "spec double {\n    then double(3) == 6;\n    then double(0) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec double {\n    then double(7) == 14;\n    then double(21) == 42;\n}\n"
+        ],
+        "variants": [
+          {
+            "label": "add",
+            "note": "double via x + x"
+          },
+          {
+            "label": "mul",
+            "note": "double via x * 2"
+          }
+        ],
+        "tags": [
+          "arithmetic",
+          "easy"
+        ]
+      }
+    },
+    {
+      "digest": "e98ef1adebcfb10d",
+      "task": {
+        "id": "min",
+        "instruction": "Write `min` returning the smaller of two Ints, using an if-expression.",
+        "specs": [
+          "spec min {\n    then min(2, 5) == 2;\n    then min(5, 2) == 2;\n    then min(4, 4) == 4;\n}\n"
+        ],
+        "tests": [
+          "spec min {\n    then min(0, 100) == 0;\n    then min(-3, -8) == -8;\n}\n"
+        ],
+        "tags": [
+          "control-flow"
+        ]
+      }
+    }
+  ]
+}
