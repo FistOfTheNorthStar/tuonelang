@@ -1,0 +1,35 @@
+[package]
+name = "tuo-corpus"
+description = "Compiler-validated corpus pipeline for tuonelang."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The corpus pipeline validates candidate programs by driving the *real*
+# compiler stages, so it depends on the orchestration facade (front end),
+# the formatter, MIR + its verifier, the spec runner, and the backend-agnostic
+# codegen interface. It never names a concrete backend: native execution is a
+# host-injected seam (see `NativeExecutor`), mirroring how the agent injects a
+# `Formatter`. Token counting reuses the research harness's tokenizers.
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-resolve.workspace = true
+tuo-mir.workspace = true
+tuo-codegen.workspace = true
+tuo-spec.workspace = true
+tuo-fmt.workspace = true
+tuo-compiler.workspace = true
+tuo-bench.workspace = true
+
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tuo-codegen-cranelift.workspace = true

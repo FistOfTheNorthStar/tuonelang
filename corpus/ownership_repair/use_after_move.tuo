@@ -1,0 +1,12 @@
+// An ownership-error repair candidate: `b` is moved into the `take` argument of
+// `consume`, then read again by `peek`. It type-checks cleanly and fails only at
+// the ownership stage (O0001, use after move). A repair clones or reorders so the
+// value is not used after it is moved.
+fn consume(take b: Box[Int]) {}
+
+fn peek(in b: Box[Int]) {}
+
+fn use_after_move(take b: Box[Int]) {
+    consume(b);
+    peek(b);
+}

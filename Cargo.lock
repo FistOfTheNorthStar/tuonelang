@@ -1278,6 +1278,7 @@ dependencies = [
  "tuo-codegen-cranelift",
  "tuo-codegen-llvm",
  "tuo-compiler",
+ "tuo-corpus",
  "tuo-fmt",
  "tuo-mir",
  "tuo-mir-interp",
@@ -1349,6 +1350,24 @@ dependencies = [
  "tuo-spec",
  "tuo-syntax",
  "tuo-types",
+]
+
+[[package]]
+name = "tuo-corpus"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tuo-bench",
+ "tuo-codegen",
+ "tuo-codegen-cranelift",
+ "tuo-compiler",
+ "tuo-diagnostics",
+ "tuo-fmt",
+ "tuo-mir",
+ "tuo-resolve",
+ "tuo-source",
+ "tuo-spec",
 ]
 
 [[package]]

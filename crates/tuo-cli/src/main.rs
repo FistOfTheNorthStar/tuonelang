@@ -24,6 +24,7 @@ mod agent;
 mod check;
 mod cli;
 mod codegen;
+mod corpus;
 mod debug;
 mod fmt;
 mod output;

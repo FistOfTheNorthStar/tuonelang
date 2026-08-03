@@ -1,0 +1,9 @@
+import util::double;
+
+fn main() -> Int {
+    double(0)
+}
+
+spec main {
+    then main() == 0;
+}

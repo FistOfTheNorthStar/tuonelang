@@ -50,6 +50,7 @@ tuo-package = { path = "crates/tuo-package" }
 tuo-lsp = { path = "crates/tuo-lsp" }
 tuo-agent = { path = "crates/tuo-agent" }
 tuo-bench = { path = "crates/tuo-bench" }
+tuo-corpus = { path = "crates/tuo-corpus" }
 tuo-compiler = { path = "crates/tuo-compiler" }
 
 # Third-party crates. Shared versions live here so every member agrees.

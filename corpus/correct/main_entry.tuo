@@ -1,0 +1,7 @@
+fn main() -> Int {
+    0
+}
+
+spec main {
+    then main() == 0;
+}
