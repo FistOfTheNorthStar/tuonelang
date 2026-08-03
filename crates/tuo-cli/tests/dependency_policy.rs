@@ -172,6 +172,12 @@ const LAYERS: &[(&str, u32)] = &[
     // schema/tokenizers (tuo-bench) and the layer-115 corpus's feature
     // extraction (tuo-corpus), so it sits strictly above them and below the CLI.
     ("tuo-codegen-bench", 116),
+    // The whole-compiler fuzzing harness: a pure consumer that drives every
+    // pipeline stage through its real public entry point (up through the
+    // interpreter) and the canonical formatter to assert robustness invariants.
+    // It adds no edge into the pipeline, only reaching down to crates below it,
+    // so it sits above the tooling surfaces and below the CLI.
+    ("tuo-fuzz", 117),
     // The `tuo` binary: may orchestrate anything below it.
     ("tuo-cli", 120),
 ];

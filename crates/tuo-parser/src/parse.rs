@@ -95,10 +95,20 @@ pub(crate) fn depth_guard(
 }
 
 /// Linear pre-scan for input that would recurse beyond [`MAX_NEST`] in the
-/// recursive-descent engine: delimiter nesting, runs of prefix
-/// operators/expression-heading keywords, and `=` chains within one
-/// statement. Returns the parse-stream position of the first offending
-/// token.
+/// recursive-descent engine, **or** build an expression tree deeper than
+/// [`MAX_NEST`] that a later recursive tree-walk (resolution, typing, lowering)
+/// would overflow on: delimiter nesting, runs of prefix operators/expression-
+/// heading keywords, `=` chains within one statement, and left-associative
+/// binary-operator chains (`+ - * / % && ||`) within one statement. Returns the
+/// parse-stream position of the first offending token.
+///
+/// The binary-chain bound is the subtle one. Pratt precedence-climbing parses
+/// `a + a + … + a` iteratively, so a long chain does not overflow the *parser* —
+/// but it produces a left-nested `BinaryExpr` tree whose depth equals the chain
+/// length, and the downstream stages walk that tree recursively. Bounding the
+/// chain here keeps the whole pipeline total on adversarial input, honoring this
+/// guard's charter (keep constructs shallow enough that no stage recurses past
+/// the limit) rather than pushing a depth guard into every later walker.
 fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
     use tuo_lexer::TokenKind as K;
     /// Tokens that begin a nested expression without a delimiter.
@@ -112,9 +122,22 @@ fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
         K::KwWhile,
         K::KwMatch,
     ];
+    /// Left-associative binary operators that chain (each one deepens the
+    /// expression tree by one level). Comparison and range are excluded — the
+    /// grammar makes them non-associative, so they cannot chain.
+    const BINARY: [K; 7] = [
+        K::Plus,
+        K::Minus,
+        K::Star,
+        K::Slash,
+        K::Percent,
+        K::AmpAmp,
+        K::PipePipe,
+    ];
     let mut delims = 0usize;
     let mut prefix_run = 0usize;
     let mut assigns = 0usize;
+    let mut binary_run = 0usize;
     for (pos, tk) in toks.iter().enumerate() {
         match tk.kind {
             K::OpenParen | K::OpenBracket | K::OpenBrace => delims += 1,
@@ -131,7 +154,17 @@ fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
             K::Semi | K::OpenBrace | K::CloseBrace => assigns = 0,
             _ => {}
         }
-        if delims > MAX_NEST || prefix_run > MAX_NEST || assigns > MAX_NEST {
+        // Count binary operators within the current statement; a statement
+        // boundary or block delimiter resets the chain. `Minus` is both a
+        // prefix and a binary operator; counting it here is conservative (it
+        // can only *raise* the depth estimate), which is the safe direction.
+        match tk.kind {
+            k if BINARY.contains(&k) => binary_run += 1,
+            K::Semi | K::OpenBrace | K::CloseBrace => binary_run = 0,
+            _ => {}
+        }
+        if delims > MAX_NEST || prefix_run > MAX_NEST || assigns > MAX_NEST || binary_run > MAX_NEST
+        {
             return Some(pos);
         }
     }

@@ -1415,6 +1415,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "tuo-fuzz"
+version = "0.0.0"
+dependencies = [
+ "tuo-ast",
+ "tuo-compiler",
+ "tuo-diagnostics",
+ "tuo-fmt",
+ "tuo-hir",
+ "tuo-lexer",
+ "tuo-mir",
+ "tuo-mir-interp",
+ "tuo-ownership",
+ "tuo-parser",
+ "tuo-resolve",
+ "tuo-source",
+ "tuo-syntax",
+ "tuo-types",
+]
+
+[[package]]
 name = "tuo-hir"
 version = "0.0.0"
 dependencies = [

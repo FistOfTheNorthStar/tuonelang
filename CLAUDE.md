@@ -102,8 +102,9 @@ Tooling surfaces on top of the facade: **`tdg-cli`** (the `tdg` binary), **`tdg-
 (language server), **`tdg-agent`** (exposes compiler feedback to coding agents),
 **`tdg-fmt`** (formatter), **`tdg-package`** (package/build orchestration),
 **`tdg-stdlib`**, **`tdg-spec`** (colocated executable specs), **`tdg-bench`**,
-**`tdg-corpus`** (the compiler-validated corpus pipeline), and
-**`tdg-codegen-bench`** (the code-generation evaluation harness).
+**`tdg-corpus`** (the compiler-validated corpus pipeline),
+**`tdg-codegen-bench`** (the code-generation evaluation harness), and
+**`tdg-fuzz`** (the whole-compiler fuzzing harness).
 
 Test corpora and fixtures live in top-level `tests/` (by stage: `lexer`, `parser`,
 `types`, `ownership`, `mir`, `codegen`, `diagnostics`, `differential`, `specs`),
@@ -234,6 +235,47 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tdg-cli/tests/bench_command.rs` (the whole thing through the real binary,
   including a run whose recorded verdict is a *lie* that recompilation exposes).
   The dependency-policy guard keeps `tdg-codegen-bench` at layer 116.
+- **The whole compiler is fuzzed through its real entry points, one invariant is
+  written once, and a discovered bug becomes a committed regression forever.**
+  `tdg-fuzz` (layer 117, above the tooling surfaces it composes and below the
+  CLI) owns tuonelang's whole-compiler fuzzing harness. It holds **no compiler
+  machinery** — it is a pure consumer that drives every listed stage through its
+  *real* public entry point (lexer, syntax-tree operations, parser, formatter,
+  AST→HIR lowering, resolve+type-check+ownership, HIR→MIR lowering + MIR verify,
+  and the MIR interpreter) and asserts that stage's invariants. Each stage's
+  contract is written **once** as a `check_*` function in `stages`, and **two
+  drivers exercise the same checker** so they can never drift: a stable,
+  fixed-seed corpus sweep (`tests/sweep.rs`, ordinary `cargo test`, no nightly)
+  and coverage-guided `cargo fuzz` targets (`fuzz/`, nightly, workspace-opted-out,
+  one target per stage). The load-bearing invariants are enforced, not asserted:
+  **arbitrary source input must not crash the compiler** (every stage entry point
+  up through MIR lowering is total by construction — malformed input becomes error
+  tokens, recovery islands, poison nodes, or diagnostics), **formatting is
+  idempotent** and **valid formatted source stays parseable with the same
+  diagnostics** (`check_fmt`), lowered MIR of an accepted program **verifies**,
+  and **verified MIR never triggers an interpreter structural panic** —
+  `check_interp` only runs MIR the interpreter's mandatory verify gate accepted
+  and rejects any `TrapKind::Internal` (the interpreter's own impossible-state
+  signal). **Differential cross-engine agreement** already lives as a mandatory
+  CI gate over the *accepted-program* generator in `tdg-cli/tests/differential.rs`
+  (interpreter == Cranelift == LLVM); this crate does not duplicate the native
+  build and says so rather than re-asserting a weaker copy. **Regression fixtures
+  are added automatically:** when a sweep or a `cargo fuzz` run finds an input
+  that panics a checker, `regression::record` (called from the `guarded` driver
+  every target wraps) writes the exact input to `regressions/<stage>/` — content-
+  addressed, idempotent, the file's bytes *are* the crashing input — and
+  `tests/sweep.rs::committed_regressions_stay_fixed` replays every committed
+  fixture through its stage's checker on each `cargo test`, so a fixed bug can
+  never silently return. This harness already earned its keep: the sweep found a
+  stack overflow on deeply nested binary-operator chains (`x + x + … + 0`), which
+  parse iteratively but build a left-nested `BinaryExpr` tree the front-end walk
+  overflowed on; the fix extends the parser's depth pre-scan to bound
+  binary-operator chain length (rejected as `P0003` before parsing, keeping every
+  downstream stage's recursion bounded), pinned in `tdg-parser/tests/recovery.rs`
+  and by the committed fixtures under `regressions/front-end/`. `tdg-fuzz` exposes
+  **no CLI subcommand** — fuzzing is a developer/CI activity, never a promise the
+  `tdg` binary makes — and the dependency-policy guard keeps it at layer 117 with
+  no edge into the pipeline.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary

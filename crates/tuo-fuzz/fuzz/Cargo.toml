@@ -1,0 +1,83 @@
+# Coverage-guided fuzzing for the whole compiler pipeline. Not a workspace
+# member: cargo-fuzz manages this crate and it requires a nightly toolchain.
+#
+#     cargo install cargo-fuzz
+#     cd crates/tuo-fuzz && cargo +nightly fuzz run parse
+#
+# One target per pipeline stage, each a thin call into the shared invariant
+# checker in `tuo_fuzz::stages` — the *same* checker the stable
+# `tests/sweep.rs` sweep drives, so the coverage-guided fuzzer and the
+# deterministic CI sweep can never disagree about what "correct" means. A
+# discovered crash is filed as a committed regression fixture (see the crate's
+# `regression` module and `fuzz_targets/README` for the workflow).
+[package]
+name = "tuo-fuzz-targets"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tuo-fuzz = { path = ".." }
+
+[[bin]]
+name = "lex"
+path = "fuzz_targets/lex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "syntax"
+path = "fuzz_targets/syntax.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fmt"
+path = "fuzz_targets/fmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ast_lowering"
+path = "fuzz_targets/ast_lowering.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "front_end"
+path = "fuzz_targets/front_end.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mir"
+path = "fuzz_targets/mir.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "interp"
+path = "fuzz_targets/interp.rs"
+test = false
+doc = false
+bench = false
+
+# Opt out of the workspace: this crate is driven by cargo-fuzz, not CI.
+[workspace]
