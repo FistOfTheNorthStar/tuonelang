@@ -1,0 +1,36 @@
+[package]
+name = "tuo-fuzz"
+description = "The TDG whole-compiler fuzzing harness: a shared deterministic input corpus, per-stage invariant checkers, and an automatic regression-fixture mechanism, exercised on stable CI and driven under coverage by cargo-fuzz."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The fuzz harness drives every pipeline stage through its *real* public entry
+# point — it re-implements nothing. It reaches the front end and semantic stages
+# directly (lexer → syntax → parser → ast → resolve → types → ownership → hir →
+# mir → mir-interp), the compiler facade for the whole-front-end driver, and the
+# canonical formatter. Every one of those crates sits below this one in the
+# dependency layering, so the fuzz crate is a pure consumer that never inverts an
+# edge. It embeds no PRNG dependency: the corpus generator is a self-contained,
+# fixed-seed SplitMix64 so a finding always reproduces byte-for-byte.
+tuo-source.workspace = true
+tuo-diagnostics.workspace = true
+tuo-lexer.workspace = true
+tuo-syntax.workspace = true
+tuo-parser.workspace = true
+tuo-ast.workspace = true
+tuo-resolve.workspace = true
+tuo-types.workspace = true
+tuo-ownership.workspace = true
+tuo-hir.workspace = true
+tuo-mir.workspace = true
+tuo-mir-interp.workspace = true
+tuo-compiler.workspace = true
+tuo-fmt.workspace = true

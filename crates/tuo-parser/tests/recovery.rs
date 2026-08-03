@@ -148,6 +148,38 @@ fn nesting_beyond_the_limit_is_p0003_not_a_crash() {
 }
 
 #[test]
+fn a_long_binary_chain_is_p0003_not_a_downstream_stack_overflow() {
+    // A long left-associative operator chain parses iteratively (Pratt
+    // precedence-climbing), so it does not overflow the parser — but it builds a
+    // left-nested `BinaryExpr` tree as deep as the chain is long, which a later
+    // recursive tree-walk (resolution, typing, lowering) would overflow on. The
+    // depth guard rejects it up front with P0003, keeping the whole pipeline
+    // total. Regression for the deep-chain crash found by the fuzz sweep.
+    let text = format!("fn f() -> Int {{ {}0 }}\n", "x + ".repeat(5_000));
+    let result = parse_str(&text);
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(result.diagnostics[0].code.to_string(), "P0003");
+    result.tree.check_coverage().expect("coverage");
+    assert_eq!(result.tree.reconstruct(&text), text);
+}
+
+#[test]
+fn a_binary_chain_within_the_limit_still_parses() {
+    // The guard must not reject ordinary expressions: a chain comfortably under
+    // the limit parses clean, with no P0003.
+    let text = format!("fn f() -> Int {{ {}0 }}\n", "1 + ".repeat(64));
+    let result = parse_str(&text);
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.code.to_string() == "P0003"),
+        "a within-limit chain must not trip the depth guard"
+    );
+    assert_eq!(count(&result, SyntaxKind::FunctionItem), 1);
+}
+
+#[test]
 fn diagnostics_arrive_in_source_order() {
     let text = "fn a() { ! ; }\nfn b() { ) ; }\nfn c() { ] ; }\n";
     let result = parse_str(text);

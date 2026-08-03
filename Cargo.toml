@@ -52,6 +52,7 @@ tuo-agent = { path = "crates/tuo-agent" }
 tuo-bench = { path = "crates/tuo-bench" }
 tuo-corpus = { path = "crates/tuo-corpus" }
 tuo-codegen-bench = { path = "crates/tuo-codegen-bench" }
+tuo-fuzz = { path = "crates/tuo-fuzz" }
 tuo-compiler = { path = "crates/tuo-compiler" }
 
 # Third-party crates. Shared versions live here so every member agrees.
