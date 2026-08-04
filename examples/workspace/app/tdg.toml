@@ -1,0 +1,11 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[modules]
+root = "src"
+
+[dependencies]
+geometry = { path = "../geometry" }
+numeric = { path = "../numeric" }

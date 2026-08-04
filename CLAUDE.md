@@ -319,6 +319,37 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   **no CLI subcommand** — fuzzing is a developer/CI activity, never a promise the
   `tdg` binary makes — and the dependency-policy guard keeps it at layer 117 with
   no edge into the pipeline.
+- **The language is dogfooded with real programs; a discovered gap becomes an ADR
+  with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds five
+  real, multi-function programs written *against* v0, not to test it from inside:
+  `cli-stats` (a command-line statistics tool), `data-pipeline` (a record/JSON-style
+  processor that decodes packed-integer fields and runs a filter+map+reduce),
+  `workspace/` (a medium three-package graph `app → geometry → numeric` wired by
+  path dependencies), `http-service` (a request-routing/status core), and
+  `concurrent-worker` (a worker-pool scheduling model). Because v0 runs only the
+  scalar control-flow core, the three that fit it **run natively** and the two that
+  cannot (an HTTP service needs I/O; a worker pool needs concurrency) have their
+  **pure decision core** written in the runnable subset — which really runs and is
+  spec-checked — while the effectful shell is a documented `CONTRACT:` tier, exactly
+  as `tdg-stdlib` splits executable from contract code; nothing advertises behavior
+  the compiler cannot perform. The examples are kept honest by
+  `tdg-cli/tests/dogfood_examples.rs`, which drives the **real** `tuo` binary over
+  every one (`check` accepts it, `test` runs its specs to `0 failed`, and each
+  runnable program `run`s/`build`s to the exact documented exit byte), so a
+  committed example can never rot. The exercise's measurements across the six axes
+  the prompt names — compiler usability, diagnostic quality, incremental
+  compilation, LLM generation success, stdlib gaps, runtime performance — are
+  written up in top-level [`DOGFOODING.md`](DOGFOODING.md) with evidence from the
+  real compiler (the incremental figures reuse `incremental_measure`, the runtime
+  figures defer to the performance lab as the system of record). The governing rule
+  is the project's own: **every language change discovered by dogfooding gets an ADR
+  and a benchmark plan, never an ad-hoc feature to make one example compile** — so
+  the exercise opened `specification/adr/ADR-0004` (aggregates + iteration in the
+  runnable core), `ADR-0006` (the effect boundary + runtime strings), `ADR-0007`
+  (the concurrency model), and `ADR-0008` (first-class functions), each `proposed`
+  and each naming the performance-lab workload it must unblock before it can be
+  accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
+  paths and are therefore gitignored, not committed.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
