@@ -28,8 +28,12 @@ cargo test -p tuo-cli --test release_gate -- --nocapture
 | **PARTIAL** | The requirement is substantially satisfied by the cited artifact, but a named, bounded piece remains. A `PARTIAL` criterion **must** carry a follow-up (an ADR or an issue) and **blocks 0.1** unless the "remaining" note is explicitly downgraded to non-blocking here. |
 | **RELEASE-BLOCKING** | A known divergence or gap that the team has decided must be resolved before 0.1 ships. Nothing may be silently deferred: an unresolved item is *either* fixed *or* recorded here with this status. |
 
-The gate is not "all green today." It is *honest today*: the table records exactly
-where 0.1 stands, and the checker guarantees the record cannot drift from the tree.
+The gate is *honest*, not aspirational: the table records exactly where 0.1
+stands, and the checker guarantees the record cannot drift from the tree. As of
+this revision every criterion is `MET` — but the gate earns that verdict by
+citing artifacts the checker proves exist, not by asserting readiness. A criterion
+that regressed would flip back to `PARTIAL`/`RELEASE-BLOCKING` here the moment its
+artifact changed.
 
 ---
 
@@ -74,17 +78,15 @@ artifact that decides it, and its current status with a one-line justification.
 
 - **Requirement:** the type system and name resolution are specified, not only
   implemented.
-- **Proving artifact:** `specification/CONSTITUTION.md` §§10–24 (the frozen type
-  universe, explicit-signature rule, no-implicit-conversions, overflow) +
-  `specification/syntax.md` §"Semantic restrictions" (the syntactic/semantic
-  boundary) + the normative crate docs of `tuo-types` and `tuo-resolve`.
-- **Status:** **PARTIAL.** The rules are all specified and cross-referenced, but
-  they are distributed across the Constitution, `syntax.md`, and crate docs rather
-  than collected into one normative `static-semantics.md` peer of `ownership.md`.
-  *Remaining:* consolidate into a single normative document.
-  **Follow-up:** tracked as a release-gate item (see "Remaining work" below); the
-  content exists and is pinned by the type/resolve test suites (`tests/types/`), so
-  this is a documentation-locality gap, not a semantics gap.
+- **Proving artifact:** `specification/static-semantics.md` (the normative model:
+  the resolution rules, the type universe, explicit signatures,
+  no-implicit-conversions, the `Rxxxx`/`Txxxx` diagnostics, and the
+  syntax/semantics boundary) + `tests/types/` (the executable counterpart pinning
+  every `T0001`..`T0013`).
+- **Status:** **MET.** The static semantics are now a single normative document,
+  `static-semantics.md`, a peer of `ownership.md`: it consolidates the rules from
+  Constitution §§8–24, `syntax.md`, and the `tuo-types`/`tuo-resolve` crate docs
+  into one place, and the `tests/types/` corpus pins them.
 
 ### G5 — Ownership semantics are documented
 
@@ -98,15 +100,16 @@ artifact that decides it, and its current status with a one-line justification.
 ### G6 — MIR semantics are documented
 
 - **Requirement:** the single executable semantic representation is specified.
-- **Proving artifact:** the normative crate doc of `tuo-mir` (every instruction's
-  meaning is defined on its type; "no undefined behavior in MIR") +
-  `crates/tuo-mir/src/verify.rs` (the mandatory verifier every backend and the
-  interpreter enforce) + `specification/adr/ADR-0002-spec-semantics.md`.
-- **Status:** **PARTIAL.** MIR's meaning is fully defined in the crate documentation
-  and enforced by the verifier, but there is no `specification/mir.md` prose peer of
-  `ownership.md`/`abi.md`. *Remaining:* lift the MIR instruction semantics into a
-  normative specification document. **Follow-up:** tracked below; the semantics are
-  already the single source the interpreter and both backends obey.
+- **Proving artifact:** `specification/mir.md` (the normative model: every
+  instruction, terminator, and trap defined on its type; the mandatory
+  verifier's well-formedness invariants and `Mxxxx` codes; the interpreter's abort
+  taxonomy and deterministic sandbox) + `crates/tuo-mir/src/verify.rs` (the
+  verifier that enforces it) + `specification/adr/ADR-0002-spec-semantics.md`.
+- **Status:** **MET.** MIR's meaning is now a single normative document,
+  `mir.md`, a peer of `ownership.md`/`abi.md`: it lifts the instruction semantics
+  from the `tuo-mir` crate doc, the verifier invariants, and the interpreter's
+  reference-execution model into one place. The verifier remains the enforcement
+  gate every backend and the interpreter obey.
 
 ### G7 — Specs execute deterministically
 
@@ -213,9 +216,9 @@ artifact that decides it, and its current status with a one-line justification.
 - **Status:** **MET.** As of this gate there are **zero** open interpreter/backend
   semantic divergences: the differential suites are green, so the backends agree
   with the reference interpreter on every fixture and every generated program. The
-  remaining open items (G4/G6 documentation locality, and the dogfooding ADRs
-  ADR-0004/0006/0007/0008) are *capability gaps and doc-locality gaps*, not
-  divergences — they are enumerated below and none is a silent deferral.
+  only remaining open items are the dogfooding ADRs (ADR-0004/0006/0007/0008),
+  which are *capability gaps*, not divergences — they are enumerated below and none
+  is a silent deferral.
 
 ---
 
@@ -226,9 +229,9 @@ artifact that decides it, and its current status with a one-line justification.
 | G1 | Grammar is versioned | MET |
 | G2 | Formatter is canonical and idempotent | MET |
 | G3 | Parser does not crash under fuzzing | MET |
-| G4 | Static semantics are documented | PARTIAL |
+| G4 | Static semantics are documented | MET |
 | G5 | Ownership semantics are documented | MET |
-| G6 | MIR semantics are documented | PARTIAL |
+| G6 | MIR semantics are documented | MET |
 | G7 | Specs execute deterministically | MET |
 | G8 | Interpreter ⇄ Cranelift differential | MET |
 | G9 | LLVM three-way differential (LLVM is in 0.1) | MET |
@@ -240,26 +243,25 @@ artifact that decides it, and its current status with a one-line justification.
 | G15 | Example applications work | MET |
 | G16 | Known divergences resolved or release-blocking | MET |
 
-**Overall: NOT YET READY.** Two criteria (G4, G6) are `PARTIAL`. Per the gate's own
-rule, a `PARTIAL` criterion blocks 0.1 unless explicitly downgraded. Both are
-**documentation-locality** gaps: the static and MIR semantics are fully specified
-and test-pinned, but not yet collected into single normative peer documents. They
-are the only work standing between the current tree and a declarable 0.1.
+**Overall: READY.** All sixteen criteria are `MET`; none is `PARTIAL` or
+`RELEASE-BLOCKING`. The two former documentation-locality gaps are closed:
+`specification/static-semantics.md` (G4) and `specification/mir.md` (G6) now sit
+alongside `ownership.md` and `abi.md` as the normative peer documents for the
+static and MIR semantics, and the `tests/types/` corpus and the MIR verifier pin
+them. The interpreter⇄Cranelift⇄LLVM differential suites are green, so there are no
+open semantic divergences. Per the gate's own rule, 0.1 may be declared ready.
+
+The remaining items enumerated under "Capability gaps" below are **not** gate
+criteria — 0.1 ships the scalar control-flow runnable core deliberately, and each
+gap is a proposed ADR with a scope decision of its own, not a silent deferral.
 
 ## Remaining work before 0.1
 
-Ordered by what blocks the declaration:
-
-1. **G4 — write `specification/static-semantics.md`.** Consolidate the type-system
-   and resolution rules (today in Constitution §§10–24, `syntax.md`, and the
-   `tuo-types`/`tuo-resolve` crate docs) into one normative document, as
-   `ownership.md` does for the borrow model. No new semantics — locality only.
-2. **G6 — write `specification/mir.md`.** Lift the MIR instruction semantics from the
-   `tuo-mir` crate doc into a normative peer of `abi.md`. No new semantics — the
-   verifier and interpreter already define the meaning.
-
-Neither requires a compiler change; both are the difference between "specified,
-distributed" and "specified, collected."
+**None.** Every gate criterion is `MET`. The last two open items — consolidating
+the static semantics (G4) and the MIR semantics (G6) into single normative
+documents — are done (`specification/static-semantics.md` and
+`specification/mir.md`). Neither required a compiler change; both were the
+difference between "specified, distributed" and "specified, collected."
 
 ## Capability gaps (not gate criteria, tracked for honesty)
 
@@ -301,9 +303,9 @@ the gate can never claim an artifact it does not have.
 G1  | MET     | specification/grammar.ebnf; specification/CONSTITUTION.md
 G2  | MET     | crates/tuo-fmt/tests/golden.rs; crates/tuo-fmt/tests/properties.rs; crates/tuo-cli/tests/fmt_command.rs
 G3  | MET     | crates/tuo-fuzz/tests/sweep.rs; crates/tuo-fuzz/regressions
-G4  | PARTIAL | specification/CONSTITUTION.md; specification/syntax.md; crates/tuo-types/src/lib.rs; crates/tuo-resolve/src/lib.rs
+G4  | MET     | specification/static-semantics.md; specification/CONSTITUTION.md; specification/syntax.md; tests/types
 G5  | MET     | specification/ownership.md; specification/adr/ADR-0003-ownership-model.md; tests/ownership
-G6  | PARTIAL | crates/tuo-mir/src/lib.rs; crates/tuo-mir/src/verify.rs; specification/adr/ADR-0002-spec-semantics.md
+G6  | MET     | specification/mir.md; crates/tuo-mir/src/verify.rs; specification/adr/ADR-0002-spec-semantics.md
 G7  | MET     | specification/adr/ADR-0002-spec-semantics.md; crates/tuo-cli/tests/spec_command.rs
 G8  | MET     | crates/tuo-cli/tests/codegen_differential.rs; crates/tuo-cli/tests/differential.rs; tests/differential/README.md
 G9  | MET     | crates/tuo-cli/tests/codegen_three_way.rs
