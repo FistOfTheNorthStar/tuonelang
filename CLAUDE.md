@@ -350,6 +350,29 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   and each naming the performance-lab workload it must unblock before it can be
   accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
   paths and are therefore gitignored, not committed.
+- **The 0.1 release gate is a checklist backed by artifacts, and the report is
+  generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
+  criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
+  may be declared ready — grammar versioned, formatter canonical/idempotent, parser
+  crash-free under fuzzing, static/ownership/MIR semantics documented, specs
+  deterministic, interpreter⇄Cranelift (and, since LLVM ships in 0.1, three-way
+  ⇄LLVM) differential-clean, human diagnostics usable, machine diagnostics
+  schema-versioned, incremental/LLM benchmarks present, corpus compiler-validated,
+  examples working, and every known semantic divergence resolved or release-blocking.
+  Each criterion names a concrete committed *proving artifact* (a test target, a
+  benchmark, or a normative doc) in a machine-readable `gate-manifest` block, and
+  `tdg-cli/tests/release_gate.rs` parses that block to assert there are exactly
+  sixteen criteria `G1`..`G16`, every status is from the gate's vocabulary, the
+  manifest and the prose summary table agree, the `GRAMMAR-VERSION: 0.1` marker G1
+  relies on is present in `grammar.ebnf`, and — the load-bearing check — **every
+  cited artifact path actually exists**, so the gate can never advertise readiness it
+  cannot back. Run with `--nocapture` it regenerates the readiness report from the
+  manifest and live `Path::exists` probes. The gate is honest-today, not all-green:
+  G4 (static semantics) and G6 (MIR semantics) are `PARTIAL` — the rules are fully
+  specified and test-pinned but not yet collected into single normative peer
+  documents of `ownership.md`/`abi.md` — so the current verdict is **NOT YET READY**,
+  and those two consolidation docs are the only work standing between the tree and a
+  declarable 0.1.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
