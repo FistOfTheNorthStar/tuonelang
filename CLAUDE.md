@@ -367,12 +367,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   relies on is present in `grammar.ebnf`, and — the load-bearing check — **every
   cited artifact path actually exists**, so the gate can never advertise readiness it
   cannot back. Run with `--nocapture` it regenerates the readiness report from the
-  manifest and live `Path::exists` probes. The gate is honest-today, not all-green:
-  G4 (static semantics) and G6 (MIR semantics) are `PARTIAL` — the rules are fully
-  specified and test-pinned but not yet collected into single normative peer
-  documents of `ownership.md`/`abi.md` — so the current verdict is **NOT YET READY**,
-  and those two consolidation docs are the only work standing between the tree and a
-  declarable 0.1.
+  manifest and live `Path::exists` probes. The gate is honest, not aspirational —
+  a criterion earns `MET` only by citing artifacts the checker proves exist. As of
+  the current revision **all sixteen criteria are `MET`** (verdict **READY**): the
+  last two documentation-locality gaps are closed by `specification/static-semantics.md`
+  (G4 — resolution + type-checking rules, the `Rxxxx`/`Txxxx` diagnostics,
+  consolidated from Constitution §§8–24, `syntax.md`, and the `tuo-resolve`/`tuo-types`
+  crate docs, pinned by `tests/types/`) and `specification/mir.md` (G6 — every MIR
+  instruction/terminator/trap defined on its type, the verifier's `Mxxxx`
+  invariants, and the interpreter's abort taxonomy + sandbox), both now normative
+  peers of `ownership.md`/`abi.md`. A criterion that regressed would flip back to
+  `PARTIAL`/`RELEASE-BLOCKING` the moment its artifact changed.
 - **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
   `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
