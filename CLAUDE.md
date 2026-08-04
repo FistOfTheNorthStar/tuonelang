@@ -235,6 +235,49 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tdg-cli/tests/bench_command.rs` (the whole thing through the real binary,
   including a run whose recorded verdict is a *lie* that recompilation exposes).
   The dependency-policy guard keeps `tdg-codegen-bench` at layer 116.
+- **The performance laboratory drives the real compiler for every number,
+  reports only what it measured, and never publishes an unsupported claim.**
+  `tdg-bench`'s `lab` module (in the layer-110 research crate, which may sit
+  atop the `tdg-compiler` facade) owns tuonelang's reproducible compiler and
+  runtime benchmarks. Every figure comes from the **real** compiler:
+  `lab::compiler` times the cold stages by driving `check_sources` and the
+  cold `lex`/`parse` entry points, and measures the incremental edits through
+  the shared `IncrementalSession` — reporting each edit's cost as the
+  **deterministic set of per-item queries that re-executed** (`executed_queries`),
+  not just wall-clock, so *warm no-op* (zero), *function-body*, *function-signature*,
+  *single-spec*, and *affected-spec* scenarios are pinned by re-execution counts,
+  not timing noise. `lab::runtime` runs compiled programs through a host-injected
+  `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
+  real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
+  honesty rule the prompt demands is enforced structurally: tuonelang v0 runs only
+  the **scalar, control-flow core**, so of the eight required runtime workloads
+  exactly four (**startup, integer-computation, function-calls, recursion**) carry
+  a real program and are `Support::Supported`, while **allocation, collections,
+  string-processing, networking** are `Support::Unsupported` with the *exact reason*
+  the v0 core cannot express them and emit **no number** — the entry becomes
+  measurable the moment the feature lands, with no other change. Cross-language
+  comparison is **equivalent-semantics only** (C is the apt peer for the scalar
+  core: AOT-native, matching integer model) via a `ComparisonRunner` seam, and a
+  `Verdict` reaches `Measured` **only when both sides actually compiled and ran**
+  under recorded toolchains and produced the same observable exit — otherwise it is
+  `Skipped` with the reason, never a one-sided or fabricated figure. Each workload's
+  source (tuonelang *and* its C peer) is the committed file under
+  `benchmarks/runtime/programs/`, embedded via `include_str!` so the recorded
+  source cannot drift; a run captures the full environment (hardware, OS, tuonelang
+  and rustc versions, exact commands) into a versioned `LabReport`
+  (`SCHEMA_VERSION`), whose human render (`render_human`) carries **no superlative
+  and no aggregate verdict** ("blazing fast" appears nowhere and a test forbids it).
+  The contract is pinned by `tdg-bench`'s unit tests, `tdg-bench/tests/lab.rs`
+  (committed programs equal the embedded sources; every supported workload passes
+  the real front end; the honesty/no-superlative rules; the committed example report
+  parses, round-trips, and its deterministic parts regenerate; a `--nocapture`
+  measurement prints the full report), and `tdg-cli/tests/lab_command.rs` (the two
+  host seams end-to-end: the supported workloads really compile-link-run via `tuo
+  run` to their expected exit byte, and a live `cc` C comparison agrees where the
+  toolchain exists, recording a skip where it does not). The benchmark repository
+  itself lives under `benchmarks/` (`compiler/`, `runtime/programs/`,
+  `runtime/results/example-report.json`). The dependency-policy guard keeps
+  `tdg-bench` at layer 110.
 - **The whole compiler is fuzzed through its real entry points, one invariant is
   written once, and a discovered bug becomes a committed regression forever.**
   `tdg-fuzz` (layer 117, above the tooling surfaces it composes and below the

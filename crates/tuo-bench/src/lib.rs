@@ -1,7 +1,16 @@
-//! Research harness for tuonelang: tokenizer measurement and LLM benchmarking.
+//! Research harness for tuonelang: the performance laboratory, tokenizer
+//! measurement, and LLM benchmarking.
 //!
-//! This crate is the *core* of two research tools whose front-ends live under
-//! `tools/tokenizer-lab` and `benchmarks/llm`:
+//! This crate is the *core* of three research tools whose front-ends live under
+//! `benchmarks/`, `tools/tokenizer-lab`, and `benchmarks/llm`:
+//!
+//! - The **performance laboratory** ([`lab`]) runs reproducible compiler and
+//!   runtime benchmarks against the *real* compiler, records the full run
+//!   environment, and — following the project's honesty rule — reports only what
+//!   it measured, tagging every workload the v0 core cannot express with the
+//!   exact reason instead of a fabricated number. It compares against a peer
+//!   language only where the semantics are equivalent, and only when a real
+//!   number backs the comparison.
 //!
 //! - The **tokenizer lab** ([`tokenizer`], [`measure`], [`fixtures`]) measures
 //!   how candidate tuonelang syntax tokenizes under *multiple* tokenizers. Its
@@ -26,6 +35,7 @@
 //! same trait, without changing the measurement engine or the schema.
 
 pub mod fixtures;
+pub mod lab;
 pub mod llm;
 pub mod measure;
 pub mod tokenizer;

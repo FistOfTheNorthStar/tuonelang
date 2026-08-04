@@ -1,0 +1,4 @@
+fn sum(take n: Int, take acc: Int) -> Int {
+    if n == 0 { acc } else { sum(n - 1, acc + n) }
+}
+fn main() -> Int { sum(1000, 0) }

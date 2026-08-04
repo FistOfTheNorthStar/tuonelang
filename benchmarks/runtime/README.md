@@ -1,4 +1,64 @@
 # Runtime benchmarks
 
-Placeholder for runtime-performance benchmarks of compiled tuonelang programs. None
-are implemented yet.
+Runtime performance of *compiled* tuonelang programs, measured by really
+compiling, linking, and running them — never simulated. The harness core lives
+in the `tuo-bench` crate (`lab::runtime`); the committed programs live here.
+
+## What v0 can and cannot measure
+
+tuonelang v0 compiles and runs the **scalar, control-flow core** only: `Int`
+arithmetic, comparison, `if`/`else`, function calls, and recursion (see the
+codegen and stdlib conventions in the root `CLAUDE.md`). It has **no heap, no
+collections, no runtime string values, and no effect boundary** yet.
+
+The performance-laboratory prompt lists eight runtime workloads. Four map onto
+the scalar core and are measured with real programs; four cannot be expressed at
+all in v0 and are recorded — honestly — as unsupported, with the exact reason,
+and **no fabricated number**. The moment a feature lands, its entry gains a
+program and the lab measures it with no other change.
+
+| Workload | Status | Program |
+|----------|--------|---------|
+| `startup` | measured | [`programs/tuo/startup.tuo`](programs/tuo/startup.tuo) |
+| `integer-computation` | measured | [`programs/tuo/integer-computation.tuo`](programs/tuo/integer-computation.tuo) |
+| `function-calls` | measured | [`programs/tuo/function-calls.tuo`](programs/tuo/function-calls.tuo) |
+| `recursion` | measured | [`programs/tuo/recursion.tuo`](programs/tuo/recursion.tuo) |
+| `allocation` | **not yet expressible** | no heap-allocating type is lowered to native code |
+| `collections` | **not yet expressible** | no collection type is lowered; `std::collections` is contract-tier |
+| `string-processing` | **not yet expressible** | no runtime `String` value is lowered |
+| `networking` | **not yet expressible** | no effect boundary (no FFI/syscalls) exists |
+
+The `programs/tuo/*.tuo` files **are** the recorded source: the harness embeds
+them via `include_str!`, so a file and its measurement can never drift.
+
+## Comparison against established languages
+
+The prompt requires comparison *only against languages with equivalent
+semantics*. For the scalar core the apt peer is **C** — like tuonelang it
+compiles ahead-of-time to native code with a matching integer model and no
+runtime between the program and the CPU. Each supported workload has an
+equivalent-semantics C program under [`programs/c/`](programs/c/) computing the
+same result the same way (same arithmetic, same recursion).
+
+A comparison is reported **only when both languages actually compiled and ran**
+under recorded toolchains and produced the same result. If a C toolchain is
+absent, or the peer program does not produce the semantically-equal result, the
+comparison is recorded as *skipped* with the reason — never a one-sided or
+fabricated figure. Unsupported workloads have no comparison, because you cannot
+compare a feature that does not exist.
+
+## What every run records
+
+Per the prompt, a run records the hardware, OS, compiler versions, exact
+commands, and source — all captured live into a `LabReport` (see
+[`../README.md`](../README.md) and the committed example
+[`results/example-report.json`](results/example-report.json)). Nothing is
+hard-coded; an unobservable fact is reported as `unknown`, not guessed.
+
+## No unsupported claims
+
+The lab publishes **no** superlative and **no** aggregate verdict. There is no
+"blazing fast" anywhere; the human report prints measured numbers, unmeasured
+workloads with their reasons, and comparisons only where a real number backs
+them. The repository is built to *prove* a claim before it is made — which for
+most of v0's runtime story means proving, precisely, what is not yet measurable.

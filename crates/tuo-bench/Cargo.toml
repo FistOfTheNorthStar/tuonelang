@@ -14,3 +14,10 @@ workspace = true
 [dependencies]
 serde.workspace = true
 serde_json.workspace = true
+
+# The performance laboratory drives the real compiler front end and the
+# incremental session. tuo-compiler is layer 100 < tuo-bench's layer 110, so
+# this edge is allowed by the dependency policy (benchmarks may sit atop the
+# facade). tuo-bench names no concrete backend: native execution and foreign
+# toolchains are host-injected seams (see `lab::runtime`/`lab::compare`).
+tuo-compiler.workspace = true
