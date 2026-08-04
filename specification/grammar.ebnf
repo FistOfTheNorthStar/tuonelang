@@ -1,6 +1,13 @@
 (* ==========================================================================
    tuonelang v0 — normative surface grammar (EBNF)
 
+   GRAMMAR-VERSION: 0.1
+   EDITION: 2024
+   (* This grammar is versioned. Any change to a [FROZEN] production is a
+      breaking change requiring a new edition and an ADR (Constitution §30);
+      the version above and this file move together. The release-readiness gate
+      — specification/RELEASE-0.1-GATE.md, criterion G1 — reads this marker. *)
+
    This file is the AUTHORITATIVE context-free grammar for tuonelang v0. It is
    cross-referenced to CONSTITUTION.md section numbers as `[§N]` and is the
    single source of truth the lexer (tuo-lexer) and parser (tuo-parser) must be
