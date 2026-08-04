@@ -1,0 +1,81 @@
+module numeric;
+
+// numeric — the leaf library of the dogfooding workspace.
+//
+// Integer primitives the higher layers build on. Depends on nothing, so it is
+// the root of the resolution graph. Every function is in the runnable scalar
+// core and is pinned by a spec.
+
+/// Absolute value. `abs(Int::MIN)` would overflow on negation and trap; callers
+/// in this workspace stay well inside that bound.
+pub fn abs(take n: Int) -> Int {
+    if n < 0 { 0 - n } else { n }
+}
+
+/// The smaller of two values.
+pub fn min(take a: Int, take b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+/// The larger of two values.
+pub fn max(take a: Int, take b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+/// `base` raised to a non-negative `exp`, by recursion. A negative exponent has
+/// no integer answer, so it is defined to return 1 (the empty product).
+pub fn pow(take base: Int, take exp: Int) -> Int {
+    if exp <= 0 {
+        1
+    } else {
+        base * pow(base, exp - 1)
+    }
+}
+
+/// The largest `r` with `r*r <= n`, by bounded linear search (see cli-stats for
+/// the same technique). Returns 0 for negative input.
+pub fn isqrt(take n: Int) -> Int {
+    if n < 0 {
+        0
+    } else {
+        isqrt_from(n, 0)
+    }
+}
+
+fn isqrt_from(take n: Int, take r: Int) -> Int {
+    if r * r > n {
+        r - 1
+    } else {
+        if r > 100000 { r } else { isqrt_from(n, r + 1) }
+    }
+}
+
+spec abs {
+    then abs(5) == 5;
+    then abs(0) == 0;
+    then abs(0 - 7) == 7;
+}
+
+spec min {
+    then min(3, 7) == 3;
+    then min(7, 3) == 3;
+}
+
+spec max {
+    then max(3, 7) == 7;
+    then max(7, 3) == 7;
+}
+
+spec pow {
+    then pow(2, 0) == 1;
+    then pow(2, 10) == 1024;
+    then pow(5, 3) == 125;
+    then pow(7, 0 - 1) == 1;
+}
+
+spec isqrt {
+    then isqrt(0) == 0;
+    then isqrt(15) == 3;
+    then isqrt(16) == 4;
+    then isqrt(25) == 5;
+}

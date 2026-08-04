@@ -1,0 +1,205 @@
+module concurrent_worker;
+
+// concurrent-worker — a concurrent worker pool, dogfooded against the limits of
+// v0.
+//
+// v0 has no concurrency: no threads, no tasks, no channels, no shared mutable
+// state across workers, and no effect boundary (see DOGFOODING.md and
+// ADR-0007). What a worker pool actually *decides*, though — how work is
+// partitioned across N workers, how long a batch takes given per-task costs,
+// and whether the partition is balanced — is pure arithmetic over the schedule.
+// So, exactly as the http-service example does, this splits into:
+//
+//   * an EXECUTABLE TIER — the deterministic scheduling model: round-robin
+//     assignment, per-worker load, the makespan (finish time of the slowest
+//     worker), and speedup versus a single worker. Runnable scalar core,
+//     spec-checked, and `main` executes; and
+//
+//   * a CONTRACT TIER — the actual parallel execution (spawn workers, hand out
+//     tasks over a channel, join results), given as `CONTRACT:` comments only,
+//     because v0 cannot run any of it. Each names the capability the language
+//     must gain (tracked in ADR-0007) before this becomes a running pool.
+//
+// The task batch: eight tasks whose costs (in abstract time units) are the
+// accessors `cost0`..`cost7`. Workers pull them round-robin: worker w handles
+// task i whenever `i % worker_count == w`.
+
+fn worker_count() -> Int { 3 }
+fn task_count() -> Int { 8 }
+
+// Per-task costs — a real scheduler's input. Uneven on purpose, so balance and
+// makespan are non-trivial.
+fn cost0() -> Int { 5 }
+fn cost1() -> Int { 2 }
+fn cost2() -> Int { 8 }
+fn cost3() -> Int { 3 }
+fn cost4() -> Int { 6 }
+fn cost5() -> Int { 1 }
+fn cost6() -> Int { 4 }
+fn cost7() -> Int { 7 }
+
+/// The cost of task `i` (0-based). A single point where the batch is defined.
+fn cost_of(take i: Int) -> Int {
+    if i == 0 { cost0() }
+    else { if i == 1 { cost1() }
+    else { if i == 2 { cost2() }
+    else { if i == 3 { cost3() }
+    else { if i == 4 { cost4() }
+    else { if i == 5 { cost5() }
+    else { if i == 6 { cost6() }
+    else { if i == 7 { cost7() }
+    else { 0 } } } } } } } }
+}
+
+/// Round-robin owner of task `i`: worker `i % worker_count`.
+fn owner_of(take i: Int) -> Int {
+    i - (i / worker_count()) * worker_count()
+}
+
+/// The total cost assigned to `worker`, by summing the costs of the tasks it
+/// owns under round-robin. Recurses over task indices with an accumulator.
+fn load_from(take worker: Int, take i: Int, take acc: Int) -> Int {
+    if i >= task_count() {
+        acc
+    } else {
+        let next = if owner_of(i) == worker {
+            acc + cost_of(i)
+        } else {
+            acc
+        };
+        load_from(worker, i + 1, next)
+    }
+}
+
+fn worker_load(take worker: Int) -> Int {
+    load_from(worker, 0, 0)
+}
+
+/// The makespan: the finish time of the slowest worker, i.e. how long the whole
+/// batch takes when the workers run in parallel. The headline latency figure.
+fn makespan_from(take worker: Int, take best: Int) -> Int {
+    if worker >= worker_count() {
+        best
+    } else {
+        let load = worker_load(worker);
+        let next = if load > best { load } else { best };
+        makespan_from(worker + 1, next)
+    }
+}
+
+fn makespan() -> Int {
+    makespan_from(0, 0)
+}
+
+/// Total serial cost: the time a single worker would take (the sum of all task
+/// costs). The baseline the pool is measured against.
+fn serial_from(take i: Int, take acc: Int) -> Int {
+    if i >= task_count() {
+        acc
+    } else {
+        serial_from(i + 1, acc + cost_of(i))
+    }
+}
+
+fn serial_cost() -> Int {
+    serial_from(0, 0)
+}
+
+/// Integer speedup (floored): serial time divided by makespan. A perfectly
+/// balanced pool of N workers approaches N; imbalance lowers it.
+fn speedup() -> Int {
+    let m = makespan();
+    if m == 0 {
+        0
+    } else {
+        serial_cost() / m
+    }
+}
+
+/// The imbalance: slowest worker's load minus the ideal even share (floored).
+/// Zero would be a perfectly balanced partition.
+fn imbalance() -> Int {
+    makespan() - serial_cost() / worker_count()
+}
+
+fn main() -> Int {
+    makespan()
+}
+
+// --- CONTRACT TIER: the concurrent execution v0 cannot run -----------------
+//
+// The scheduling model above decides everything a pool needs to; what remains
+// is running the tasks in parallel, which v0 cannot express. Given as contracts
+// only. Each blocks on a capability tracked in ADR-0007 "Concurrency model and
+// the effect boundary".
+//
+// CONTRACT spawn_pool(workers: Int) -> Pool
+//   Start `workers` OS/green threads, each looping: pull a task, run it, push
+//   the result. BLOCKED ON: a concurrency primitive (threads/tasks) — v0 has no
+//   way to start a second thread of control — and a shared work queue, which
+//   needs both a heap collection and a synchronization type (the Shared/atomics
+//   story is unspecified for v0).
+//
+// CONTRACT submit(pool: Pool, task: Task) -> Unit
+//   Enqueue a task onto the shared queue. BLOCKED ON: a channel/queue type
+//   (heap + synchronization) and a first-class Task value (a function value or
+//   closure — v0 has neither, see DOGFOODING.md).
+//
+// CONTRACT join(pool: Pool) -> Results
+//   Wait for all workers to drain the queue and collect their results. BLOCKED
+//   ON: the concurrency primitive above plus a collection type to hold results.
+//
+// Note: the DETERMINISTIC model here is not merely a stand-in. A real pool's
+// observable performance (makespan, speedup, balance) is exactly what this
+// computes; when concurrency lands, the executable tier becomes the pool's
+// own scheduling oracle, checked against the live run.
+
+// --- Executable specs for the scheduling model -----------------------------
+
+spec cost_of {
+    then cost_of(0) == 5;
+    then cost_of(7) == 7;
+    then cost_of(8) == 0;
+}
+
+spec owner_of {
+    // round-robin over 3 workers
+    then owner_of(0) == 0;
+    then owner_of(1) == 1;
+    then owner_of(2) == 2;
+    then owner_of(3) == 0;
+    then owner_of(7) == 1;
+}
+
+spec "per-worker load partitions the batch" {
+    // worker 0 owns tasks 0,3,6 -> 5+3+4 = 12
+    then worker_load(0) == 12;
+    // worker 1 owns tasks 1,4,7 -> 2+6+7 = 15
+    then worker_load(1) == 15;
+    // worker 2 owns tasks 2,5   -> 8+1   = 9
+    then worker_load(2) == 9;
+}
+
+spec "loads sum to the serial cost (no task lost or double-counted)" {
+    then worker_load(0) + worker_load(1) + worker_load(2) == serial_cost();
+    then serial_cost() == 36;
+}
+
+spec makespan {
+    // slowest worker is worker 1 at 15
+    then makespan() == 15;
+}
+
+spec speedup {
+    // 36 / 15 = 2 (floored) with 3 workers: imbalance costs us the 3rd.
+    then speedup() == 2;
+}
+
+spec imbalance {
+    // makespan 15 minus even share 36/3 = 12 -> 3 units of imbalance.
+    then imbalance() == 3;
+}
+
+spec main {
+    then main() == 15;
+}

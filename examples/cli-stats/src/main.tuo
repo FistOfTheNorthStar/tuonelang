@@ -1,0 +1,159 @@
+module cli_stats;
+
+// cli-stats — a command-line statistics tool, dogfooded on the v0 scalar core.
+//
+// A real CLI reads a list of numbers from argv or stdin and prints summary
+// statistics. v0 has neither argument access nor an array type nor stdout (see
+// DOGFOODING.md and the ADRs it links), so this program encodes its dataset as
+// the seven positional accessors `d0`..`d6` and returns one selected statistic
+// as its process exit status — the only output channel the scalar core has.
+//
+// Everything below is genuine, non-toy computation: a fixed-size numeric
+// reduction library (count, sum, min, max, mean, range, a scaled variance, and
+// a bounded integer square root) written entirely in the runnable subset, with
+// executable `spec` blocks pinning each function. It compiles with
+// `tuo check`, its specs run under `tuo spec`, and it runs natively with
+// `tuo run` — the exit status is `report()`'s value truncated to a byte.
+
+// --- The dataset -----------------------------------------------------------
+//
+// Seven sample observations. A real build would populate these from argv; here
+// they are the program's fixed input. Chosen so the derived statistics land in
+// distinct, easily-checked values.
+
+fn d0() -> Int { 12 }
+fn d1() -> Int { 7 }
+fn d2() -> Int { 23 }
+fn d3() -> Int { 4 }
+fn d4() -> Int { 16 }
+fn d5() -> Int { 9 }
+fn d6() -> Int { 19 }
+
+fn count() -> Int { 7 }
+
+// --- Reductions ------------------------------------------------------------
+
+/// The arithmetic sum of the whole dataset.
+fn sum() -> Int {
+    d0() + d1() + d2() + d3() + d4() + d5() + d6()
+}
+
+/// The smaller of two values.
+fn min2(take a: Int, take b: Int) -> Int {
+    if a < b { a } else { b }
+}
+
+/// The larger of two values.
+fn max2(take a: Int, take b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+/// The smallest observation.
+fn minimum() -> Int {
+    min2(min2(min2(d0(), d1()), min2(d2(), d3())), min2(min2(d4(), d5()), d6()))
+}
+
+/// The largest observation.
+fn maximum() -> Int {
+    max2(max2(max2(d0(), d1()), max2(d2(), d3())), max2(max2(d4(), d5()), d6()))
+}
+
+/// The spread between the extremes.
+fn range() -> Int {
+    maximum() - minimum()
+}
+
+/// The integer mean (floored): total / count.
+fn mean() -> Int {
+    sum() / count()
+}
+
+/// The sum of squared deviations from the mean, a scaled dispersion measure
+/// that avoids the fractional division a true variance would need.
+fn sq_dev(take x: Int, take m: Int) -> Int {
+    (x - m) * (x - m)
+}
+
+fn dispersion() -> Int {
+    let m = mean();
+    sq_dev(d0(), m) + sq_dev(d1(), m) + sq_dev(d2(), m) + sq_dev(d3(), m)
+        + sq_dev(d4(), m) + sq_dev(d5(), m) + sq_dev(d6(), m)
+}
+
+/// A bounded integer square root by linear search: the largest `r` with
+/// `r*r <= n`, capped so the recursion is provably finite on the scalar core.
+fn isqrt_from(take n: Int, take r: Int) -> Int {
+    if r * r > n {
+        r - 1
+    } else {
+        if r > 1000 {
+            r
+        } else {
+            isqrt_from(n, r + 1)
+        }
+    }
+}
+
+fn isqrt(take n: Int) -> Int {
+    if n < 0 {
+        0
+    } else {
+        isqrt_from(n, 0)
+    }
+}
+
+/// A single reported figure small enough to survive exit-status truncation:
+/// the mean plus the integer standard deviation. For this dataset mean = 12
+/// and the standard deviation floors to 6, so the program exits 18.
+fn report() -> Int {
+    mean() + isqrt(dispersion() / count())
+}
+
+fn main() -> Int {
+    report()
+}
+
+// --- Executable specs ------------------------------------------------------
+
+spec "sum totals the dataset" {
+    then sum() == 90;
+}
+
+spec "extremes are found" {
+    then minimum() == 4;
+    then maximum() == 23;
+    then range() == 19;
+}
+
+spec "mean floors the average" {
+    then mean() == 12;
+}
+
+spec min2 {
+    then min2(3, 7) == 3;
+    then min2(7, 3) == 3;
+    then min2(5, 5) == 5;
+}
+
+spec max2 {
+    then max2(3, 7) == 7;
+    then max2(7, 3) == 7;
+    then max2(5, 5) == 5;
+}
+
+spec isqrt {
+    then isqrt(0) == 0;
+    then isqrt(1) == 1;
+    then isqrt(15) == 3;
+    then isqrt(16) == 4;
+    then isqrt(24) == 4;
+    then isqrt(25) == 5;
+}
+
+spec "report is the mean plus the integer standard deviation" {
+    then report() == 18;
+}
+
+spec main {
+    then main() == 18;
+}

@@ -1,0 +1,166 @@
+module http_service;
+
+// http-service — an HTTP service, dogfooded against the limits of v0.
+//
+// Prompt 39 asks for "an HTTP service WHEN networking support exists." It does
+// not exist in v0: there is no effect boundary (no sockets, no syscalls), no
+// String value, and no heap (see DOGFOODING.md and ADR-0006). So this example
+// is split exactly the way `tdg-stdlib` splits its modules:
+//
+//   * an EXECUTABLE TIER — the pure request-routing and status-code logic,
+//     which is the real decision core of any HTTP server. It is written in the
+//     runnable scalar subset, checks with `tuo check`, runs its specs with
+//     `tuo test`, and `main` executes with `tuo run`; and
+//
+//   * a CONTRACT TIER — the effectful shell (bind a socket, read the request
+//     bytes, write the response) given only as documented `CONTRACT:` comments,
+//     because v0 cannot perform any of it. Nothing here pretends to serve real
+//     traffic. Each contract names the exact capability the language must gain,
+//     tracked by ADR-0006, before this example can become a running server.
+//
+// Encoding, so the pure core has concrete values to route on:
+//
+//   method: 1 = GET, 2 = POST, 3 = PUT, 4 = DELETE   (0 = unknown)
+//   path:   1 = /            2 = /health
+//           3 = /users       4 = /users/{id}          (0 = unmatched)
+//
+// A route decision is `(method, path) -> status`, the heart of a web service.
+
+// --- Method and path tags --------------------------------------------------
+
+fn method_get() -> Int { 1 }
+fn method_post() -> Int { 2 }
+
+fn path_root() -> Int { 1 }
+fn path_health() -> Int { 2 }
+fn path_users() -> Int { 3 }
+fn path_user_id() -> Int { 4 }
+
+// --- HTTP status codes (the executable routing core) -----------------------
+
+fn status_ok() -> Int { 200 }
+fn status_created() -> Int { 201 }
+fn status_not_found() -> Int { 404 }
+fn status_method_not_allowed() -> Int { 405 }
+
+/// Does this path exist at all, regardless of method?
+fn path_exists(take path: Int) -> Bool {
+    path == path_root()
+        || path == path_health()
+        || path == path_users()
+        || path == path_user_id()
+}
+
+/// Is `method` allowed on `path`? GET is allowed everywhere; POST only creates
+/// under /users. This is the per-route method policy a real router encodes.
+fn method_allowed(take method: Int, take path: Int) -> Bool {
+    if method == method_get() {
+        path_exists(path)
+    } else {
+        // POST is only allowed to create a user.
+        method == method_post() && path == path_users()
+    }
+}
+
+/// The core routing decision: map a (method, path) request to a status code.
+/// Precedence matches a conforming server: unknown path -> 404 before any
+/// method check; known path with a disallowed method -> 405; a POST that
+/// creates -> 201; everything else allowed -> 200.
+fn route(take method: Int, take path: Int) -> Int {
+    if !path_exists(path) {
+        status_not_found()
+    } else {
+        if !method_allowed(method, path) {
+            status_method_not_allowed()
+        } else {
+            if method == method_post() {
+                status_created()
+            } else {
+                status_ok()
+            }
+        }
+    }
+}
+
+/// A tiny synthetic request log the pure core can "handle" end to end: four
+/// requests, summed into a single figure so `main` has an integer result. The
+/// value is `sum of statuses mod 256` — proof the routing core executed.
+fn handle_sample_traffic() -> Int {
+    let a = route(method_get(), path_root());        // 200
+    let b = route(method_get(), path_health());      // 200
+    let c = route(method_post(), path_users());      // 201
+    let d = route(method_delete_unknown(), path_users()); // 405
+    (a + b + c + d) - 1000
+}
+
+/// An unmodelled method tag (DELETE), used to exercise the 405 path.
+fn method_delete_unknown() -> Int { 4 }
+
+fn main() -> Int {
+    handle_sample_traffic()
+}
+
+// --- CONTRACT TIER: the effectful shell v0 cannot run ----------------------
+//
+// The functions below are the parts a real deployment needs and v0 cannot
+// express. They are written as contracts, NOT as code, so nothing claims to run
+// that cannot. Each blocks on a specific language capability tracked in
+// ADR-0006 "Effect boundary and networking for services".
+//
+// CONTRACT serve(port: Int) -> Result[Int, IoError]
+//   Bind a TCP listener on `port`, accept connections, and for each: read the
+//   request, parse the request line into (method, path), call `route`, and
+//   write the status line + body. BLOCKED ON: an effect boundary (sockets are a
+//   syscall; v0 has no FFI/syscall mechanism) and a runtime String/byte-buffer
+//   type for the request/response payloads.
+//
+// CONTRACT parse_request_line(raw: String) -> Request
+//   Turn the raw bytes "GET /health HTTP/1.1" into a typed request. BLOCKED ON:
+//   a String value and slicing/scanning over it (v0 lowers no String ops), and
+//   a product type to hold the parsed (method, path, version) result in the
+//   runnable core (see ADR-0004). The pure `route` above already consumes the
+//   decoded integer form, so only decoding is missing — not the decision logic.
+//
+// CONTRACT write_response(status: Int, body: String) -> Result[Int, IoError]
+//   Serialize a response and write it to the connection. BLOCKED ON: the same
+//   effect boundary plus String formatting.
+
+// --- Executable specs for the routing core ---------------------------------
+
+spec "known paths exist and unknown ones do not" {
+    then path_exists(path_root());
+    then path_exists(path_user_id());
+    then !path_exists(0);
+    then !path_exists(99);
+}
+
+spec "method policy per route" {
+    then method_allowed(method_get(), path_health());
+    then method_allowed(method_post(), path_users());
+    then !method_allowed(method_post(), path_health());
+    then !method_allowed(method_get(), 0);
+}
+
+spec route {
+    // happy paths
+    then route(method_get(), path_root()) == 200;
+    then route(method_get(), path_health()) == 200;
+    then route(method_post(), path_users()) == 201;
+    // unknown path is 404 even for a valid method
+    then route(method_get(), 0) == 404;
+    then route(method_get(), 99) == 404;
+    // known path, disallowed method is 405
+    then route(method_post(), path_health()) == 405;
+    then route(method_delete_unknown(), path_users()) == 405;
+}
+
+spec "404 precedes 405: an unknown path never reports a method error" {
+    // POST to an unknown path is 404 (path checked first), not 405.
+    then route(method_post(), 0) == 404;
+}
+
+spec main {
+    // 200 + 200 + 201 + 405 = 1006; 1006 - 1000 = 6
+    then handle_sample_traffic() == 6;
+    then main() == 6;
+}

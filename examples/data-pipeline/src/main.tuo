@@ -1,0 +1,162 @@
+module data_pipeline;
+
+// data-pipeline — a JSON/record-processing application, dogfooded on the v0
+// scalar core.
+//
+// A real data processor decodes structured records (say, JSON objects with a
+// `category` and an `amount` field), filters them, transforms them, and
+// aggregates the result. v0 has no strings, no arrays, and no heap (see
+// DOGFOODING.md), so records here are *packed integers* and the "batch" is a
+// fixed set of positional accessors — but the pipeline itself is the genuine
+// article: field decoding, a filter predicate, a per-record transform, and two
+// aggregations (a conditional sum and a count), each pinned by an executable
+// `spec`.
+//
+// Record encoding (a deliberately real serialization exercise):
+//
+//     record = category * 100000 + amount
+//
+//   * `category` in 1..=9   — a small enumerated tag (1 = groceries,
+//                             2 = transport, 3 = utilities, ...)
+//   * `amount`   in 0..=99999 — the value carried by the record
+//
+// Decoding a field is integer division / modulo — exactly what a hand-written
+// JSON number scanner reduces to once the bytes are in hand. The program
+// answers one query — "total amount across transport records (category 2)" —
+// and returns it (mod 256) as the process exit status.
+
+// --- The encoded batch -----------------------------------------------------
+//
+// Eight packed records. In a real build these would be decoded from a byte
+// stream; here they are the fixed input. Written in packed form on purpose, so
+// the decoders below have something authentic to take apart.
+
+fn r0() -> Int { 100150 } // category 1, amount 150
+fn r1() -> Int { 200080 } // category 2, amount  80
+fn r2() -> Int { 300500 } // category 3, amount 500
+fn r3() -> Int { 200120 } // category 2, amount 120
+fn r4() -> Int { 100075 } // category 1, amount  75
+fn r5() -> Int { 200200 } // category 2, amount 200
+fn r6() -> Int { 400300 } // category 4, amount 300
+fn r7() -> Int { 300060 } // category 3, amount  60
+
+// --- Field decoders --------------------------------------------------------
+
+/// The base used to pack `category` and `amount` into one integer.
+fn field_base() -> Int { 100000 }
+
+/// Decode the `category` field of a packed record.
+fn category(take record: Int) -> Int {
+    record / field_base()
+}
+
+/// Decode the `amount` field of a packed record.
+fn amount(take record: Int) -> Int {
+    record - category(record) * field_base()
+}
+
+// --- Pipeline stages -------------------------------------------------------
+
+/// The filter predicate: does this record belong to the queried category?
+fn matches(take record: Int, take wanted: Int) -> Bool {
+    category(record) == wanted
+}
+
+/// The per-record transform + fold: contribute a record's amount to the
+/// running total only when it matches the wanted category. This is the fused
+/// filter+map+reduce step a streaming processor would run per element.
+fn fold_one(take acc: Int, take record: Int, take wanted: Int) -> Int {
+    if matches(record, wanted) {
+        acc + amount(record)
+    } else {
+        acc
+    }
+}
+
+/// Total the amounts of every record in the wanted category.
+fn total_for(take wanted: Int) -> Int {
+    let a0 = fold_one(0, r0(), wanted);
+    let a1 = fold_one(a0, r1(), wanted);
+    let a2 = fold_one(a1, r2(), wanted);
+    let a3 = fold_one(a2, r3(), wanted);
+    let a4 = fold_one(a3, r4(), wanted);
+    let a5 = fold_one(a4, r5(), wanted);
+    let a6 = fold_one(a5, r6(), wanted);
+    fold_one(a6, r7(), wanted)
+}
+
+/// Count how many records fall in the wanted category.
+fn count_hit(take acc: Int, take record: Int, take wanted: Int) -> Int {
+    if matches(record, wanted) {
+        acc + 1
+    } else {
+        acc
+    }
+}
+
+fn count_for(take wanted: Int) -> Int {
+    let c0 = count_hit(0, r0(), wanted);
+    let c1 = count_hit(c0, r1(), wanted);
+    let c2 = count_hit(c1, r2(), wanted);
+    let c3 = count_hit(c2, r3(), wanted);
+    let c4 = count_hit(c3, r4(), wanted);
+    let c5 = count_hit(c4, r5(), wanted);
+    let c6 = count_hit(c5, r6(), wanted);
+    count_hit(c6, r7(), wanted)
+}
+
+/// The average amount within a category (floored). Guards the empty category
+/// so no record in the pipeline can divide by zero.
+fn average_for(take wanted: Int) -> Int {
+    let n = count_for(wanted);
+    if n == 0 {
+        0
+    } else {
+        total_for(wanted) / n
+    }
+}
+
+/// The query the program answers: total transport (category 2) spend.
+fn main() -> Int {
+    total_for(2)
+}
+
+// --- Executable specs ------------------------------------------------------
+
+spec "field decoding splits category from amount" {
+    then category(200120) == 2;
+    then amount(200120) == 120;
+    then category(100150) == 1;
+    then amount(100150) == 150;
+}
+
+spec "the filter predicate selects a category" {
+    then matches(r3(), 2);
+    then matches(r0(), 1);
+}
+
+spec "the pipeline totals a category" {
+    // transport (category 2): 80 + 120 + 200 = 400
+    then total_for(2) == 400;
+    // groceries (category 1): 150 + 75 = 225
+    then total_for(1) == 225;
+    // utilities (category 3): 500 + 60 = 560
+    then total_for(3) == 560;
+    // a category with no records totals zero
+    then total_for(9) == 0;
+}
+
+spec "the pipeline counts a category" {
+    then count_for(2) == 3;
+    then count_for(1) == 2;
+    then count_for(9) == 0;
+}
+
+spec "averages floor and guard the empty category" {
+    then average_for(2) == 133;
+    then average_for(9) == 0;
+}
+
+spec main {
+    then main() == 400;
+}
