@@ -1265,6 +1265,7 @@ version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
+ "tuo-compiler",
 ]
 
 [[package]]
@@ -1274,6 +1275,7 @@ dependencies = [
  "clap",
  "serde_json",
  "tuo-agent",
+ "tuo-bench",
  "tuo-codegen",
  "tuo-codegen-bench",
  "tuo-codegen-cranelift",

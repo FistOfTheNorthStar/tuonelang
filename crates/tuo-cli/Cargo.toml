@@ -64,3 +64,8 @@ tuo-types.workspace = true
 # run every spec; the hallucination benchmark compiles real vs. invented APIs.
 # (tuo-spec and tuo-compiler are already normal dependencies above.)
 tuo-stdlib.workspace = true
+# The performance-laboratory seam test injects the CLI's real native
+# compile-link-run and a live `cc` as the lab's NativeRunner/ComparisonRunner,
+# proving the supported workloads run natively and agree with C. tuo-bench is
+# layer 110 < tuo-cli's 120, so this dev-dependency is a valid lower-layer edge.
+tuo-bench.workspace = true

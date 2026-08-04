@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "environment": {
+    "target_triple": "aarch64-apple-darwin",
+    "arch": "aarch64",
+    "pointer_width": 64,
+    "os": "macos",
+    "cpu_model": {
+      "state": "known",
+      "value": "Apple M-series (illustrative)"
+    },
+    "logical_cpus": {
+      "state": "known",
+      "value": "10"
+    },
+    "tuonelang_version": "0.0.0",
+    "language_edition": "2024",
+    "rustc_version": {
+      "state": "known",
+      "value": "1.85.0 (illustrative)"
+    }
+  },
+  "cold_stages": [],
+  "edit_scenarios": [
+    {
+      "label": "warm-no-op-check",
+      "command": "tuo check <package> (re-run after edit)",
+      "reexecuted": [],
+      "reexecuted_count": 0
+    },
+    {
+      "label": "edit-function-body",
+      "command": "tuo check <package> (re-run after edit)",
+      "reexecuted": [
+        "fn_body(sym10)",
+        "fn_body(sym8)",
+        "fn_body(sym9)",
+        "interface(file#0)",
+        "parse(file#0)",
+        "resolution()",
+        "spec_graph()"
+      ],
+      "reexecuted_count": 7
+    },
+    {
+      "label": "edit-function-signature",
+      "command": "tuo check <package> (re-run after edit)",
+      "reexecuted": [
+        "fn_body(sym10)",
+        "fn_body(sym8)",
+        "fn_body(sym9)",
+        "interface(file#0)",
+        "mir_of(sym8)",
+        "parse(file#0)",
+        "resolution()",
+        "spec_graph()",
+        "type_of(sym10)",
+        "type_of(sym8)",
+        "type_of(sym9)"
+      ],
+      "reexecuted_count": 11
+    },
+    {
+      "label": "edit-single-spec",
+      "command": "tuo verify <package> (re-run after spec edit)",
+      "reexecuted": [
+        "fn_body(sym10)",
+        "fn_body(sym8)",
+        "fn_body(sym9)",
+        "interface(file#0)",
+        "parse(file#0)",
+        "resolution()",
+        "spec_graph()"
+      ],
+      "reexecuted_count": 7
+    },
+    {
+      "label": "affected-spec-verify",
+      "command": "tuo verify --affected-by <file> <package>",
+      "reexecuted": [
+        "spec:11"
+      ],
+      "reexecuted_count": 1
+    }
+  ],
+  "runtime_workloads": [
+    {
+      "label": "startup",
+      "description": "process startup and exit of a trivial program",
+      "support": {
+        "support": "supported",
+        "source": "fn main() -> Int { 0 }\n",
+        "expected_exit": 0
+      }
+    },
+    {
+      "label": "integer-computation",
+      "description": "a tight integer arithmetic reduction (sum 1..=1000 by recursion)",
+      "support": {
+        "support": "supported",
+        "source": "fn sum(take n: Int, take acc: Int) -> Int {\n    if n == 0 { acc } else { sum(n - 1, acc + n) }\n}\nfn main() -> Int { sum(1000, 0) }\n",
+        "expected_exit": 20
+      }
+    },
+    {
+      "label": "function-calls",
+      "description": "many non-recursive function calls",
+      "support": {
+        "support": "supported",
+        "source": "fn f(take n: Int) -> Int { n + 1 }\nfn g(take n: Int) -> Int { f(n) + f(n) }\nfn main() -> Int { g(3) + g(4) + g(5) }\n",
+        "expected_exit": 30
+      }
+    },
+    {
+      "label": "recursion",
+      "description": "deep-ish recursion (naive Fibonacci, fib(20))",
+      "support": {
+        "support": "supported",
+        "source": "fn fib(take n: Int) -> Int {\n    if n < 2 { n } else { fib(n - 1) + fib(n - 2) }\n}\nfn main() -> Int { fib(20) }\n",
+        "expected_exit": 109
+      }
+    },
+    {
+      "label": "allocation",
+      "description": "heap allocation and deallocation throughput",
+      "support": {
+        "support": "unsupported",
+        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet. No program can exercise allocation."
+      }
+    },
+    {
+      "label": "collections",
+      "description": "insert/lookup over a standard collection",
+      "support": {
+        "support": "unsupported",
+        "reason": "v0 lowers no collection type. std::collections is a documented catalog of free-function contracts, not executable collection code. No program can exercise collections."
+      }
+    },
+    {
+      "label": "string-processing",
+      "description": "building and scanning string data",
+      "support": {
+        "support": "unsupported",
+        "reason": "v0 has no runtime String value: string literals exist in the grammar but no String operations are lowered to native code. No program can exercise string processing."
+      }
+    },
+    {
+      "label": "networking",
+      "description": "a basic socket round-trip",
+      "support": {
+        "support": "unsupported",
+        "reason": "v0 has no effect boundary (no FFI/syscalls); std::io/std::process are contract-tier only. No program can perform I/O, so networking cannot be measured."
+      }
+    }
+  ],
+  "comparisons": [
+    {
+      "workload": {
+        "label": "startup",
+        "peer": "c",
+        "peer_source": "int main(void) { return 0; }\n",
+        "expected_exit": 0
+      },
+      "tuonelang_exit": 0,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "integer-computation",
+        "peer": "c",
+        "peer_source": "static int sum(int n, int acc) {\n    return n == 0 ? acc : sum(n - 1, acc + n);\n}\nint main(void) { return sum(1000, 0); }\n",
+        "expected_exit": 20
+      },
+      "tuonelang_exit": 20,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "function-calls",
+        "peer": "c",
+        "peer_source": "static int f(int n) { return n + 1; }\nstatic int g(int n) { return f(n) + f(n); }\nint main(void) { return g(3) + g(4) + g(5); }\n",
+        "expected_exit": 30
+      },
+      "tuonelang_exit": 30,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "recursion",
+        "peer": "c",
+        "peer_source": "static int fib(int n) {\n    return n < 2 ? n : fib(n - 1) + fib(n - 2);\n}\nint main(void) { return fib(20); }\n",
+        "expected_exit": 109
+      },
+      "tuonelang_exit": 109,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    }
+  ]
+}

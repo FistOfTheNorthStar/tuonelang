@@ -1,0 +1,3 @@
+fn f(take n: Int) -> Int { n + 1 }
+fn g(take n: Int) -> Int { f(n) + f(n) }
+fn main() -> Int { g(3) + g(4) + g(5) }
