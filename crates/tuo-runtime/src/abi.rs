@@ -254,18 +254,117 @@ fn aggregate_layout(
     fields: impl IntoIterator<Item = Ty>,
     types: &TypeckResult,
 ) -> Result<Layout, LayoutError> {
+    aggregate_layout_and_offsets(fields, types).map(|(layout, _)| layout)
+}
+
+/// The `#[repr(C)]` layout of a sequence of fields, together with the byte
+/// offset of each field within the aggregate (declaration order). The offsets
+/// are what a backend adds to an aggregate's base address to reach a
+/// [`Projection::Field`](tuo_mir::Projection) — the single source of truth for
+/// where a field lives, shared by every backend so none invents its own.
+fn aggregate_layout_and_offsets(
+    fields: impl IntoIterator<Item = Ty>,
+    types: &TypeckResult,
+) -> Result<(Layout, Vec<u64>), LayoutError> {
     let mut offset = 0u64;
     let mut align = 1u64;
+    let mut offsets = Vec::new();
     for field in fields {
         let field_layout = layout_of(&field, types)?;
         offset = align_up(offset, field_layout.align);
+        offsets.push(offset);
         offset += field_layout.size;
         align = align.max(field_layout.align);
     }
-    Ok(Layout {
-        size: align_up(offset, align),
-        align,
-    })
+    Ok((
+        Layout {
+            size: align_up(offset, align),
+            align,
+        },
+        offsets,
+    ))
+}
+
+/// The byte offsets of a **struct** or **tuple** value's fields, in declaration
+/// order — the offset a backend adds to the aggregate's base address to reach
+/// field *n*. For a `Struct` the field types come from the type's shape; for a
+/// `Tuple` they are the element types directly.
+///
+/// # Errors
+///
+/// [`LayoutError`] if `ty` is not a struct/tuple, is generic, or any field has
+/// no v0 layout — the same cases [`layout_of`] refuses.
+pub fn struct_field_offsets(ty: &Ty, types: &TypeckResult) -> Result<Vec<u64>, LayoutError> {
+    match ty {
+        Ty::Tuple(fields) => {
+            aggregate_layout_and_offsets(fields.iter().cloned(), types).map(|(_, offs)| offs)
+        }
+        Ty::Struct(symbol, args) => {
+            let shape = types
+                .struct_shape(*symbol)
+                .ok_or_else(|| LayoutError::new("field offsets of an unknown struct"))?;
+            require_monomorphic(&shape.type_params, args, "struct")?;
+            aggregate_layout_and_offsets(shape.fields.iter().map(|(_, ty)| ty.clone()), types)
+                .map(|(_, offs)| offs)
+        }
+        _ => Err(LayoutError::new(
+            "field offsets requested for a non-struct, non-tuple type",
+        )),
+    }
+}
+
+/// The byte offsets of an enum **variant's payload fields**, measured from the
+/// start of the enum value (i.e. already including the leading discriminant).
+/// Variant `variant` is the declaration-order index; each payload field is laid
+/// out `#[repr(C)]` starting after the [`DISCRIMINANT_SIZE`] tag, aligned to the
+/// payload's alignment. Handles user enums and the canonical `Option`/`Result`.
+///
+/// # Errors
+///
+/// [`LayoutError`] if `ty` is not an enum-like type, `variant` is out of range,
+/// it is generic, or a payload field has no v0 layout.
+pub fn variant_field_offsets(
+    ty: &Ty,
+    variant: usize,
+    types: &TypeckResult,
+) -> Result<Vec<u64>, LayoutError> {
+    let payload: Vec<Ty> = match ty {
+        Ty::Enum(symbol, args) => {
+            let shape = types
+                .enum_shape(*symbol)
+                .ok_or_else(|| LayoutError::new("field offsets of an unknown enum"))?;
+            require_monomorphic(&shape.type_params, args, "enum")?;
+            let (_, fields) = shape
+                .variants
+                .get(variant)
+                .ok_or_else(|| LayoutError::new("enum variant index out of range"))?;
+            fields.iter().map(|(_, ty)| ty.clone()).collect()
+        }
+        Ty::Option(inner) => match variant {
+            0 => Vec::new(),
+            1 => vec![(**inner).clone()],
+            _ => return Err(LayoutError::new("Option variant index out of range")),
+        },
+        Ty::Result(ok, err) => match variant {
+            0 => vec![(**ok).clone()],
+            1 => vec![(**err).clone()],
+            _ => return Err(LayoutError::new("Result variant index out of range")),
+        },
+        _ => {
+            return Err(LayoutError::new(
+                "variant field offsets requested for a non-enum type",
+            ));
+        }
+    };
+
+    // The payload begins after the tag, rounded up to the payload's alignment
+    // (matching `enum_layout`), then fields are laid out `#[repr(C)]` from there.
+    let (body, mut offsets) = aggregate_layout_and_offsets(payload, types)?;
+    let start = align_up(DISCRIMINANT_SIZE, body.align.max(1));
+    for off in &mut offsets {
+        *off += start;
+    }
+    Ok(offsets)
 }
 
 /// The layout of an enum: a [`DISCRIMINANT_SIZE`] tag followed by the largest
@@ -410,5 +509,53 @@ mod tests {
         assert_eq!(align_up(8, 8), 8);
         assert_eq!(align_up(9, 8), 16);
         assert_eq!(align_up(5, 1), 5);
+    }
+
+    #[test]
+    fn tuple_field_offsets_follow_c_padding() {
+        use super::struct_field_offsets;
+        let t = &TypeckResult::default();
+        // (I8, I32): field 0 at 0, field 1 at 4 (i8 padded up to i32 align).
+        let pair = Ty::Tuple(vec![Ty::Int(IntKind::I8), Ty::Int(IntKind::I32)]);
+        assert_eq!(struct_field_offsets(&pair, t).unwrap(), vec![0, 4]);
+        // (I8, I8): tightly packed, offsets 0 and 1.
+        let bytes = Ty::Tuple(vec![Ty::Int(IntKind::I8), Ty::Int(IntKind::I8)]);
+        assert_eq!(struct_field_offsets(&bytes, t).unwrap(), vec![0, 1]);
+        // (I64, I8, I64): 0, 8, then pad to 16.
+        let mixed = Ty::Tuple(vec![
+            Ty::Int(IntKind::I64),
+            Ty::Int(IntKind::I8),
+            Ty::Int(IntKind::I64),
+        ]);
+        assert_eq!(struct_field_offsets(&mixed, t).unwrap(), vec![0, 8, 16]);
+    }
+
+    #[test]
+    fn variant_field_offsets_sit_after_the_discriminant() {
+        use super::variant_field_offsets;
+        let t = &TypeckResult::default();
+        // Option[I64]: Some's payload is after the tag, padded to 8 → offset 8.
+        let opt = Ty::Option(Box::new(Ty::Int(IntKind::I64)));
+        assert_eq!(variant_field_offsets(&opt, 1, t).unwrap(), vec![8]);
+        // None has no payload.
+        assert_eq!(variant_field_offsets(&opt, 0, t).unwrap(), Vec::<u64>::new());
+        // Result[I64, I8]: Ok payload at 8 (pad to 8), Err payload at 4 (tag+align1).
+        let res = Ty::Result(
+            Box::new(Ty::Int(IntKind::I64)),
+            Box::new(Ty::Int(IntKind::I8)),
+        );
+        assert_eq!(variant_field_offsets(&res, 0, t).unwrap(), vec![8]);
+        assert_eq!(variant_field_offsets(&res, 1, t).unwrap(), vec![4]);
+    }
+
+    #[test]
+    fn field_offsets_refuse_non_aggregates() {
+        use super::{struct_field_offsets, variant_field_offsets};
+        let t = &TypeckResult::default();
+        assert!(struct_field_offsets(&Ty::int(), t).is_err());
+        assert!(variant_field_offsets(&Ty::int(), 0, t).is_err());
+        // An out-of-range variant is refused, not silently zero.
+        let opt = Ty::Option(Box::new(Ty::Bool));
+        assert!(variant_field_offsets(&opt, 2, t).is_err());
     }
 }
