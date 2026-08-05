@@ -1,0 +1,6 @@
+fn go(take r: Result[Int, Int]) -> Int {
+    match r { Ok { value } => value, Err { error } => error + 1000 }
+}
+fn main() -> Int {
+    go(Ok { value: 5 }) + go(Err { error: 7 })
+}

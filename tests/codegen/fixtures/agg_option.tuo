@@ -1,0 +1,6 @@
+fn unwrap_or(take v: Option[Int], take d: Int) -> Int {
+    match v { Some { value } => value, None => d }
+}
+fn main() -> Int {
+    unwrap_or(Some { value: 7 }, 0) + unwrap_or(None, 99)
+}

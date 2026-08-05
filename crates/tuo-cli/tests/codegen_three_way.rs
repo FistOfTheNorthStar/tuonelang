@@ -181,14 +181,37 @@ fn a_deterministic_trap_agrees_across_all_three_engines() {
     assert_three_way_agreement("trap_div_zero.tuo");
 }
 
+/// The ADR-0004 Stage 1 aggregate lowering: product types (struct, tuple, enum,
+/// `Option`, `Result`) whose fields are all scalars, crossing call boundaries by
+/// pointer/sret. Each of these agrees across all three engines by construction —
+/// every offset comes from the one runtime ABI both backends consult.
+#[test]
+fn stage1_aggregates_agree_across_all_three_engines() {
+    for name in [
+        "unsupported_struct.tuo", // struct field read (now supported)
+        "agg_struct_param.tuo",   // aggregate parameter by pointer + copy-in
+        "agg_struct_return.tuo",  // aggregate return via sret
+        "agg_struct_both.tuo",    // sret + aggregate param ordering together
+        "agg_enum_match.tuo",     // enum discriminant feeding a Switch
+        "agg_enum_payload.tuo",   // enum variant payload fields
+        "agg_option.tuo",         // Option[Int] payload (Some = variant 0)
+        "agg_result.tuo",         // Result[Int, Int] both variants
+        "agg_nested.tuo",         // a struct field that is itself a struct
+        "agg_move.tuo",           // whole-aggregate move through a call
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
-    // A program outside the scalar subset (an aggregate) must be *refused* by
-    // both backends with a failure exit and an explanatory message, never
-    // silently mis-compiled. The interpreter remains the reference and can still
-    // run it. This asserts the two backends agree on the *boundary* of what they
-    // lower, not just on results inside it.
-    let path = fixture("unsupported_struct.tuo");
+    // A program still outside the native subset (an aggregate carrying a
+    // `String`/`Str`, which Stage 1 does not lower) must be *refused* by both
+    // backends with a failure exit and an explanatory message, never silently
+    // mis-compiled. The interpreter remains the reference and can still run it.
+    // This asserts the two backends agree on the *boundary* of what they lower,
+    // not just on results inside it.
+    let path = fixture("unsupported_string.tuo");
     for release in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
         command.arg("build");

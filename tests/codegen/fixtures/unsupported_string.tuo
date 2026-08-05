@@ -1,0 +1,6 @@
+struct Named { tag: Str, n: Int }
+fn nlen(take x: Named) -> Int { x.n }
+fn main() -> Int {
+    let s = Named { tag: "hi", n: 5 };
+    nlen(s)
+}

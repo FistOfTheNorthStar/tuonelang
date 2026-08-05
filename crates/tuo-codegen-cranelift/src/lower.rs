@@ -19,31 +19,106 @@
 //!
 //! # Locals
 //!
-//! Each MIR local becomes a Cranelift [`Variable`], read and written by index.
-//! v0's supported locals are all scalars (one register), so no stack slots are
-//! needed. A local that never holds a supported scalar (only aggregates, say)
-//! makes the whole function unsupported.
+//! Each MIR local is classified once, up front (see [`LocalKind`]):
+//!
+//! - a **scalar** local (bool/char/int) becomes a Cranelift [`Variable`], read
+//!   and written by index, held in a register;
+//! - a **unit** local carries no value;
+//! - an **aggregate** local (a Stage-1 product type — struct/tuple/enum whose
+//!   transitive fields are all scalars) gets one explicit [`StackSlot`], and its
+//!   fields are accessed by computing a byte address into the slot from the
+//!   runtime ABI's offsets (see [`tuo_runtime::abi`]).
+//!
+//! A local whose type has no v0 layout at all (arrays, strings, floats, wrapped
+//! or heap-backed aggregates — Stage 2) still makes the whole function
+//! unsupported. Aggregate lowering follows ADR-0004 Stage 1: product types only,
+//! scalar leaves, by-pointer/sret call ABI.
 
 use std::collections::HashMap;
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{AbiParam, InstBuilder, Signature, Type, Value as ClifValue, types};
-use cranelift_codegen::isa::CallConv;
+use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
+use cranelift_codegen::ir::{
+    AbiParam, InstBuilder, MemFlags, Signature, StackSlot, Type, Value as ClifValue, types,
+};
+use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variable};
 use cranelift_module::{FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, Function, Operand, Place, Program, Rvalue, Statement, Terminator, Trap,
-    UnOp,
+    BinOp, CastKind, Const, Function, Operand, Place, Program, Projection, Rvalue, Statement,
+    Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
+use tuo_runtime::abi::{Layout, layout_of, struct_field_offsets, variant_field_offsets};
 use tuo_runtime::{TRAP_SYMBOL, TrapCode};
 use tuo_types::{IntKind, Ty, TypeckResult};
 
 use crate::abi::{int_type, int_width_bits, is_signed, scalar_type};
 use crate::{CodegenCtx, FUNCTION_LINKAGE};
+
+/// How a MIR local is stored by the backend, decided once up front from its
+/// declared type. This is the third outcome added to the original scalar/unit
+/// pair: an aggregate local backed by an explicit stack slot.
+enum LocalKind {
+    /// A scalar (bool/char/int) held in an SSA [`Variable`] of the given type.
+    Scalar(Variable, Type),
+    /// A `Unit` local (or a zero-sized aggregate): carries no value, no slot.
+    Unit,
+    /// A Stage-1 aggregate held in an explicit stack slot; `ty` is the local's
+    /// declared type, from which field offsets are computed via the ABI.
+    Aggregate {
+        /// The stack slot holding the aggregate's bytes.
+        slot: StackSlot,
+        /// The aggregate's declared type (source of truth for offsets).
+        ty: Ty,
+    },
+}
+
+/// The storage classification of a local, from its declared type and the ABI.
+///
+/// Mirrors the LLVM backend's `classify_storage` exactly so the two backends make
+/// identical ABI choices. Returns:
+/// - `Ok(None)` — a scalar (the caller resolves its register type) or unit;
+/// - `Ok(Some(layout))` — a Stage-1 aggregate with a non-zero layout;
+/// - `Err(..)` — the local's type has no v0 layout (Stage 2 / unsupported).
+///
+/// A type that `scalar_type` maps is a scalar; `Ty::Unit` is unit; anything else
+/// whose [`layout_of`] succeeds and is non-zero is an aggregate; a zero-sized
+/// aggregate is treated as unit (matching the interpreter's `Value::Unit`).
+enum Storage {
+    Scalar,
+    Unit,
+    Aggregate(Layout),
+}
+
+/// Classify a local's declared type into its backend storage. See [`Storage`].
+///
+/// # Errors
+///
+/// [`CodegenError::unsupported`] if the type has no v0 runtime layout — the same
+/// cases the scalar path refused before Stage 1 (arrays, strings, floats,
+/// heap-backed or otherwise non-Stage-1 aggregates).
+fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
+    if scalar_type(ty).is_some() {
+        return Ok(Storage::Scalar);
+    }
+    if matches!(ty, Ty::Unit) {
+        return Ok(Storage::Unit);
+    }
+    // Not scalar, not unit: it must be a Stage-1 aggregate with a real layout.
+    // `layout_of` refuses arrays/strings/floats/wrappers transitively, so a
+    // successful non-zero layout is exactly a scalar-only product type.
+    match layout_of(ty, types) {
+        Ok(layout) if layout.size == 0 => Ok(Storage::Unit),
+        Ok(layout) => Ok(Storage::Aggregate(layout)),
+        Err(error) => Err(CodegenError::unsupported(format!(
+            "`{context}` uses a type the Cranelift backend does not lower yet: {error}"
+        ))),
+    }
+}
 
 /// Declare then define every lowerable function of `program` into `module`.
 ///
@@ -55,13 +130,13 @@ use crate::{CodegenCtx, FUNCTION_LINKAGE};
 pub(crate) fn lower_program(
     module: &mut ObjectModule,
     program: &Program,
-    _types: &TypeckResult,
+    types: &TypeckResult,
 ) -> Result<HashMap<SymbolId, FuncId>, CodegenError> {
     // Pass 1: declare every function so direct calls can reference them before
     // their bodies are defined.
     let mut ids: HashMap<SymbolId, FuncId> = HashMap::new();
     for function in &program.functions {
-        let signature = function_signature(module, function)?;
+        let signature = function_signature(module, function, types)?;
         let symbol_name = mangle(function.symbol);
         let id = module
             .declare_function(&symbol_name, FUNCTION_LINKAGE, &signature)
@@ -75,20 +150,49 @@ pub(crate) fn lower_program(
     let mut ctx = CodegenCtx::new(module);
     let mut builder_ctx = FunctionBuilderContext::new();
     for function in &program.functions {
-        define_function(module, &mut ctx, &mut builder_ctx, &ids, function)?;
+        define_function(
+            module,
+            &mut ctx,
+            &mut builder_ctx,
+            &ids,
+            function,
+            &program.functions,
+            types,
+        )?;
     }
     Ok(ids)
 }
 
-/// The Cranelift signature of a MIR function (v0 scalar ABI).
+/// The Cranelift signature of a MIR function (v0 ABI, Stage-1 aggregates).
+///
+/// Applies the two aggregate calling-convention rules of ADR-0004 Stage 1,
+/// identically to the LLVM backend's `function_type`:
+/// - an **aggregate return** is an sret hidden out-pointer, *prepended* as
+///   argument index 0, and the native return type becomes void;
+/// - an **aggregate parameter** is passed as a pointer to a caller-owned copy.
+///
+/// Every size/align derives from [`tuo_runtime::abi`], never from Cranelift's
+/// native small-struct classification.
 fn function_signature(
     module: &ObjectModule,
     function: &Function,
+    types: &TypeckResult,
 ) -> Result<Signature, CodegenError> {
     let call_conv = module.isa().default_call_conv();
+    let pointer_type = module.isa().pointer_type();
     let mut signature = Signature::new(call_conv);
-    // Every parameter must be a supported scalar passed by value. Borrow-mode
-    // parameters are not lowered yet (they alias caller memory).
+
+    // Classify the return: an aggregate return prepends an sret pointer and the
+    // function returns void; a scalar return is by value; unit is no value.
+    let ret_storage = classify_storage(&function.ret, types, &function.name)?;
+    let returns_aggregate = matches!(ret_storage, Storage::Aggregate(_));
+    if returns_aggregate {
+        // sret hidden out-pointer is ALWAYS argument index 0 (prepended).
+        signature.params.push(AbiParam::new(pointer_type));
+    }
+
+    // Every parameter must be `Value` mode. Borrow-mode parameters are not
+    // lowered yet (they alias caller memory).
     for (index, mode) in function.params.iter().enumerate() {
         if *mode != tuo_mir::PassMode::Value {
             return Err(CodegenError::unsupported(format!(
@@ -98,14 +202,25 @@ fn function_signature(
             )));
         }
         let ty = &function.locals[index].ty;
-        let clif = require_scalar(ty, &function.name)?;
-        signature.params.push(AbiParam::new(clif));
+        match classify_storage(ty, types, &function.name)? {
+            Storage::Scalar => signature
+                .params
+                .push(AbiParam::new(require_scalar(ty, &function.name)?)),
+            // A unit parameter carries no value; it occupies no ABI slot.
+            Storage::Unit => {}
+            // An aggregate parameter is passed as a pointer to a caller copy.
+            Storage::Aggregate(_) => signature.params.push(AbiParam::new(pointer_type)),
+        }
     }
-    // A unit return is modelled as no return value; any other non-scalar is
-    // unsupported.
-    if !matches!(function.ret, Ty::Unit) {
-        let clif = require_scalar(&function.ret, &function.name)?;
-        signature.returns.push(AbiParam::new(clif));
+
+    // Return value: scalar by value; aggregate is void (written through sret);
+    // unit is no value.
+    match ret_storage {
+        Storage::Scalar => signature.returns.push(AbiParam::new(require_scalar(
+            &function.ret,
+            &function.name,
+        )?)),
+        Storage::Unit | Storage::Aggregate(_) => {}
     }
     Ok(signature)
 }
@@ -126,12 +241,22 @@ fn define_function(
     builder_ctx: &mut FunctionBuilderContext,
     ids: &HashMap<SymbolId, FuncId>,
     function: &Function,
+    functions: &[Function],
+    types: &TypeckResult,
 ) -> Result<(), CodegenError> {
-    let signature = function_signature(module, function)?;
+    let signature = function_signature(module, function, types)?;
     let self_id = ids[&function.symbol];
 
     ctx.context_mut().func.signature = signature;
-    let mut lowering = Lowering::new(module, ctx.context_mut(), builder_ctx, ids, function)?;
+    let mut lowering = Lowering::new(
+        module,
+        ctx.context_mut(),
+        builder_ctx,
+        ids,
+        function,
+        functions,
+        types,
+    )?;
     lowering.run()?;
     lowering.finish();
 
@@ -148,13 +273,19 @@ struct Lowering<'a> {
     module: &'a mut ObjectModule,
     ids: &'a HashMap<SymbolId, FuncId>,
     function: &'a Function,
+    /// Every function in the program, so a direct call can read its callee's
+    /// return type and name for the aggregate call ABI.
+    functions: &'a [Function],
+    types: &'a TypeckResult,
+    /// The pointer type of the target (for slot addresses and aggregate args).
+    pointer_type: Type,
+    /// The frontend config, needed by `emit_small_memory_copy`.
+    frontend_config: TargetFrontendConfig,
     /// The Cranelift block for each MIR block index.
     blocks: Vec<cranelift_codegen::ir::Block>,
-    /// The register type of each local (index = local id), for supported
-    /// scalar locals; `None` for a `Unit` local (which carries no value).
-    local_types: Vec<Option<Type>>,
-    /// The Cranelift variable backing each MIR local (index = local id).
-    locals: Vec<Variable>,
+    /// How each MIR local is stored (index = local id): scalar variable, unit,
+    /// or aggregate stack slot. Filled during `run` once the builder exists.
+    kinds: Vec<LocalKind>,
 }
 
 impl<'a> Lowering<'a> {
@@ -164,27 +295,30 @@ impl<'a> Lowering<'a> {
         builder_ctx: &'a mut FunctionBuilderContext,
         ids: &'a HashMap<SymbolId, FuncId>,
         function: &'a Function,
+        functions: &'a [Function],
+        types: &'a TypeckResult,
     ) -> Result<Self, CodegenError> {
-        // Resolve the register type of every local up front; a non-scalar,
-        // non-unit local makes the function unsupported.
-        let mut local_types = Vec::with_capacity(function.locals.len());
+        // Classify every local up front so an unsupported (Stage-2) type fails
+        // before any IR is built. The concrete slots/variables are created in
+        // `run`, once the builder exists.
         for local in &function.locals {
-            if matches!(local.ty, Ty::Unit) {
-                local_types.push(None);
-            } else {
-                local_types.push(Some(require_scalar(&local.ty, &function.name)?));
-            }
+            classify_storage(&local.ty, types, &function.name)?;
         }
 
+        let pointer_type = module.isa().pointer_type();
+        let frontend_config = module.isa().frontend_config();
         let builder = FunctionBuilder::new(&mut context.func, builder_ctx);
         Ok(Self {
             builder,
             module,
             ids,
             function,
+            functions,
+            types,
+            pointer_type,
+            frontend_config,
             blocks: Vec::new(),
-            local_types,
-            locals: Vec::new(),
+            kinds: Vec::new(),
         })
     }
 
@@ -195,34 +329,84 @@ impl<'a> Lowering<'a> {
             .map(|_| self.builder.create_block())
             .collect();
 
-        // Declare every local as a Variable of its register type. `Unit` locals
-        // get a placeholder i8 variable that is never read meaningfully. The
-        // returned Variables are stored so later code addresses a local by its
-        // MIR index.
-        let local_types = self.local_types.clone();
-        self.locals = local_types
-            .iter()
-            .map(|local_type| self.builder.declare_var(local_type.unwrap_or(types::I8)))
-            .collect();
+        // Classify and allocate storage for every local: a scalar gets an SSA
+        // Variable; a unit local carries no value; an aggregate local gets one
+        // explicit stack slot addressed by its ABI layout.
+        self.kinds = Vec::with_capacity(self.function.locals.len());
+        for local in &self.function.locals {
+            let kind = match classify_storage(&local.ty, self.types, &self.function.name)? {
+                Storage::Scalar => {
+                    // `require_scalar` cannot fail here (classify said scalar).
+                    let ty = require_scalar(&local.ty, &self.function.name)?;
+                    LocalKind::Scalar(self.builder.declare_var(ty), ty)
+                }
+                Storage::Unit => LocalKind::Unit,
+                Storage::Aggregate(layout) => {
+                    let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                        StackSlotKind::ExplicitSlot,
+                        u32::try_from(layout.size).map_err(|_| {
+                            CodegenError::backend("aggregate stack slot larger than 4 GiB")
+                        })?,
+                        log2_align(layout.align),
+                    ));
+                    LocalKind::Aggregate {
+                        slot,
+                        ty: local.ty.clone(),
+                    }
+                }
+            };
+            self.kinds.push(kind);
+        }
 
         // Entry block: append the parameters and seed the parameter locals.
         let entry = self.blocks[0];
         self.builder.append_block_params_for_function_params(entry);
         self.builder.switch_to_block(entry);
         let param_values: Vec<ClifValue> = self.builder.block_params(entry).to_vec();
-        for (index, value) in param_values.into_iter().enumerate() {
-            let var = self.locals[index];
-            self.builder.def_var(var, value);
+
+        // If this function returns an aggregate, native parameter 0 is the sret
+        // out-pointer (not a MIR local); the MIR parameters start at native
+        // index 1. Otherwise they start at 0.
+        let returns_aggregate = matches!(
+            classify_storage(&self.function.ret, self.types, &self.function.name)?,
+            Storage::Aggregate(_)
+        );
+        let mut native = usize::from(returns_aggregate);
+
+        // Seed each MIR parameter local from its native parameter. A scalar is
+        // defined directly; an aggregate parameter's incoming pointer is copied
+        // into the callee's own slot (owned-copy semantics); a unit parameter
+        // occupies no native slot.
+        for index in 0..self.function.params.len() {
+            match &self.kinds[index] {
+                LocalKind::Scalar(var, _) => {
+                    let var = *var;
+                    let value = param_values[native];
+                    self.builder.def_var(var, value);
+                    native += 1;
+                }
+                LocalKind::Unit => {}
+                LocalKind::Aggregate { slot, ty } => {
+                    let slot = *slot;
+                    let ty = ty.clone();
+                    let src = param_values[native];
+                    native += 1;
+                    let layout = self.layout(&ty)?;
+                    let dest = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+                    self.emit_memcpy(dest, src, layout);
+                }
+            }
         }
 
-        // Seed non-parameter locals with a zero of their type so a Variable is
-        // always defined before use on every path (the ownership checker
-        // guarantees no *semantic* read of an uninitialized local, but
-        // Cranelift's SSA construction still requires a definition to exist).
+        // Seed non-parameter scalar locals with a zero so a Variable is always
+        // defined before use on every path (the ownership checker guarantees no
+        // *semantic* read of an uninitialized local, but Cranelift's SSA
+        // construction still requires a definition to exist). Aggregate slots
+        // need no such seeding — a stack slot is always addressable.
         for index in self.function.params.len()..self.function.locals.len() {
-            if let Some(ty) = self.local_types[index] {
+            if let LocalKind::Scalar(var, ty) = &self.kinds[index] {
+                let (var, ty) = (*var, *ty);
                 let zero = self.builder.ins().iconst(ty, 0);
-                let var = self.locals[index];
                 self.builder.def_var(var, zero);
             }
         }
@@ -253,17 +437,37 @@ impl<'a> Lowering<'a> {
 
     fn lower_statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match statement {
-            Statement::Assign { place, rvalue } => {
-                let value = self.lower_rvalue(rvalue)?;
-                self.write_place(place, value)?;
-                Ok(())
-            }
+            Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
             Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
             Statement::Drop { .. } => {
-                // v0 supported values own no host resource and every drop of a
-                // scalar is a no-op (the interpreter's drop of a scalar frees
-                // only its budget). Nothing to emit.
+                // v0 supported values own no host resource; a Stage-1 aggregate
+                // owns no heap (scalar fields only), so its drop is a no-op too,
+                // exactly like a scalar's. Nothing to emit.
                 Ok(())
+            }
+        }
+    }
+
+    /// Lower `place = rvalue`. An aggregate rvalue (`Aggregate`) is materialized
+    /// in place into the destination's byte storage; a whole-aggregate `Use`
+    /// (copy/move of an aggregate place) is a memcpy between slots; every scalar
+    /// rvalue (including `Discriminant`, which yields a `Usize` scalar) takes the
+    /// scalar path and is stored with `write_place`.
+    fn lower_assign(&mut self, place: &Place, rvalue: &Rvalue) -> Result<(), CodegenError> {
+        match rvalue {
+            Rvalue::Aggregate { kind, fields } => self.lower_aggregate(place, kind, fields),
+            Rvalue::Use(operand) if self.operand_is_aggregate(operand) => {
+                // Whole-aggregate copy/move: memcpy from the source place's slot
+                // into the destination's byte storage.
+                let (dest_addr, dest_ty) = self.place_address(place)?;
+                let layout = self.layout(&dest_ty)?;
+                let src_addr = self.operand_aggregate_address(operand)?;
+                self.emit_memcpy(dest_addr, src_addr, layout);
+                Ok(())
+            }
+            _ => {
+                let value = self.lower_rvalue(rvalue)?;
+                self.write_place(place, value)
             }
         }
     }
@@ -279,10 +483,44 @@ impl<'a> Lowering<'a> {
                 "call to a function outside the lowered program (v0 has no external calls)",
             ));
         };
-        let mut arg_values = Vec::with_capacity(args.len());
+        let callee_fn = self.function_named(callee)?;
+
+        // Does the callee return an aggregate? If so, the first native argument
+        // is an sret out-pointer to caller-owned destination storage.
+        let dest_ty = self.place_type(dest);
+        let ret_is_aggregate = matches!(
+            classify_storage(&callee_fn.ret, self.types, &callee_fn.name)?,
+            Storage::Aggregate(_)
+        );
+
+        let mut arg_values: Vec<ClifValue> = Vec::with_capacity(args.len() + 1);
+
+        // Allocate the sret destination up front (a temporary slot unless dest is
+        // a bare aggregate local, in which case its own slot is the destination).
+        let sret_slot = if ret_is_aggregate {
+            let layout = self.layout(&callee_fn.ret)?;
+            let (slot, addr) = self.sret_destination(dest, &dest_ty, layout)?;
+            arg_values.push(addr);
+            Some((slot, layout))
+        } else {
+            None
+        };
+
+        // Marshal each argument. A scalar `Value` arg is passed by value; an
+        // aggregate `Value` arg is materialized into a caller temporary and its
+        // address passed. Unit arguments occupy no native slot.
         for arg in args {
             match arg {
-                tuo_mir::Arg::Value(operand) => arg_values.push(self.lower_operand(operand)?),
+                tuo_mir::Arg::Value(operand) => {
+                    if self.operand_is_unit(operand) {
+                        // A unit argument carries no native value.
+                    } else if self.operand_is_aggregate(operand) {
+                        let addr = self.materialize_aggregate_arg(operand)?;
+                        arg_values.push(addr);
+                    } else {
+                        arg_values.push(self.lower_operand(operand)?);
+                    }
+                }
                 tuo_mir::Arg::Borrow(_) | tuo_mir::Arg::BorrowMut(_) => {
                     return Err(CodegenError::unsupported(
                         "borrow-mode call arguments are not lowered by the Cranelift backend yet",
@@ -290,16 +528,94 @@ impl<'a> Lowering<'a> {
                 }
             }
         }
+
         let func_ref = self
             .module
             .declare_func_in_func(callee_id, self.builder.func);
         let call = self.builder.ins().call(func_ref, &arg_values);
-        let results = self.builder.inst_results(call);
-        // A unit-returning callee yields no result; a scalar callee yields one.
-        if let Some(&result) = results.first() {
-            self.write_place(dest, result)?;
+
+        if let Some((slot, layout)) = sret_slot {
+            // The callee wrote the aggregate result into the sret slot. If `dest`
+            // is a bare aggregate local, that slot *is* its storage and nothing
+            // more is needed. If `dest` is projected, copy from the temporary
+            // slot into the projected address.
+            if !dest.projection.is_empty() {
+                let src = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+                let (dest_addr, _leaf) = self.place_address(dest)?;
+                self.emit_memcpy(dest_addr, src, layout);
+            }
+        } else {
+            let results = self.builder.inst_results(call);
+            // A unit-returning callee yields no result; a scalar callee yields
+            // one, stored into the (scalar) destination.
+            if let Some(&result) = results.first() {
+                self.write_place(dest, result)?;
+            }
         }
         Ok(())
+    }
+
+    /// The sret destination for a call returning an aggregate: `(slot, address)`.
+    /// When `dest` is a bare aggregate local, its own slot is reused (no post-call
+    /// copy). Otherwise a fresh temporary slot is allocated and returned so the
+    /// caller can copy it into the projected destination after the call.
+    fn sret_destination(
+        &mut self,
+        dest: &Place,
+        dest_ty: &Ty,
+        layout: Layout,
+    ) -> Result<(StackSlot, ClifValue), CodegenError> {
+        if dest.projection.is_empty() {
+            if let LocalKind::Aggregate { slot, .. } = &self.kinds[dest.local.0 as usize] {
+                let slot = *slot;
+                let addr = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+                return Ok((slot, addr));
+            }
+        }
+        // Projected (or otherwise) destination: use a fresh temporary slot.
+        let _ = dest_ty;
+        let slot = self.new_temp_slot(layout)?;
+        let addr = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+        Ok((slot, addr))
+    }
+
+    /// Materialize an aggregate call argument into a caller-owned temporary slot
+    /// and return its address, per the by-pointer call ABI. The operand is a
+    /// `Copy`/`Move` of an aggregate place; memcpy its slot into the temporary so
+    /// the callee's copy-in cannot alias the caller's live value.
+    fn materialize_aggregate_arg(&mut self, operand: &Operand) -> Result<ClifValue, CodegenError> {
+        let ty = self
+            .operand_ty(operand)
+            .ok_or_else(|| CodegenError::backend("aggregate argument has no static type"))?;
+        let layout = self.layout(&ty)?;
+        let src = self.operand_aggregate_address(operand)?;
+        let slot = self.new_temp_slot(layout)?;
+        let dest = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+        self.emit_memcpy(dest, src, layout);
+        Ok(dest)
+    }
+
+    /// Allocate a fresh temporary stack slot of `layout`.
+    fn new_temp_slot(&mut self, layout: Layout) -> Result<StackSlot, CodegenError> {
+        Ok(self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            u32::try_from(layout.size)
+                .map_err(|_| CodegenError::backend("aggregate temporary larger than 4 GiB"))?,
+            log2_align(layout.align),
+        )))
+    }
+
+    /// The MIR function with symbol `callee`, needed to read its return type and
+    /// name for the call ABI. All calls are direct and internal in v0.
+    fn function_named(&self, callee: SymbolId) -> Result<&'a Function, CodegenError> {
+        self.functions
+            .iter()
+            .find(|f| f.symbol == callee)
+            .ok_or_else(|| {
+                CodegenError::unsupported(
+                    "call to a function outside the lowered program (v0 has no external calls)",
+                )
+            })
     }
 
     // ----- terminators -----
@@ -307,11 +623,22 @@ impl<'a> Lowering<'a> {
     fn lower_terminator(&mut self, terminator: &Terminator) -> Result<(), CodegenError> {
         match terminator {
             Terminator::Return(operand) => {
-                if matches!(self.function.ret, Ty::Unit) {
-                    self.builder.ins().return_(&[]);
-                } else {
-                    let value = self.lower_operand(operand)?;
-                    self.builder.ins().return_(&[value]);
+                match classify_storage(&self.function.ret, self.types, &self.function.name)? {
+                    Storage::Unit => {
+                        self.builder.ins().return_(&[]);
+                    }
+                    Storage::Scalar => {
+                        let value = self.lower_operand(operand)?;
+                        self.builder.ins().return_(&[value]);
+                    }
+                    Storage::Aggregate(layout) => {
+                        // Copy the operand's aggregate value into the sret
+                        // out-pointer (native parameter 0), then return void.
+                        let src = self.operand_aggregate_address(operand)?;
+                        let sret = self.builder.block_params(self.blocks[0])[0];
+                        self.emit_memcpy(sret, src, layout);
+                        self.builder.ins().return_(&[]);
+                    }
                 }
                 Ok(())
             }
@@ -387,14 +714,12 @@ impl<'a> Lowering<'a> {
                 let value = self.lower_operand(operand)?;
                 self.lower_cast(*kind, operand, value, to)
             }
-            Rvalue::Aggregate { .. } => Err(CodegenError::unsupported(
-                "aggregate construction is not lowered by the Cranelift backend yet",
+            Rvalue::Aggregate { .. } => Err(CodegenError::backend(
+                "aggregate construction reached the scalar rvalue path",
             )),
-            Rvalue::Discriminant(_) => Err(CodegenError::unsupported(
-                "enum discriminants are not lowered by the Cranelift backend yet",
-            )),
+            Rvalue::Discriminant(place) => self.lower_discriminant(place),
             Rvalue::Len(_) => Err(CodegenError::unsupported(
-                "array length is not lowered by the Cranelift backend yet",
+                "array length is not lowered by the Cranelift backend yet (Stage 2)",
             )),
         }
     }
@@ -595,29 +920,229 @@ impl<'a> Lowering<'a> {
 
     // ----- places -----
 
+    /// Read the scalar value of `place`. An empty projection on a scalar local
+    /// reads its SSA variable; a non-empty projection resolves to a leaf byte
+    /// address (which must be a scalar leaf in Stage 1) and loads it.
     fn read_place(&mut self, place: &Place) -> Result<ClifValue, CodegenError> {
-        if !place.projection.is_empty() {
-            return Err(CodegenError::unsupported(
-                "projected places (fields, indices) are not lowered by the Cranelift backend yet",
-            ));
+        if place.projection.is_empty() {
+            let local = place.local.0 as usize;
+            return match &self.kinds[local] {
+                LocalKind::Scalar(var, _) => Ok(self.builder.use_var(*var)),
+                LocalKind::Unit => Err(CodegenError::backend(
+                    "reading a scalar value from a unit local",
+                )),
+                LocalKind::Aggregate { .. } => Err(CodegenError::backend(
+                    "reading a whole aggregate as a scalar (should go through the aggregate path)",
+                )),
+            };
         }
-        let var = self.locals[place.local.0 as usize];
-        Ok(self.builder.use_var(var))
+        // Projected read: walk to the leaf address and load the scalar there.
+        let (addr, leaf_ty) = self.place_address(place)?;
+        let clif = require_scalar(&leaf_ty, &self.function.name)?;
+        Ok(self.builder.ins().load(clif, MemFlags::trusted(), addr, 0))
     }
 
+    /// Write the scalar `value` to `place`. An empty projection on a scalar local
+    /// defines its SSA variable; a non-empty projection resolves to a leaf byte
+    /// address (a scalar leaf in Stage 1) and stores there. A unit destination
+    /// carries no value.
     fn write_place(&mut self, place: &Place, value: ClifValue) -> Result<(), CodegenError> {
-        if !place.projection.is_empty() {
-            return Err(CodegenError::unsupported(
-                "projected places (fields, indices) are not lowered by the Cranelift backend yet",
+        if place.projection.is_empty() {
+            let local = place.local.0 as usize;
+            return match &self.kinds[local] {
+                LocalKind::Scalar(var, _) => {
+                    self.builder.def_var(*var, value);
+                    Ok(())
+                }
+                // A unit-typed destination carries no value; skip it.
+                LocalKind::Unit => Ok(()),
+                LocalKind::Aggregate { .. } => Err(CodegenError::backend(
+                    "writing a scalar into a whole aggregate local (should go through the \
+                     aggregate path)",
+                )),
+            };
+        }
+        let (addr, _leaf_ty) = self.place_address(place)?;
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), value, addr, 0);
+        Ok(())
+    }
+
+    /// The shared address walk: resolve `place` to a `(byte address, leaf type)`
+    /// pair by starting at the root local's slot base and advancing by each
+    /// projection's ABI offset. Only aggregate-slot roots admit a non-empty
+    /// projection; `Index` is refused (arrays are Stage 2).
+    ///
+    /// This is the single place both scalar field read/write and whole-aggregate
+    /// operations compute a field address, so the two code paths cannot diverge.
+    fn place_address(&mut self, place: &Place) -> Result<(ClifValue, Ty), CodegenError> {
+        let local = place.local.0 as usize;
+        let (mut addr, mut cur_ty) = match &self.kinds[local] {
+            LocalKind::Aggregate { slot, ty } => {
+                let base = self.builder.ins().stack_addr(self.pointer_type, *slot, 0);
+                (base, ty.clone())
+            }
+            LocalKind::Scalar(..) | LocalKind::Unit if place.projection.is_empty() => {
+                return Err(CodegenError::backend(
+                    "place_address called on a non-aggregate local with no projection",
+                ));
+            }
+            LocalKind::Scalar(..) | LocalKind::Unit => {
+                // A projection on a scalar/unit local is impossible in
+                // well-formed MIR; refuse rather than mis-address.
+                return Err(CodegenError::backend("projection on a non-aggregate local"));
+            }
+        };
+
+        for step in &place.projection {
+            let offset = match step {
+                Projection::Field(index) => {
+                    let offsets = struct_field_offsets(&cur_ty, self.types)
+                        .map_err(|error| self.layout_error(error))?;
+                    let i = *index as usize;
+                    let offset = *offsets.get(i).ok_or_else(|| {
+                        CodegenError::backend("struct/tuple field index out of range")
+                    })?;
+                    cur_ty = self.field_type(&cur_ty, i)?;
+                    offset
+                }
+                Projection::VariantField { variant, field } => {
+                    let offsets = variant_field_offsets(&cur_ty, *variant as usize, self.types)
+                        .map_err(|error| self.layout_error(error))?;
+                    let f = *field as usize;
+                    let offset = *offsets
+                        .get(f)
+                        .ok_or_else(|| CodegenError::backend("variant field index out of range"))?;
+                    cur_ty = self.variant_field_type(&cur_ty, *variant as usize, f)?;
+                    offset
+                }
+                Projection::Index(_) => {
+                    return Err(CodegenError::unsupported(
+                        "array indexing is not lowered by the Cranelift backend yet (Stage 2)",
+                    ));
+                }
+            };
+            let offset = i64::try_from(offset)
+                .map_err(|_| CodegenError::backend("field offset exceeds i64"))?;
+            addr = self.builder.ins().iadd_imm(addr, offset);
+        }
+        Ok((addr, cur_ty))
+    }
+
+    /// Materialize a `Rvalue::Aggregate` in place into `dest`'s byte storage.
+    ///
+    /// For an enum-like type the u32 discriminant is stored at offset 0 first;
+    /// for a struct/tuple no tag is written. Each field operand is then stored at
+    /// its ABI offset — a scalar field with a scalar store, a nested-aggregate
+    /// field with a whole-aggregate memcpy from its source slot.
+    fn lower_aggregate(
+        &mut self,
+        dest: &Place,
+        kind: &tuo_mir::AggregateKind,
+        fields: &[Operand],
+    ) -> Result<(), CodegenError> {
+        let (ty, variant) = match kind {
+            tuo_mir::AggregateKind::Adt { ty, variant } => (ty.clone(), *variant),
+            tuo_mir::AggregateKind::Range => {
+                return Err(CodegenError::unsupported(
+                    "range construction is not lowered by the Cranelift backend (Stage 2)",
+                ));
+            }
+        };
+
+        // The destination base address (bare aggregate local, or a projected
+        // whole-aggregate slot).
+        let base = self.aggregate_dest_address(dest)?;
+
+        // Enum-like: store the u32 tag at offset 0. Struct/tuple: no tag.
+        let enum_like = matches!(ty, Ty::Enum(..) | Ty::Option(_) | Ty::Result(..));
+        if enum_like {
+            let tag = self.builder.ins().iconst(types::I32, i64::from(variant));
+            self.builder.ins().store(MemFlags::trusted(), tag, base, 0);
+        }
+
+        // Field offsets: struct/tuple vs enum variant.
+        let offsets = if enum_like {
+            variant_field_offsets(&ty, variant as usize, self.types)
+                .map_err(|error| self.layout_error(error))?
+        } else {
+            struct_field_offsets(&ty, self.types).map_err(|error| self.layout_error(error))?
+        };
+        if fields.len() != offsets.len() {
+            return Err(CodegenError::backend(
+                "aggregate field count does not match the ABI offset count",
             ));
         }
-        // A unit-typed destination carries no value; skip it.
-        if self.local_types[place.local.0 as usize].is_none() {
-            return Ok(());
+
+        for (i, operand) in fields.iter().enumerate() {
+            // A unit / zero-sized field contributes no store.
+            if self.operand_is_unit(operand) {
+                continue;
+            }
+            let offset = i64::try_from(offsets[i])
+                .map_err(|_| CodegenError::backend("field offset exceeds i64"))?;
+            let field_addr = self.builder.ins().iadd_imm(base, offset);
+            if self.operand_is_aggregate(operand) {
+                // Nested aggregate field: memcpy from its source slot.
+                let field_ty = self
+                    .operand_ty(operand)
+                    .ok_or_else(|| CodegenError::backend("aggregate field has no static type"))?;
+                let layout = self.layout(&field_ty)?;
+                let src = self.operand_aggregate_address(operand)?;
+                self.emit_memcpy(field_addr, src, layout);
+            } else {
+                // Scalar field: evaluate and store.
+                let value = self.lower_operand(operand)?;
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), value, field_addr, 0);
+            }
         }
-        let var = self.locals[place.local.0 as usize];
-        self.builder.def_var(var, value);
         Ok(())
+    }
+
+    /// The base address to materialize an aggregate into, for an `Assign` whose
+    /// destination is an aggregate. A bare aggregate local uses its slot; a
+    /// projected destination resolves through the address walk.
+    fn aggregate_dest_address(&mut self, dest: &Place) -> Result<ClifValue, CodegenError> {
+        if dest.projection.is_empty() {
+            if let LocalKind::Aggregate { slot, .. } = &self.kinds[dest.local.0 as usize] {
+                return Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0));
+            }
+            return Err(CodegenError::backend(
+                "aggregate rvalue assigned to a non-aggregate local",
+            ));
+        }
+        let (addr, _leaf) = self.place_address(dest)?;
+        Ok(addr)
+    }
+
+    /// Lower `Rvalue::Discriminant`: load the u32 tag at offset 0 of the enum
+    /// value and zero-extend it to a `Usize` (i64), matching the interpreter's
+    /// `Value::Int(discr, Usize)`.
+    fn lower_discriminant(&mut self, place: &Place) -> Result<ClifValue, CodegenError> {
+        let base = if place.projection.is_empty() {
+            match &self.kinds[place.local.0 as usize] {
+                LocalKind::Aggregate { slot, .. } => {
+                    self.builder.ins().stack_addr(self.pointer_type, *slot, 0)
+                }
+                _ => {
+                    return Err(CodegenError::backend(
+                        "discriminant of a non-aggregate local",
+                    ));
+                }
+            }
+        } else {
+            let (addr, _leaf) = self.place_address(place)?;
+            addr
+        };
+        // Load the u32 tag, then zero-extend to i64 (Usize). Never truncate.
+        let tag = self
+            .builder
+            .ins()
+            .load(types::I32, MemFlags::trusted(), base, 0);
+        Ok(self.builder.ins().uextend(types::I64, tag))
     }
 
     // ----- traps -----
@@ -682,19 +1207,191 @@ impl<'a> Lowering<'a> {
         matches!(self.operand_ty(operand), Some(Ty::Int(kind)) if is_signed(kind))
     }
 
-    /// The static type of an operand, from the local's declared type or the
-    /// constant's kind. Only the scalar shapes the backend supports are
-    /// resolved; others return `None`.
+    /// The static type of an operand, from the local's declared type (following
+    /// projections to the leaf field type) or the constant's kind. Non-primitive
+    /// constants return `None`.
     fn operand_ty(&self, operand: &Operand) -> Option<Ty> {
         match operand {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
-                Some(self.function.locals[place.local.0 as usize].ty.clone())
-            }
+            Operand::Copy(place) | Operand::Move(place) => Some(self.place_type(place)),
             Operand::Const(Const::Int(_, kind)) => Some(Ty::Int(*kind)),
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             _ => None,
         }
+    }
+
+    // ----- aggregate helpers -----
+
+    /// The declared type of `place`, following its projections. Used only for
+    /// classifying the call-site destination.
+    fn place_type(&self, place: &Place) -> Ty {
+        let mut cur = self.function.locals[place.local.0 as usize].ty.clone();
+        for step in &place.projection {
+            cur = match step {
+                Projection::Field(i) => self.field_type(&cur, *i as usize).unwrap_or(Ty::Error),
+                Projection::VariantField { variant, field } => self
+                    .variant_field_type(&cur, *variant as usize, *field as usize)
+                    .unwrap_or(Ty::Error),
+                Projection::Index(_) => Ty::Error,
+            };
+        }
+        cur
+    }
+
+    /// The i-th field type of a struct/tuple `cur_ty` (declaration order).
+    fn field_type(&self, cur_ty: &Ty, i: usize) -> Result<Ty, CodegenError> {
+        match cur_ty {
+            Ty::Tuple(fields) => fields
+                .get(i)
+                .cloned()
+                .ok_or_else(|| CodegenError::backend("tuple field index out of range")),
+            Ty::Struct(symbol, _) => {
+                let shape = self
+                    .types
+                    .struct_shape(*symbol)
+                    .ok_or_else(|| CodegenError::backend("field of an unknown struct"))?;
+                shape
+                    .fields
+                    .get(i)
+                    .map(|(_, ty)| ty.clone())
+                    .ok_or_else(|| CodegenError::backend("struct field index out of range"))
+            }
+            _ => Err(CodegenError::backend(
+                "field projection on a non-struct, non-tuple type",
+            )),
+        }
+    }
+
+    /// The payload field type of variant `variant`, field `field` of an
+    /// enum-like `cur_ty`.
+    fn variant_field_type(
+        &self,
+        cur_ty: &Ty,
+        variant: usize,
+        field: usize,
+    ) -> Result<Ty, CodegenError> {
+        match cur_ty {
+            Ty::Enum(symbol, _) => {
+                let shape = self
+                    .types
+                    .enum_shape(*symbol)
+                    .ok_or_else(|| CodegenError::backend("variant field of an unknown enum"))?;
+                let (_, payload) = shape
+                    .variants
+                    .get(variant)
+                    .ok_or_else(|| CodegenError::backend("enum variant index out of range"))?;
+                payload
+                    .get(field)
+                    .map(|(_, ty)| ty.clone())
+                    .ok_or_else(|| CodegenError::backend("variant field index out of range"))
+            }
+            // `Some` = variant 0 (payload at field 0), `None` = variant 1
+            // (empty), matching the interpreter/MIR and the runtime ABI.
+            Ty::Option(inner) => match (variant, field) {
+                (0, 0) => Ok((**inner).clone()),
+                _ => Err(CodegenError::backend("bad Option variant field")),
+            },
+            Ty::Result(ok, err) => match (variant, field) {
+                (0, 0) => Ok((**ok).clone()),
+                (1, 0) => Ok((**err).clone()),
+                _ => Err(CodegenError::backend("bad Result variant field")),
+            },
+            _ => Err(CodegenError::backend(
+                "variant-field projection on a non-enum type",
+            )),
+        }
+    }
+
+    /// Whether an operand refers to an aggregate value (a bare-local place whose
+    /// declared type is a Stage-1 aggregate). Projected operands are scalar
+    /// leaves in Stage 1, so they are never whole aggregates.
+    fn operand_is_aggregate(&self, operand: &Operand) -> bool {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                matches!(
+                    classify_storage(
+                        &self.function.locals[place.local.0 as usize].ty,
+                        self.types,
+                        &self.function.name,
+                    ),
+                    Ok(Storage::Aggregate(_))
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether an operand is unit-valued (a unit constant, or a bare-local place
+    /// of unit/zero-sized type). Such an operand contributes no native value.
+    fn operand_is_unit(&self, operand: &Operand) -> bool {
+        match operand {
+            Operand::Const(Const::Unit) => true,
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                matches!(
+                    classify_storage(
+                        &self.function.locals[place.local.0 as usize].ty,
+                        self.types,
+                        &self.function.name,
+                    ),
+                    Ok(Storage::Unit)
+                )
+            }
+            _ => false,
+        }
+    }
+
+    /// The base address of the aggregate an operand names (a `Copy`/`Move` of a
+    /// bare aggregate local). Used for whole-aggregate copies/moves. A move
+    /// leaves the source husk untouched: a Stage-1 aggregate owns no heap, so no
+    /// zeroing is needed (the ownership checker forbids re-reading a moved value).
+    fn operand_aggregate_address(&mut self, operand: &Operand) -> Result<ClifValue, CodegenError> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                match &self.kinds[place.local.0 as usize] {
+                    LocalKind::Aggregate { slot, .. } => {
+                        Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0))
+                    }
+                    _ => Err(CodegenError::backend(
+                        "aggregate address requested for a non-aggregate local",
+                    )),
+                }
+            }
+            _ => Err(CodegenError::backend(
+                "aggregate address requested for a non-place operand",
+            )),
+        }
+    }
+
+    /// The runtime ABI layout of `ty`, or a backend error (the type was already
+    /// classified as an aggregate, so this should not fail).
+    fn layout(&self, ty: &Ty) -> Result<Layout, CodegenError> {
+        layout_of(ty, self.types).map_err(|error| self.layout_error(error))
+    }
+
+    /// Turn an ABI [`LayoutError`](tuo_runtime::abi::LayoutError) into a backend
+    /// error. Reaching one after classification means the MIR named a shape the
+    /// ABI cannot lay out — a backend/verifier fault, not a user error.
+    fn layout_error(&self, error: tuo_runtime::abi::LayoutError) -> CodegenError {
+        CodegenError::backend(format!("ABI layout failed during lowering: {error}"))
+    }
+
+    /// Copy `layout.size` bytes from `src` to `dest`, both aggregate slot
+    /// addresses, using the aggregate's alignment. A zero-sized copy is a no-op.
+    fn emit_memcpy(&mut self, dest: ClifValue, src: ClifValue, layout: Layout) {
+        if layout.size == 0 {
+            return;
+        }
+        let align = u8::try_from(layout.align).unwrap_or(u8::MAX);
+        self.builder.emit_small_memory_copy(
+            self.frontend_config,
+            dest,
+            src,
+            layout.size,
+            align,
+            align,
+            true,
+            MemFlags::trusted(),
+        );
     }
 }
 
@@ -722,6 +1419,14 @@ fn comparison_code(op: BinOp, signed: bool) -> Option<IntCC> {
         BinOp::Ge => IntCC::UnsignedGreaterThanOrEqual,
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
     })
+}
+
+/// The base-2 logarithm of a power-of-two alignment, as the `align_shift` a
+/// Cranelift [`StackSlotData`] expects. The ABI guarantees `align` is a power of
+/// two ≥ 1, so `trailing_zeros` is exact.
+fn log2_align(align: u64) -> u8 {
+    // A power-of-two u64's trailing-zero count is at most 63.
+    u8::try_from(align.max(1).trailing_zeros()).unwrap_or(0)
 }
 
 /// The runtime trap code for a MIR terminator trap.

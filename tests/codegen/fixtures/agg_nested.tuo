@@ -1,0 +1,6 @@
+struct Inner { a: Int, b: Int }
+struct Outer { p: Inner, z: Int }
+fn main() -> Int {
+    let o = Outer { p: Inner { a: 1, b: 2 }, z: 3 };
+    o.p.a + o.p.b + o.z
+}

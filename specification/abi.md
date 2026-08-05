@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `0` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `1` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -208,8 +208,9 @@ struct tuo_weak { tuo_shared_block[T] *ptr; }   // one word, never null
   active variant's payload, the whole sized/aligned to hold the largest variant.
   The discriminant is the variant's **declaration-order index** — byte-identical
   to the interpreter's `Value::Variant { variant, .. }`. `Option[T]` is
-  `{ 0 => None, 1 => Some(T) }`; `Result[T,E]` is `{ 0 => Ok(T), 1 => Err(E) }`,
-  matching declaration order. No niche/pointer packing in v0.
+  `{ 0 => Some(T), 1 => None }`; `Result[T,E]` is `{ 0 => Ok(T), 1 => Err(E) }`,
+  matching declaration order and the interpreter/MIR numbering (`Some`/`Ok` = 0).
+  No niche/pointer packing in v0.
 
 ## Panic / trap behavior
 
@@ -326,9 +327,10 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `0`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `1`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
-it. The version is asserted by the crate's tests so a silent reinterpretation of
+it. Version `1` corrected `Option`'s variant numbering (`Some` = 0, `None` = 1)
+to match the interpreter and MIR. The version is asserted by the crate's tests so a silent reinterpretation of
 bytes is impossible.

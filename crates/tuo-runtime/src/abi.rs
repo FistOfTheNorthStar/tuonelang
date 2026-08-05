@@ -29,11 +29,16 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 
 /// The version of the runtime ABI these layouts implement.
 ///
-/// `0` — unstable. Any change to a layout, offset, discriminant numbering,
+/// `1` — unstable. Any change to a layout, offset, discriminant numbering,
 /// calling-convention rule, or runtime-symbol meaning **must** increment this
 /// in the same commit that updates the tests pinning the affected layout.
 /// Additive, non-layout-affecting clarifications do not bump it.
-pub const ABI_VERSION: u32 = 0;
+///
+/// `1` corrects `Option`'s variant numbering to match the interpreter and MIR
+/// (`Some` = variant 0 with the payload, `None` = variant 1, empty). The prior
+/// `0` had `Option` reversed, which no backend exercised until ADR-0004 Stage 1
+/// aggregate lowering read its payload offset.
+pub const ABI_VERSION: u32 = 1;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -210,8 +215,11 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
         }
 
         // `Option`/`Result` are the two canonical two-variant enums; they lay
-        // out exactly as user enums do, in declaration order.
-        Ty::Option(inner) => enum_layout([Vec::new(), vec![(**inner).clone()]], types),
+        // out exactly as user enums do, in declaration order. The interpreter and
+        // MIR number `Some`/`Ok` = variant 0 and `None`/`Err` = variant 1, so the
+        // ABI must too (byte-identical to `Value::Variant`): `Some` carries the
+        // payload at variant 0, `None` is the empty variant 1.
+        Ty::Option(inner) => enum_layout([vec![(**inner).clone()], Vec::new()], types),
         Ty::Result(ok, err) => enum_layout([vec![(**ok).clone()], vec![(**err).clone()]], types),
 
         // No runtime value / needs substitution / internal placeholder.
@@ -340,9 +348,11 @@ pub fn variant_field_offsets(
                 .ok_or_else(|| LayoutError::new("enum variant index out of range"))?;
             fields.iter().map(|(_, ty)| ty.clone()).collect()
         }
+        // `Some` = variant 0 (payload), `None` = variant 1 (empty) — matching the
+        // interpreter and MIR's discriminant numbering.
         Ty::Option(inner) => match variant {
-            0 => Vec::new(),
-            1 => vec![(**inner).clone()],
+            0 => vec![(**inner).clone()],
+            1 => Vec::new(),
             _ => return Err(LayoutError::new("Option variant index out of range")),
         },
         Ty::Result(ok, err) => match variant {
@@ -403,10 +413,10 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_zero() {
+    fn the_abi_is_version_one() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout, never silently.
-        assert_eq!(ABI_VERSION, 0);
+        assert_eq!(ABI_VERSION, 1);
     }
 
     #[test]
@@ -472,7 +482,8 @@ mod tests {
     #[test]
     fn option_is_a_two_variant_enum_with_an_explicit_tag() {
         let t = &TypeckResult::default();
-        // Option[I64]: u32 tag, pad to 8, i64 payload at 8..16 → size 16, align 8.
+        // Option[I64]: u32 tag, pad to 8, i64 `Some` payload at 8..16 → size 16,
+        // align 8 (`Some` = variant 0, `None` = empty variant 1).
         let opt = Ty::Option(Box::new(Ty::Int(IntKind::I64)));
         assert_eq!(layout_of(&opt, t).unwrap(), Layout { size: 16, align: 8 });
         // Option[Bool]: tag(4) + bool(1) → 5, padded to align 4 → size 8.
@@ -534,11 +545,15 @@ mod tests {
     fn variant_field_offsets_sit_after_the_discriminant() {
         use super::variant_field_offsets;
         let t = &TypeckResult::default();
-        // Option[I64]: Some's payload is after the tag, padded to 8 → offset 8.
+        // Option[I64]: Some (variant 0) payload is after the tag, padded to 8 →
+        // offset 8.
         let opt = Ty::Option(Box::new(Ty::Int(IntKind::I64)));
-        assert_eq!(variant_field_offsets(&opt, 1, t).unwrap(), vec![8]);
-        // None has no payload.
-        assert_eq!(variant_field_offsets(&opt, 0, t).unwrap(), Vec::<u64>::new());
+        assert_eq!(variant_field_offsets(&opt, 0, t).unwrap(), vec![8]);
+        // None (variant 1) has no payload.
+        assert_eq!(
+            variant_field_offsets(&opt, 1, t).unwrap(),
+            Vec::<u64>::new()
+        );
         // Result[I64, I8]: Ok payload at 8 (pad to 8), Err payload at 4 (tag+align1).
         let res = Ty::Result(
             Box::new(Ty::Int(IntKind::I64)),

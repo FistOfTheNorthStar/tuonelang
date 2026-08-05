@@ -1,0 +1,7 @@
+struct P { x: Int, y: Int }
+fn id(take p: P) -> P { p }
+fn main() -> Int {
+    let a = P { x: 8, y: 9 };
+    let b = id(a);
+    b.x + b.y
+}
