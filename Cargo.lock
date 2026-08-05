@@ -1228,7 +1228,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokenizer-lab"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "serde_json",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-agent"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1252,7 +1252,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-ast"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-lexer",
  "tuo-source",
@@ -1261,7 +1261,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-bench"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-cli"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "clap",
  "serde_json",
@@ -1294,7 +1294,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-codegen"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-diagnostics",
  "tuo-mir",
@@ -1304,7 +1304,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-codegen-bench"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1320,7 +1320,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-codegen-cranelift"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cranelift-codegen",
  "cranelift-frontend",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-codegen-llvm"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "inkwell",
  "tuo-codegen",
@@ -1352,7 +1352,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-compiler"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-codegen",
@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-corpus"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1391,7 +1391,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-db"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-diagnostics",
  "tuo-source",
@@ -1399,7 +1399,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-diagnostics"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde_json",
  "tuo-source",
@@ -1407,7 +1407,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-fmt"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-diagnostics",
  "tuo-lexer",
@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-fuzz"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-compiler",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-hir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-lexer",
@@ -1450,7 +1450,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-lexer"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "logos",
@@ -1461,7 +1461,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-lsp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -1475,7 +1475,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-mir"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
@@ -1489,7 +1489,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-mir-interp"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
@@ -1504,7 +1504,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-ownership"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
@@ -1516,11 +1516,11 @@ dependencies = [
 
 [[package]]
 name = "tuo-package"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "tuo-parser"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chumsky",
  "criterion",
@@ -1534,7 +1534,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-resolve"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
@@ -1546,18 +1546,18 @@ dependencies = [
 
 [[package]]
 name = "tuo-runtime"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-types",
 ]
 
 [[package]]
 name = "tuo-source"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "tuo-spec"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",
@@ -1573,11 +1573,11 @@ dependencies = [
 
 [[package]]
 name = "tuo-stdlib"
-version = "0.0.0"
+version = "0.1.0"
 
 [[package]]
 name = "tuo-syntax"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-diagnostics",
  "tuo-lexer",
@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "tuo-types"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "tuo-ast",
  "tuo-diagnostics",

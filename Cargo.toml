@@ -9,7 +9,7 @@ members = ["crates/*", "tools/tokenizer-lab"]
 # version, edition, license, and repository information in a single place.
 # ---------------------------------------------------------------------------
 [workspace.package]
-version = "0.0.0"
+version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
