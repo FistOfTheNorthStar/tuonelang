@@ -1,0 +1,24 @@
+// Fixed-capacity arrays (ADR-0004 Stage 2): both literal forms and the
+// type form, in deliberately messy spacing.
+fn sums()->Int{
+let xs:[Int;4]=[1,2,3,4];
+let zeros = [ 0 ; 8 ];
+let empty : [Int; 0] = [ ] ;
+let trailing=[1, 2,];
+let nested:[[Bool;2];3]=[[true,false];3];
+let first=xs[ 0 ];
+let mut_grid = [ [ 1 ] ; 2 ] ;
+first+trailing[1]
+}
+
+fn iterate ( ) -> Int {
+let xs = [ 10 , 20 , 30 ] ;
+var total = 0 ;
+for x in [ 1 , 2 , 3 ] { total = total + x ; }
+for y in xs { total = total + y ; }
+total
+}
+
+spec sums {
+    then sums ( ) == 3 ;
+}

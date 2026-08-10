@@ -786,7 +786,7 @@ impl<'a> FnLower<'a> {
                 _ => Err(missing()),
             },
             Projection::Index(_) => match ty {
-                Ty::Array(item) => Ok((**item).clone()),
+                Ty::Array(item) | Ty::FixedArray(item, _) => Ok((**item).clone()),
                 _ => Err(missing()),
             },
         }
@@ -1181,6 +1181,8 @@ impl FnLower<'_> {
             }
             ExprKind::Path { res, .. } => self.path_expr(expr, res),
             ExprKind::StructLit { ctor, fields, .. } => self.struct_lit(expr, ctor, fields),
+            ExprKind::Array(elements) => self.array_lit(expr, elements),
+            ExprKind::ArrayRepeat { value, .. } => self.array_repeat(expr, value),
             ExprKind::Unary { op, operand } => self.unary(expr, *op, operand),
             ExprKind::Binary { op, lhs, rhs } => self.binary(expr, *op, lhs, rhs),
             ExprKind::Range { lo, hi } => {
@@ -1365,6 +1367,82 @@ impl FnLower<'_> {
                 kind: AggregateKind::Adt {
                     ty: ty.clone(),
                     variant,
+                },
+                fields,
+            },
+            ty,
+            expr.span,
+        )?;
+        Ok(Some(Value::Place(place)))
+    }
+
+    /// Lower a list-form array literal `[a, b, c]` (ADR-0004 Stage 2):
+    /// evaluate the elements left to right, then one `Aggregate` with
+    /// [`AggregateKind::Array`]. Non-`Copy` element operands are `Move`,
+    /// mirroring `Adt` field lowering.
+    fn array_lit(&mut self, expr: &Expr, elements: &[Expr]) -> Lowered {
+        let ty = self.expr_ty(expr)?;
+        let Ty::FixedArray(element_ty, len) = &ty else {
+            return Err("array literal has a non-array type (compiler bug guard)".to_owned());
+        };
+        let (element_ty, len) = ((**element_ty).clone(), *len);
+        let mut fields = Vec::new();
+        for (position, element) in elements.iter().enumerate() {
+            let Some(value) = self.expr(element)? else {
+                return Ok(None);
+            };
+            let operand = self.use_value(value, &element_ty);
+            let later: Vec<&Expr> = elements[position + 1..].iter().collect();
+            let operand = self.freeze_before(operand, element.span, &later)?;
+            fields.push(operand);
+        }
+        let place = self.assign_temp(
+            Rvalue::Aggregate {
+                kind: AggregateKind::Array {
+                    element: element_ty,
+                    len,
+                },
+                fields,
+            },
+            ty,
+            expr.span,
+        )?;
+        Ok(Some(Value::Place(place)))
+    }
+
+    /// Lower a repeat-form array literal `[x; N]` (ADR-0004 Stage 2):
+    /// evaluate the operand **once**, then one `Aggregate` whose fields are
+    /// `N` copies of `Operand::Copy` of it — legal because the front end
+    /// required a `Copy` element (O0010). `N == 0` still evaluates the
+    /// operand once (its value is then dead; the drop is a no-op since it
+    /// is `Copy`). A deliberate O(N)-statements expansion — no
+    /// `Rvalue::Repeat`, no loop — bounded by `MAX_FIXED_ARRAY_LEN`.
+    fn array_repeat(&mut self, expr: &Expr, value: &Expr) -> Lowered {
+        let ty = self.expr_ty(expr)?;
+        let Ty::FixedArray(element_ty, len) = &ty else {
+            return Err("array literal has a non-array type (compiler bug guard)".to_owned());
+        };
+        let (element_ty, len) = ((**element_ty).clone(), *len);
+        if !self.is_copy(&element_ty) {
+            // The front end rejects this (O0010); refuse rather than emit
+            // an illegal N-fold duplication if it ever slips through.
+            return Err("a repeat literal of a non-`Copy` element is not lowered".to_owned());
+        }
+        let Some(lowered) = self.expr(value)? else {
+            return Ok(None);
+        };
+        let source = self.place_of(lowered, &element_ty, value.span)?;
+        let fields = vec![
+            Operand::Copy(source);
+            usize::try_from(len).map_err(|_| {
+                "fixed-array length exceeds the addressable range".to_owned()
+            })?
+        ];
+        let place = self.assign_temp(
+            Rvalue::Aggregate {
+                kind: AggregateKind::Array {
+                    element: element_ty,
+                    len,
                 },
                 fields,
             },
@@ -1576,11 +1654,18 @@ impl FnLower<'_> {
         let index_op = Self::read_value(index_value);
         let index_place =
             self.assign_temp(Rvalue::Use(index_op), Ty::Int(IntKind::Usize), index.span)?;
-        let len = self.assign_temp(
-            Rvalue::Len(base_place.clone()),
-            Ty::Int(IntKind::Usize),
-            index.span,
-        )?;
+        // A `[T; N]`'s length never exists at runtime: it is a constant,
+        // and `Rvalue::Len` stays a growable-`Array`-only operation
+        // (ADR-0004 Stage 2). Everything downstream of the `len` temp —
+        // the `Lt` compare, the `Assert`, the `Index` projection — is
+        // identical for both array types.
+        let len_rvalue = match &base_ty {
+            Ty::FixedArray(_, n) => {
+                Rvalue::Use(Operand::Const(Const::Int(i128::from(*n), IntKind::Usize)))
+            }
+            _ => Rvalue::Len(base_place.clone()),
+        };
+        let len = self.assign_temp(len_rvalue, Ty::Int(IntKind::Usize), index.span)?;
         let cond = self.assign_temp(
             Rvalue::Binary {
                 op: BinOp::Lt,
@@ -1848,7 +1933,7 @@ impl FnLower<'_> {
         self.push_scope();
         let outcome = match &iter_ty {
             Ty::Range(item) => self.for_range(binding, iter, item, body),
-            Ty::Array(item) => self.for_array(binding, iter, item, body),
+            Ty::Array(item) | Ty::FixedArray(item, _) => self.for_array(binding, iter, item, body),
             _ => Err("`for` iterates ranges and arrays in v0".to_owned()),
         };
         match outcome {
@@ -1973,7 +2058,10 @@ impl FnLower<'_> {
                 "iterating an array of non-`Copy` elements is not lowered in v0".to_owned(),
             );
         }
-        let array_ty = Ty::Array(Box::new(item.clone()));
+        // The iterable is either the growable `Array[T]` or the fixed
+        // `[T; N]` (ADR-0004 Stage 2); the counted loop is identical, only
+        // the `len` source differs below.
+        let array_ty = self.expr_ty(iter)?;
         let Some(value) = self.expr(iter)? else {
             return Ok(None);
         };
@@ -1993,11 +2081,15 @@ impl FnLower<'_> {
             Ty::Int(IntKind::Usize),
             iter.span,
         )?;
-        let len = self.assign_temp(
-            Rvalue::Len(array.clone()),
-            Ty::Int(IntKind::Usize),
-            iter.span,
-        )?;
+        // As in `index_expr`: a `[T; N]`'s length is a constant, never a
+        // `Rvalue::Len`.
+        let len_rvalue = match &array_ty {
+            Ty::FixedArray(_, n) => {
+                Rvalue::Use(Operand::Const(Const::Int(i128::from(*n), IntKind::Usize)))
+            }
+            _ => Rvalue::Len(array.clone()),
+        };
+        let len = self.assign_temp(len_rvalue, Ty::Int(IntKind::Usize), iter.span)?;
         let element = match binding {
             Some(symbol) => self.local_for(symbol, iter.span)?,
             None => self.temp(item.clone(), iter.span),
@@ -2794,6 +2886,8 @@ fn can_write(expr: &Expr) -> bool {
             false
         }
         ExprKind::StructLit { fields, .. } => fields.iter().any(|field| can_write(&field.value)),
+        ExprKind::Array(elements) => elements.iter().any(can_write),
+        ExprKind::ArrayRepeat { value, .. } => can_write(value),
         ExprKind::Unary { operand, .. } => can_write(operand),
         ExprKind::Binary { lhs, rhs, .. } => can_write(lhs) || can_write(rhs),
         ExprKind::Range { lo, hi } => can_write(lo) || can_write(hi),
@@ -2842,9 +2936,11 @@ fn contains_error(ty: &Ty) -> bool {
         | Ty::Float(_)
         | Ty::Param(_) => false,
         Ty::Tuple(items) => items.iter().any(contains_error),
-        Ty::Array(item) | Ty::Range(item) | Ty::Option(item) | Ty::Wrapper(_, item) => {
-            contains_error(item)
-        }
+        Ty::Array(item)
+        | Ty::FixedArray(item, _)
+        | Ty::Range(item)
+        | Ty::Option(item)
+        | Ty::Wrapper(_, item) => contains_error(item),
         Ty::Result(ok, err) => contains_error(ok) || contains_error(err),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_error),
         Ty::Fn(fn_ty) => fn_ty.params.iter().any(contains_error) || contains_error(&fn_ty.ret),
@@ -2868,6 +2964,7 @@ fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
                 .collect(),
         ),
         Ty::Array(item) => Ty::Array(Box::new(instantiate(item, params, args))),
+        Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(instantiate(item, params, args)), *n),
         Ty::Range(item) => Ty::Range(Box::new(instantiate(item, params, args))),
         Ty::Option(item) => Ty::Option(Box::new(instantiate(item, params, args))),
         Ty::Result(ok, err) => Ty::Result(

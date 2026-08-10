@@ -1,0 +1,9 @@
+T0014@552..558 fixed-size array length 100000 exceeds the maximum 65536 | expected count 65536 | actual count 100000
+T0001@200..209 mismatched types | expected type `[I64; 4]` | actual type `[_; 3]`
+T0001@271..275 mismatched types | expected type `I64` | actual type `Bool`
+T0014@348..352 a fixed-size array length must be a plain integer literal | actual name `8i64`
+T0014@421..425 a fixed-size array length must be a plain integer literal | actual name `3u32`
+T0014@497..502 fixed-size array length 65537 exceeds the maximum 65536 | expected count 65536 | actual count 65537
+T0011@629..631 type annotation needed
+T0001@721..722 mismatched types | expected type `Usize` | actual type `I32`
+T0006@780..787 operator `index` is not supported for type `Bool` | actual type `Bool`

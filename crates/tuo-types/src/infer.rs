@@ -76,6 +76,7 @@ impl InferCtx {
             Ty::Var(var) => Ty::Var(var),
             Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| self.apply(item)).collect()),
             Ty::Array(item) => Ty::Array(Box::new(self.apply(&item))),
+            Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(self.apply(&item)), n),
             Ty::Range(item) => Ty::Range(Box::new(self.apply(&item))),
             Ty::Fn(fn_ty) => Ty::Fn(Box::new(FnTy {
                 params: fn_ty.params.iter().map(|param| self.apply(param)).collect(),
@@ -101,9 +102,11 @@ impl InferCtx {
         match self.shallow(ty) {
             Ty::Var(other) => other == var,
             Ty::Tuple(items) => items.iter().any(|item| self.occurs(var, item)),
-            Ty::Array(item) | Ty::Range(item) | Ty::Option(item) | Ty::Wrapper(_, item) => {
-                self.occurs(var, &item)
-            }
+            Ty::Array(item)
+            | Ty::FixedArray(item, _)
+            | Ty::Range(item)
+            | Ty::Option(item)
+            | Ty::Wrapper(_, item) => self.occurs(var, &item),
             Ty::Fn(fn_ty) => {
                 fn_ty.params.iter().any(|param| self.occurs(var, param))
                     || self.occurs(var, &fn_ty.ret)
@@ -199,6 +202,10 @@ impl InferCtx {
                 Ok(())
             }
             (Ty::Array(a), Ty::Array(b)) | (Ty::Range(a), Ty::Range(b)) => self.unify(&a, &b),
+            // Fixed-array lengths are concrete `u64`s — there are no length
+            // variables and no length inference in v0; differing lengths
+            // fall through to the mismatch arm.
+            (Ty::FixedArray(a, n), Ty::FixedArray(b, m)) if n == m => self.unify(&a, &b),
             (Ty::Option(a), Ty::Option(b)) => self.unify(&a, &b),
             (Ty::Result(a_ok, a_err), Ty::Result(b_ok, b_err)) => {
                 self.unify(&a_ok, &b_ok)?;

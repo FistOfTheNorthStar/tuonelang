@@ -20,10 +20,11 @@
 //!   host-injected [`NativeRunner`](runtime::NativeRunner) (the CLI's real
 //!   Cranelift+`cc` builder). Nothing is simulated.
 //! - **Report only what exists.** tuonelang v0 runs the scalar, control-flow
-//!   core and nothing else, so [`runtime`]'s allocation/collections/string/
-//!   networking workloads are tagged [`Unsupported`](runtime::Support::Unsupported)
-//!   with the exact reason and emit **no number**. A comparison exists only where
-//!   a peer language shares the workload's semantics ([`compare`]).
+//!   core plus the fixed-capacity array `[T; N]` and nothing else, so
+//!   [`runtime`]'s allocation/string/networking workloads are tagged
+//!   [`Unsupported`](runtime::Support::Unsupported) with the exact reason and
+//!   emit **no number**. A comparison exists only where a peer language shares
+//!   the workload's semantics ([`compare`]).
 //! - **No claim without a number.** [`compare::Verdict`] reaches `Measured` only
 //!   when both languages actually ran under recorded toolchains; otherwise it is
 //!   `Skipped` with the reason. [`report::render_human`] carries no superlative

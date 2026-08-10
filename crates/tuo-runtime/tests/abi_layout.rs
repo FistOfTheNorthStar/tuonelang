@@ -59,6 +59,32 @@ fn the_str_slice_header_matches_a_two_word_repr_c_struct() {
 }
 
 #[test]
+fn fixed_arrays_match_rust_repr_c_arrays() {
+    // ADR-0004 Stage 2: `[T; N]` is inline — size = N × stride(T),
+    // align = align(T), element i at i × stride(T) — exactly a Rust `[T; N]`.
+    let fixed = |elem: Ty, n: u64| Ty::FixedArray(Box::new(elem), n);
+    // [I8; 3] = size 3 / align 1.
+    assert_eq!(abi(&fixed(Ty::Int(IntKind::I8), 3)), repr_c::<[i8; 3]>());
+    // [I32; 0] = size 0 / align 4 — a ZST that still aligns like I32.
+    assert_eq!(abi(&fixed(Ty::Int(IntKind::I32), 0)), repr_c::<[i32; 0]>());
+    // [I64; 4] = size 32 / align 8.
+    assert_eq!(abi(&fixed(Ty::Int(IntKind::I64), 4)), repr_c::<[i64; 4]>());
+    // [(I8, I32); 2]: the element strides at 8 (tail padding included), so
+    // size 16 / align 4.
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Pair {
+        a: i8,
+        b: i32,
+    }
+    let pair = Ty::Tuple(vec![Ty::Int(IntKind::I8), Ty::Int(IntKind::I32)]);
+    assert_eq!(abi(&fixed(pair, 2)), repr_c::<[Pair; 2]>());
+    // Nesting: [[I8; 3]; 2] = size 6 / align 1.
+    let inner = fixed(Ty::Int(IntKind::I8), 3);
+    assert_eq!(abi(&fixed(inner, 2)), repr_c::<[[i8; 3]; 2]>());
+}
+
+#[test]
 fn a_mixed_tuple_packs_exactly_like_repr_c() {
     // (I8, I32, I8): i8@0, pad, i32@4, i8@8, pad to align 4 → size 12, align 4.
     #[repr(C)]

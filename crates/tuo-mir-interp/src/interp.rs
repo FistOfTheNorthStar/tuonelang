@@ -542,6 +542,13 @@ impl Machine<'_, '_> {
                         fields: values,
                     },
                     AggregateKind::Range => Value::Aggregate(values),
+                    // A fixed-size array `[T; N]` (ADR-0004 Stage 2): the
+                    // operands are its elements in index order. Indexing,
+                    // drops, and `value_cost` over `Value::Array` already
+                    // apply; `Rvalue::Len` never sees one (the verifier
+                    // rejects it), so the `Internal`-trap guard there stays
+                    // honest.
+                    AggregateKind::Array { .. } => Value::Array(values),
                 })
             }
             Rvalue::Discriminant(place) => {

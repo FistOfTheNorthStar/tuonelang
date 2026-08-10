@@ -25,14 +25,17 @@
 //!   and written by index, held in a register;
 //! - a **unit** local carries no value;
 //! - an **aggregate** local (a Stage-1 product type — struct/tuple/enum whose
-//!   transitive fields are all scalars) gets one explicit [`StackSlot`], and its
-//!   fields are accessed by computing a byte address into the slot from the
-//!   runtime ABI's offsets (see [`tuo_runtime::abi`]).
+//!   transitive fields are all scalars — or an ADR-0004 Stage 2 fixed array
+//!   `[T; N]`) gets one explicit [`StackSlot`], and its fields/elements are
+//!   accessed by computing a byte address into the slot from the runtime ABI's
+//!   offsets (see [`tuo_runtime::abi`]).
 //!
-//! A local whose type has no v0 layout at all (arrays, strings, floats, wrapped
-//! or heap-backed aggregates — Stage 2) still makes the whole function
-//! unsupported. Aggregate lowering follows ADR-0004 Stage 1: product types only,
-//! scalar leaves, by-pointer/sret call ABI.
+//! A local whose type has no v0 layout at all (growable `Array[T]`, strings,
+//! floats, heap-backed aggregates) still makes the whole function unsupported.
+//! Aggregate lowering follows ADR-0004: scalar leaves, by-pointer/sret call
+//! ABI. Fixed arrays are laid out inline — element `i` at `i × stride(T)` —
+//! and indexed by unchecked address arithmetic, because MIR asserts the bounds
+//! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use.
 
 use std::collections::HashMap;
 
@@ -98,9 +101,8 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type has no v0 runtime layout — the same
-/// cases the scalar path refused before Stage 1 (arrays, strings, floats,
-/// heap-backed or otherwise non-Stage-1 aggregates).
+/// [`CodegenError::unsupported`] if the type has no v0 runtime layout (the
+/// growable `Array[T]`, strings, floats, heap-backed aggregates).
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
     if scalar_type(ty).is_some() {
         return Ok(Storage::Scalar);
@@ -108,9 +110,9 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
     if matches!(ty, Ty::Unit) {
         return Ok(Storage::Unit);
     }
-    // Not scalar, not unit: it must be a Stage-1 aggregate with a real layout.
-    // `layout_of` refuses arrays/strings/floats/wrappers transitively, so a
-    // successful non-zero layout is exactly a scalar-only product type.
+    // Not scalar, not unit: it must be an aggregate with a real layout — a
+    // scalar-leaf product type (Stage 1) or a fixed array `[T; N]` (Stage 2).
+    // `layout_of` refuses growable arrays/strings/floats/wrappers transitively.
     match layout_of(ty, types) {
         Ok(layout) if layout.size == 0 => Ok(Storage::Unit),
         Ok(layout) => Ok(Storage::Aggregate(layout)),
@@ -456,6 +458,9 @@ impl<'a> Lowering<'a> {
     fn lower_assign(&mut self, place: &Place, rvalue: &Rvalue) -> Result<(), CodegenError> {
         match rvalue {
             Rvalue::Aggregate { kind, fields } => self.lower_aggregate(place, kind, fields),
+            // A unit-valued copy/move (a unit local, or a zero-sized aggregate
+            // such as `[T; 0]`) carries no bytes: nothing to emit.
+            Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
             Rvalue::Use(operand) if self.operand_is_aggregate(operand) => {
                 // Whole-aggregate copy/move: memcpy from the source place's slot
                 // into the destination's byte storage.
@@ -718,8 +723,13 @@ impl<'a> Lowering<'a> {
                 "aggregate construction reached the scalar rvalue path",
             )),
             Rvalue::Discriminant(place) => self.lower_discriminant(place),
+            // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
+            // length is lowered as a constant and the MIR verifier rejects
+            // `Len` of a fixed-array place), so refusing it entirely stays
+            // sound for fixed arrays.
             Rvalue::Len(_) => Err(CodegenError::unsupported(
-                "array length is not lowered by the Cranelift backend yet (Stage 2)",
+                "the growable `Array[T]` (and its `Len`) is not lowered by the Cranelift \
+                 backend yet",
             )),
         }
     }
@@ -971,8 +981,11 @@ impl<'a> Lowering<'a> {
 
     /// The shared address walk: resolve `place` to a `(byte address, leaf type)`
     /// pair by starting at the root local's slot base and advancing by each
-    /// projection's ABI offset. Only aggregate-slot roots admit a non-empty
-    /// projection; `Index` is refused (arrays are Stage 2).
+    /// projection's ABI offset. A `Field`/`VariantField` step advances by a
+    /// constant ABI offset; an `Index` step advances by the runtime index value
+    /// times the element stride — **unchecked**, because MIR asserts the bounds
+    /// (`Assert { IndexOutOfBounds }`) before every `Index` use, exactly like
+    /// the interpreter's post-check access.
     ///
     /// This is the single place both scalar field read/write and whole-aggregate
     /// operations compute a field address, so the two code paths cannot diverge.
@@ -983,20 +996,29 @@ impl<'a> Lowering<'a> {
                 let base = self.builder.ins().stack_addr(self.pointer_type, *slot, 0);
                 (base, ty.clone())
             }
+            // A zero-sized aggregate root (e.g. `[T; 0]`) classifies as unit
+            // storage yet may still be projected in MIR — only in code the
+            // preceding bounds `Assert` makes unreachable at runtime (any index
+            // into a zero-length array traps first). Give it a null base; no
+            // load/store computed from it can ever execute.
+            LocalKind::Unit if !place.projection.is_empty() => (
+                self.builder.ins().iconst(self.pointer_type, 0),
+                self.function.locals[local].ty.clone(),
+            ),
             LocalKind::Scalar(..) | LocalKind::Unit if place.projection.is_empty() => {
                 return Err(CodegenError::backend(
                     "place_address called on a non-aggregate local with no projection",
                 ));
             }
             LocalKind::Scalar(..) | LocalKind::Unit => {
-                // A projection on a scalar/unit local is impossible in
-                // well-formed MIR; refuse rather than mis-address.
+                // A projection on a scalar local is impossible in well-formed
+                // MIR; refuse rather than mis-address.
                 return Err(CodegenError::backend("projection on a non-aggregate local"));
             }
         };
 
         for step in &place.projection {
-            let offset = match step {
+            match step {
                 Projection::Field(index) => {
                     let offsets = struct_field_offsets(&cur_ty, self.types)
                         .map_err(|error| self.layout_error(error))?;
@@ -1005,7 +1027,9 @@ impl<'a> Lowering<'a> {
                         CodegenError::backend("struct/tuple field index out of range")
                     })?;
                     cur_ty = self.field_type(&cur_ty, i)?;
-                    offset
+                    let offset = i64::try_from(offset)
+                        .map_err(|_| CodegenError::backend("field offset exceeds i64"))?;
+                    addr = self.builder.ins().iadd_imm(addr, offset);
                 }
                 Projection::VariantField { variant, field } => {
                     let offsets = variant_field_offsets(&cur_ty, *variant as usize, self.types)
@@ -1015,17 +1039,37 @@ impl<'a> Lowering<'a> {
                         .get(f)
                         .ok_or_else(|| CodegenError::backend("variant field index out of range"))?;
                     cur_ty = self.variant_field_type(&cur_ty, *variant as usize, f)?;
-                    offset
+                    let offset = i64::try_from(offset)
+                        .map_err(|_| CodegenError::backend("field offset exceeds i64"))?;
+                    addr = self.builder.ins().iadd_imm(addr, offset);
                 }
-                Projection::Index(_) => {
-                    return Err(CodegenError::unsupported(
-                        "array indexing is not lowered by the Cranelift backend yet (Stage 2)",
-                    ));
+                Projection::Index(index_local) => {
+                    // Only the fixed `[T; N]` is indexable natively; element
+                    // `i` lives at `i × stride(T)` (the ABI's inline layout).
+                    let element = match &cur_ty {
+                        Ty::FixedArray(element, _) => (**element).clone(),
+                        _ => {
+                            return Err(CodegenError::unsupported(
+                                "indexing the growable `Array[T]` is not lowered by the \
+                                 Cranelift backend (only the fixed `[T; N]` is)",
+                            ));
+                        }
+                    };
+                    let stride = i64::try_from(self.layout(&element)?.stride())
+                        .map_err(|_| CodegenError::backend("element stride exceeds i64"))?;
+                    // The index is a `Usize` scalar local, pre-asserted in
+                    // bounds by the MIR before this use.
+                    let index_value = match &self.kinds[index_local.0 as usize] {
+                        LocalKind::Scalar(var, _) => self.builder.use_var(*var),
+                        _ => {
+                            return Err(CodegenError::backend("array index local is not a scalar"));
+                        }
+                    };
+                    let scaled = self.builder.ins().imul_imm(index_value, stride);
+                    addr = self.builder.ins().iadd(addr, scaled);
+                    cur_ty = element;
                 }
-            };
-            let offset = i64::try_from(offset)
-                .map_err(|_| CodegenError::backend("field offset exceeds i64"))?;
-            addr = self.builder.ins().iadd_imm(addr, offset);
+            }
         }
         Ok((addr, cur_ty))
     }
@@ -1035,7 +1079,8 @@ impl<'a> Lowering<'a> {
     /// For an enum-like type the u32 discriminant is stored at offset 0 first;
     /// for a struct/tuple no tag is written. Each field operand is then stored at
     /// its ABI offset — a scalar field with a scalar store, a nested-aggregate
-    /// field with a whole-aggregate memcpy from its source slot.
+    /// field with a whole-aggregate memcpy from its source slot. A fixed-array
+    /// aggregate takes its own path (element `i` at `i × stride`).
     fn lower_aggregate(
         &mut self,
         dest: &Place,
@@ -1048,6 +1093,9 @@ impl<'a> Lowering<'a> {
                 return Err(CodegenError::unsupported(
                     "range construction is not lowered by the Cranelift backend (Stage 2)",
                 ));
+            }
+            tuo_mir::AggregateKind::Array { element, len } => {
+                return self.lower_array_aggregate(dest, element, *len, fields);
             }
         };
 
@@ -1097,6 +1145,54 @@ impl<'a> Lowering<'a> {
                 self.builder
                     .ins()
                     .store(MemFlags::trusted(), value, field_addr, 0);
+            }
+        }
+        Ok(())
+    }
+
+    /// Materialize an `AggregateKind::Array { element, len }` — a fixed-size
+    /// array value `[element; len]` — into `dest`'s byte storage: the operands
+    /// are the `len` elements in index order, and element `i` is stored at byte
+    /// offset `i × stride(element)` per the runtime ABI's inline layout
+    /// (`abi::layout_of`; no header, no allocation). A scalar element is a
+    /// scalar store; a nested-aggregate element is a whole-aggregate memcpy —
+    /// mirroring `lower_aggregate`'s field dispatch.
+    fn lower_array_aggregate(
+        &mut self,
+        dest: &Place,
+        element: &Ty,
+        len: u64,
+        fields: &[Operand],
+    ) -> Result<(), CodegenError> {
+        if fields.len() as u64 != len {
+            return Err(CodegenError::backend(
+                "fixed-array operand count does not match its length",
+            ));
+        }
+        let elem_layout = self.layout(element)?;
+        let stride = elem_layout.stride();
+        // A zero-sized array (`len == 0`, or a zero-sized element type) has no
+        // bytes to write and its destination classifies as unit storage — the
+        // construction is a no-op (element operands are `Copy`/`Move`/`Const`
+        // places, which carry no side effect to preserve).
+        if len == 0 || stride == 0 {
+            return Ok(());
+        }
+        let base = self.aggregate_dest_address(dest)?;
+        for (i, operand) in fields.iter().enumerate() {
+            let offset = (i as u64)
+                .checked_mul(stride)
+                .and_then(|offset| i64::try_from(offset).ok())
+                .ok_or_else(|| CodegenError::backend("array element offset exceeds i64"))?;
+            let element_addr = self.builder.ins().iadd_imm(base, offset);
+            if self.operand_is_aggregate(operand) {
+                let src = self.operand_aggregate_address(operand)?;
+                self.emit_memcpy(element_addr, src, elem_layout);
+            } else {
+                let value = self.lower_operand(operand)?;
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), value, element_addr, 0);
             }
         }
         Ok(())
@@ -1222,8 +1318,7 @@ impl<'a> Lowering<'a> {
 
     // ----- aggregate helpers -----
 
-    /// The declared type of `place`, following its projections. Used only for
-    /// classifying the call-site destination.
+    /// The declared type of `place`, following its projections to the leaf.
     fn place_type(&self, place: &Place) -> Ty {
         let mut cur = self.function.locals[place.local.0 as usize].ty.clone();
         for step in &place.projection {
@@ -1232,7 +1327,12 @@ impl<'a> Lowering<'a> {
                 Projection::VariantField { variant, field } => self
                     .variant_field_type(&cur, *variant as usize, *field as usize)
                     .unwrap_or(Ty::Error),
-                Projection::Index(_) => Ty::Error,
+                // Indexing yields the element type (growable or fixed; only
+                // the fixed `[T; N]` is lowered, but the type walk is total).
+                Projection::Index(_) => match cur {
+                    Ty::Array(element) | Ty::FixedArray(element, _) => (*element).clone(),
+                    _ => Ty::Error,
+                },
             };
         }
         cur
@@ -1302,18 +1402,14 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// Whether an operand refers to an aggregate value (a bare-local place whose
-    /// declared type is a Stage-1 aggregate). Projected operands are scalar
-    /// leaves in Stage 1, so they are never whole aggregates.
+    /// Whether an operand refers to an aggregate value: a place whose leaf type
+    /// (the declared type of a bare local, or the projected leaf — e.g. a
+    /// struct-typed array element) classifies as aggregate storage.
     fn operand_is_aggregate(&self, operand: &Operand) -> bool {
         match operand {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            Operand::Copy(place) | Operand::Move(place) => {
                 matches!(
-                    classify_storage(
-                        &self.function.locals[place.local.0 as usize].ty,
-                        self.types,
-                        &self.function.name,
-                    ),
+                    classify_storage(&self.place_type(place), self.types, &self.function.name),
                     Ok(Storage::Aggregate(_))
                 )
             }
@@ -1340,9 +1436,11 @@ impl<'a> Lowering<'a> {
         }
     }
 
-    /// The base address of the aggregate an operand names (a `Copy`/`Move` of a
-    /// bare aggregate local). Used for whole-aggregate copies/moves. A move
-    /// leaves the source husk untouched: a Stage-1 aggregate owns no heap, so no
+    /// The base address of the aggregate an operand names: a `Copy`/`Move` of a
+    /// bare aggregate local's slot, or of a projected place whose leaf is an
+    /// aggregate (e.g. a struct-typed array element), resolved through the
+    /// shared address walk. Used for whole-aggregate copies/moves. A move
+    /// leaves the source husk untouched: a v0 aggregate owns no heap, so no
     /// zeroing is needed (the ownership checker forbids re-reading a moved value).
     fn operand_aggregate_address(&mut self, operand: &Operand) -> Result<ClifValue, CodegenError> {
         match operand {
@@ -1355,6 +1453,10 @@ impl<'a> Lowering<'a> {
                         "aggregate address requested for a non-aggregate local",
                     )),
                 }
+            }
+            Operand::Copy(place) | Operand::Move(place) => {
+                let (addr, _leaf) = self.place_address(place)?;
+                Ok(addr)
             }
             _ => Err(CodegenError::backend(
                 "aggregate address requested for a non-place operand",

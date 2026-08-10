@@ -1,0 +1,88 @@
+SourceFile
+  FnDecl literals
+    Returns `Int`
+    Block
+      Let `empty` ty=`[Int; 0]`
+        ArrayLiteral (list)
+      Let `list`
+        ArrayLiteral (list)
+          Literal `1`
+          Literal `2`
+          Literal `3`
+      Let `trailing`
+        ArrayLiteral (list)
+          Literal `1`
+          Literal `2`
+          Literal `3`
+      Let `repeat`
+        ArrayLiteral (repeat) len=`8`
+          Literal `0`
+      Let `nested` ty=`[[Bool; 2]; 3]`
+        ArrayLiteral (repeat) len=`3`
+          ArrayLiteral (list)
+            Literal `true`
+            Literal `false`
+      Let `separators`
+        ArrayLiteral (repeat) len=`1_024`
+          Literal `0`
+      Tail
+        Binary `+`
+          Binary `+`
+            Binary `+`
+              Index
+                Path `list`
+                Literal `0`
+              Index
+                Path `trailing`
+                Literal `1`
+            Index
+              Path `repeat`
+              Literal `7`
+          Index
+            Path `separators`
+            Literal `9`
+  FnDecl indexing
+    Param in xs ty=`[Int; 4]`
+    Returns `Int`
+    Block
+      Tail
+        Binary `+`
+          Index
+            Path `xs`
+            Literal `0`
+          Index
+            ArrayLiteral (list)
+              Literal `10`
+              Literal `20`
+            Literal `1`
+  FnDecl iteration
+    Returns `Int`
+    Block
+      Var `total`
+        Literal `0`
+      ExprStatement
+        For `x`
+          ArrayLiteral (list)
+            Literal `1`
+            Literal `2`
+            Literal `3`
+          Block
+            ExprStatement
+              Assign
+                Path `total`
+                Binary `+`
+                  Path `total`
+                  Path `x`
+      Tail
+        Path `total`
+  FnDecl types
+    Param in grid ty=`[[Int; 2]; 2]`
+    Param take row ty=`[Int; 2]`
+    Returns `[Int; 2]`
+    Block
+      Let `picked` ty=`[Int; 2]`
+        Index
+          Path `grid`
+          Literal `0`
+      Tail
+        Path `picked`

@@ -8,7 +8,7 @@
 use std::fmt::Write as _;
 
 use crate::Ast;
-use crate::expr::{ElseBranch, Expr};
+use crate::expr::{ArrayLiteralKind, ElseBranch, Expr};
 use crate::item::{FnDecl, Item, SpecStatement};
 use crate::pat::Pattern;
 use crate::stmt::{Block, Statement};
@@ -323,6 +323,19 @@ impl Printer {
                     }
                 }
             }
+            Expr::ArrayLiteral(lit) => match lit.kind() {
+                Some(ArrayLiteralKind::List(elements)) => {
+                    self.line(depth, "ArrayLiteral (list)");
+                    for element in elements {
+                        self.expr(depth + 1, element);
+                    }
+                }
+                Some(ArrayLiteralKind::Repeat { value, len }) => {
+                    self.line(depth, &format!("ArrayLiteral (repeat) len=`{}`", len.text));
+                    self.expr(depth + 1, value);
+                }
+                None => self.line(depth, "ArrayLiteral (malformed)"),
+            },
             Expr::Unary(unary) => {
                 self.line(depth, &format!("Unary `{}`", unary.op().unwrap_or("?")));
                 if let Some(operand) = unary.operand() {

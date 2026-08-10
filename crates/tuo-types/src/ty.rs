@@ -7,6 +7,15 @@
 
 use tuo_resolve::{Resolution, SymbolId};
 
+/// The largest length a fixed-size array type `[T; N]` may declare
+/// (ADR-0004 Stage 2).
+///
+/// The repeat literal `[x; N]` lowers to `N` explicit MIR operands, so an
+/// unbounded `N` would be a compile-time blowup; the cap keeps that
+/// expansion small until a dedicated `Rvalue::Repeat` lifts it (never
+/// silently raised — see the ADR).
+pub const MAX_FIXED_ARRAY_LEN: u64 = 65_536;
+
 /// A signed or unsigned integer type of exactly specified width
 /// (Constitution §10). `Isize`/`Usize` are pointer-width; `Usize` is the
 /// index/length type.
@@ -150,6 +159,10 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     /// `Array[T]` — the builtin homogeneous array, indexed by `Usize`.
     Array(Box<Ty>),
+    /// `[T; N]` — the inline fixed-length array; `N` elements of `T`,
+    /// length part of the type. Distinct from `Array[T]`, the growable
+    /// heap sequence. (ADR-0004 Stage 2.)
+    FixedArray(Box<Ty>, u64),
     /// The type of `a .. b` ranges (internal; iterable by `for`).
     Range(Box<Ty>),
     /// A function type.
@@ -218,6 +231,7 @@ impl Ty {
                 format!("({})", inner.join(", "))
             }
             Self::Array(item) => format!("Array[{}]", item.render(resolution)),
+            Self::FixedArray(elem, n) => format!("[{}; {n}]", elem.render(resolution)),
             Self::Range(item) => format!("Range[{}]", item.render(resolution)),
             Self::Fn(fn_ty) => {
                 let params: Vec<String> = fn_ty

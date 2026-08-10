@@ -28,16 +28,19 @@
 //! - a **scalar** local (bool/char/int) is an `alloca` of a single integer, read
 //!   with `load` and written with `store`; `mem2reg` promotes it to a register;
 //! - a **unit** local carries no value;
-//! - an **aggregate** local (a Stage-1 product type) is an `alloca` of the
-//!   aggregate's exact byte layout, force-aligned to the ABI alignment, whose
-//!   fields are accessed by GEP-ing a byte offset from the ABI (see
-//!   [`tuo_runtime::abi`]).
+//! - an **aggregate** local (a Stage-1 product type, or an ADR-0004 Stage 2
+//!   fixed array `[T; N]`) is an `alloca` of the aggregate's exact byte layout,
+//!   force-aligned to the ABI alignment, whose fields/elements are accessed by
+//!   GEP-ing a byte offset from the ABI (see [`tuo_runtime::abi`]).
 //!
-//! A local whose type has no v0 layout (arrays, strings, floats, heap-backed
-//! aggregates — Stage 2) still makes the whole function unsupported. Aggregate
-//! lowering follows ADR-0004 Stage 1 and is byte-for-byte identical to the
-//! Cranelift backend: product types only, scalar leaves, by-pointer/sret call
-//! ABI, every size/offset from the runtime ABI.
+//! A local whose type has no v0 layout (the growable `Array[T]`, strings,
+//! floats, heap-backed aggregates) still makes the whole function unsupported.
+//! Aggregate lowering follows ADR-0004 and is byte-for-byte identical to the
+//! Cranelift backend: scalar leaves, by-pointer/sret call ABI, every
+//! size/offset from the runtime ABI. Fixed arrays are laid out inline —
+//! element `i` at `i × stride(T)` — and indexed by unchecked address
+//! arithmetic, because MIR asserts the bounds (`Assert { IndexOutOfBounds }`)
+//! before every `Projection::Index` use.
 
 use std::collections::HashMap;
 
@@ -396,6 +399,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_assign(&mut self, place: &Place, rvalue: &Rvalue) -> Result<(), CodegenError> {
         match rvalue {
             Rvalue::Aggregate { kind, fields } => self.lower_aggregate(place, kind, fields),
+            // A unit-valued copy/move (a unit local, or a zero-sized aggregate
+            // such as `[T; 0]`) carries no bytes: nothing to emit.
+            Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
             Rvalue::Use(operand) if self.operand_is_aggregate(operand) => {
                 let (dest_addr, dest_ty) = self.place_address(place)?;
                 let layout = self.layout(&dest_ty)?;
@@ -642,8 +648,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 "aggregate construction reached the scalar rvalue path",
             )),
             Rvalue::Discriminant(place) => self.lower_discriminant(place),
+            // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
+            // length is lowered as a constant and the MIR verifier rejects
+            // `Len` of a fixed-array place), so refusing it entirely stays
+            // sound for fixed arrays.
             Rvalue::Len(_) => Err(CodegenError::unsupported(
-                "array length is not lowered by the LLVM backend yet (Stage 2)",
+                "the growable `Array[T]` (and its `Len`) is not lowered by the LLVM backend yet",
             )),
         }
     }
@@ -971,18 +981,31 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     /// The shared address walk: resolve `place` to a `(byte address, leaf type)`
     /// pair by GEP-ing each projection's ABI offset from the root aggregate's
     /// pointer. Byte-identical in structure to the Cranelift backend's
-    /// `place_address`; `Index` is refused (arrays are Stage 2).
+    /// `place_address`. A `Field`/`VariantField` step advances by a constant
+    /// ABI offset; an `Index` step advances by the runtime index value times
+    /// the element stride — **unchecked**, because MIR asserts the bounds
+    /// (`Assert { IndexOutOfBounds }`) before every `Index` use, exactly like
+    /// the interpreter's post-check access.
     fn place_address(&mut self, place: &Place) -> Result<(PointerValue<'ctx>, Ty), CodegenError> {
         let local = place.local.0 as usize;
         let (mut addr, mut cur_ty) = match &self.kinds[local] {
             LocalKind::Aggregate { ptr, ty } => (*ptr, ty.clone()),
+            // A zero-sized aggregate root (e.g. `[T; 0]`) classifies as unit
+            // storage yet may still be projected in MIR — only in code the
+            // preceding bounds `Assert` makes unreachable at runtime (any index
+            // into a zero-length array traps first). Give it a null base; no
+            // load/store computed from it can ever execute.
+            LocalKind::Unit if !place.projection.is_empty() => (
+                self.ptr_ty.const_null(),
+                self.function.locals[local].ty.clone(),
+            ),
             _ => {
                 return Err(CodegenError::backend("projection on a non-aggregate local"));
             }
         };
 
         for step in &place.projection {
-            let offset = match step {
+            match step {
                 Projection::Field(index) => {
                     let offsets = struct_field_offsets(&cur_ty, self.types)
                         .map_err(|error| self.layout_error(error))?;
@@ -991,7 +1014,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         CodegenError::backend("struct/tuple field index out of range")
                     })?;
                     cur_ty = self.field_type(&cur_ty, i)?;
-                    offset
+                    addr = self.byte_gep(addr, offset)?;
                 }
                 Projection::VariantField { variant, field } => {
                     let offsets = variant_field_offsets(&cur_ty, *variant as usize, self.types)
@@ -1001,15 +1024,37 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         .get(f)
                         .ok_or_else(|| CodegenError::backend("variant field index out of range"))?;
                     cur_ty = self.variant_field_type(&cur_ty, *variant as usize, f)?;
-                    offset
+                    addr = self.byte_gep(addr, offset)?;
                 }
-                Projection::Index(_) => {
-                    return Err(CodegenError::unsupported(
-                        "array indexing is not lowered by the LLVM backend yet (Stage 2)",
-                    ));
+                Projection::Index(index_local) => {
+                    // Only the fixed `[T; N]` is indexable natively; element
+                    // `i` lives at `i × stride(T)` (the ABI's inline layout).
+                    let element = match &cur_ty {
+                        Ty::FixedArray(element, _) => (**element).clone(),
+                        _ => {
+                            return Err(CodegenError::unsupported(
+                                "indexing the growable `Array[T]` is not lowered by the LLVM \
+                                 backend (only the fixed `[T; N]` is)",
+                            ));
+                        }
+                    };
+                    let stride = self.layout(&element)?.stride();
+                    // The index is a `Usize` scalar local, pre-asserted in
+                    // bounds by the MIR before this use.
+                    let index_value = match &self.kinds[index_local.0 as usize] {
+                        LocalKind::Scalar(ptr, int_ty) => self
+                            .builder
+                            .build_load(*int_ty, *ptr, "idx")
+                            .map_err(builder_err("loading an array index"))?
+                            .into_int_value(),
+                        _ => {
+                            return Err(CodegenError::backend("array index local is not a scalar"));
+                        }
+                    };
+                    addr = self.dynamic_byte_gep(addr, index_value, stride)?;
+                    cur_ty = element;
                 }
-            };
-            addr = self.byte_gep(addr, offset)?;
+            }
         }
         Ok((addr, cur_ty))
     }
@@ -1043,8 +1088,39 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .map_err(builder_err("converting a field integer back to a pointer"))
     }
 
+    /// Advance a byte pointer by a **runtime** element index times a constant
+    /// `stride`. The dynamic counterpart of [`Self::byte_gep`], used only by
+    /// `Projection::Index`: `inttoptr(ptrtoint(base) + index × stride)`.
+    fn dynamic_byte_gep(
+        &mut self,
+        base: PointerValue<'ctx>,
+        index: IntValue<'ctx>,
+        stride: u64,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let usize_ty = self.ctx.i64_type();
+        let base_int = self
+            .builder
+            .build_ptr_to_int(base, usize_ty, "base_int")
+            .map_err(builder_err("converting a base pointer to an integer"))?;
+        let stride = usize_ty.const_int(stride, false);
+        let scaled = self
+            .builder
+            .build_int_mul(index, stride, "elem_off")
+            .map_err(builder_err("scaling an array index by the element stride"))?;
+        let sum = self
+            .builder
+            .build_int_add(base_int, scaled, "elem_int")
+            .map_err(builder_err("adding an element offset"))?;
+        self.builder
+            .build_int_to_ptr(sum, self.ptr_ty, "elem")
+            .map_err(builder_err(
+                "converting an element integer back to a pointer",
+            ))
+    }
+
     /// Materialize a `Rvalue::Aggregate` in place into `dest`'s byte storage.
-    /// Byte-identical to the Cranelift backend's `lower_aggregate`.
+    /// Byte-identical to the Cranelift backend's `lower_aggregate`. A
+    /// fixed-array aggregate takes its own path (element `i` at `i × stride`).
     fn lower_aggregate(
         &mut self,
         dest: &Place,
@@ -1057,6 +1133,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 return Err(CodegenError::unsupported(
                     "range construction is not lowered by the LLVM backend (Stage 2)",
                 ));
+            }
+            tuo_mir::AggregateKind::Array { element, len } => {
+                return self.lower_array_aggregate(dest, element, *len, fields);
             }
         };
 
@@ -1100,6 +1179,54 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 self.builder
                     .build_store(field_addr, value)
                     .map_err(builder_err("storing an aggregate field"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Materialize an `AggregateKind::Array { element, len }` — a fixed-size
+    /// array value `[element; len]` — into `dest`'s byte storage: the operands
+    /// are the `len` elements in index order, and element `i` is stored at byte
+    /// offset `i × stride(element)` per the runtime ABI's inline layout
+    /// (`abi::layout_of`; no header, no allocation). A scalar element is a
+    /// scalar store; a nested-aggregate element is a whole-aggregate memcpy —
+    /// mirroring `lower_aggregate`'s field dispatch. Byte-identical to the
+    /// Cranelift backend's `lower_array_aggregate`.
+    fn lower_array_aggregate(
+        &mut self,
+        dest: &Place,
+        element: &Ty,
+        len: u64,
+        fields: &[Operand],
+    ) -> Result<(), CodegenError> {
+        if fields.len() as u64 != len {
+            return Err(CodegenError::backend(
+                "fixed-array operand count does not match its length",
+            ));
+        }
+        let elem_layout = self.layout(element)?;
+        let stride = elem_layout.stride();
+        // A zero-sized array (`len == 0`, or a zero-sized element type) has no
+        // bytes to write and its destination classifies as unit storage — the
+        // construction is a no-op (element operands are `Copy`/`Move`/`Const`
+        // places, which carry no side effect to preserve).
+        if len == 0 || stride == 0 {
+            return Ok(());
+        }
+        let base = self.aggregate_dest_address(dest)?;
+        for (i, operand) in fields.iter().enumerate() {
+            let offset = (i as u64)
+                .checked_mul(stride)
+                .ok_or_else(|| CodegenError::backend("array element offset overflows"))?;
+            let element_addr = self.byte_gep(base, offset)?;
+            if self.operand_is_aggregate(operand) {
+                let src = self.operand_aggregate_address(operand)?;
+                self.emit_memcpy(element_addr, src, elem_layout)?;
+            } else {
+                let value = self.lower_operand(operand)?;
+                self.builder
+                    .build_store(element_addr, value)
+                    .map_err(builder_err("storing an array element"))?;
             }
         }
         Ok(())
@@ -1239,8 +1366,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
     // ----- aggregate helpers -----
 
-    /// The declared type of `place`, following its projections. Used only for
-    /// classifying the call-site destination.
+    /// The declared type of `place`, following its projections to the leaf.
     fn place_type(&self, place: &Place) -> Ty {
         let mut cur = self.function.locals[place.local.0 as usize].ty.clone();
         for step in &place.projection {
@@ -1249,7 +1375,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 Projection::VariantField { variant, field } => self
                     .variant_field_type(&cur, *variant as usize, *field as usize)
                     .unwrap_or(Ty::Error),
-                Projection::Index(_) => Ty::Error,
+                // Indexing yields the element type (growable or fixed; only
+                // the fixed `[T; N]` is lowered, but the type walk is total).
+                Projection::Index(_) => match cur {
+                    Ty::Array(element) | Ty::FixedArray(element, _) => (*element).clone(),
+                    _ => Ty::Error,
+                },
             };
         }
         cur
@@ -1319,16 +1450,14 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         }
     }
 
-    /// Whether an operand refers to a whole Stage-1 aggregate value.
+    /// Whether an operand refers to an aggregate value: a place whose leaf type
+    /// (the declared type of a bare local, or the projected leaf — e.g. a
+    /// struct-typed array element) classifies as aggregate storage.
     fn operand_is_aggregate(&self, operand: &Operand) -> bool {
         match operand {
-            Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+            Operand::Copy(place) | Operand::Move(place) => {
                 matches!(
-                    classify_storage(
-                        &self.function.locals[place.local.0 as usize].ty,
-                        self.types,
-                        &self.function.name,
-                    ),
+                    classify_storage(&self.place_type(place), self.types, &self.function.name),
                     Ok(Storage::Aggregate(_))
                 )
             }
@@ -1355,10 +1484,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         }
     }
 
-    /// The base pointer of the aggregate an operand names (a `Copy`/`Move` of a
-    /// bare aggregate local). A move leaves the source husk untouched: a Stage-1
-    /// aggregate owns no heap, so no zeroing is needed (the ownership checker
-    /// forbids re-reading a moved value).
+    /// The base pointer of the aggregate an operand names: a `Copy`/`Move` of a
+    /// bare aggregate local, or of a projected place whose leaf is an aggregate
+    /// (e.g. a struct-typed array element), resolved through the shared address
+    /// walk. A move leaves the source husk untouched: a v0 aggregate owns no
+    /// heap, so no zeroing is needed (the ownership checker forbids re-reading
+    /// a moved value).
     fn operand_aggregate_address(
         &mut self,
         operand: &Operand,
@@ -1371,6 +1502,10 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         "aggregate address requested for a non-aggregate local",
                     )),
                 }
+            }
+            Operand::Copy(place) | Operand::Move(place) => {
+                let (addr, _leaf) = self.place_address(place)?;
+                Ok(addr)
             }
             _ => Err(CodegenError::backend(
                 "aggregate address requested for a non-place operand",
@@ -1399,7 +1534,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         index: usize,
     ) -> Result<PointerValue<'ctx>, CodegenError> {
         let i8 = self.ctx.i8_type();
-        let size = i8.const_int(layout.size, false);
+        // The element count must be a pointer-width constant: an i8-typed count
+        // would silently truncate any aggregate larger than 255 bytes.
+        let size = self.ctx.i64_type().const_int(layout.size, false);
         let name = if index == usize::MAX {
             "agg_tmp".to_owned()
         } else {

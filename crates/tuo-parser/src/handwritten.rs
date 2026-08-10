@@ -1073,6 +1073,10 @@ impl Parser<'_> {
                 self.path_expr()
             }
             K::KwSelfValue => self.path_expr(),
+            // A `[` at primary position can only open an array literal:
+            // `base[i]` indexing is a postfix op after a completed primary
+            // (ADR-0004 Stage 2).
+            K::OpenBracket => self.array_literal(),
             k if is_block_form(k) => self.block_expression(),
             K::KwReturn => {
                 let mut els = vec![self.bump()];
@@ -1104,6 +1108,32 @@ impl Parser<'_> {
             }
             _ => Err(Fail),
         }
+    }
+
+    /// `[a, b, c]` (0+ elements, trailing comma allowed, `[]` legal) or the
+    /// repeat form `[x; N]` where `N` is an `INT_LITERAL` token — mirroring
+    /// the Chumsky grammar's ordered choice (repeat form first, then the
+    /// comma list), so both engines build the same tree (ADR-0004 Stage 2).
+    fn array_literal(&mut self) -> R {
+        let mut els = Els::new();
+        self.expect(K::OpenBracket, &mut els)?;
+        // Repeat form `[x; N]`: speculative, exactly like the oracle's
+        // first alternative — a failed attempt leaves no trace.
+        let mark = self.mark();
+        if let Ok(value) = self.expr(false) {
+            if self.at(K::Semi) {
+                els.push(value);
+                els.push(self.bump());
+                self.expect(K::IntLiteral, &mut els)?;
+                self.expect(K::CloseBracket, &mut els)?;
+                return Ok(node(SyntaxKind::ArrayLiteral, els));
+            }
+        }
+        self.rollback(mark);
+        // List form: a possibly-empty comma list of expressions.
+        self.comma_list(&mut els, false, |p| p.expr(false))?;
+        self.expect(K::CloseBracket, &mut els)?;
+        Ok(node(SyntaxKind::ArrayLiteral, els))
     }
 
     fn struct_literal(&mut self) -> R {
@@ -1275,6 +1305,17 @@ impl Parser<'_> {
                     }
                 }
                 Ok(node(SyntaxKind::PathType, els))
+            }
+            // `[` uniquely selects the fixed-capacity array type `[T; N]`
+            // — no other type starts with a bracket (`TypeArguments` only
+            // ever follow a path/wrapper head). ADR-0004 Stage 2.
+            K::OpenBracket => {
+                let mut els = vec![self.bump()];
+                els.push(self.ty()?);
+                self.expect(K::Semi, &mut els)?;
+                self.expect(K::IntLiteral, &mut els)?;
+                self.expect(K::CloseBracket, &mut els)?;
+                Ok(node(SyntaxKind::FixedArrayType, els))
             }
             _ => Err(Fail),
         }

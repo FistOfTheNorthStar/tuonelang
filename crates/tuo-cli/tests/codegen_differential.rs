@@ -142,6 +142,38 @@ fn stage1_aggregates_match_the_interpreter() {
 }
 
 #[test]
+fn stage2_fixed_arrays_match_the_interpreter() {
+    // ADR-0004 Stage 2 fixed-capacity arrays: the default (Cranelift) backend
+    // must agree with the reference interpreter on inline construction,
+    // indexing, for-folds, nesting, and array parameters/returns.
+    for name in [
+        "arr_literal_index.tuo",
+        "arr_repeat_fold.tuo",
+        "arr_param_return.tuo",
+        "arr_nested.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn a_fixed_array_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
+    // The interpreter traps `IndexOutOfBounds`; the native binary must abort
+    // with the runtime's fixed trap status (the bounds `Assert` is in the MIR
+    // before the unchecked address arithmetic the backend emits).
+    let path = fixture("arr_trap_oob.tuo");
+    assert!(
+        interpret_main(&path).is_err(),
+        "the reference interpreter should trap on the out-of-bounds index"
+    );
+    assert_eq!(
+        run_native(&path),
+        TRAP_EXIT_STATUS,
+        "a native out-of-bounds trap must terminate with the runtime's fixed trap status"
+    );
+}
+
+#[test]
 fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
     // The reference interpreter traps on this program, and the native binary
     // must likewise abort — with the runtime's fixed trap status, distinct from

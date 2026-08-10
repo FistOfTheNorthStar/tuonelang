@@ -38,7 +38,11 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// (`Some` = variant 0 with the payload, `None` = variant 1, empty). The prior
 /// `0` had `Option` reversed, which no backend exercised until ADR-0004 Stage 1
 /// aggregate lowering read its payload offset.
-pub const ABI_VERSION: u32 = 1;
+///
+/// `2` — adds the inline `[T; N]` fixed-size array layout
+/// (`size = N × stride(T)`, `align = align(T)`, element `i` at
+/// `i × stride(T)`); no existing layout changed. (ADR-0004 Stage 2.)
+pub const ABI_VERSION: u32 = 2;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -193,6 +197,26 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
         }
 
         Ty::Tuple(fields) => aggregate_layout(fields.iter().cloned(), types),
+
+        // The inline fixed-size array `[T; N]` (ADR-0004 Stage 2): no
+        // header, no indirection, no allocation — the value *is* its `N`
+        // elements. Element `i` lives at byte offset `i * stride(T)`;
+        // `Layout::stride` (size includes tail padding, so elements tile
+        // with no gaps) is the whole story — no per-element offsets table
+        // is needed. `[T; 0]` is a ZST that still aligns like `T`. Element
+        // layout errors propagate, so `[Never; 2]` etc. are refused
+        // exactly as their element is. NOTE: this arm belongs with the
+        // aggregates — the `Ty::Array` *header* arm above is untouched.
+        Ty::FixedArray(elem, n) => {
+            let e = layout_of(elem, types)?;
+            let size = n
+                .checked_mul(e.stride())
+                .ok_or_else(|| LayoutError::new("fixed array size overflows"))?;
+            Ok(Layout {
+                size,
+                align: e.align,
+            })
+        }
 
         Ty::Struct(symbol, args) => {
             let shape = types
@@ -413,10 +437,10 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_one() {
+    fn the_abi_is_version_two() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout, never silently.
-        assert_eq!(ABI_VERSION, 1);
+        assert_eq!(ABI_VERSION, 2);
     }
 
     #[test]
@@ -503,6 +527,42 @@ mod tests {
             Box::new(Ty::Int(IntKind::I8)),
         );
         assert_eq!(layout_of(&res, t).unwrap(), Layout { size: 16, align: 8 });
+    }
+
+    #[test]
+    fn fixed_arrays_are_inline_with_no_header() {
+        let t = &TypeckResult::default();
+        // [I8; 3]: size 3, align 1 — no header word anywhere.
+        let bytes = Ty::FixedArray(Box::new(Ty::Int(IntKind::I8)), 3);
+        assert_eq!(layout_of(&bytes, t).unwrap(), Layout { size: 3, align: 1 });
+        // [I64; 4]: size 32, align 8; element i at i * 8.
+        let words = Ty::FixedArray(Box::new(Ty::Int(IntKind::I64)), 4);
+        assert_eq!(layout_of(&words, t).unwrap(), Layout { size: 32, align: 8 });
+        // [I32; 0]: a ZST that still aligns like its element.
+        let empty = Ty::FixedArray(Box::new(Ty::Int(IntKind::I32)), 0);
+        assert_eq!(layout_of(&empty, t).unwrap(), Layout { size: 0, align: 4 });
+        // [(I8, I32); 2]: the element strides at 8 (tail padding included),
+        // so the array is 16 bytes, align 4.
+        let pair = Ty::Tuple(vec![Ty::Int(IntKind::I8), Ty::Int(IntKind::I32)]);
+        let pairs = Ty::FixedArray(Box::new(pair), 2);
+        assert_eq!(layout_of(&pairs, t).unwrap(), Layout { size: 16, align: 4 });
+        // Nesting: [[I8; 3]; 2] = 6 bytes, align 1.
+        let nested = Ty::FixedArray(
+            Box::new(Ty::FixedArray(Box::new(Ty::Int(IntKind::I8)), 3)),
+            2,
+        );
+        assert_eq!(layout_of(&nested, t).unwrap(), Layout { size: 6, align: 1 });
+    }
+
+    #[test]
+    fn fixed_array_element_errors_and_overflow_are_refused() {
+        let t = &TypeckResult::default();
+        // Element errors propagate: [Never; 2] is refused as Never is.
+        let never = Ty::FixedArray(Box::new(Ty::Never), 2);
+        assert!(layout_of(&never, t).is_err());
+        // Defense in depth: a size that overflows u64 is refused, not wrapped.
+        let huge = Ty::FixedArray(Box::new(Ty::Int(IntKind::I64)), u64::MAX / 2);
+        assert!(layout_of(&huge, t).is_err());
     }
 
     #[test]

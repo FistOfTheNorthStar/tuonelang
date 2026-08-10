@@ -107,3 +107,31 @@ fn case_range_of_copy_is_copy(in limit: Int) -> Int {
     }
     total
 }
+
+fn case_fixed_array_of_copy_is_copy(in seed: Int) -> Int {
+    // ADR-0004 Stage 2: `[Int; 3]` is `Copy` (its element is), so using it
+    // by value repeatedly never moves it.
+    let xs = [seed, seed, seed];
+    let a = xs;
+    let b = xs;
+    a[0] + b[1] + xs[2]
+}
+
+fn case_fixed_array_copy_elements_read_out(in seed: Int) -> Int {
+    let xs = [seed; 4];
+    let first = xs[0];
+    let again = xs[0];
+    first + again
+}
+
+fn case_fixed_array_iteration_copies(in seed: Int) -> Int {
+    let xs = [seed; 3];
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    for x in xs {
+        total = total + x;
+    }
+    total
+}

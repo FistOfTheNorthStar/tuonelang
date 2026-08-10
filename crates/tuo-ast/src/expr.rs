@@ -19,6 +19,8 @@ pub enum Expr<'a> {
     Path(PathExpr<'a>),
     /// A struct literal: `Point { x: 1, y }`.
     StructLiteral(StructLiteralExpr<'a>),
+    /// An array literal: `[a, b, c]` or `[x; N]` (ADR-0004 Stage 2).
+    ArrayLiteral(ArrayLiteralExpr<'a>),
     /// A prefix operator application: `-x`, `!x`, `move x`.
     Unary(UnaryExpr<'a>),
     /// An infix operator application.
@@ -71,6 +73,7 @@ impl<'a> Expr<'a> {
             SyntaxKind::Literal => Self::Literal(LiteralExpr { ast, node }),
             SyntaxKind::PathExpr => Self::Path(PathExpr { ast, node }),
             SyntaxKind::StructLiteral => Self::StructLiteral(StructLiteralExpr { ast, node }),
+            SyntaxKind::ArrayLiteral => Self::ArrayLiteral(ArrayLiteralExpr { ast, node }),
             SyntaxKind::UnaryExpr => Self::Unary(UnaryExpr { ast, node }),
             SyntaxKind::BinaryExpr => Self::Binary(BinaryExpr { ast, node }),
             SyntaxKind::RangeExpr => Self::Range(RangeExpr { ast, node }),
@@ -104,6 +107,7 @@ impl<'a> Expr<'a> {
             Self::Literal(e) => e.span(),
             Self::Path(e) => e.span(),
             Self::StructLiteral(e) => e.span(),
+            Self::ArrayLiteral(e) => e.span(),
             Self::Unary(e) => e.span(),
             Self::Binary(e) => e.span(),
             Self::Range(e) => e.span(),
@@ -135,6 +139,7 @@ impl<'a> Expr<'a> {
             Self::Literal(e) => e.node,
             Self::Path(e) => e.node,
             Self::StructLiteral(e) => e.node,
+            Self::ArrayLiteral(e) => e.node,
             Self::Unary(e) => e.node,
             Self::Binary(e) => e.node,
             Self::Range(e) => e.node,
@@ -241,6 +246,47 @@ impl<'a> StructLiteralExpr<'a> {
     pub fn inits(self) -> impl Iterator<Item = FieldInit<'a>> {
         let ast = self.ast;
         child_nodes(self.node).filter_map(move |node| FieldInit::cast(ast, node))
+    }
+}
+
+ast_view! {
+    /// An array literal: the list form `[a, b, c]` or the repeat form
+    /// `[x; N]` (ADR-0004 Stage 2). The `;` token distinguishes the forms.
+    ArrayLiteralExpr from ArrayLiteral
+}
+
+/// The two surface forms of an array literal.
+#[derive(Clone, Debug)]
+pub enum ArrayLiteralKind<'a> {
+    /// The list form `[a, b, c]` (0+ elements): the elements in source
+    /// order.
+    List(std::vec::IntoIter<Expr<'a>>),
+    /// The repeat form `[x; N]`: the repeated value and the `INT_LITERAL`
+    /// length token with its span.
+    Repeat {
+        /// The repeated value expression.
+        value: Expr<'a>,
+        /// The length token (`INT_LITERAL`), with its exact span.
+        len: Name<'a>,
+    },
+}
+
+impl<'a> ArrayLiteralExpr<'a> {
+    /// Which form the literal is, with its parts. `None` only for a
+    /// malformed tree (a repeat form missing its value or length).
+    #[must_use]
+    pub fn kind(self) -> Option<ArrayLiteralKind<'a>> {
+        let ast = self.ast;
+        if ast.has_token(self.node, TokenKind::Semi) {
+            let value = nth_expr(ast, self.node, 0)?;
+            let len = ast.direct_token_name(self.node, TokenKind::IntLiteral)?;
+            return Some(ArrayLiteralKind::Repeat { value, len });
+        }
+        let elements: Vec<Expr<'a>> = child_nodes(self.node)
+            .filter(|child| child.kind.is_expression())
+            .filter_map(move |child| Expr::cast(ast, child))
+            .collect();
+        Some(ArrayLiteralKind::List(elements.into_iter()))
     }
 }
 

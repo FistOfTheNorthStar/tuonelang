@@ -60,6 +60,11 @@
                      *today* — the parser implements it — but is not promised
                      stable. See CONSTITUTION.md and open-questions.md.
    Where no tag appears the enclosing section's tag applies.
+
+   2026-08-05: ADR-0004 Stage 2 adds the additive [EXPERIMENTAL] productions
+   `fixed_array_type` (D) and `array_literal` (G). No [FROZEN] production's
+   surface changed and no token was added, so GRAMMAR-VERSION stays 0.1 per
+   this file's own versioning rule.
    ========================================================================== *)
 
 
@@ -231,9 +236,16 @@ path_segment   = IDENT ;                                            (* [EXPERIME
 
 type           = path_type
                | unit_type
-               | wrapper_type ;
+               | wrapper_type
+               | fixed_array_type ;                                 (* [EXPERIMENTAL ADR-0004] *)
 
 unit_type      = "(", ")" ;                                         (* the unit type () [§10] *)
+
+(* Fixed-capacity array type: the length is part of the type. The length is an
+   INT_LITERAL token — not a general expression — and admits no type suffix
+   (a SEMANTIC check, per the superset rule). `[T; N]` is distinct from the
+   growable `Array[T]`. Added by ADR-0004 Stage 2. *)
+fixed_array_type = "[", type, ";", INT_LITERAL, "]" ;               (* [EXPERIMENTAL ADR-0004] length is part of the type *)
 
 path_type      = type_path, [ type_arguments ] ;                    (* e.g. Map, Option[T], std::io::File *)
 type_path      = ( "Self" | IDENT ), { "::", IDENT } ;             (* "Self" only valid inside impl/interface (semantic) *)
@@ -382,8 +394,20 @@ call_args      = "(", [ expression, { ",", expression }, [ "," ] ], ")" ;
 primary_expr   = literal
                | path_expr
                | struct_literal
+               | array_literal                                     (* [EXPERIMENTAL ADR-0004] *)
                | grouping_or_unit
                | block_expression ;
+
+(* Fixed-capacity array literals (ADR-0004 Stage 2): the list form `[a, b, c]`
+   (0+ elements, trailing comma allowed, `[]` legal) and the repeat form
+   `[x; N]`. `N` is an INT_LITERAL token, exactly as in `fixed_array_type` —
+   no suffix (semantic check), and `-` cannot begin an INT_LITERAL, so
+   `[x; -1]` is a parse error. Disambiguation is one-token: a `[` at primary
+   position can only open a literal (`base[i]` indexing is a postfix_op after
+   a completed primary); inside, the token after the first expression decides
+   (`;` → repeat form; `,` or `]` → list form). *)
+array_literal  = "[", [ expression, { ",", expression }, [ "," ] ], "]"
+               | "[", expression, ";", INT_LITERAL, "]" ;           (* [EXPERIMENTAL ADR-0004] *)
 
 grouping_or_unit = "(", [ expression ], ")" ;                      (* `()` is unit value; `(e)` is grouping *)
 

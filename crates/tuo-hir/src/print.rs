@@ -255,6 +255,10 @@ impl Printer<'_> {
                     }
                 });
             }
+            TyKind::FixedArray { element, len } => {
+                let line = format!("type [_; {len}]");
+                self.nest(&line, |printer| printer.ty(element));
+            }
             TyKind::Err => self.line("type {err}"),
         }
     }
@@ -356,6 +360,17 @@ impl Printer<'_> {
                         }
                     });
                 }
+            }
+            ExprKind::Array(elements) => {
+                self.nest("array-lit", |printer| {
+                    for element in elements {
+                        printer.expr(element);
+                    }
+                });
+            }
+            ExprKind::ArrayRepeat { value, len } => {
+                let line = format!("array-repeat {len}");
+                self.nest(&line, |printer| printer.expr(value));
             }
             ExprKind::StructLit { ctor, args, fields } => {
                 let line = format!("struct-lit {}", self.res(ctor));

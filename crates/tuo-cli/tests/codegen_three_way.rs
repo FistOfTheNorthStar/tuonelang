@@ -203,6 +203,33 @@ fn stage1_aggregates_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0004 Stage 2 fixed-capacity arrays `[T; N]`: inline construction (both
+/// literal forms), indexing (constant and loop-counter), for-folds, nesting,
+/// whole-array copy, and array parameters/returns through the by-pointer/sret
+/// call ABI. Each agrees across all three engines by construction — every
+/// element offset is `i × stride(T)` from the one runtime ABI both backends
+/// consult, and the bounds `Assert` is in the shared MIR before every index.
+#[test]
+fn stage2_fixed_arrays_agree_across_all_three_engines() {
+    for name in [
+        "arr_literal_index.tuo", // literal construction + constant index
+        "arr_repeat_fold.tuo",   // repeat construction + for-fold
+        "arr_param_return.tuo",  // array parameter + array return (sret)
+        "arr_nested.tuo",        // `[[Int; 2]; 3]` nesting + double index
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// An out-of-bounds index traps identically on all three engines: the
+/// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
+/// runtime's fixed trap status (the bounds `Assert` is lowered before the
+/// unchecked address arithmetic).
+#[test]
+fn a_fixed_array_out_of_bounds_trap_agrees_across_all_three_engines() {
+    assert_three_way_agreement("arr_trap_oob.tuo");
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
     // A program still outside the native subset (an aggregate carrying a

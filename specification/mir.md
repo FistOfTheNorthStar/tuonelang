@@ -108,8 +108,9 @@ Projections ([`Projection`]):
   order) of enum variant `variant`. Defined **only while the discriminant is
   `variant`**; lowering guards every use with a discriminant test, so backends may
   assume it.
-- **`Index(i)`** — the array element at the `Usize` value held by local `i`.
-  Defined **only for in-bounds values**; lowering emits an explicit bounds-check
+- **`Index(i)`** — the element of the **array (growable `Array[T]` or fixed
+  `[T; N]`)** at the `Usize` value held by local `i`. Defined **only for
+  in-bounds values**; lowering emits an explicit bounds-check
   [`Assert`](#6-terminators) before every use.
 
 ### Operands
@@ -157,6 +158,8 @@ statement that traps (arithmetic, §5.3) aborts the program deterministically.
     storage) when it reaches zero;
   - a `Weak` releases its handle;
   - an `Array` drops elements front to back, then the storage;
+  - a `[T; N]` drops elements front to back; its storage is inline and is not
+    freed;
   - a `String` frees its buffer;
   - a struct or enum drops its (active variant's) fields in declaration order;
   - every `Copy` value's drop is a **no-op**.
@@ -188,6 +191,9 @@ value of a statically known type.
   value at `place`, as a `Usize`: the declaration-order index of the active
   variant (`Some` = 0, `None` = 1; `Ok` = 0, `Err` = 1).
 - **`Len(place)`** — the length of the array at `place`, as a `Usize`.
+  **`Len` applies only to the growable `Array[T]`.** A `[T; N]`'s length is a
+  compile-time constant; lowering emits `Const N : Usize` and the verifier
+  rejects `Len` of a fixed-array place.
 
 ### 5.2 Unary operations (`UnOp`)
 
@@ -236,6 +242,10 @@ content equality). `Lt`/`Le`/`Gt`/`Ge` are also defined on `Char` by scalar valu
   of type `ty` with active variant `variant` (declaration-order index; `0` for a
   struct). The operands are the variant's payload fields in declaration order.
 - **`Range`** — a range value from two operands, start then end.
+- **`Array { element, len }`** — a fixed-size array from `len` operands in index
+  order; the destination's type is `[element; len]`. Carrying both `element` and
+  `len` in the kind keeps verification local and the rendered MIR
+  self-describing (ADR-0004 Stage 2).
 
 ---
 
@@ -301,7 +311,12 @@ Per function, in one pass, the verifier proves:
   Unreachable blocks are excluded (dead code is not an undefined-use bug).
 - **Type consistency** — the two operands of a `Binary` share a type, a
   `Discriminant`/`Len` projects an enum-like / array place, a `Branch`/`Assert`
-  condition is `Bool`, and a call/return destination's arity is right.
+  condition is `Bool`, and a call/return destination's arity is right. An
+  `Aggregate` of kind `Array { element, len }` supplies exactly `len` operands,
+  each of the element type, into a destination of exactly `[element; len]`; and
+  **`Len` is growable-`Array`-only** — `Len` of a `[T; N]` place is a verifier
+  error, because fixed-array lengths are lowered as constants (a backend may
+  rely on never seeing one).
 - **Terminators** — a `Switch`'s arm values are pairwise distinct.
 - **Ownership invariants that must survive lowering** — a borrow argument is never
   paired against a by-value read of the same call; a `Copy`-typed place is never

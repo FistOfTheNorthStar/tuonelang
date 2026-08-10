@@ -10,9 +10,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use tuo_ast::{
-    AssignExpr, Ast, BindingStmt, Block, CallExpr, ElseBranch, Expr, FieldPat, FnDecl, ForExpr,
-    IfExpr, Item, LoopExpr, MatchExpr, Name, Pattern, SpecDecl, SpecStatement, Statement,
-    UnaryExpr, WhileExpr,
+    ArrayLiteralKind, AssignExpr, Ast, BindingStmt, Block, CallExpr, ElseBranch, Expr, FieldPat,
+    FnDecl, ForExpr, IfExpr, Item, LoopExpr, MatchExpr, Name, Pattern, SpecDecl, SpecStatement,
+    Statement, UnaryExpr, WhileExpr,
 };
 use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace};
 use tuo_resolve::{Resolution, SymbolId, SymbolKind};
@@ -661,6 +661,40 @@ impl<'a> Body<'a> {
                     }
                 }
             }
+            Expr::ArrayLiteral(literal) => match literal.kind() {
+                Some(ArrayLiteralKind::List(elements)) => {
+                    // Each element is its own value, moved into the array.
+                    for element in elements {
+                        self.expr(element, Use::Value);
+                    }
+                }
+                Some(ArrayLiteralKind::Repeat { value, .. }) => {
+                    self.expr(value, Use::Value);
+                    // §2: `[x; N]` duplicates its operand `N` times, and a
+                    // non-`Copy` value cannot be duplicated — uniformly,
+                    // with no `N == 0`/`1` special cases (O0010, ADR-0004
+                    // Stage 2). This is also what makes the MIR lowering's
+                    // `N × Operand::Copy(temp)` expansion verifier-legal.
+                    let element_ty = value.span().and_then(|span| self.cx.types.expr_ty(span));
+                    if let Some(ty) = element_ty
+                        && !self.cx.env.is_copy(ty)
+                    {
+                        let span = self.at(literal.span());
+                        self.report(
+                            Diagnostic::error(
+                                code(10),
+                                "the repeated element of `[x; N]` must be a `Copy` type",
+                                span,
+                            )
+                            .with_primary_label("a non-`Copy` value cannot be duplicated")
+                            .with_help(
+                                "list the elements explicitly, or use a `Copy` element type",
+                            ),
+                        );
+                    }
+                }
+                None => {}
+            },
             Expr::Unary(unary) => self.unary(unary, usage),
             Expr::Binary(binary) => {
                 if let Some(lhs) = binary.lhs() {
@@ -857,7 +891,7 @@ impl<'a> Body<'a> {
         // §1: indexing reads an element; only `Copy` elements can be used by
         // value, and nothing moves out through an index.
         if usage == Use::Value {
-            if let Some(Ty::Array(element)) =
+            if let Some(Ty::Array(element) | Ty::FixedArray(element, _)) =
                 base_place.as_ref().and_then(|place| self.place_ty(place))
             {
                 if !self.cx.env.is_copy(&element) {

@@ -170,7 +170,17 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
                 .then(type_args.clone()),
         );
         let path_type = node!(SyntaxKind::PathType, type_path.then(type_args.or_not()),);
-        choice((unit_type, wrapper, path_type))
+        // `[T; N]` — the fixed-capacity array type; `[` uniquely selects it
+        // at type position (ADR-0004 Stage 2).
+        let fixed_array = node!(
+            SyntaxKind::FixedArrayType,
+            tok(K::OpenBracket)
+                .then(ty.clone())
+                .then(tok(K::Semi))
+                .then(tok(K::IntLiteral))
+                .then(tok(K::CloseBracket)),
+        );
+        choice((unit_type, wrapper, fixed_array, path_type))
     })
     .boxed();
     let type_args_p = type_args(ty.clone());
@@ -392,6 +402,23 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
             .then(expr_b.clone())
             .then(tok(K::CloseParen)),
     );
+    // `[a, b, c]` / `[x; N]` — a `[` at primary position can only open an
+    // array literal (indexing is a postfix op). Repeat form first, exactly
+    // as the handwritten engine speculates (ADR-0004 Stage 2).
+    let array_literal = node!(
+        SyntaxKind::ArrayLiteral,
+        tok(K::OpenBracket)
+            .then(choice((
+                expr_b
+                    .clone()
+                    .then(tok(K::Semi))
+                    .then(tok(K::IntLiteral))
+                    .map(children)
+                    .boxed(),
+                comma_list(expr_b.clone()),
+            )))
+            .then(tok(K::CloseBracket)),
+    );
     let return_expr = node!(
         SyntaxKind::ReturnExpr,
         tok(K::KwReturn).then(expr_b.clone().or_not()),
@@ -411,6 +438,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         literal,
         unit_literal.clone(),
         struct_literal.clone(),
+        array_literal.clone(),
         path_expr.clone(),
         group_expr.clone(),
         block_expression.clone(),
@@ -422,6 +450,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
     let primary_ns: BP<'a> = choice((
         literal,
         unit_literal,
+        array_literal,
         path_expr,
         group_expr,
         block_expression.clone(),

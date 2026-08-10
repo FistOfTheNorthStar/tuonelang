@@ -1,0 +1,8 @@
+fn pick(take i: Usize) -> Int {
+    let xs = [1, 2];
+    xs[i]
+}
+
+fn main() -> Int {
+    pick(9)
+}

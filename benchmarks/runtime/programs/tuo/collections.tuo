@@ -1,0 +1,26 @@
+fn lookup(take table: [Int; 8], take i: Usize) -> Int {
+    table[i]
+}
+
+fn scan(take table: [Int; 8]) -> Int {
+    var total = 0;
+    for x in table {
+        total = total + x;
+    }
+    total
+}
+
+fn probe(take table: [Int; 8]) -> Int {
+    lookup(table, 0) + lookup(table, 3) + lookup(table, 7)
+}
+
+fn main() -> Int {
+    let table = [3, 1, 4, 1, 5, 9, 2, 6];
+    var total = 0;
+    var round = 0;
+    while round < 200 {
+        total = total + scan(table) + probe(table);
+        round = round + 1;
+    }
+    total
+}

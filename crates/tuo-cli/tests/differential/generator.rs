@@ -6,9 +6,12 @@
 //! subset the Cranelift backend lowers. This generator guarantees both **by
 //! construction** rather than by generate-and-filter — every program it emits
 //! type-checks and stays within integers, arithmetic, comparison, `if`/`else`,
-//! and direct calls. It never emits a float, a string, an aggregate, a
-//! projection, or anything else the backend refuses, so a divergence is always a
-//! real correctness finding and never a rejected program.
+//! direct calls, and (ADR-0004 Stage 2) fixed-capacity `[Int; N]` arrays:
+//! literal and repeat construction, constant in-bounds indexing, and `for`
+//! folds — including a wide flat literal and the zero-length repeat form. It
+//! never emits a float, a string, a growable `Array[T]`, or anything else the
+//! backend refuses, so a divergence is always a real correctness finding and
+//! never a rejected program.
 //!
 //! # Determinism
 //!
@@ -94,9 +97,12 @@ impl Bounds {
 
 /// The names in scope while generating one function body: its parameters and any
 /// `let` locals introduced so far. Every name is `Int`-typed, so referencing any
-/// of them is well-typed.
+/// of them is well-typed. `fresh` numbers array/fold bindings (which are *not*
+/// `Int`-typed or not in expression scope, so they never enter `names`) uniquely
+/// across the whole body, so nested array forms cannot collide or shadow.
 struct Scope {
     names: Vec<String>,
+    fresh: u32,
 }
 
 /// Generate a complete, well-typed program from `seed`.
@@ -116,6 +122,7 @@ pub fn program(seed: u64) -> String {
         let arity = bounds.params;
         let mut scope = Scope {
             names: (0..arity).map(|p| format!("p{p}")).collect(),
+            fresh: 0,
         };
         let params = scope
             .names
@@ -130,7 +137,10 @@ pub fn program(seed: u64) -> String {
     }
 
     // `main` takes no parameters and returns Int.
-    let mut scope = Scope { names: Vec::new() };
+    let mut scope = Scope {
+        names: Vec::new(),
+        fresh: 0,
+    };
     let body = expr(&mut rng, &mut scope, &callable, bounds.max_depth);
     writeln!(out, "fn main() -> Int {{ {body} }}").expect("string write");
     out
@@ -142,9 +152,11 @@ fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32
     if depth == 0 {
         return leaf(rng, scope);
     }
-    match rng.below(6) {
+    match rng.below(7) {
         // Leaf: literal or an in-scope name.
         0 => leaf(rng, scope),
+        // A fixed-array form (construct + index or construct + fold).
+        6 => array_form(rng, scope, callable, depth),
         // Binary arithmetic (may trap; both engines must trap together).
         1 | 2 => {
             let op = ["+", "-", "*", "/", "%"][rng.below(5) as usize];
@@ -183,6 +195,63 @@ fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32
                     .join(", ");
                 format!("{name}({args})")
             }
+        }
+    }
+}
+
+/// An `Int`-typed fixed-array form (ADR-0004 Stage 2): construct a small
+/// `[Int; N]` — literal or repeat form — then either index it at a constant
+/// in-bounds position or fold it with a counted `for` loop. Element
+/// expressions recurse, so arrays nest inside arithmetic and vice versa; the
+/// bindings introduced here are never pushed into `scope.names` (the array is
+/// not `Int`-typed and the fold accumulator lives only inside its block), so
+/// every emitted reference stays well-typed by construction.
+fn array_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+    let id = scope.fresh;
+    scope.fresh += 1;
+    match rng.below(4) {
+        // Literal construction, constant in-bounds index: always defined.
+        0 => {
+            let n = 1 + rng.below(4); // 1..=4 elements
+            let k = rng.below(n);
+            let elements = (0..n)
+                .map(|_| expr(rng, scope, callable, depth - 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ let a{id}: [Int; {n}] = [{elements}]; a{id}[{k}] }}")
+        }
+        // Literal construction folded by a counted `for` loop.
+        1 => {
+            let n = 1 + rng.below(3); // 1..=3 elements
+            let elements = (0..n)
+                .map(|_| expr(rng, scope, callable, depth - 1))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{{ var t{id} = 0; for x{id} in [{elements}] {{ t{id} = t{id} + x{id}; }} t{id} }}"
+            )
+        }
+        // Repeat construction folded by a counted `for` loop. `n == 0` is
+        // deliberately in range: the zero-length array still evaluates its
+        // element once and the loop body never runs.
+        2 => {
+            let n = rng.below(4); // 0..=3 repeats
+            let value = expr(rng, scope, callable, depth - 1);
+            format!(
+                "{{ let a{id} = [{value}; {n}]; var t{id} = 0; \
+                 for x{id} in a{id} {{ t{id} = t{id} + x{id}; }} t{id} }}"
+            )
+        }
+        // A wide, flat literal (a shallow but broad tree) with a constant
+        // in-bounds index, pinning the many-element construction path.
+        _ => {
+            let n = 5 + rng.below(12); // 5..=16 elements
+            let k = rng.below(n);
+            let elements = (0..n)
+                .map(|_| leaf(rng, scope))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{{ let a{id}: [Int; {n}] = [{elements}]; a{id}[{k}] }}")
         }
     }
 }

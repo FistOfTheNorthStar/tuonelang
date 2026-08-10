@@ -457,6 +457,19 @@ impl Cx {
                     span,
                 }
             }
+            ast::TypeRef::FixedArray(array) => {
+                // `[T; N]` (ADR-0004 Stage 2). The length token's digits are
+                // normalized exactly like `Lit::Int`; a malformed tree
+                // (missing element or length) is poison.
+                let kind = match (array.element(), array.len()) {
+                    (Some(element), Some(len)) => TyKind::FixedArray {
+                        element: Box::new(self.ty(element, span)),
+                        len: len.text.replace('_', ""),
+                    },
+                    _ => TyKind::Err,
+                };
+                Ty { kind, span }
+            }
             ast::TypeRef::Path(path) => {
                 let res = path
                     .path()
@@ -745,6 +758,18 @@ impl Cx {
                         .map_or(err_expr(span), |receiver| self.expr(receiver, span)),
                 ),
                 name: field.name().unwrap_or_default().to_owned(),
+            },
+            ast::Expr::ArrayLiteral(literal) => match literal.kind() {
+                // `[a, b, c]` / `[x; N]` (ADR-0004 Stage 2); a malformed
+                // tree is poison.
+                Some(ast::ArrayLiteralKind::List(elements)) => {
+                    ExprKind::Array(elements.map(|element| self.expr(element, span)).collect())
+                }
+                Some(ast::ArrayLiteralKind::Repeat { value, len }) => ExprKind::ArrayRepeat {
+                    value: Box::new(self.expr(value, span)),
+                    len: len.text.replace('_', ""),
+                },
+                None => ExprKind::Err,
             },
             ast::Expr::Index(index) => match (index.base(), index.index()) {
                 (Some(base), Some(idx)) => ExprKind::Index {

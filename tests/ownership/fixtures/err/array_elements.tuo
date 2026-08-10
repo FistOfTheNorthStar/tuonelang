@@ -1,0 +1,24 @@
+// ownership.md §2 — fixed arrays (ADR-0004 Stage 2): a non-`Copy` `[T; N]`
+// moves as one whole value (O0001 on reuse), and index expressions are not
+// places, so a non-`Copy` element cannot be read out by value (O0007 — the
+// same rule the growable `Array[T]` follows).
+
+fn eat(take xs: [String; 2]) { }
+
+fn eat_one(take s: String) { }
+
+fn case_fixed_array_moves_whole(take s1: String, take s2: String) {
+    let xs = [s1, s2];
+    eat(xs);
+    eat(xs); // ERROR: O0001 `xs` was moved by the first call
+}
+
+fn case_no_move_out_of_index(take s1: String, take s2: String) {
+    let xs = [s1, s2];
+    eat_one(xs[0]); // ERROR: O0007 cannot move an element out of an index expression
+}
+
+fn case_list_element_moves_in(take s: String) {
+    let xs = [s];
+    eat_one(s); // ERROR: O0001 `s` was moved into the literal
+}

@@ -220,7 +220,9 @@ pub enum Statement {
     /// contents; a `Shared` decrements its count and destroys the
     /// contents (and both counts' storage) when it reaches zero; a `Weak`
     /// releases its handle; an `Array` drops elements front to back, then
-    /// the storage; a `String` frees its buffer; a struct or enum drops
+    /// the storage; a `[T; N]` drops elements front to back and frees
+    /// nothing (its storage is inline); a `String` frees its buffer; a
+    /// struct or enum drops
     /// its (active variant's) fields in declaration order; every `Copy`
     /// value's drop is a no-op. After the statement the place is
     /// uninitialized.
@@ -288,7 +290,10 @@ pub enum Rvalue {
     /// `place`, as a `Usize`: the declaration-order index of the active
     /// variant (`Some` = 0, `None` = 1; `Ok` = 0, `Err` = 1).
     Discriminant(Place),
-    /// The length of the array at `place`, as a `Usize`.
+    /// The length of the **growable** `Array[T]` at `place`, as a `Usize`.
+    /// A fixed `[T; N]`'s length is a compile-time constant: lowering
+    /// emits `Const N : Usize` instead, and the verifier rejects `Len` of
+    /// a fixed-array place (ADR-0004 Stage 2).
     Len(Place),
 }
 
@@ -373,6 +378,16 @@ pub enum AggregateKind {
     },
     /// A range value from two operands, start then end.
     Range,
+    /// A fixed-size array value `[element; len]`. The operands are the
+    /// `len` elements in index order. Carrying both `element` and `len`
+    /// keeps verification local (no destination-type inference) and makes
+    /// the rendered MIR self-describing (ADR-0004 Stage 2).
+    Array {
+        /// The element type.
+        element: Ty,
+        /// The number of elements; always equals the operand count.
+        len: u64,
+    },
 }
 
 /// The closing control transfer of a basic block.

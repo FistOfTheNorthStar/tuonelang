@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use tuo_ast::{
-    Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, GenericParams, ImportDecl, Item, Name,
-    Pattern, SpecDecl, SpecStatement, Statement, TypeArgs, TypePath, TypeRef,
+    ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, GenericParams, ImportDecl,
+    Item, Name, Pattern, SpecDecl, SpecStatement, Statement, TypeArgs, TypePath, TypeRef,
 };
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 use tuo_source::Span;
@@ -1110,6 +1110,20 @@ impl Resolver {
             Expr::Index(index) => {
                 self.walk_operands(scopes, index.base(), index.index());
             }
+            Expr::ArrayLiteral(literal) => match literal.kind() {
+                // `[a, b, c]` / `[x; N]` (ADR-0004 Stage 2): the elements
+                // (or the repeated value) resolve; the length is a literal
+                // token, never a name.
+                Some(ArrayLiteralKind::List(elements)) => {
+                    for element in elements {
+                        self.walk_expr(scopes, element);
+                    }
+                }
+                Some(ArrayLiteralKind::Repeat { value, .. }) => {
+                    self.walk_expr(scopes, value);
+                }
+                None => {}
+            },
             Expr::Try(inner) => {
                 if let Some(expr) = inner.inner() {
                     self.walk_expr(scopes, expr);
@@ -1233,6 +1247,14 @@ impl Resolver {
                 }
                 if let Some(args) = path.args() {
                     self.walk_type_args(scopes, args);
+                }
+            }
+            TypeRef::FixedArray(array) => {
+                // `[T; N]` (ADR-0004 Stage 2): only the element type
+                // resolves; the length is a literal token, and `[T; N]`
+                // itself is structural — it never enters name resolution.
+                if let Some(element) = array.element() {
+                    self.walk_type(scopes, element);
                 }
             }
         }
