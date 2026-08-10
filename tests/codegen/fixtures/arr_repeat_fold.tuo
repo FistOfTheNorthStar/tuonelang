@@ -1,0 +1,8 @@
+fn main() -> Int {
+    let sevens = [7; 5];
+    var total = 0;
+    for x in sevens {
+        total = total + x;
+    }
+    total
+}

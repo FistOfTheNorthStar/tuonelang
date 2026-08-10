@@ -2,86 +2,88 @@ module geometry;
 
 // geometry — the middle layer of the dogfooding workspace.
 //
-// Integer-lattice geometry built on `numeric`. This layer surfaces a real v0
-// limitation (recorded in DOGFOODING.md and ADR-0004): with no product type in
-// the runnable core, a "point" cannot be one value — every point is passed as a
-// separate `x`/`y` pair. The functions are still genuine geometry, and each is
-// pinned by a spec.
+// Integer-lattice geometry built on `numeric`. A point on the lattice is a
+// first-class value: the `Point` struct (ADR-0004). Every distance function
+// takes whole points, and each is pinned by a spec.
 
 import numeric::abs;
 import numeric::max;
 import numeric::isqrt;
 
+/// A point on the integer lattice.
+pub struct Point {
+    x: Int,
+    y: Int,
+}
+
+/// Build a `Point` from its coordinates.
+pub fn point(take x: Int, take y: Int) -> Point {
+    Point { x: x, y: y }
+}
+
 /// Manhattan (taxicab) distance between two lattice points. The natural metric
 /// when only integer moves are allowed, and exact in integer arithmetic.
-pub fn manhattan(take ax: Int, take ay: Int, take bx: Int, take by: Int) -> Int {
-    abs(ax - bx) + abs(ay - by)
+pub fn manhattan(take a: Point, take b: Point) -> Int {
+    abs(a.x - b.x) + abs(a.y - b.y)
 }
 
 /// Chebyshev (chessboard) distance: the max of the per-axis gaps.
-pub fn chebyshev(take ax: Int, take ay: Int, take bx: Int, take by: Int) -> Int {
-    max(abs(ax - bx), abs(ay - by))
+pub fn chebyshev(take a: Point, take b: Point) -> Int {
+    max(abs(a.x - b.x), abs(a.y - b.y))
 }
 
 /// The squared Euclidean distance — exact in integers (no square root taken).
-pub fn dist_squared(take ax: Int, take ay: Int, take bx: Int, take by: Int) -> Int {
-    let dx = ax - bx;
-    let dy = ay - by;
+pub fn dist_squared(take a: Point, take b: Point) -> Int {
+    let dx = a.x - b.x;
+    let dy = a.y - b.y;
     dx * dx + dy * dy
 }
 
 /// The Euclidean distance, floored to an integer via `numeric::isqrt`.
-pub fn dist_floor(take ax: Int, take ay: Int, take bx: Int, take by: Int) -> Int {
-    isqrt(dist_squared(ax, ay, bx, by))
+pub fn dist_floor(take a: Point, take b: Point) -> Int {
+    isqrt(dist_squared(a, b))
 }
 
 /// Twice the signed area of the triangle (a, b, c) — the 2D cross product. Its
 /// sign tells orientation: > 0 counter-clockwise, < 0 clockwise, 0 collinear.
-pub fn cross(
-    take ax: Int,
-    take ay: Int,
-    take bx: Int,
-    take by: Int,
-    take cx: Int,
-    take cy: Int,
-) -> Int {
-    (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+pub fn cross(take a: Point, take b: Point, take c: Point) -> Int {
+    (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
 }
 
 /// The area of an axis-aligned rectangle given two opposite corners.
-pub fn rect_area(take ax: Int, take ay: Int, take bx: Int, take by: Int) -> Int {
-    abs(bx - ax) * abs(by - ay)
+pub fn rect_area(take a: Point, take b: Point) -> Int {
+    abs(b.x - a.x) * abs(b.y - a.y)
 }
 
 spec manhattan {
-    then manhattan(0, 0, 3, 4) == 7;
-    then manhattan(1, 1, 1, 1) == 0;
-    then manhattan(0 - 2, 0 - 3, 2, 3) == 10;
+    then manhattan(point(0, 0), point(3, 4)) == 7;
+    then manhattan(point(1, 1), point(1, 1)) == 0;
+    then manhattan(point(0 - 2, 0 - 3), point(2, 3)) == 10;
 }
 
 spec chebyshev {
-    then chebyshev(0, 0, 3, 4) == 4;
-    then chebyshev(0, 0, 5, 1) == 5;
+    then chebyshev(point(0, 0), point(3, 4)) == 4;
+    then chebyshev(point(0, 0), point(5, 1)) == 5;
 }
 
 spec dist_squared {
-    then dist_squared(0, 0, 3, 4) == 25;
-    then dist_squared(1, 2, 4, 6) == 25;
+    then dist_squared(point(0, 0), point(3, 4)) == 25;
+    then dist_squared(point(1, 2), point(4, 6)) == 25;
 }
 
 spec dist_floor {
-    then dist_floor(0, 0, 3, 4) == 5;
-    then dist_floor(0, 0, 2, 2) == 2;
+    then dist_floor(point(0, 0), point(3, 4)) == 5;
+    then dist_floor(point(0, 0), point(2, 2)) == 2;
 }
 
 spec cross {
     // (0,0)->(1,0)->(1,1) turns counter-clockwise: positive.
-    then cross(0, 0, 1, 0, 1, 1) == 1;
+    then cross(point(0, 0), point(1, 0), point(1, 1)) == 1;
     // collinear points give zero.
-    then cross(0, 0, 2, 2, 4, 4) == 0;
+    then cross(point(0, 0), point(2, 2), point(4, 4)) == 0;
 }
 
 spec rect_area {
-    then rect_area(0, 0, 4, 3) == 12;
-    then rect_area(2, 2, 0 - 1, 0 - 1) == 9;
+    then rect_area(point(0, 0), point(4, 3)) == 12;
+    then rect_area(point(2, 2), point(0 - 1, 0 - 1)) == 9;
 }

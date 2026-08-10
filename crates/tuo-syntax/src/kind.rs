@@ -83,6 +83,9 @@ pub enum SyntaxKind {
     UnitType,
     /// `Box[T]`, `Shared[T]`, `Weak[T]` (D).
     WrapperType,
+    /// `[ type ; INT ]` — the fixed-capacity array type `[T; N]`
+    /// (D, `[EXPERIMENTAL]` ADR-0004).
+    FixedArrayType,
     /// `[type, type]` applied to a type or path (D).
     TypeArguments,
 
@@ -124,6 +127,10 @@ pub enum SyntaxKind {
     PathExpr,
     /// `:: [T]` explicit type arguments at a value path (G).
     Turbofish,
+    /// `[ expr, … ]` or `[ expr ; INT ]` — one kind for both array-literal
+    /// forms; the `Semi` token distinguishes them losslessly
+    /// (G, `[EXPERIMENTAL]` ADR-0004).
+    ArrayLiteral,
     /// `Point { x: 1, y }` (G).
     StructLiteral,
     /// One `name : expr` or shorthand `name` initializer (G).
@@ -201,6 +208,7 @@ impl SyntaxKind {
         matches!(
             self,
             Self::AssignExpr
+                | Self::ArrayLiteral
                 | Self::BinaryExpr
                 | Self::RangeExpr
                 | Self::UnaryExpr

@@ -2,6 +2,56 @@ fn head(in items: Array[Int]) -> Int {
     items[0]
 }
 
+// Fixed-capacity arrays (ADR-0004 Stage 2): the [T; N] type, both literal
+// forms, indexing, iteration, nesting, and the generic-substitution paths.
+
+struct Buffer[T] {
+    xs: [T; 2],
+}
+
+fn fixed_list() -> Int {
+    let xs: [Int; 4] = [1, 2, 3, 4];
+    xs[0] + xs[3]
+}
+
+fn fixed_repeat() -> Int {
+    let zeros = [0; 8];
+    zeros[7]
+}
+
+fn fixed_empty() -> [Int; 0] {
+    let empty: [Int; 0] = [];
+    empty
+}
+
+fn fixed_nested() -> Bool {
+    let grid: [[Bool; 2]; 3] = [[true, false]; 3];
+    grid[2][1]
+}
+
+fn fixed_iterate(in xs: [Int; 3]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    for y in [1, 2, 3] {
+        total = total + y;
+    }
+    total
+}
+
+fn fixed_generic_field() -> Int {
+    // Pins the substitution walkers: `[T; 2]` instantiated at `Int` must
+    // flow through typing, field access, and indexing.
+    let buffer = Buffer { xs: [4, 5] };
+    buffer.xs[0] + buffer.xs[1]
+}
+
+fn fixed_underscore_separators() -> Int {
+    let xs = [0; 1_024];
+    xs[1_023]
+}
+
 fn sum(in items: Array[Int], in count: Usize) -> Int {
     var total = 0;
     var i: Usize = 0;

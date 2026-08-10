@@ -1,0 +1,7 @@
+struct Point { x: Int, y: Int }
+fn shift(take p: Point, take d: Int) -> Point { Point { x: p.x + d, y: p.y + d } }
+fn main() -> Int {
+    let p = Point { x: 10, y: 20 };
+    let q = shift(p, 5);
+    q.x + q.y
+}

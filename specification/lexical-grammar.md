@@ -176,6 +176,12 @@ generics use square brackets `[T]` (§18). This is why the parser needs no
 special handling for the `<`/`>` “is this a generic or a comparison?” ambiguity
 that complicates C++/Rust-family parsers.
 
+**Fixed-capacity arrays add no tokens** (ADR-0004 Stage 2): the `[T; N]` type
+and the `[a, b, c]` / `[x; N]` literals are built entirely from the existing
+`[` `]` delimiters, the `;` separator, the `,` separator, and `INT_LITERAL`.
+The `;`-inside-brackets disambiguation (`;` after the first expression selects
+the repeat form) is a parser concern, not a lexical one.
+
 **No compound-assignment, no bitwise-operator tokens in v0.** `+=`, `|`, `&`,
 `^`, `<<`, `>>` are intentionally absent from the token set; the `|` glyph exists
 only inside patterns (`A | B`) and bounds (`T + U` uses `+`). These omissions are

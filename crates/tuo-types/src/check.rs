@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 
 use tuo_ast::{
-    Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, Item, LiteralPat, Name, Pattern, SpecDecl,
-    SpecStatement, Statement, StructLiteralExpr, TypeRef,
+    ArrayLiteralExpr, ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, Item,
+    LiteralPat, Name, Pattern, SpecDecl, SpecStatement, Statement, StructLiteralExpr, TypeRef,
 };
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 use tuo_lexer::TokenKind;
@@ -24,7 +24,7 @@ use tuo_source::Span;
 
 use crate::TypeckResult;
 use crate::infer::{InferCtx, VarClass};
-use crate::ty::{FloatKind, FnTy, IntKind, Ty, WrapperKind};
+use crate::ty::{FloatKind, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, Ty, WrapperKind};
 
 /// The type checker's diagnostic codes (the reserved `Txxxx` namespace).
 ///
@@ -41,6 +41,8 @@ use crate::ty::{FloatKind, FnTy, IntKind, Ty, WrapperKind};
 /// - `T0011` — type annotation needed.
 /// - `T0012` — expected a value/constructor, found something else.
 /// - `T0013` — `break`/`continue` outside a loop.
+/// - `T0014` — invalid fixed-size array length (suffixed, unparsable,
+///   or over [`MAX_FIXED_ARRAY_LEN`]).
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -420,6 +422,9 @@ impl<'a> Checker<'a> {
             "Char" => nullary(Ty::Char)?,
             "String" => nullary(Ty::String)?,
             "Str" => nullary(Ty::Str)?,
+            // `Array` stays the *growable* heap sequence; the fixed-size
+            // `[T; N]` is structural syntax (`TypeRef::FixedArray`) and
+            // never enters name resolution or this builtin table.
             "Array" => {
                 if !self.check_type_arity("Array", 1, args.len(), span) {
                     return Some(Ty::Error);
@@ -475,7 +480,89 @@ impl<'a> Checker<'a> {
                 }
                 self.lower_named(last, args)
             }
+            TypeRef::FixedArray(array) => {
+                let element = array
+                    .element()
+                    .map_or(Ty::Error, |element| self.lower_type(element));
+                let Some(len) = array.len() else {
+                    return Ty::Error;
+                };
+                match self.fixed_array_len(len.text, len.span) {
+                    Some(n) => Ty::FixedArray(Box::new(element), n),
+                    None => Ty::Error,
+                }
+            }
         }
+    }
+
+    /// Parse and validate the `INT_LITERAL` length of a `[T; N]` type or a
+    /// `[x; N]` repeat literal (ADR-0004 Stage 2): decimal / `0x` / `0o` /
+    /// `0b` with `_` separators, exactly the radix handling integer
+    /// literals get, but with **no type suffix admitted**, and capped at
+    /// [`MAX_FIXED_ARRAY_LEN`]. Reports `T0014` and returns `None` when
+    /// invalid; non-negativity is structural (`-` cannot begin an
+    /// `INT_LITERAL`).
+    fn fixed_array_len(&mut self, text: &str, span: Span) -> Option<u64> {
+        const INT_SUFFIXES: [&str; 10] = [
+            "isize", "usize", "i16", "i32", "i64", "u16", "u32", "u64", "i8", "u8",
+        ];
+        if INT_SUFFIXES.iter().any(|suffix| text.ends_with(suffix)) {
+            self.push(
+                Diagnostic::error(
+                    code(14),
+                    "a fixed-size array length must be a plain integer literal",
+                    span,
+                )
+                .with_primary_label("type suffix not allowed here")
+                .with_actual(StructuredValue::Name(text.to_owned())),
+            );
+            return None;
+        }
+        let digits = text.replace('_', "");
+        let parsed = if let Some(hex) = digits
+            .strip_prefix("0x")
+            .or_else(|| digits.strip_prefix("0X"))
+        {
+            u64::from_str_radix(hex, 16)
+        } else if let Some(bin) = digits
+            .strip_prefix("0b")
+            .or_else(|| digits.strip_prefix("0B"))
+        {
+            u64::from_str_radix(bin, 2)
+        } else if let Some(oct) = digits
+            .strip_prefix("0o")
+            .or_else(|| digits.strip_prefix("0O"))
+        {
+            u64::from_str_radix(oct, 8)
+        } else {
+            digits.parse()
+        };
+        let Ok(n) = parsed else {
+            self.push(
+                Diagnostic::error(
+                    code(14),
+                    format!("invalid fixed-size array length `{text}`"),
+                    span,
+                )
+                .with_actual(StructuredValue::Name(text.to_owned())),
+            );
+            return None;
+        };
+        if n > MAX_FIXED_ARRAY_LEN {
+            self.push(
+                Diagnostic::error(
+                    code(14),
+                    format!(
+                        "fixed-size array length {n} exceeds the maximum {MAX_FIXED_ARRAY_LEN}"
+                    ),
+                    span,
+                )
+                .with_expected(StructuredValue::Count(MAX_FIXED_ARRAY_LEN))
+                .with_actual(StructuredValue::Count(n)),
+            );
+            return None;
+        }
+        Some(n)
     }
 
     fn lower_named(&mut self, name: Name<'_>, args: Vec<Ty>) -> Ty {
@@ -1137,6 +1224,41 @@ impl<'a> Checker<'a> {
         shape.ty
     }
 
+    /// Type an array literal (ADR-0004 Stage 2).
+    ///
+    /// List form `[e0, …, ek-1]`: every element unifies against one fresh
+    /// element variable (a mismatch is reported at the offending element's
+    /// span) and the element *count* is the length — `[]` is a
+    /// `[_; 0]` whose element type must be solved from context or the
+    /// annotation-needed error fires at the literal. Repeat form `[x; N]`:
+    /// the operand types the element and the validated `N` is the length;
+    /// the `Copy` requirement on the repeated element is enforced by the
+    /// ownership checker (duplicating a non-`Copy` value is what §2
+    /// forbids).
+    fn array_literal(&mut self, literal: ArrayLiteralExpr<'_>, span: Span) -> Ty {
+        match literal.kind() {
+            Some(ArrayLiteralKind::List(elements)) => {
+                let elem = self.fresh(span);
+                let mut count: u64 = 0;
+                for element in elements {
+                    let element_span = self.at(value_span(&element));
+                    let actual = self.expr(element);
+                    self.expect_ty(&elem, &actual, element_span);
+                    count += 1;
+                }
+                Ty::FixedArray(Box::new(elem), count)
+            }
+            Some(ArrayLiteralKind::Repeat { value, len }) => {
+                let elem = self.expr(value);
+                match self.fixed_array_len(len.text, len.span) {
+                    Some(n) => Ty::FixedArray(Box::new(elem), n),
+                    None => Ty::Error,
+                }
+            }
+            None => Ty::Error,
+        }
+    }
+
     // ------------------------------------------------------------------
     // Expressions
     // ------------------------------------------------------------------
@@ -1173,6 +1295,7 @@ impl<'a> Checker<'a> {
             },
             Expr::Path(path) => self.path_value(path),
             Expr::StructLiteral(literal) => self.struct_literal(literal),
+            Expr::ArrayLiteral(literal) => self.array_literal(literal, span),
             Expr::Unary(unary) => {
                 let operand = unary.operand().map_or(Ty::Error, |inner| self.expr(inner));
                 match unary.op() {
@@ -1266,7 +1389,7 @@ impl<'a> Checker<'a> {
                     .map_or(span, |inner| self.at(value_span(&inner)));
                 let index_ty = index.index().map_or(Ty::Error, |inner| self.expr(inner));
                 match self.icx.apply(&base) {
-                    Ty::Array(item) => {
+                    Ty::Array(item) | Ty::FixedArray(item, _) => {
                         self.expect_ty(&Ty::Int(IntKind::Usize), &index_ty, index_span);
                         *item
                     }
@@ -1549,7 +1672,7 @@ impl<'a> Checker<'a> {
 
     fn element_ty(&mut self, iterable: &Ty, span: Span) -> Ty {
         match self.icx.apply(iterable) {
-            Ty::Range(item) | Ty::Array(item) => *item,
+            Ty::Range(item) | Ty::Array(item) | Ty::FixedArray(item, _) => *item,
             Ty::Error | Ty::Var(_) | Ty::Never => Ty::Error,
             other => {
                 let rendered = other.render(self.resolution);
@@ -1960,6 +2083,7 @@ fn substitute(ty: &Ty, map: &HashMap<SymbolId, Ty>) -> Ty {
         Ty::Param(symbol) => map.get(symbol).cloned().unwrap_or_else(|| ty.clone()),
         Ty::Tuple(items) => Ty::Tuple(items.iter().map(|item| substitute(item, map)).collect()),
         Ty::Array(item) => Ty::Array(Box::new(substitute(item, map))),
+        Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(substitute(item, map)), *n),
         Ty::Range(item) => Ty::Range(Box::new(substitute(item, map))),
         Ty::Fn(fn_ty) => Ty::Fn(Box::new(FnTy {
             params: fn_ty

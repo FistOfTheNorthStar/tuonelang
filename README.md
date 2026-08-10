@@ -13,12 +13,14 @@ programmers and AI coding agents.
 ## Status
 
 The compiler front end, reference interpreter, and native backends are
-implemented. tuonelang programs written against the **v0 scalar control-flow
-core** compile, spec-check, and run today. The v0 core is deliberate: integer
-arithmetic, `if`/`else`, direct and recursive function calls, and an integer
-`main`. Aggregates, effects/I-O, concurrency, and first-class functions are
-tracked capability gaps (proposed ADR-0004/0006/0007/0008), not yet in the
-runnable core.
+implemented. tuonelang programs written against the **v0 runnable core**
+compile, spec-check, and run today. The core is deliberate: integer
+arithmetic, `if`/`else`, direct and recursive function calls, an integer
+`main`, and — since ADR-0004 landed — **structs, enums, `Option`/`Result`,
+fixed-capacity `[T; N]` arrays with checked indexing, and bounded `for`
+iteration**, all compiled natively by both backends in lock-step with the
+interpreter. Effects/I-O, concurrency, and first-class functions are tracked
+capability gaps (proposed ADR-0006/0007/0008), not yet in the runnable core.
 
 - ✅ Front end: lexer → parser (lossless CST) → resolver → type checker →
   ownership checker, with human and machine-versioned diagnostics.
@@ -32,9 +34,9 @@ runnable core.
   reads **READY** — all sixteen criteria are `MET`, each backed by a committed
   proving artifact.
 
-Because tuonelang v0 ships only the scalar core, the compiler **refuses**
-programs outside it rather than mis-compiling them — no component advertises
-behavior it cannot perform.
+Because tuonelang v0 ships a deliberately bounded core, the compiler
+**refuses** programs outside it rather than mis-compiling them — no component
+advertises behavior it cannot perform.
 
 ## Quick start
 

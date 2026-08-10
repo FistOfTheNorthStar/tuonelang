@@ -121,19 +121,20 @@
       }
     },
     {
+      "label": "collections",
+      "description": "bulk construction, indexed lookups, and scans over the builtin fixed-size array `[Int; N]` (ADR-0004 Stage 2), the v0 collection",
+      "support": {
+        "support": "supported",
+        "source": "fn lookup(take table: [Int; 8], take i: Usize) -> Int {\n    table[i]\n}\n\nfn scan(take table: [Int; 8]) -> Int {\n    var total = 0;\n    for x in table {\n        total = total + x;\n    }\n    total\n}\n\nfn probe(take table: [Int; 8]) -> Int {\n    lookup(table, 0) + lookup(table, 3) + lookup(table, 7)\n}\n\nfn main() -> Int {\n    let table = [3, 1, 4, 1, 5, 9, 2, 6];\n    var total = 0;\n    var round = 0;\n    while round < 200 {\n        total = total + scan(table) + probe(table);\n        round = round + 1;\n    }\n    total\n}\n",
+        "expected_exit": 8
+      }
+    },
+    {
       "label": "allocation",
       "description": "heap allocation and deallocation throughput",
       "support": {
         "support": "unsupported",
-        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet. No program can exercise allocation."
-      }
-    },
-    {
-      "label": "collections",
-      "description": "insert/lookup over a standard collection",
-      "support": {
-        "support": "unsupported",
-        "reason": "v0 lowers no collection type. std::collections is a documented catalog of free-function contracts, not executable collection code. No program can exercise collections."
+        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet (the fixed `[T; N]` is inline and allocates nothing). No program can exercise allocation."
       }
     },
     {
@@ -201,6 +202,19 @@
         "expected_exit": 109
       },
       "tuonelang_exit": 109,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "collections",
+        "peer": "c",
+        "peer_source": "static long long lookup(const long long table[8], long long i) { return table[i]; }\n\nstatic long long scan(const long long table[8]) {\n    long long total = 0;\n    for (int k = 0; k < 8; k++) {\n        total += table[k];\n    }\n    return total;\n}\n\nstatic long long probe(const long long table[8]) {\n    return lookup(table, 0) + lookup(table, 3) + lookup(table, 7);\n}\n\nint main(void) {\n    long long table[8] = {3, 1, 4, 1, 5, 9, 2, 6};\n    long long total = 0;\n    for (long long round = 0; round < 200; round++) {\n        total += scan(table) + probe(table);\n    }\n    return (int)total;\n}\n",
+        "expected_exit": 8
+      },
+      "tuonelang_exit": 8,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

@@ -9,36 +9,41 @@ module app;
 // as the process exit status. Runnable with `tuo run`, spec-checked with
 // `tuo test`.
 
+import geometry::Point;
+import geometry::point;
 import geometry::manhattan;
 import geometry::dist_floor;
 import numeric::max;
 
-// The polyline: five waypoints on the integer lattice, each a coordinate pair.
-// (A product type would let these be five points instead of ten accessors —
-// see DOGFOODING.md / ADR-0004.)
-fn p0x() -> Int { 0 }
-fn p0y() -> Int { 0 }
-fn p1x() -> Int { 3 }
-fn p1y() -> Int { 4 }
-fn p2x() -> Int { 3 }
-fn p2y() -> Int { 10 }
-fn p3x() -> Int { 8 }
-fn p3y() -> Int { 10 }
-fn p4x() -> Int { 8 }
-fn p4y() -> Int { 2 }
+// The polyline: five waypoints on the integer lattice, each a `Point`.
+fn p0() -> Point {
+    point(0, 0)
+}
+fn p1() -> Point {
+    point(3, 4)
+}
+fn p2() -> Point {
+    point(3, 10)
+}
+fn p3() -> Point {
+    point(8, 10)
+}
+fn p4() -> Point {
+    point(8, 2)
+}
 
 /// The total Manhattan length of the four-leg polyline.
 fn path_length() -> Int {
-    let leg0 = manhattan(p0x(), p0y(), p1x(), p1y());
-    let leg1 = manhattan(p1x(), p1y(), p2x(), p2y());
-    let leg2 = manhattan(p2x(), p2y(), p3x(), p3y());
-    let leg3 = manhattan(p3x(), p3y(), p4x(), p4y());
+    let leg0 = manhattan(p0(), p1());
+    let leg1 = manhattan(p1(), p2());
+    let leg2 = manhattan(p2(), p3());
+    let leg3 = manhattan(p3(), p4());
     leg0 + leg1 + leg2 + leg3
 }
 
 /// The floored straight-line length of the first leg, for comparison.
 fn first_leg_euclidean() -> Int {
-    dist_floor(p0x(), p0y(), p1x(), p1y())
+    dist_floor(p0(), p1())
 }
 
 /// The longer of the two figures — exercising a direct `numeric` dependency

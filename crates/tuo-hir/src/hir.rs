@@ -317,6 +317,16 @@ pub enum TyKind {
         /// The wrapped type arguments, in source order.
         args: Vec<Ty>,
     },
+    /// A fixed-capacity array type `[T; N]` (ADR-0004 Stage 2). The length
+    /// is the normalized digit string (separators removed), exactly like
+    /// [`Lit::Int`] — value parsing and overflow are a type-checker concern
+    /// per the grammar's superset rule.
+    FixedArray {
+        /// The element type.
+        element: Box<Ty>,
+        /// The length digits as written, separators removed.
+        len: String,
+    },
     /// A malformed type reference; poison.
     Err,
 }
@@ -595,6 +605,19 @@ pub enum ExprKind {
         receiver: Box<Expr>,
         /// The field name or tuple index as written.
         name: String,
+    },
+    /// An array literal in list form: `[a, b, c]` (0+ elements). The
+    /// element count is the resulting fixed array's length (ADR-0004
+    /// Stage 2).
+    Array(Vec<Expr>),
+    /// An array literal in repeat form: `[value; len]` (ADR-0004 Stage 2).
+    /// The length is the normalized digit string (separators removed),
+    /// exactly like [`Lit::Int`].
+    ArrayRepeat {
+        /// The repeated value.
+        value: Box<Expr>,
+        /// The length digits as written, separators removed.
+        len: String,
     },
     /// An index: `base[index]`.
     Index {

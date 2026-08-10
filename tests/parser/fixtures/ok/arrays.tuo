@@ -1,0 +1,31 @@
+// ADR-0004 Stage 2: fixed-capacity array syntax — the [T; N] type and both
+// literal forms, exercising the one-token disambiguation (a `[` at primary
+// position opens a literal; `;` after the first element selects the repeat
+// form) and index-vs-literal postfix handling.
+
+fn literals() -> Int {
+    let empty: [Int; 0] = [];
+    let list = [1, 2, 3];
+    let trailing = [1, 2, 3,];
+    let repeat = [0; 8];
+    let nested: [[Bool; 2]; 3] = [[true, false]; 3];
+    let separators = [0; 1_024];
+    list[0] + trailing[1] + repeat[7] + separators[9]
+}
+
+fn indexing(in xs: [Int; 4]) -> Int {
+    xs[0] + [10, 20][1]
+}
+
+fn iteration() -> Int {
+    var total = 0;
+    for x in [1, 2, 3] {
+        total = total + x;
+    }
+    total
+}
+
+fn types(in grid: [[Int; 2]; 2], take row: [Int; 2]) -> [Int; 2] {
+    let picked: [Int; 2] = grid[0];
+    picked
+}

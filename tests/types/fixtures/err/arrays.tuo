@@ -1,0 +1,46 @@
+// Fixed-capacity array errors (ADR-0004 Stage 2): length mismatches are
+// ordinary T0001 mismatches rendering both types; bad lengths are T0014.
+
+fn length_mismatch() -> Int {
+    let a: [Int; 4] = [1, 2, 3];
+    a[0]
+}
+
+fn element_mismatch() -> Int {
+    let xs = [1, true, 3];
+    xs[0]
+}
+
+fn repeat_length_suffixed() -> Int {
+    let xs = [0; 8i64];
+    xs[0]
+}
+
+fn type_length_suffixed() -> Int {
+    let xs: [Int; 3u32] = [1, 2, 3];
+    xs[0]
+}
+
+fn over_the_cap() -> Int {
+    let xs = [0; 65537];
+    xs[0]
+}
+
+fn type_over_the_cap(in xs: [Int; 100000]) -> Int {
+    xs[0]
+}
+
+fn empty_needs_annotation() {
+    let empty = [];
+}
+
+fn index_must_be_usize() -> Int {
+    let xs = [1, 2, 3];
+    let i: I32 = 1;
+    xs[i]
+}
+
+fn not_indexable() -> Int {
+    let flag = true;
+    flag[0]
+}

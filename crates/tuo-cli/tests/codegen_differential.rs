@@ -121,6 +121,59 @@ fn integer_division_matches_the_interpreter() {
 }
 
 #[test]
+fn stage1_aggregates_match_the_interpreter() {
+    // ADR-0004 Stage 1 aggregate lowering (product types, scalar fields): the
+    // default backend must agree with the reference interpreter on structs,
+    // tuples, enums, `Option`, and `Result` crossing call boundaries.
+    for name in [
+        "unsupported_struct.tuo",
+        "agg_struct_param.tuo",
+        "agg_struct_return.tuo",
+        "agg_struct_both.tuo",
+        "agg_enum_match.tuo",
+        "agg_enum_payload.tuo",
+        "agg_option.tuo",
+        "agg_result.tuo",
+        "agg_nested.tuo",
+        "agg_move.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn stage2_fixed_arrays_match_the_interpreter() {
+    // ADR-0004 Stage 2 fixed-capacity arrays: the default (Cranelift) backend
+    // must agree with the reference interpreter on inline construction,
+    // indexing, for-folds, nesting, and array parameters/returns.
+    for name in [
+        "arr_literal_index.tuo",
+        "arr_repeat_fold.tuo",
+        "arr_param_return.tuo",
+        "arr_nested.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn a_fixed_array_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
+    // The interpreter traps `IndexOutOfBounds`; the native binary must abort
+    // with the runtime's fixed trap status (the bounds `Assert` is in the MIR
+    // before the unchecked address arithmetic the backend emits).
+    let path = fixture("arr_trap_oob.tuo");
+    assert!(
+        interpret_main(&path).is_err(),
+        "the reference interpreter should trap on the out-of-bounds index"
+    );
+    assert_eq!(
+        run_native(&path),
+        TRAP_EXIT_STATUS,
+        "a native out-of-bounds trap must terminate with the runtime's fixed trap status"
+    );
+}
+
+#[test]
 fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
     // The reference interpreter traps on this program, and the native binary
     // must likewise abort — with the runtime's fixed trap status, distinct from
@@ -139,11 +192,12 @@ fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
 
 #[test]
 fn a_program_outside_the_backend_subset_is_refused_not_miscompiled() {
-    // A program the native backend does not lower yet (an aggregate) must be
-    // *refused* with a failure exit, never silently mis-compiled. The
-    // interpreter remains the reference and can still run it (checked
-    // elsewhere); here we assert `tuo build` declines cleanly.
-    let path = fixture("unsupported_struct.tuo");
+    // A program the native backend does not lower yet (an aggregate carrying a
+    // `String`/`Str`, which ADR-0004 Stage 1 does not cover) must be *refused*
+    // with a failure exit, never silently mis-compiled. The interpreter remains
+    // the reference and can still run it (checked elsewhere); here we assert
+    // `tuo build` declines cleanly.
+    let path = fixture("unsupported_string.tuo");
     let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
         .arg("build")
         .arg("-o")

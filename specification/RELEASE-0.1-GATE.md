@@ -216,9 +216,9 @@ artifact that decides it, and its current status with a one-line justification.
 - **Status:** **MET.** As of this gate there are **zero** open interpreter/backend
   semantic divergences: the differential suites are green, so the backends agree
   with the reference interpreter on every fixture and every generated program. The
-  only remaining open items are the dogfooding ADRs (ADR-0004/0006/0007/0008),
-  which are *capability gaps*, not divergences — they are enumerated below and none
-  is a silent deferral.
+  only remaining open items are the dogfooding ADRs (ADR-0006/0007/0008;
+  ADR-0004 is now **accepted and landed**), which are *capability gaps*, not
+  divergences — they are enumerated below and none is a silent deferral.
 
 ---
 
@@ -252,8 +252,10 @@ them. The interpreter⇄Cranelift⇄LLVM differential suites are green, so there
 open semantic divergences. Per the gate's own rule, 0.1 may be declared ready.
 
 The remaining items enumerated under "Capability gaps" below are **not** gate
-criteria — 0.1 ships the scalar control-flow runnable core deliberately, and each
-gap is a proposed ADR with a scope decision of its own, not a silent deferral.
+criteria — 0.1 ships the scalar control-flow core **plus the ADR-0004
+aggregates** (structs, enums, fixed `[T; N]` arrays, bounded iteration)
+deliberately, and each remaining gap is a proposed ADR with a scope decision of
+its own, not a silent deferral.
 
 ## Remaining work before 0.1
 
@@ -266,13 +268,13 @@ difference between "specified, distributed" and "specified, collected."
 ## Capability gaps (not gate criteria, tracked for honesty)
 
 These are **not** 0.1 release-gate criteria — 0.1 ships the scalar control-flow
-runnable core deliberately — but the gate records them so no reader mistakes their
-absence for a divergence. Each has a proposed ADR from the Prompt 39 dogfooding
-exercise (`DOGFOODING.md`) and a benchmark plan:
+core plus the ADR-0004 aggregates deliberately — but the gate records them so no
+reader mistakes their absence for a divergence. Each has an ADR from the Prompt
+39 dogfooding exercise (`DOGFOODING.md`) and a benchmark plan:
 
 | Gap | ADR | Benchmark consideration |
 |-----|-----|-------------------------|
-| Aggregates + iteration in the runnable core | ADR-0004 (proposed) | unblocks the perf-lab `collections` workload |
+| Aggregates + iteration in the runnable core | ADR-0004 (**accepted, landed**) | done — the perf-lab `collections` workload is `Supported` with its committed program and C peer |
 | Effect boundary + runtime strings | ADR-0006 (proposed) | unblocks `string-processing` + `networking` |
 | Concurrency model | ADR-0007 (proposed) | new parallel-speedup benchmark category |
 | First-class functions | ADR-0008 (proposed) | extends `function-calls` with indirect calls |

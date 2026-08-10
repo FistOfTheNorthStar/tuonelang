@@ -6,16 +6,18 @@ in the `tuo-bench` crate (`lab::runtime`); the committed programs live here.
 
 ## What v0 can and cannot measure
 
-tuonelang v0 compiles and runs the **scalar, control-flow core** only: `Int`
-arithmetic, comparison, `if`/`else`, function calls, and recursion (see the
-codegen and stdlib conventions in the root `CLAUDE.md`). It has **no heap, no
-collections, no runtime string values, and no effect boundary** yet.
+tuonelang v0 compiles and runs the **scalar, control-flow core** — `Int`
+arithmetic, comparison, `if`/`else`, function calls, and recursion — plus,
+since ADR-0004 Stage 2, the **fixed-capacity array** `[T; N]` (inline,
+stack-allocated; see the codegen conventions in the root `CLAUDE.md`). It has
+**no heap, no runtime string values, and no effect boundary** yet.
 
-The performance-laboratory prompt lists eight runtime workloads. Four map onto
-the scalar core and are measured with real programs; four cannot be expressed at
-all in v0 and are recorded — honestly — as unsupported, with the exact reason,
-and **no fabricated number**. The moment a feature lands, its entry gains a
-program and the lab measures it with no other change.
+The performance-laboratory prompt lists eight runtime workloads. Five map onto
+the runnable core and are measured with real programs; three cannot be expressed
+at all in v0 and are recorded — honestly — as unsupported, with the exact
+reason, and **no fabricated number**. The moment a feature lands, its entry
+gains a program and the lab measures it with no other change — exactly the move
+`collections` made when the fixed array landed.
 
 | Workload | Status | Program |
 |----------|--------|---------|
@@ -23,8 +25,8 @@ program and the lab measures it with no other change.
 | `integer-computation` | measured | [`programs/tuo/integer-computation.tuo`](programs/tuo/integer-computation.tuo) |
 | `function-calls` | measured | [`programs/tuo/function-calls.tuo`](programs/tuo/function-calls.tuo) |
 | `recursion` | measured | [`programs/tuo/recursion.tuo`](programs/tuo/recursion.tuo) |
-| `allocation` | **not yet expressible** | no heap-allocating type is lowered to native code |
-| `collections` | **not yet expressible** | no collection type is lowered; `std::collections` is contract-tier |
+| `collections` | measured | [`programs/tuo/collections.tuo`](programs/tuo/collections.tuo) |
+| `allocation` | **not yet expressible** | no heap-allocating type is lowered to native code (`[T; N]` is inline and allocates nothing) |
 | `string-processing` | **not yet expressible** | no runtime `String` value is lowered |
 | `networking` | **not yet expressible** | no effect boundary (no FFI/syscalls) exists |
 

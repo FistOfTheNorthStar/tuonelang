@@ -148,6 +148,42 @@ fn nesting_beyond_the_limit_is_p0003_not_a_crash() {
 }
 
 #[test]
+fn nested_array_literals_beyond_the_limit_are_p0003_not_a_crash() {
+    // ADR-0004 Stage 2: the depth pre-scan already counts `[` in `delims`,
+    // so deeply nested array literals are bounded with no pre-scan change —
+    // asserted here, not assumed.
+    let text = format!(
+        "fn f() {{ let x = {}1{}; }}\n",
+        "[".repeat(500),
+        "]".repeat(500)
+    );
+    let result = parse_str(&text);
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(result.diagnostics[0].code.to_string(), "P0003");
+    result.tree.check_coverage().expect("coverage");
+    assert_eq!(result.tree.reconstruct(&text), text);
+}
+
+#[test]
+fn a_wide_flat_array_literal_parses_within_the_limit() {
+    // A long *flat* literal builds a wide, not deep, tree — safe, and must
+    // not trip the depth guard.
+    let text = format!(
+        "fn f() -> Int {{ let xs = [{}0]; xs[0] }}\n",
+        "1, ".repeat(2_000)
+    );
+    let result = parse_str(&text);
+    assert!(
+        !result
+            .diagnostics
+            .iter()
+            .any(|d| d.code.to_string() == "P0003"),
+        "a wide flat literal must not trip the depth guard"
+    );
+    assert_eq!(count(&result, SyntaxKind::FunctionItem), 1);
+}
+
+#[test]
 fn a_long_binary_chain_is_p0003_not_a_downstream_stack_overflow() {
     // A long left-associative operator chain parses iteratively (Pratt
     // precedence-climbing), so it does not overflow the parser — but it builds a

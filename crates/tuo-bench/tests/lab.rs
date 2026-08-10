@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use tuo_bench::lab::compare::{Verdict, comparison_for};
-use tuo_bench::lab::compiler::{ColdStage, Edit, measure_cold, measure_edit};
+use tuo_bench::lab::compiler::{self, ColdStage, Edit, measure_cold, measure_edit};
 use tuo_bench::lab::env::Environment;
 use tuo_bench::lab::report::{ComparisonEntry, LabReport, render_human};
 use tuo_bench::lab::runtime::{Support, workloads};
@@ -127,10 +127,11 @@ fn honesty_rules_hold_over_the_catalog() {
             }
         }
     }
-    // The v0 story: exactly the four scalar-core workloads run; the other four
-    // are honestly recorded as not-yet-expressible.
-    assert_eq!(supported, 4);
-    assert_eq!(unsupported, 4);
+    // The v0 story: the four scalar-core workloads plus the fixed-array
+    // collections workload (ADR-0004 Stage 2) run; the other three are
+    // honestly recorded as not-yet-expressible.
+    assert_eq!(supported, 5);
+    assert_eq!(unsupported, 3);
 }
 
 /// (3, cont.) The human report never markets. No superlative may appear, and
@@ -169,7 +170,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     // Schema + catalog invariants.
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 4);
+    assert_eq!(committed.supported_workload_count(), 5);
 
     // The deterministic edit scenarios regenerate identically.
     let fresh_edits = vec![
@@ -186,7 +187,7 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set.
-    assert_eq!(committed.comparisons.len(), 4);
+    assert_eq!(committed.comparisons.len(), 5);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -241,11 +242,11 @@ fn measured_lab_report_prints_under_nocapture() {
     let clock = SystemClock::new();
     let mut report = LabReport::new(Environment::capture());
 
-    // Cold front-end stages over a representative small program.
-    let src = "fn helper(take n: Int) -> Int { n + 1 }\n\
-               fn main() -> Int { helper(41) }\n";
+    // Cold front-end stages over the representative aggregate/loop program
+    // (struct + fixed array + bounded for, per ADR-0004), so the cold cost of
+    // the new lowering is what the lab tracks.
     for stage in [ColdStage::Lex, ColdStage::Parse, ColdStage::Check] {
-        if let Some(result) = measure_cold(&clock, stage, src, 50, 20) {
+        if let Some(result) = measure_cold(&clock, stage, compiler::COLD_AGGREGATE, 50, 20) {
             report.cold_stages.push(result);
         }
     }

@@ -44,6 +44,24 @@ ever required.
     `Copy`;
   - `String`, `Array[T]` (an owned heap array), `Box[T]`, `Shared[T]`, and
     `Weak[T]` are **never** `Copy`, regardless of `T`;
+  - a fixed-size array `[T; N]` (ADR-0004 Stage 2) is `Copy` iff `T` is —
+    the §2 aggregate rule applied to `N` identical fields; the length is
+    irrelevant. Contrast: the growable `Array[T]` above is **never** `Copy`
+    (it owns a heap buffer), while `[T; N]` owns no heap and inherits its
+    element's `Copy`-ness. A non-`Copy` `[T; N]` moves as one whole value,
+    exactly like a struct; element-wise partial moves do not exist because
+    index expressions are not places (`O0007`, §below). Dropping a `[T; N]`
+    drops elements front to back and frees nothing (the storage is inline);
+    a `Copy` fixed array's drop is a no-op. The repeat literal `[x; N]`
+    duplicates its operand `N` times and therefore requires a `Copy`
+    element for **every** `N` (uniform, no `N == 0`/`1` special cases) —
+    **O0010** otherwise, since duplicating a non-`Copy` value is precisely
+    what this section forbids. The list literal `[a, b, c]` has no such
+    restriction (each element is its own value, moved in). Iteration binds
+    each element **by copy**, so a `for` over a non-`Copy`-element fixed
+    array type-checks but is refused at MIR lowering, exactly as for
+    `Array[T]`. `in`/`mut` parameters of type `[T; N]` alias the caller's
+    inline storage like any other aggregate — no new rule;
   - a generic type parameter `T` is treated as **not** `Copy` inside a
     generic function body (checking happens once per `fn`, pre-monomorphization,
     and must be sound for every instantiation).
@@ -416,6 +434,7 @@ the negative fixture corpus:
 | `O0007` | Invalid explicit `move` (a `Copy` value or a non-place expression). |
 | `O0008` | Conditional move without reinitialization at a drop point (no hidden drop flags). |
 | `O0009` | Use of a partially moved value. |
+| `O0010` | Repeat array literal `[x; N]` of a non-`Copy` element (ADR-0004 Stage 2). |
 
 Every diagnostic names the place, the earlier action that produced the state
 (the move site, the borrow, the conflicting argument), and — where one

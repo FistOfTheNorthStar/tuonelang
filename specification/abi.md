@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `0` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `2` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -135,6 +135,24 @@ struct tuo_array {
   reads past `len`.
 - Dropping an `Array[T]` drops elements front-to-back, then frees the buffer.
 
+## Fixed-size arrays
+
+`[T; N]` is the builtin **inline, fixed-length** homogeneous sequence
+(ADR-0004 Stage 2). Unlike `Array[T]` — the owned, growable sequence whose
+value is a three-word `(ptr, len, cap)` heap header — a `[T; N]` value **is**
+its `N` elements, stored inline wherever the value lives (a local's stack
+slot, a struct field), with no header, no indirection, and no allocation.
+
+- `size = N × stride(T)`, `align = align(T)`; element *i* is at offset
+  `i × stride(T)`. For `N = 0` the value is zero-sized but still aligns like
+  `T`.
+- `N` is part of the type: `[I64; 3]` and `[I64; 4]` are distinct types with
+  distinct sizes.
+- Dropping a `[T; N]` drops elements front-to-back and frees nothing (the
+  storage is inline); a `Copy` element type makes the whole array `Copy` and
+  its drop a no-op.
+- The `Array[T]` header layout above is unchanged by this section.
+
 ## Box
 
 `Box[T]` is a **unique, owning** heap pointer — one word:
@@ -208,8 +226,9 @@ struct tuo_weak { tuo_shared_block[T] *ptr; }   // one word, never null
   active variant's payload, the whole sized/aligned to hold the largest variant.
   The discriminant is the variant's **declaration-order index** — byte-identical
   to the interpreter's `Value::Variant { variant, .. }`. `Option[T]` is
-  `{ 0 => None, 1 => Some(T) }`; `Result[T,E]` is `{ 0 => Ok(T), 1 => Err(E) }`,
-  matching declaration order. No niche/pointer packing in v0.
+  `{ 0 => Some(T), 1 => None }`; `Result[T,E]` is `{ 0 => Ok(T), 1 => Err(E) }`,
+  matching declaration order and the interpreter/MIR numbering (`Some`/`Ok` = 0).
+  No niche/pointer packing in v0.
 
 ## Panic / trap behavior
 
@@ -256,7 +275,9 @@ change; the shim seam is where it will attach.
 
 All heap memory (`Box`, `Shared`, `String`, `Array`) is acquired and released
 through **two C-ABI runtime symbols**, so the allocator is a single, swappable
-seam and no backend embeds `malloc` calls directly:
+seam and no backend embeds `malloc` calls directly. (A `[T; N]` fixed-size
+array never participates: its storage is inline and it never touches
+`tuo_rt_alloc`.)
 
 ```
 void *tuo_rt_alloc(usize size, usize align);          // never returns null; traps on OOM
@@ -326,9 +347,12 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `0`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `2`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
-it. The version is asserted by the crate's tests so a silent reinterpretation of
+it. Version `1` corrected `Option`'s variant numbering (`Some` = 0, `None` = 1)
+to match the interpreter and MIR. Version `2` added the inline `[T; N]`
+fixed-size array layout (`size = N × stride(T)`, `align = align(T)`, element
+`i` at `i × stride(T)`); no existing layout changed. The version is asserted by the crate's tests so a silent reinterpretation of
 bytes is impossible.

@@ -130,6 +130,10 @@ const PROGRAM_SKELETONS: &[&str] = &[
     "fn main() -> Int { let b = mkbox(); consume(b); consume({HOLE}) }",
     "fn main() -> Int { loop { break {HOLE}; } }",
     "struct S { x: Int } fn main() -> Int { {HOLE} }",
+    "fn main() -> Int { let xs = [{HOLE}, 2, 3]; xs[0] }",
+    "fn main() -> Int { let xs = [{HOLE}; 4]; xs[3] }",
+    "fn main() -> Int { let xs: [Int; 2] = {HOLE}; xs[1] }",
+    "fn main() -> Int { var t = 0; for x in [{HOLE}, 1] { t = t + x; } t }",
     "enum E { A, B } fn main() -> Int { {HOLE} }",
     "fn rec(take n: Int) -> Int { if n == 0 { 0 } else { rec(n - {HOLE}) } }",
     "spec main { then main() == {HOLE}; }",
@@ -154,6 +158,12 @@ const HOLE_LEAVES: &[&str] = &[
     "undefined",
     "1 + 1",
     "f(2)",
+    "[1, 2]",
+    "[0; 3]",
+    "[[1]; 2]",
+    "[]",
+    "[1; -1]",
+    "[1, 2,]",
 ];
 
 fn near_program(rng: &mut Rng) -> String {

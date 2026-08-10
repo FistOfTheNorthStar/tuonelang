@@ -141,11 +141,10 @@ fn a_non_integer_entry_is_unsupported() {
 }
 
 #[test]
-fn a_projected_place_makes_a_body_unsupported() {
-    // A body that reads a struct field (a projected place) is outside the
-    // scalar subset; the backend must refuse rather than mis-lower. Model it as
-    // `fn main() -> Int { _0.0 }` over a tuple local — verified MIR would guard
-    // this, but the backend's own rejection is what we assert.
+fn a_stage1_aggregate_field_read_now_compiles() {
+    // ADR-0004 Stage 1: reading a scalar field of a product-type local is now
+    // lowered. Model `fn main() -> Int { _1.0 }` over a tuple local: the backend
+    // must accept it (the field lives in the local's stack slot), not refuse it.
     use tuo_mir::{Projection, Rvalue};
     let pair_ty = Ty::Tuple(vec![Ty::int(), Ty::int()]);
     let function = Function {
@@ -181,6 +180,61 @@ fn a_projected_place_makes_a_body_unsupported() {
         functions: vec![function],
         skipped: Vec::new(),
     };
+    CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("a Stage-1 aggregate field read now compiles");
+}
+
+#[test]
+fn an_array_index_projection_is_still_unsupported() {
+    // Arrays are Stage 2: an `Index` projection must still be refused (never
+    // silently lowered) even though struct/tuple/enum projections now work.
+    use tuo_mir::{Projection, Rvalue};
+    let array_ty = Ty::Array(Box::new(Ty::int()));
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: array_ty,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![tuo_mir::Statement::Assign {
+                place: Place::local(tuo_mir::LocalId(0)),
+                rvalue: Rvalue::Use(Operand::Copy(Place {
+                    local: tuo_mir::LocalId(1),
+                    projection: vec![Projection::Index(tuo_mir::LocalId(2))],
+                })),
+            }],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
     let error = CraneliftBackend::new()
         .compile(
             &program,
@@ -189,6 +243,6 @@ fn a_projected_place_makes_a_body_unsupported() {
             EntryAbi::IntReturn,
             &TargetSpec::host(),
         )
-        .expect_err("a projected place is outside the scalar subset");
+        .expect_err("array indexing is a Stage 2 concern and must be refused");
     assert_eq!(error.kind, CodegenErrorKind::Unsupported);
 }

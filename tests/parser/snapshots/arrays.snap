@@ -1,0 +1,338 @@
+SourceFile
+  FunctionItem
+    KwFn "fn"
+    Ident "literals"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "empty"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          PathType
+            TypePath
+              Ident "Int"
+          Semi ";"
+          IntLiteral "0"
+          CloseBracket "]"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "list"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          Literal
+            IntLiteral "1"
+          Comma ","
+          Literal
+            IntLiteral "2"
+          Comma ","
+          Literal
+            IntLiteral "3"
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "trailing"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          Literal
+            IntLiteral "1"
+          Comma ","
+          Literal
+            IntLiteral "2"
+          Comma ","
+          Literal
+            IntLiteral "3"
+          Comma ","
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "repeat"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          Literal
+            IntLiteral "0"
+          Semi ";"
+          IntLiteral "8"
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "nested"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          FixedArrayType
+            OpenBracket "["
+            PathType
+              TypePath
+                Ident "Bool"
+            Semi ";"
+            IntLiteral "2"
+            CloseBracket "]"
+          Semi ";"
+          IntLiteral "3"
+          CloseBracket "]"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          ArrayLiteral
+            OpenBracket "["
+            Literal
+              BoolLiteral "true"
+            Comma ","
+            Literal
+              BoolLiteral "false"
+            CloseBracket "]"
+          Semi ";"
+          IntLiteral "3"
+          CloseBracket "]"
+        Semi ";"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "separators"
+        Eq "="
+        ArrayLiteral
+          OpenBracket "["
+          Literal
+            IntLiteral "0"
+          Semi ";"
+          IntLiteral "1_024"
+          CloseBracket "]"
+        Semi ";"
+      BinaryExpr
+        BinaryExpr
+          BinaryExpr
+            IndexExpr
+              PathExpr
+                Ident "list"
+              OpenBracket "["
+              Literal
+                IntLiteral "0"
+              CloseBracket "]"
+            Plus "+"
+            IndexExpr
+              PathExpr
+                Ident "trailing"
+              OpenBracket "["
+              Literal
+                IntLiteral "1"
+              CloseBracket "]"
+          Plus "+"
+          IndexExpr
+            PathExpr
+              Ident "repeat"
+            OpenBracket "["
+            Literal
+              IntLiteral "7"
+            CloseBracket "]"
+        Plus "+"
+        IndexExpr
+          PathExpr
+            Ident "separators"
+          OpenBracket "["
+          Literal
+            IntLiteral "9"
+          CloseBracket "]"
+      CloseBrace "}"
+  FunctionItem
+    KwFn "fn"
+    Ident "indexing"
+    ParamList
+      OpenParen "("
+      Param
+        KwIn "in"
+        Ident "xs"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          PathType
+            TypePath
+              Ident "Int"
+          Semi ";"
+          IntLiteral "4"
+          CloseBracket "]"
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      BinaryExpr
+        IndexExpr
+          PathExpr
+            Ident "xs"
+          OpenBracket "["
+          Literal
+            IntLiteral "0"
+          CloseBracket "]"
+        Plus "+"
+        IndexExpr
+          ArrayLiteral
+            OpenBracket "["
+            Literal
+              IntLiteral "10"
+            Comma ","
+            Literal
+              IntLiteral "20"
+            CloseBracket "]"
+          OpenBracket "["
+          Literal
+            IntLiteral "1"
+          CloseBracket "]"
+      CloseBrace "}"
+  FunctionItem
+    KwFn "fn"
+    Ident "iteration"
+    ParamList
+      OpenParen "("
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      PathType
+        TypePath
+          Ident "Int"
+    Block
+      OpenBrace "{"
+      VarStatement
+        KwVar "var"
+        BindingPattern
+          Ident "total"
+        Eq "="
+        Literal
+          IntLiteral "0"
+        Semi ";"
+      ExpressionStatement
+        ForExpr
+          KwFor "for"
+          BindingPattern
+            Ident "x"
+          KwIn "in"
+          ArrayLiteral
+            OpenBracket "["
+            Literal
+              IntLiteral "1"
+            Comma ","
+            Literal
+              IntLiteral "2"
+            Comma ","
+            Literal
+              IntLiteral "3"
+            CloseBracket "]"
+          Block
+            OpenBrace "{"
+            ExpressionStatement
+              AssignExpr
+                PathExpr
+                  Ident "total"
+                Eq "="
+                BinaryExpr
+                  PathExpr
+                    Ident "total"
+                  Plus "+"
+                  PathExpr
+                    Ident "x"
+              Semi ";"
+            CloseBrace "}"
+      PathExpr
+        Ident "total"
+      CloseBrace "}"
+  FunctionItem
+    KwFn "fn"
+    Ident "types"
+    ParamList
+      OpenParen "("
+      Param
+        KwIn "in"
+        Ident "grid"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          FixedArrayType
+            OpenBracket "["
+            PathType
+              TypePath
+                Ident "Int"
+            Semi ";"
+            IntLiteral "2"
+            CloseBracket "]"
+          Semi ";"
+          IntLiteral "2"
+          CloseBracket "]"
+      Comma ","
+      Param
+        KwTake "take"
+        Ident "row"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          PathType
+            TypePath
+              Ident "Int"
+          Semi ";"
+          IntLiteral "2"
+          CloseBracket "]"
+      CloseParen ")"
+    ReturnType
+      ThinArrow "->"
+      FixedArrayType
+        OpenBracket "["
+        PathType
+          TypePath
+            Ident "Int"
+        Semi ";"
+        IntLiteral "2"
+        CloseBracket "]"
+    Block
+      OpenBrace "{"
+      LetStatement
+        KwLet "let"
+        BindingPattern
+          Ident "picked"
+        Colon ":"
+        FixedArrayType
+          OpenBracket "["
+          PathType
+            TypePath
+              Ident "Int"
+          Semi ";"
+          IntLiteral "2"
+          CloseBracket "]"
+        Eq "="
+        IndexExpr
+          PathExpr
+            Ident "grid"
+          OpenBracket "["
+          Literal
+            IntLiteral "0"
+          CloseBracket "]"
+        Semi ";"
+      PathExpr
+        Ident "picked"
+      CloseBrace "}"

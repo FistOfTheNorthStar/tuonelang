@@ -13,7 +13,7 @@
 //! The checker runs after type checking and consumes its results (§16): a
 //! body containing a type error is not ownership-checked, and expressions
 //! the type checker poisons (method calls, pending the trait system) never
-//! produce ownership noise. Diagnostics use the reserved `O0001`–`O0009`
+//! produce ownership noise. Diagnostics use the reserved `O0001`–`O0010`
 //! codes of `specification/ownership.md` §15; each names the place, the
 //! earlier action that produced the state, and — where one exists — the
 //! local fix. The executable counterpart of the specification is the
@@ -39,7 +39,11 @@
 //!   deferred `let`/`var` must first be assigned as a whole.
 //! - **Index expressions are not places (`O0007`)**: nothing moves out of
 //!   or is assigned through `items[i]`; only `Copy` elements are read out
-//!   by value.
+//!   by value. This covers the growable `Array[T]` and the fixed `[T; N]`
+//!   alike (ADR-0004 Stage 2).
+//! - **A repeat literal needs a `Copy` element (`O0010`)**: `[x; N]`
+//!   duplicates its operand `N` times, and §2 forbids duplicating a
+//!   non-`Copy` value — uniformly, with no `N == 0`/`1` special cases.
 //! - **Generic values are move-only**: `T` is treated as non-`Copy` inside
 //!   a generic body (checking is pre-monomorphization).
 //!

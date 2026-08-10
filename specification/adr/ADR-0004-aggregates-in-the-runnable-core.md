@@ -1,6 +1,7 @@
 # ADR-0004: Aggregates and iteration in the runnable core
 
-- **Status:** proposed
+- **Status:** accepted (2026-08-10 — both stages landed; the acceptance
+  conditions below are met and enforced by committed artifacts)
 - **Date:** 2026-08-04
 - **Context:** Dogfooding v0 (see [`DOGFOODING.md`](../../DOGFOODING.md),
   findings **D-1** and **D-2**) showed that the single most repeated cost across
@@ -84,3 +85,33 @@
   compiler benchmarks must also gain an aggregate/loop program so the cold-check
   and incremental-edit costs of the new lowering are tracked from day one. This
   ADR is not "accepted" until that lab entry and its C peer exist.
+
+- **Resolution (2026-08-10):** both stages landed and every acceptance condition
+  above is met by a committed, test-pinned artifact:
+  - *Stage 1 (product types):* structs, tuples, enums, `Option`, and `Result`
+    with transitively scalar fields construct, project, and cross call
+    boundaries natively in both backends, laid out solely by
+    `tuo_runtime::abi` (`struct_field_offsets`/`variant_field_offsets`;
+    `ABI_VERSION` 2). Pinned by `tests/codegen/fixtures/agg_*.tuo` under the
+    three-way differential suites. Landing it exposed and fixed a latent ABI
+    bug: `Option`'s variant numbering was reversed relative to the reference
+    interpreter (`Some` = 0).
+  - *Stage 2 (fixed arrays + iteration):* the inline `[T; N]` type with
+    `[a, b, c]` / `[x; N]` literals, checked indexing, and bounded `for`
+    lowers end to end (`AggregateKind::Array`; a fixed array's length is a
+    compile-time constant — `Rvalue::Len` stays growable-`Array`-only and the
+    verifier rejects it on fixed arrays). Pinned by
+    `tests/codegen/fixtures/arr_*.tuo`, the extended differential generator,
+    and the fuzz-corpus array skeletons.
+  - *Benchmark condition:* the performance lab's `collections` workload is
+    `Support::Supported` with the committed
+    `benchmarks/runtime/programs/tuo/collections.tuo` and its C peer, and the
+    compiler lab's cold stages measure the aggregate/loop program
+    (`lab::compiler::COLD_AGGREGATE`), whose acceptance is itself test-pinned.
+  - *Oracle:* `examples/workspace/geometry` passes a `Point` struct,
+    `examples/data-pipeline` folds an `[Int; 8]` batch, and
+    `examples/cli-stats` holds an `[Int; 7]` dataset — identical spec verdicts
+    and exit bytes (26/144/18), enforced by `tuo-cli`'s `dogfood_examples`.
+  - *Deliberately out of scope, unchanged:* the growable `Array[T]` heap
+    header (a later ADR on the allocator seam), index expressions as
+    assignment targets, and iteration over non-`Copy` element arrays.

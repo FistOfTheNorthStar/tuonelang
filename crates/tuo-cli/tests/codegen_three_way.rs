@@ -181,14 +181,64 @@ fn a_deterministic_trap_agrees_across_all_three_engines() {
     assert_three_way_agreement("trap_div_zero.tuo");
 }
 
+/// The ADR-0004 Stage 1 aggregate lowering: product types (struct, tuple, enum,
+/// `Option`, `Result`) whose fields are all scalars, crossing call boundaries by
+/// pointer/sret. Each of these agrees across all three engines by construction —
+/// every offset comes from the one runtime ABI both backends consult.
+#[test]
+fn stage1_aggregates_agree_across_all_three_engines() {
+    for name in [
+        "unsupported_struct.tuo", // struct field read (now supported)
+        "agg_struct_param.tuo",   // aggregate parameter by pointer + copy-in
+        "agg_struct_return.tuo",  // aggregate return via sret
+        "agg_struct_both.tuo",    // sret + aggregate param ordering together
+        "agg_enum_match.tuo",     // enum discriminant feeding a Switch
+        "agg_enum_payload.tuo",   // enum variant payload fields
+        "agg_option.tuo",         // Option[Int] payload (Some = variant 0)
+        "agg_result.tuo",         // Result[Int, Int] both variants
+        "agg_nested.tuo",         // a struct field that is itself a struct
+        "agg_move.tuo",           // whole-aggregate move through a call
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// ADR-0004 Stage 2 fixed-capacity arrays `[T; N]`: inline construction (both
+/// literal forms), indexing (constant and loop-counter), for-folds, nesting,
+/// whole-array copy, and array parameters/returns through the by-pointer/sret
+/// call ABI. Each agrees across all three engines by construction — every
+/// element offset is `i × stride(T)` from the one runtime ABI both backends
+/// consult, and the bounds `Assert` is in the shared MIR before every index.
+#[test]
+fn stage2_fixed_arrays_agree_across_all_three_engines() {
+    for name in [
+        "arr_literal_index.tuo", // literal construction + constant index
+        "arr_repeat_fold.tuo",   // repeat construction + for-fold
+        "arr_param_return.tuo",  // array parameter + array return (sret)
+        "arr_nested.tuo",        // `[[Int; 2]; 3]` nesting + double index
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// An out-of-bounds index traps identically on all three engines: the
+/// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
+/// runtime's fixed trap status (the bounds `Assert` is lowered before the
+/// unchecked address arithmetic).
+#[test]
+fn a_fixed_array_out_of_bounds_trap_agrees_across_all_three_engines() {
+    assert_three_way_agreement("arr_trap_oob.tuo");
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
-    // A program outside the scalar subset (an aggregate) must be *refused* by
-    // both backends with a failure exit and an explanatory message, never
-    // silently mis-compiled. The interpreter remains the reference and can still
-    // run it. This asserts the two backends agree on the *boundary* of what they
-    // lower, not just on results inside it.
-    let path = fixture("unsupported_struct.tuo");
+    // A program still outside the native subset (an aggregate carrying a
+    // `String`/`Str`, which Stage 1 does not lower) must be *refused* by both
+    // backends with a failure exit and an explanatory message, never silently
+    // mis-compiled. The interpreter remains the reference and can still run it.
+    // This asserts the two backends agree on the *boundary* of what they lower,
+    // not just on results inside it.
+    let path = fixture("unsupported_string.tuo");
     for release in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
         command.arg("build");

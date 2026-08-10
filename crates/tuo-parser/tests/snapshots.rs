@@ -111,11 +111,17 @@ fn corpus_is_fully_covered() {
             "err/broken_items",
             "err/broken_statements",
             "err/unclosed",
+            "ok/arrays",
             "ok/hello",
             "ok/showcase",
         ],
         "new fixture? add a #[test] fn for it in snapshots.rs"
     );
+}
+
+#[test]
+fn arrays() {
+    check_ok("arrays");
 }
 
 #[test]

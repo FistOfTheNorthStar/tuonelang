@@ -1,0 +1,6 @@
+struct Point { x: Int, y: Int }
+fn make(take a: Int, take b: Int) -> Point { Point { x: a, y: b } }
+fn main() -> Int {
+    let p = make(30, 12);
+    p.x + p.y
+}

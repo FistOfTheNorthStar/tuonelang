@@ -288,7 +288,7 @@ impl Verifier<'_> {
                 self.variant_field_ty(ty, *variant, *field)
             }
             Projection::Index(_) => match ty {
-                Ty::Array(item) => Some((**item).clone()),
+                Ty::Array(item) | Ty::FixedArray(item, _) => Some((**item).clone()),
                 _ => None,
             },
         }
@@ -466,6 +466,9 @@ impl Verifier<'_> {
         }
     }
 
+    /// `Len` applies **only** to the growable `Array[T]`. A fixed
+    /// `[T; N]`'s length is lowered as a constant, and this check enforces
+    /// that invariant so a backend can rely on it (ADR-0004 Stage 2).
     fn check_len(&mut self, block: usize, place: &Place) {
         self.check_place(block, place);
         let name = self.fn_name().to_owned();
@@ -475,7 +478,9 @@ impl Verifier<'_> {
             self.error(
                 code::TYPE_MISMATCH,
                 format!(
-                    "fn `{name}`: bb{block} takes the length of a non-array place (_{})",
+                    "fn `{name}`: bb{block} takes the length of a non-`Array` place (_{}); \
+                     `Len` applies only to the growable `Array[T]` — a `[T; N]`'s length is \
+                     lowered as a constant",
                     place.local.0
                 ),
             );
@@ -514,6 +519,54 @@ impl Verifier<'_> {
                     fields.len()
                 ),
             );
+        }
+        // A fixed-size array aggregate (ADR-0004 Stage 2): operand count
+        // equals the declared length, every operand is the element type,
+        // and the destination is exactly `[element; len]`.
+        if let Rvalue::Aggregate {
+            kind: AggregateKind::Array { element, len },
+            fields,
+        } = rvalue
+        {
+            let name = self.fn_name().to_owned();
+            if fields.len() as u64 != *len {
+                self.error(
+                    code::TYPE_MISMATCH,
+                    format!(
+                        "fn `{name}`: bb{block} builds a fixed array of length {len} from {} \
+                         operands",
+                        fields.len()
+                    ),
+                );
+            }
+            for field in fields {
+                if let Some(ty) = self.operand_ty(field)
+                    && !types_agree(&ty, element)
+                {
+                    self.error(
+                        code::TYPE_MISMATCH,
+                        format!(
+                            "fn `{name}`: bb{block} builds a fixed array from an operand that \
+                             is not the element type"
+                        ),
+                    );
+                }
+            }
+            if let Some(dest) = self.place_ty(place) {
+                let destination_ok = matches!(
+                    &dest,
+                    Ty::FixedArray(item, n) if types_agree(item, element) && *n == *len
+                ) || matches!(&dest, Ty::Never | Ty::Error);
+                if !destination_ok {
+                    self.error(
+                        code::TYPE_MISMATCH,
+                        format!(
+                            "fn `{name}`: bb{block} assigns a fixed-array aggregate to a place \
+                             that is not `[element; len]`"
+                        ),
+                    );
+                }
+            }
         }
         let _ = place;
     }
@@ -603,23 +656,39 @@ impl Verifier<'_> {
     /// Fixed-point: the definitely-initialized set on entry to each block.
     /// Block 0 starts with the parameters initialized; every other block's
     /// entry set is the intersection over its predecessors' exit sets.
+    ///
+    /// This is a **must**-analysis, so every reachable non-entry block is
+    /// seeded at **top** (all locals) and the iteration only ever shrinks a
+    /// set toward the greatest fixed point. Seeding matters for termination:
+    /// an earlier version skipped not-yet-visited predecessors (treating them
+    /// as top) while defaulting a block with no visited predecessors to
+    /// bottom, and that mixed, non-monotone seeding oscillated forever on a
+    /// loop body containing a bounds `Assert` (a back edge from a
+    /// higher-numbered block into the loop's continuation). With a uniform
+    /// top seed every update is monotone decreasing over a finite lattice,
+    /// so the loop terminates.
     fn solve_init(&self) -> BTreeMap<usize, BTreeSet<u32>> {
         let param_count = u32::try_from(self.function.params.len()).unwrap_or(u32::MAX);
         let params: BTreeSet<u32> = (0..param_count).collect();
-
-        let mut entry: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
-        entry.insert(0, params.clone());
+        let all_locals: BTreeSet<u32> = (0..self.local_count()).collect();
 
         // Reachable blocks, so unreachable ones never seed the intersection.
         let reachable = self.reachable_blocks();
 
+        let mut entry: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
+        for &index in &reachable {
+            let seed = if index == 0 {
+                params.clone()
+            } else {
+                all_locals.clone()
+            };
+            entry.insert(index, seed);
+        }
+
         let mut changed = true;
         while changed {
             changed = false;
-            for index in 0..self.function.blocks.len() {
-                if !reachable.contains(&index) {
-                    continue;
-                }
+            for &index in &reachable {
                 // Entry = intersection of predecessor exits (params for bb0).
                 let mut incoming: Option<BTreeSet<u32>> = if index == 0 {
                     Some(params.clone())
@@ -627,10 +696,8 @@ impl Verifier<'_> {
                     None
                 };
                 for pred in self.predecessors(index) {
-                    if !reachable.contains(&pred) {
-                        continue;
-                    }
                     let Some(pred_entry) = entry.get(&pred) else {
+                        // Unreachable predecessor: nothing flows in from it.
                         continue;
                     };
                     let exit = self.exit_set(pred, pred_entry);
@@ -639,6 +706,8 @@ impl Verifier<'_> {
                         None => exit,
                     });
                 }
+                // A reachable non-entry block always has a reachable
+                // predecessor; the fallback only guards impossible shapes.
                 let new = incoming.unwrap_or_default();
                 if entry.get(&index) != Some(&new) {
                     entry.insert(index, new);
@@ -1360,6 +1429,117 @@ mod tests {
         assert!(
             codes(&program).is_empty(),
             "dead code must not raise an undefined-use error",
+        );
+    }
+
+    #[test]
+    fn a_loop_body_with_a_bounds_assert_terminates_the_init_solver() {
+        // Regression: the exact CFG shape `tuo-mir` lowering emits for a `for`
+        // loop whose body indexes an array — a back edge (bb5 → bb3) from a
+        // block numbered *higher* than its successor, introduced by the bounds
+        // `Assert`'s continuation block. The old `solve_init` seeding (skip
+        // unvisited predecessors, default a pred-less block to bottom) was
+        // non-monotone on this shape and oscillated forever; the top-seeded
+        // must-analysis converges. The test's assertion is that `verify`
+        // *returns* (and finds nothing wrong).
+        //
+        //   bb0: init; goto bb1            (loop head is bb1)
+        //   bb1: cond; branch bb2 / bb4    (bb4 = exit)
+        //   bb2: bounds check; assert -> bb5
+        //   bb3: step; goto bb1            (back edge target, numbered low)
+        //   bb4: return
+        //   bb5: body; goto bb3            (back edge source, numbered high)
+        let usize_local = || local(Ty::Int(IntKind::Usize));
+        let usize_const = |value: i128| Operand::Const(Const::Int(value, IntKind::Usize));
+        let assign = |index: u32, rvalue: Rvalue| Statement::Assign {
+            place: Place::local(LocalId(index)),
+            rvalue,
+        };
+        let copy = |index: u32| Operand::Copy(Place::local(LocalId(index)));
+        let program = func(
+            vec![],
+            vec![
+                local(Ty::int()), // _0: accumulator
+                usize_local(),    // _1: index
+                usize_local(),    // _2: len (a fixed array's constant length)
+                local(Ty::Bool),  // _3: loop condition
+                local(Ty::Bool),  // _4: bounds condition
+                local(Ty::int()), // _5: body temp
+            ],
+            vec![
+                BasicBlock {
+                    statements: vec![
+                        assign(0, Rvalue::Use(int(0))),
+                        assign(1, Rvalue::Use(usize_const(0))),
+                        assign(2, Rvalue::Use(usize_const(3))),
+                    ],
+                    terminator: Terminator::Goto(BlockId(1)),
+                },
+                BasicBlock {
+                    statements: vec![assign(
+                        3,
+                        Rvalue::Binary {
+                            op: BinOp::Lt,
+                            lhs: copy(1),
+                            rhs: copy(2),
+                        },
+                    )],
+                    terminator: Terminator::Branch {
+                        cond: copy(3),
+                        then_block: BlockId(2),
+                        else_block: BlockId(4),
+                    },
+                },
+                BasicBlock {
+                    statements: vec![assign(
+                        4,
+                        Rvalue::Binary {
+                            op: BinOp::Lt,
+                            lhs: copy(1),
+                            rhs: copy(2),
+                        },
+                    )],
+                    terminator: Terminator::Assert {
+                        cond: copy(4),
+                        trap: crate::mir::Trap::IndexOutOfBounds,
+                        target: BlockId(5),
+                    },
+                },
+                BasicBlock {
+                    statements: vec![assign(
+                        1,
+                        Rvalue::Binary {
+                            op: BinOp::Add,
+                            lhs: copy(1),
+                            rhs: usize_const(1),
+                        },
+                    )],
+                    terminator: Terminator::Goto(BlockId(1)),
+                },
+                BasicBlock {
+                    statements: vec![],
+                    terminator: Terminator::Return(copy(0)),
+                },
+                BasicBlock {
+                    statements: vec![
+                        assign(
+                            5,
+                            Rvalue::Binary {
+                                op: BinOp::Add,
+                                lhs: copy(0),
+                                rhs: int(1),
+                            },
+                        ),
+                        assign(0, Rvalue::Use(copy(5))),
+                    ],
+                    terminator: Terminator::Goto(BlockId(3)),
+                },
+            ],
+            Ty::int(),
+        );
+        assert!(
+            codes(&program).is_empty(),
+            "the loop-with-assert shape must verify clean (and terminate)",
         );
     }
 

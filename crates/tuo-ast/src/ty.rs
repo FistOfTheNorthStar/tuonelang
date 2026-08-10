@@ -16,6 +16,8 @@ pub enum TypeRef<'a> {
     Wrapper(WrapperType<'a>),
     /// A path type such as `Int` or `collections::Map[K, V]`.
     Path(PathType<'a>),
+    /// A fixed-capacity array type `[T; N]` (ADR-0004 Stage 2).
+    FixedArray(FixedArrayType<'a>),
 }
 
 impl<'a> TypeRef<'a> {
@@ -26,6 +28,7 @@ impl<'a> TypeRef<'a> {
             SyntaxKind::UnitType => UnitType::cast(ast, node).map(Self::Unit),
             SyntaxKind::WrapperType => WrapperType::cast(ast, node).map(Self::Wrapper),
             SyntaxKind::PathType => PathType::cast(ast, node).map(Self::Path),
+            SyntaxKind::FixedArrayType => FixedArrayType::cast(ast, node).map(Self::FixedArray),
             _ => None,
         }
     }
@@ -38,6 +41,7 @@ impl<'a> TypeRef<'a> {
             Self::Unit(ty) => ty.span(),
             Self::Wrapper(ty) => ty.span(),
             Self::Path(ty) => ty.span(),
+            Self::FixedArray(ty) => ty.span(),
         }
     }
 
@@ -48,6 +52,7 @@ impl<'a> TypeRef<'a> {
             Self::Unit(ty) => ty.text(),
             Self::Wrapper(ty) => ty.text(),
             Self::Path(ty) => ty.text(),
+            Self::FixedArray(ty) => ty.text(),
         }
     }
 
@@ -58,7 +63,30 @@ impl<'a> TypeRef<'a> {
             Self::Unit(ty) => ty.syntax(),
             Self::Wrapper(ty) => ty.syntax(),
             Self::Path(ty) => ty.syntax(),
+            Self::FixedArray(ty) => ty.syntax(),
         }
+    }
+}
+
+ast_view! {
+    /// A fixed-capacity array type `[T; N]` (ADR-0004 Stage 2): the length
+    /// is part of the type and is an `INT_LITERAL` token, never a general
+    /// expression.
+    FixedArrayType from FixedArrayType
+}
+
+impl<'a> FixedArrayType<'a> {
+    /// The element type between the `[` and the `;`.
+    #[must_use]
+    pub fn element(self) -> Option<TypeRef<'a>> {
+        let ast = self.ast;
+        child_nodes(self.node).find_map(move |node| TypeRef::cast(ast, node))
+    }
+
+    /// The length: the `INT_LITERAL` token after the `;`, with its span.
+    #[must_use]
+    pub fn len(self) -> Option<Name<'a>> {
+        self.ast.direct_token_name(self.node, TokenKind::IntLiteral)
     }
 }
 

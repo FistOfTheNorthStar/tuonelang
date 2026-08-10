@@ -171,6 +171,11 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
                     )
                 }
                 AggregateKind::Range => format!("range({})", fields.join(", ")),
+                AggregateKind::Array { element, len } => format!(
+                    "[{}; {len}] [ {} ]",
+                    element.render(resolution),
+                    fields.join(", ")
+                ),
             }
         }
         Rvalue::Discriminant(place) => format!("discriminant({})", render_place(place)),

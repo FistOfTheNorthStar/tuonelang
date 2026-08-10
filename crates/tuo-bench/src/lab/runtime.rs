@@ -4,11 +4,12 @@
 //!
 //! The prompt lists eight runtime workloads: startup, integer computation,
 //! allocation, collections, string processing, function calls, recursion, and
-//! networking. tuonelang v0 compiles and runs only the **scalar, control-flow
+//! networking. tuonelang v0 compiles and runs the **scalar, control-flow
 //! core** — `Int` arithmetic, comparison, `if`/`else`, function calls, and
-//! recursion (see the codegen and stdlib conventions). It has **no heap, no
-//! collections, no string values, and no effect boundary** yet. Four of the
-//! eight workloads therefore have no program to measure.
+//! recursion — plus, since ADR-0004 Stage 2, the **fixed-capacity array**
+//! `[T; N]` (inline, stack-allocated), which makes the collections workload
+//! measurable. It still has **no heap, no string values, and no effect
+//! boundary**, so three of the eight workloads have no program to measure.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -97,10 +98,11 @@ impl RuntimeWorkload {
 /// exact reason it cannot run yet).
 ///
 /// This is the single source of truth for what the runtime lab can and cannot
-/// measure. When a feature lands (a heap, collections, strings, an effect
-/// boundary), the corresponding entry moves from [`Support::Unsupported`] to
+/// measure. When a feature lands (a heap, strings, an effect boundary), the
+/// corresponding entry moves from [`Support::Unsupported`] to
 /// [`Support::Supported`] with a program, and the lab measures it — no other
-/// change required.
+/// change required. The collections entry made exactly that move when
+/// ADR-0004 Stage 2 landed the fixed-capacity array.
 #[must_use]
 pub fn workloads() -> Vec<RuntimeWorkload> {
     vec![
@@ -136,20 +138,22 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // fib(20) = 6765; observable exit byte = 6765 & 0xff = 109.
             109,
         ),
+        RuntimeWorkload::supported(
+            "collections",
+            "bulk construction, indexed lookups, and scans over the builtin \
+             fixed-size array `[Int; N]` (ADR-0004 Stage 2), the v0 collection",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/collections.tuo"),
+            // 200 rounds × (scan 31 + probes 10) = 8200; exit byte 8200 & 0xff = 8.
+            8,
+        ),
         // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "allocation",
             "heap allocation and deallocation throughput",
             "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native \
              code: the runtime allocator seam exists in the ABI spec but no allocating \
-             construct is compiled yet. No program can exercise allocation.",
-        ),
-        RuntimeWorkload::unsupported(
-            "collections",
-            "insert/lookup over a standard collection",
-            "v0 lowers no collection type. std::collections is a documented catalog of \
-             free-function contracts, not executable collection code. No program can \
-             exercise collections.",
+             construct is compiled yet (the fixed `[T; N]` is inline and allocates \
+             nothing). No program can exercise allocation.",
         ),
         RuntimeWorkload::unsupported(
             "string-processing",
@@ -261,13 +265,14 @@ mod tests {
     }
 
     #[test]
-    fn exactly_the_scalar_core_is_supported() {
+    fn exactly_the_runnable_core_is_supported() {
         let supported: Vec<String> = workloads()
             .into_iter()
             .filter(|w| w.is_supported())
             .map(|w| w.label)
             .collect();
-        // Precisely the four scalar-core workloads, and no more.
+        // Precisely the four scalar-core workloads plus the fixed-array
+        // collections workload (ADR-0004 Stage 2), and no more.
         assert_eq!(
             supported,
             vec![
@@ -275,6 +280,7 @@ mod tests {
                 "integer-computation".to_string(),
                 "function-calls".to_string(),
                 "recursion".to_string(),
+                "collections".to_string(),
             ]
         );
     }
@@ -295,7 +301,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 4, "only the four supported workloads run");
+        assert_eq!(results.len(), 5, "only the five supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

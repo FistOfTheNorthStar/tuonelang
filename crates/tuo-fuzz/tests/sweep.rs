@@ -60,6 +60,24 @@ fn pathological_inputs_terminate_and_uphold_invariants() {
         "\0".repeat(1_000),
         "spec s { then ".repeat(1_000),
         format!("fn main() -> Int {{ {} }}", "1 + ".repeat(3_000) + "1"),
+        // ADR-0004 Stage 2: deeply nested array literals are bounded by the
+        // parser's depth pre-scan (`[` already counts in `delims`), and a
+        // wide *flat* literal builds a wide, not deep, tree.
+        "[".repeat(10_000),
+        format!(
+            "fn main() -> Int {{ let xs = {}0{}; 0 }}",
+            "[".repeat(5_000),
+            "]".repeat(5_000)
+        ),
+        format!(
+            "fn main() -> Int {{ let xs = [{}0]; xs[0] }}",
+            "1, ".repeat(5_000)
+        ),
+        format!(
+            "fn t() -> Int {{ let x: {}Int{} = 0; x }}",
+            "[".repeat(4_000),
+            "; 2]".repeat(4_000)
+        ),
     ];
     for (stage, check) in all_checkers() {
         for text in &pathological {

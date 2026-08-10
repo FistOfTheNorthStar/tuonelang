@@ -1,0 +1,10 @@
+enum Shape { Circle { r: Int }, Rect { w: Int, h: Int } }
+fn area(take s: Shape) -> Int {
+    match s {
+        Shape::Circle { r } => r * r * 3,
+        Shape::Rect { w, h } => w * h,
+    }
+}
+fn main() -> Int {
+    area(Shape::Circle { r: 2 }) + area(Shape::Rect { w: 3, h: 4 })
+}

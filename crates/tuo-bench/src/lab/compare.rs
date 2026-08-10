@@ -12,8 +12,8 @@
 //!    tuonelang, compiles ahead-of-time to native code, traps on nothing here,
 //!    and has a matching `int` model for these programs. A workload whose
 //!    tuonelang side is [`Unsupported`](super::runtime::Support::Unsupported)
-//!    (allocation, collections, strings, networking) has **no comparison** — you
-//!    cannot compare a feature that does not exist.
+//!    (allocation, strings, networking) has **no comparison** — you cannot
+//!    compare a feature that does not exist.
 //!
 //! 2. **No claim without both numbers.** A [`Comparison`] can only reach a
 //!    [`Verdict::Measured`] when *both* sides actually compiled and ran under the
@@ -105,6 +105,7 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
             include_str!("../../../../benchmarks/runtime/programs/c/function-calls.c")
         }
         "recursion" => include_str!("../../../../benchmarks/runtime/programs/c/recursion.c"),
+        "collections" => include_str!("../../../../benchmarks/runtime/programs/c/collections.c"),
         _ => return None,
     })
 }

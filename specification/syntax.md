@@ -107,8 +107,17 @@ reference](#forward-reference).
 ## Types
 
 The type grammar (`grammar.ebnf (D)`) is purely syntactic: `path_type`,
-`unit_type` `()`, and the ownership `wrapper_type`s `Box[T]` / `Shared[T]` /
-`Weak[T]` (§25). Generic arguments are bracketed (`Option[T]`, `Map[K, V]`).
+`unit_type` `()`, the ownership `wrapper_type`s `Box[T]` / `Shared[T]` /
+`Weak[T]` (§25), and the `[EXPERIMENTAL]` `fixed_array_type`
+`[T; N]` (ADR-0004 Stage 2). Generic arguments are bracketed (`Option[T]`,
+`Map[K, V]`).
+
+**Fixed-capacity arrays** (`[T; N]`, ADR-0004 Stage 2): the length is part of
+the type and is an `INT_LITERAL` token — never a general expression — with no
+type suffix admitted (a semantic check, per the superset rule). A `[` at type
+position uniquely selects this production: no other type starts with `[`
+(`TypeArguments` only ever follow a path/wrapper head), so disambiguation is
+one-token. `[T; N]` is distinct from the growable `Array[T]`.
 
 **There is no reference/pointer type syntax.** Aliasing is expressed *only*
 through the parameter **modes** `in` / `mut` / `take` (§22), never as a
@@ -176,6 +185,16 @@ Expressions (`grammar.ebnf (G)`) are precedence-layered as listed under
   checker (§10).
 - Control-transfer expressions `return` / `break` / `continue` are ordinary
   expressions (§8, §16) and may carry a value / label.
+- **Array literals** (`[EXPERIMENTAL]`, ADR-0004 Stage 2): the list form
+  `[a, b, c]` (0+ elements, trailing comma allowed, `[]` legal) and the repeat
+  form `[x; N]` with an `INT_LITERAL` length. Disambiguation is one-token: a
+  `[` at *primary* position can only open a literal — `base[i]` indexing is a
+  postfix op consumed after a completed primary — and inside the literal the
+  token after the first expression decides (`;` → repeat form; `,` or `]` →
+  list form). Because `-` cannot begin an `INT_LITERAL`, `[x; -1]` is a parse
+  error. The literal is legal in `expr_no_struct` positions
+  (`for x in [1, 2, 3] { … }` is unambiguous — postfix ops never include `{`).
+  No new token was added: `[`/`]`, `;`, `,`, and `INT_LITERAL` all existed.
 
 ### The one context-sensitive point: struct literals in condition position
 

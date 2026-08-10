@@ -170,7 +170,7 @@ impl CodegenBackend for LlvmBackend {
     fn compile(
         &self,
         program: &Program,
-        _types: &TypeckResult,
+        types: &TypeckResult,
         entry: &str,
         abi: EntryAbi,
         target: &TargetSpec,
@@ -204,7 +204,7 @@ impl CodegenBackend for LlvmBackend {
         module.set_data_layout(&machine.get_target_data().get_data_layout());
 
         // Lower every function, then synthesize the C-compatible `main` shim.
-        let ids = lower_program(&context, &module, program)?;
+        let ids = lower_program(&context, &module, program, types)?;
         let entry_value = ids[&entry_fn.symbol];
         emit_main_shim(&context, &module, entry_value, entry_kind)?;
 

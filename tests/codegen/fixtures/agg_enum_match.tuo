@@ -1,0 +1,9 @@
+enum Color { Red, Green, Blue }
+fn code(take c: Color) -> Int {
+    match c {
+        Color::Red => 10,
+        Color::Green => 20,
+        Color::Blue => 30,
+    }
+}
+fn main() -> Int { code(Color::Green) + code(Color::Blue) }

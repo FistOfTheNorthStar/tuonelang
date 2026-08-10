@@ -5,12 +5,12 @@ module data_pipeline;
 //
 // A real data processor decodes structured records (say, JSON objects with a
 // `category` and an `amount` field), filters them, transforms them, and
-// aggregates the result. v0 has no strings, no arrays, and no heap (see
-// DOGFOODING.md), so records here are *packed integers* and the "batch" is a
-// fixed set of positional accessors — but the pipeline itself is the genuine
-// article: field decoding, a filter predicate, a per-record transform, and two
-// aggregations (a conditional sum and a count), each pinned by an executable
-// `spec`.
+// aggregates the result. v0 has no strings and no heap (see DOGFOODING.md), so
+// records here are *packed integers* — but the batch is a real fixed-capacity
+// array, folded with a bounded `for` loop, and the pipeline itself is the
+// genuine article: field decoding, a filter predicate, a per-record transform,
+// and two aggregations (a conditional sum and a count), each pinned by an
+// executable `spec`.
 //
 // Record encoding (a deliberately real serialization exercise):
 //
@@ -26,24 +26,29 @@ module data_pipeline;
 // and returns it (mod 256) as the process exit status.
 
 // --- The encoded batch -----------------------------------------------------
-//
-// Eight packed records. In a real build these would be decoded from a byte
-// stream; here they are the fixed input. Written in packed form on purpose, so
-// the decoders below have something authentic to take apart.
 
-fn r0() -> Int { 100150 } // category 1, amount 150
-fn r1() -> Int { 200080 } // category 2, amount  80
-fn r2() -> Int { 300500 } // category 3, amount 500
-fn r3() -> Int { 200120 } // category 2, amount 120
-fn r4() -> Int { 100075 } // category 1, amount  75
-fn r5() -> Int { 200200 } // category 2, amount 200
-fn r6() -> Int { 400300 } // category 4, amount 300
-fn r7() -> Int { 300060 } // category 3, amount  60
+/// Eight packed records in one fixed-capacity array. In a real build these
+/// would be decoded from a byte stream; here they are the fixed input. Written
+/// in packed form on purpose, so the decoders below have something authentic
+/// to take apart.
+fn records() -> [Int; 8] {
+    [100150, // category 1, amount 150
+    200080, // category 2, amount  80
+    300500, // category 3, amount 500
+    200120, // category 2, amount 120
+    100075, // category 1, amount  75
+    200200, // category 2, amount 200
+    400300, // category 4, amount 300
+    300060 // category 3, amount  60
+    ]
+}
 
 // --- Field decoders --------------------------------------------------------
 
 /// The base used to pack `category` and `amount` into one integer.
-fn field_base() -> Int { 100000 }
+fn field_base() -> Int {
+    100000
+}
 
 /// Decode the `category` field of a packed record.
 fn category(take record: Int) -> Int {
@@ -73,19 +78,17 @@ fn fold_one(take acc: Int, take record: Int, take wanted: Int) -> Int {
     }
 }
 
-/// Total the amounts of every record in the wanted category.
+/// Total the amounts of every record in the wanted category, folding
+/// `fold_one` over the batch.
 fn total_for(take wanted: Int) -> Int {
-    let a0 = fold_one(0, r0(), wanted);
-    let a1 = fold_one(a0, r1(), wanted);
-    let a2 = fold_one(a1, r2(), wanted);
-    let a3 = fold_one(a2, r3(), wanted);
-    let a4 = fold_one(a3, r4(), wanted);
-    let a5 = fold_one(a4, r5(), wanted);
-    let a6 = fold_one(a5, r6(), wanted);
-    fold_one(a6, r7(), wanted)
+    var total = 0;
+    for record in records() {
+        total = fold_one(total, record, wanted);
+    }
+    total
 }
 
-/// Count how many records fall in the wanted category.
+/// The per-record counting step: bump the count only on a match.
 fn count_hit(take acc: Int, take record: Int, take wanted: Int) -> Int {
     if matches(record, wanted) {
         acc + 1
@@ -94,15 +97,14 @@ fn count_hit(take acc: Int, take record: Int, take wanted: Int) -> Int {
     }
 }
 
+/// Count how many records fall in the wanted category, folding `count_hit`
+/// over the batch.
 fn count_for(take wanted: Int) -> Int {
-    let c0 = count_hit(0, r0(), wanted);
-    let c1 = count_hit(c0, r1(), wanted);
-    let c2 = count_hit(c1, r2(), wanted);
-    let c3 = count_hit(c2, r3(), wanted);
-    let c4 = count_hit(c3, r4(), wanted);
-    let c5 = count_hit(c4, r5(), wanted);
-    let c6 = count_hit(c5, r6(), wanted);
-    count_hit(c6, r7(), wanted)
+    var count = 0;
+    for record in records() {
+        count = count_hit(count, record, wanted);
+    }
+    count
 }
 
 /// The average amount within a category (floored). Guards the empty category
@@ -131,8 +133,8 @@ spec "field decoding splits category from amount" {
 }
 
 spec "the filter predicate selects a category" {
-    then matches(r3(), 2);
-    then matches(r0(), 1);
+    then matches(records()[3], 2);
+    then matches(records()[0], 1);
 }
 
 spec "the pipeline totals a category" {

@@ -122,8 +122,9 @@ fn supported_workloads_run_natively_and_match() {
     let results = run_supported(&TuoRunNativeRunner);
     assert_eq!(
         results.len(),
-        4,
-        "exactly the four scalar-core workloads run"
+        5,
+        "exactly the five supported workloads run (the scalar core plus the \
+         fixed-array collections workload)"
     );
     for (label, outcome) in results {
         let outcome = outcome.unwrap_or_else(|e| panic!("workload `{label}` failed to run: {e}"));
@@ -179,7 +180,7 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     }
     // Either the toolchain was present (comparisons measured) or it was not
     // (all skipped) — but every supported workload was accounted for.
-    assert_eq!(measured + skipped, 4);
+    assert_eq!(measured + skipped, 5);
     // On CI and dev machines `cc` is present, so we expect real measurements;
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {

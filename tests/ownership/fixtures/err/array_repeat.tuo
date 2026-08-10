@@ -1,0 +1,33 @@
+// ownership.md §2, O0010 — the repeat literal `[x; N]` duplicates its
+// operand N times, and a non-`Copy` value cannot be duplicated (ADR-0004
+// Stage 2). Uniform for every N: no N == 0 or N == 1 special cases.
+
+struct Wrapped {
+    text: String,
+}
+
+fn consume_strings(take xs: [String; 3]) { }
+
+fn case_repeat_string(take s: String) {
+    let xs = [s; 3]; // ERROR: O0010 a non-`Copy` value cannot be duplicated
+}
+
+fn case_repeat_string_zero(take s: String) {
+    let xs = [s; 0]; // ERROR: O0010 uniform — even N == 0 is rejected
+}
+
+fn case_repeat_string_one(take s: String) {
+    let xs = [s; 1]; // ERROR: O0010 uniform — even N == 1 is rejected
+}
+
+fn case_repeat_non_copy_struct(take w: Wrapped) {
+    let xs = [w; 2]; // ERROR: O0010 a struct with a `String` field is not `Copy`
+}
+
+fn case_repeat_in_argument(take s: String) {
+    consume_strings([s; 3]); // ERROR: O0010 in argument position too
+}
+
+fn case_repeat_boxed(take b: Box[Int]) {
+    let xs = [b; 4]; // ERROR: O0010 wrappers are never `Copy`
+}

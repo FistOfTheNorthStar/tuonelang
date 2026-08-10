@@ -1,0 +1,15 @@
+fn make(take seed: Int) -> [Int; 3] {
+    [seed, seed * 2, seed * 3]
+}
+
+fn sum(take xs: [Int; 3]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    total
+}
+
+fn main() -> Int {
+    sum(make(7))
+}

@@ -141,6 +141,19 @@ types that give the frozen rules a home; none is a new surface type:
   syntax** (tuple structs are excluded, §12).
 - **`Range`** — the internal type of `a .. b`, iterable by `for` (§16).
 - **`Array[T]`** — the builtin homogeneous array, **indexed by `Usize`**.
+- **`[T; N]`** (`[EXPERIMENTAL]`, ADR-0004 Stage 2) — the inline fixed-length
+  array; `N` elements of `T`, the length part of the type, indexed by `Usize`
+  and iterable by `for`. Lengths are concrete `u64`s — there are **no length
+  variables and no length inference**: `[Int; 3]` and `[Int; 4]` are distinct
+  types, and a length mismatch is an ordinary `T0001` rendering both types. The
+  list literal `[a, b, c]` has its element count as the length (elements unify
+  against one fresh element variable, mismatches reported at the offending
+  element; an unconstrained `[]` needs an annotation, `T0011`); the repeat
+  literal `[x; N]` duplicates a **`Copy`** operand (`O0010` otherwise). The
+  written length is a plain `INT_LITERAL` — decimal/`0x`/`0o`/`0b`, no type
+  suffix — parsed to `u64` and capped at `MAX_FIXED_ARRAY_LEN = 65_536`
+  (`T0014` on violation). `[T; N]` never enters name resolution; `Array` stays
+  the growable heap sequence.
 - **`Option[T]` / `Result[T, E]`** — the canonical stdlib enums (§14, §15).
 - **`Struct` / `Enum`** (by `SymbolId`), **`Wrapper`** (`Box`/`Shared`/`Weak`, §25),
   **`Param`** (a generic type parameter, §18), **function types**.
@@ -212,6 +225,12 @@ the trait system will own.
 | `T0011` | Type annotation needed. |
 | `T0012` | Expected a value/constructor, found something else. |
 | `T0013` | `break`/`continue` outside a loop. |
+| `T0014` | Invalid fixed-size array length: suffixed, unparsable, or over `MAX_FIXED_ARRAY_LEN` (ADR-0004 Stage 2). |
+
+Ownership-flavored array rules live in `specification/ownership.md`: indexing
+reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
+elements by value, `O0007`), and the repeat literal `[x; N]` requires a `Copy`
+element (`O0010`).
 
 ---
 
