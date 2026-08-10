@@ -9,9 +9,10 @@ compiler actually accepts and executes — nothing aspirational.
 > accepts the full v0 language. The *runnable core* — what `tuo spec`, `tuo run`,
 > and `tuo build` execute — is pure integer computation: scalars, structs, enums,
 > `Option`/`Result`, fixed `[T; N]` arrays, `for`/`while`/`match`, calls and
-> recursion. Strings and floats run in the *interpreter* (`spec`/`verify`) but
-> are not yet compiled *natively*; I/O, concurrency, and first-class functions
-> are tracked ADRs (0006/0007/0008) and are not in v0.
+> recursion, floats, and borrow-mode (`in`/`mut`) calls. Strings run in the
+> *interpreter* (`spec`/`verify`) but are not yet compiled *natively*; I/O,
+> concurrency, and first-class functions are tracked ADRs (0006/0007/0008) and
+> are not in v0.
 > Anything outside the core is **refused with a clear error, never mis-compiled**.
 
 ---
@@ -86,7 +87,7 @@ type names and unusable as binding names.
 | Kind | Forms | Notes |
 |------|-------|-------|
 | Integer | `42`, `0xFF`, `0o77`, `0b1010`, `2_000_000`, `42i32` | Suffixes `i8`…`usize`. **No negative literal** — `-` is a unary operator, so `-5` is negation applied to `5` (fine in expressions, but e.g. `[x; -1]` is a parse error). |
-| Float | `1.0`, `0.5`, `2.0e3`, `1.5f32` | `1.` and `.5` are **not** floats. (Run in specs/the interpreter; not yet compiled natively.) |
+| Float | `1.0`, `0.5`, `2.0e3`, `1.5f32` | `1.` and `.5` are **not** floats. |
 | Bool | `true`, `false` | |
 | Char | `'a'`, `'\n'`, `'\u{1F600}'` | Escapes: `\" \' \\ \n \r \t \0 \u{HEX}` |
 | String | `"hello"` | One canonical form. No raw strings, no interpolation. (Runs in specs/the interpreter; not yet compiled natively.) |
@@ -178,6 +179,10 @@ Things that deliberately **do not exist** in v0: bitwise operators and shifts
 Integer arithmetic **traps** (deterministic abort — no wraparound, no
 unwinding) on: overflow of `+ - *`, negation of `MIN`, `MIN / -1`, and division
 or remainder by zero. `/` truncates toward zero; `%` takes the dividend's sign.
+
+Float arithmetic is IEEE-754 and **never traps** (`0.0 / 0.0` is NaN). An
+`as` cast from float to integer truncates toward zero and **saturates** to the
+target range; NaN casts to 0 — also never a trap.
 
 ---
 
@@ -544,9 +549,9 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | `if` / `match` / `while` / `for` / `loop`, calls, recursion | ✅ | ✅ | ✅ |
 | Structs, enums, `Option`/`Result` (scalar fields, nested) | ✅ | ✅ | ✅ |
 | `[T; N]` arrays, literals, checked indexing, `for` over arrays | ✅ | ✅ | ✅ |
-| Borrow-mode (`in`/`mut`) calls | ✅ | ✅ | scalars ✅ / aggregate borrows refused |
+| Borrow-mode (`in`/`mut`) calls | ✅ | ✅ | ✅ |
+| Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` / `String` values (literals, `==`, `if`/`match` over them) | ✅ | ✅ | ❌ refused |
-| Floats (`F32`/`F64`) arithmetic and comparison | ✅ | ✅ | ❌ refused |
 | Growable `Array[T]`, `Box`/`Shared`/`Weak` heap values | declared | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
 | I/O, filesystem, clock, processes, threads | contract sigs only | ❌ (sandbox) | ❌ |

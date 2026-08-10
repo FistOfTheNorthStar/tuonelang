@@ -140,10 +140,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   and exits with the program's own status, the integer its nullary `main` returns; both
   backends lower the **v0 runnable core** — the scalar control-flow core plus the
   ADR-0004 aggregates (structs, enums, `Option`/`Result`, fixed `[T; N]` arrays
-  with checked indexing, bounded `for`), laid out solely by `tdg-runtime`'s
-  `abi` module — and *refuse* — never mis-compile — anything outside it
-  (strings, floats, the growable `Array[T]`, borrow-mode calls), pointing the
-  user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  with checked indexing, bounded `for`), floats (IEEE-754, saturating `as`
+  casts, `%` via the C `fmod`), and borrow-mode (`in`/`mut`) calls (a pointer
+  to the caller's place, per `specification/abi.md`), laid out solely by
+  `tdg-runtime`'s `abi` module — and *refuse* — never mis-compile — anything
+  outside it (strings, the growable `Array[T]`, the `Box`/`Shared`/`Weak` heap
+  wrappers), refusing at storage-classification time with a message naming the
+  type and pointing the user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the

@@ -29,7 +29,7 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 
 /// The version of the runtime ABI these layouts implement.
 ///
-/// `1` — unstable. Any change to a layout, offset, discriminant numbering,
+/// `2` — unstable. Any change to a layout, offset, discriminant numbering,
 /// calling-convention rule, or runtime-symbol meaning **must** increment this
 /// in the same commit that updates the tests pinning the affected layout.
 /// Additive, non-layout-affecting clarifications do not bump it.

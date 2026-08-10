@@ -249,8 +249,9 @@ taxonomy (`tuo_runtime::TrapCode`), stable and append-only.
 
 ## Process startup
 
-The runtime does **not** own `main`. The backend synthesizes a C `main` shim
-(see `tuo-codegen-cranelift`) that:
+The runtime does **not** own `main`. The backend synthesizes a `main` shim —
+emitted natively into the object file (see `tuo-codegen-cranelift`'s
+`emit_main_shim`; a C shim would be behaviorally identical) — that:
 
 1. calls the program's nullary entry function, and
 2. returns the entry's integer result as the process exit status.
