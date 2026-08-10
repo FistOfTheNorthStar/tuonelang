@@ -1,16 +1,16 @@
 module cli_stats;
 
-// cli-stats — a command-line statistics tool, dogfooded on the v0 scalar core.
+// cli-stats — a command-line statistics tool, dogfooded on the v0 core.
 //
 // A real CLI reads a list of numbers from argv or stdin and prints summary
-// statistics. v0 has neither argument access nor an array type nor stdout (see
-// DOGFOODING.md and the ADRs it links), so this program encodes its dataset as
-// the seven positional accessors `d0`..`d6` and returns one selected statistic
-// as its process exit status — the only output channel the scalar core has.
+// statistics. v0 has neither argument access nor stdout (see DOGFOODING.md and
+// the ADRs it links), so this program holds its dataset in a fixed `[Int; 7]`
+// array and returns one selected statistic as its process exit status — the
+// only output channel the core has.
 //
-// Everything below is genuine, non-toy computation: a fixed-size numeric
-// reduction library (count, sum, min, max, mean, range, a scaled variance, and
-// a bounded integer square root) written entirely in the runnable subset, with
+// Everything below is genuine, non-toy computation: a numeric reduction
+// library (count, sum, min, max, mean, range, a scaled variance, and a bounded
+// integer square root) written entirely in the runnable subset, with
 // executable `spec` blocks pinning each function. It compiles with
 // `tuo check`, its specs run under `tuo spec`, and it runs natively with
 // `tuo run` — the exit status is `report()`'s value truncated to a byte.
@@ -21,41 +21,62 @@ module cli_stats;
 // they are the program's fixed input. Chosen so the derived statistics land in
 // distinct, easily-checked values.
 
-fn d0() -> Int { 12 }
-fn d1() -> Int { 7 }
-fn d2() -> Int { 23 }
-fn d3() -> Int { 4 }
-fn d4() -> Int { 16 }
-fn d5() -> Int { 9 }
-fn d6() -> Int { 19 }
+fn data() -> [Int; 7] {
+    [12, 7, 23, 4, 16, 9, 19]
+}
 
-fn count() -> Int { 7 }
+/// The number of observations — the declared length of `data()`'s type.
+fn count() -> Int {
+    7
+}
 
 // --- Reductions ------------------------------------------------------------
 
 /// The arithmetic sum of the whole dataset.
 fn sum() -> Int {
-    d0() + d1() + d2() + d3() + d4() + d5() + d6()
+    var total = 0;
+    for x in data() {
+        total = total + x;
+    }
+    total
 }
 
 /// The smaller of two values.
 fn min2(take a: Int, take b: Int) -> Int {
-    if a < b { a } else { b }
+    if a < b {
+        a
+    } else {
+        b
+    }
 }
 
 /// The larger of two values.
 fn max2(take a: Int, take b: Int) -> Int {
-    if a > b { a } else { b }
+    if a > b {
+        a
+    } else {
+        b
+    }
 }
 
 /// The smallest observation.
 fn minimum() -> Int {
-    min2(min2(min2(d0(), d1()), min2(d2(), d3())), min2(min2(d4(), d5()), d6()))
+    let xs = data();
+    var lowest = xs[0];
+    for x in xs {
+        lowest = min2(lowest, x);
+    }
+    lowest
 }
 
 /// The largest observation.
 fn maximum() -> Int {
-    max2(max2(max2(d0(), d1()), max2(d2(), d3())), max2(max2(d4(), d5()), d6()))
+    let xs = data();
+    var highest = xs[0];
+    for x in xs {
+        highest = max2(highest, x);
+    }
+    highest
 }
 
 /// The spread between the extremes.
@@ -76,8 +97,11 @@ fn sq_dev(take x: Int, take m: Int) -> Int {
 
 fn dispersion() -> Int {
     let m = mean();
-    sq_dev(d0(), m) + sq_dev(d1(), m) + sq_dev(d2(), m) + sq_dev(d3(), m)
-        + sq_dev(d4(), m) + sq_dev(d5(), m) + sq_dev(d6(), m)
+    var total = 0;
+    for x in data() {
+        total = total + sq_dev(x, m);
+    }
+    total
 }
 
 /// A bounded integer square root by linear search: the largest `r` with
