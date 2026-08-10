@@ -205,13 +205,48 @@ pub struct EditResult {
 
 /// A small two-function, one-spec program used for the edit scenarios. `alpha`
 /// calls `helper`; `beta` is independent; the spec depends on `alpha`.
+///
+/// `beta` deliberately folds a fixed array with a bounded `for` loop (ADR-0004)
+/// so the per-function re-lowering the edit scenarios measure includes the
+/// aggregate/loop MIR paths from day one, not only scalar arithmetic.
 const BASELINE: &str = "\
 fn helper(take n: Int) -> Int { n + 1 }
 fn alpha(take n: Int) -> Int { helper(n) + 2 }
-fn beta(take n: Int) -> Int { n * 3 }
+fn beta(take n: Int) -> Int {
+    var acc = 0;
+    for x in [n, n, n] {
+        acc = acc + x * 3;
+    }
+    acc
+}
 spec alpha_adds {
     when r = alpha(take 10);
     then assert r == 13;
+}
+";
+
+/// A representative aggregate/loop program for the **cold** stages: a struct
+/// with field projection, a fixed `[T; N]` array literal, and a bounded `for`
+/// fold — the ADR-0004 constructs — so cold lex/parse/check cost of the new
+/// lowering is tracked by the lab from the day the features landed. The
+/// program must stay accepted by the real front end (pinned by a test below);
+/// a cold measurement over a rejected program would time error paths and
+/// report them as compile cost.
+pub const COLD_AGGREGATE: &str = "\
+struct Point {
+    x: Int,
+    y: Int,
+}
+fn shift(take p: Point, take d: Int) -> Point {
+    Point { x: p.x + d, y: p.y + d }
+}
+fn main() -> Int {
+    var acc = 0;
+    for w in [1, 2, 3, 4] {
+        let s = shift(Point { x: w, y: w }, 1);
+        acc = acc + s.x;
+    }
+    acc
 }
 ";
 
@@ -239,7 +274,7 @@ pub fn measure_edit(edit: Edit) -> EditResult {
         Edit::FunctionBody => {
             // Change beta's body only (an independent leaf). helper/alpha and the
             // spec must not re-execute.
-            let edited = BASELINE.replace("n * 3", "n * 4");
+            let edited = BASELINE.replace("x * 3", "x * 4");
             session.set_file("prog.tuo", &edited);
             warm(&session);
         }
@@ -322,6 +357,25 @@ mod tests {
             assert_eq!(result.source_bytes, src.len());
             assert!(result.command.contains(".tuo"));
         }
+    }
+
+    #[test]
+    fn the_cold_aggregate_program_passes_the_real_front_end() {
+        // The aggregate/loop cold program must stay accepted: a cold
+        // measurement over a rejected program would time error paths and call
+        // them compile cost. This is the same honesty rule the runtime
+        // workloads pin for their committed sources.
+        let mut map = SourceMap::new();
+        let file = map.intern_file("cold_aggregate.tuo");
+        let id = map
+            .add_source(file, COLD_AGGREGATE)
+            .expect("program fits in a source map");
+        let outcome = tuo_compiler::check_sources(&map, &[id]);
+        assert!(
+            outcome.diagnostics.is_empty(),
+            "COLD_AGGREGATE must be accepted, got {:?}",
+            outcome.diagnostics
+        );
     }
 
     #[test]

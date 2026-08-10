@@ -247,8 +247,8 @@ benchmark-consideration section, per the prompt. None was patched ad hoc.
 
 | ID | Finding (discovered by) | Disposition |
 |----|-------------------------|-------------|
-| **D-1** | No product type (struct/tuple) in the runnable core — *geometry points, every dataset* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) *(proposed)* |
-| **D-2** | No arrays/collections + no iteration in the runnable core — *every fold* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) *(proposed)* |
+| **D-1** | No product type (struct/tuple) in the runnable core — *geometry points, every dataset* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — geometry now passes a real `Point` |
+| **D-2** | No arrays/collections + no iteration in the runnable core — *every fold* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — the folds now run over `[T; N]` arrays |
 | **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) *(proposed)* |
 | **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) *(proposed)* |
 | **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) *(proposed)* |
@@ -262,3 +262,15 @@ The four ADRs (0004, 0006, 0007, 0008) are the durable output of this exercise:
 they turn "the language can't do X" into a reviewed, benchmarkable decision
 about *how* it should, so the next capability lands by design rather than by the
 convenience of one example.
+
+**Post-exercise update (2026-08-10).** ADR-0004 completed exactly that loop:
+both stages landed (structs/enums natively lowered; the inline `[T; N]` array
+with literals, checked indexing, and bounded `for`), the perf-lab `collections`
+workload it named moved to `Supported` with its committed program and C peer,
+and the examples this report describes were rewritten onto the new capabilities
+with **identical spec verdicts and exit bytes** — the acceptance oracle this
+exercise defined. The prose above intentionally still describes the *v0-at-the-
+time* workarounds (accessor functions, hand-unrolled folds): that is what the
+exercise found, and the findings table is the record of what became of it.
+D-5c closes with it: aggregates are now the first non-`Copy` runnable values,
+so ownership diagnostics are reachable from runnable programs.

@@ -138,9 +138,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   runtime trap shim into an executable — the default debug build uses the Cranelift
   backend, `--release` uses the optimizing LLVM backend; `run` additionally executes it
   and exits with the program's own status, the integer its nullary `main` returns; both
-  backends lower the **scalar, control-flow core** today and *refuse* — never
-  mis-compile — anything outside it, pointing the user back to the interpreter as the
-  reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  backends lower the **v0 runnable core** — the scalar control-flow core plus the
+  ADR-0004 aggregates (structs, enums, `Option`/`Result`, fixed `[T; N]` arrays
+  with checked indexing, bounded `for`), laid out solely by `tdg-runtime`'s
+  `abi` module — and *refuse* — never mis-compile — anything outside it
+  (strings, floats, the growable `Array[T]`, borrow-mode calls), pointing the
+  user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
@@ -249,15 +252,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: tuonelang v0 runs only
-  the **scalar, control-flow core**, so of the eight required runtime workloads
-  exactly four (**startup, integer-computation, function-calls, recursion**) carry
-  a real program and are `Support::Supported`, while **allocation, collections,
-  string-processing, networking** are `Support::Unsupported` with the *exact reason*
-  the v0 core cannot express them and emit **no number** — the entry becomes
-  measurable the moment the feature lands, with no other change. Cross-language
-  comparison is **equivalent-semantics only** (C is the apt peer for the scalar
-  core: AOT-native, matching integer model) via a `ComparisonRunner` seam, and a
+  honesty rule the prompt demands is enforced structurally: of the eight required
+  runtime workloads exactly five (**startup, integer-computation, function-calls,
+  recursion**, and — since ADR-0004's fixed arrays landed — **collections**, an
+  `[Int; 8]` insert/scan with its C peer) carry a real program and are
+  `Support::Supported`, while **allocation, string-processing, networking** are
+  `Support::Unsupported` with the *exact reason* the v0 core cannot express them
+  and emit **no number** — the entry becomes measurable the moment the feature
+  lands, with no other change (exactly how `collections` flipped). The compiler
+  lab's cold stages measure the aggregate/loop program
+  (`lab::compiler::COLD_AGGREGATE`, acceptance test-pinned) so the ADR-0004
+  lowering's compile cost is tracked too. Cross-language
+  comparison is **equivalent-semantics only** (C is the apt peer for the runnable
+  core: AOT-native, matching integer model, `#[repr(C)]`-compatible aggregates)
+  via a `ComparisonRunner` seam, and a
   `Verdict` reaches `Measured` **only when both sides actually compiled and ran**
   under recorded toolchains and produced the same observable exit — otherwise it is
   `Skipped` with the reason, never a one-sided or fabricated figure. Each workload's
@@ -326,9 +334,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   processor that decodes packed-integer fields and runs a filter+map+reduce),
   `workspace/` (a medium three-package graph `app → geometry → numeric` wired by
   path dependencies), `http-service` (a request-routing/status core), and
-  `concurrent-worker` (a worker-pool scheduling model). Because v0 runs only the
-  scalar control-flow core, the three that fit it **run natively** and the two that
-  cannot (an HTTP service needs I/O; a worker pool needs concurrency) have their
+  `concurrent-worker` (a worker-pool scheduling model). The three that fit the
+  runnable core **run natively** — and since ADR-0004 landed they use it for
+  real: `geometry` passes a `Point` struct, `data-pipeline` folds an `[Int; 8]`
+  batch, and `cli-stats` holds an `[Int; 7]` dataset, with the same spec
+  verdicts and exit bytes as their pre-aggregate forms. The two that cannot run
+  (an HTTP service needs I/O; a worker pool needs concurrency) have their
   **pure decision core** written in the runnable subset — which really runs and is
   spec-checked — while the effectful shell is a documented `CONTRACT:` tier, exactly
   as `tdg-stdlib` splits executable from contract code; nothing advertises behavior
@@ -345,10 +356,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   is the project's own: **every language change discovered by dogfooding gets an ADR
   and a benchmark plan, never an ad-hoc feature to make one example compile** — so
   the exercise opened `specification/adr/ADR-0004` (aggregates + iteration in the
-  runnable core), `ADR-0006` (the effect boundary + runtime strings), `ADR-0007`
-  (the concurrency model), and `ADR-0008` (first-class functions), each `proposed`
-  and each naming the performance-lab workload it must unblock before it can be
-  accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
+  runnable core — since **accepted and landed**, having unblocked its named
+  `collections` workload), `ADR-0006` (the effect boundary + runtime strings),
+  `ADR-0007` (the concurrency model), and `ADR-0008` (first-class functions),
+  the latter three still `proposed` and each naming the performance-lab
+  workload it must unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
   paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -572,8 +584,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `Resolution` symbols the agent/LSP project), and — where executable — an
   executable `spec`; there is deliberately **one** obvious API per fundamental
   task, never competing spellings. Because v0 has **no native effect boundary**
-  (no FFI/syscalls; interpreter and both backends implement only the scalar,
-  control-flow core) and **methods are not lowered** (`impl` method calls are v0
+  (no FFI/syscalls — effects await ADR-0006; the runnable core is pure
+  computation) and **methods are not lowered** (`impl` method calls are v0
   no-ops pending the trait system), the library is *free functions only* and each
   module separates an **executable tier** (pure computation — ordering,
   `Option`/`Result` combinators, `Duration` arithmetic, error classification, the

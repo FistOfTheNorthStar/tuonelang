@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use tuo_bench::lab::compare::{Verdict, comparison_for};
-use tuo_bench::lab::compiler::{ColdStage, Edit, measure_cold, measure_edit};
+use tuo_bench::lab::compiler::{self, ColdStage, Edit, measure_cold, measure_edit};
 use tuo_bench::lab::env::Environment;
 use tuo_bench::lab::report::{ComparisonEntry, LabReport, render_human};
 use tuo_bench::lab::runtime::{Support, workloads};
@@ -242,11 +242,11 @@ fn measured_lab_report_prints_under_nocapture() {
     let clock = SystemClock::new();
     let mut report = LabReport::new(Environment::capture());
 
-    // Cold front-end stages over a representative small program.
-    let src = "fn helper(take n: Int) -> Int { n + 1 }\n\
-               fn main() -> Int { helper(41) }\n";
+    // Cold front-end stages over the representative aggregate/loop program
+    // (struct + fixed array + bounded for, per ADR-0004), so the cold cost of
+    // the new lowering is what the lab tracks.
     for stage in [ColdStage::Lex, ColdStage::Parse, ColdStage::Check] {
-        if let Some(result) = measure_cold(&clock, stage, src, 50, 20) {
+        if let Some(result) = measure_cold(&clock, stage, compiler::COLD_AGGREGATE, 50, 20) {
             report.cold_stages.push(result);
         }
     }
