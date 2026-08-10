@@ -221,6 +221,45 @@ fn stage2_fixed_arrays_agree_across_all_three_engines() {
     }
 }
 
+/// Native float support: IEEE-754 arithmetic (never trapping), `%` with C
+/// `fmod` semantics (Cranelift calls libm's `fmod`/`fmodf`, LLVM emits
+/// `frem`), Rust-semantics NaN comparisons, saturating float→int casts
+/// (NaN → 0, via `fcvt_to_*_sat` and the `llvm.fpto*i.sat` intrinsics),
+/// genuine f32 arithmetic, and floats inside aggregates. All three engines
+/// must agree bit for bit on the observable exit.
+#[test]
+fn floats_agree_across_all_three_engines() {
+    for name in [
+        "flt_arith.tuo",    // f64 + - * / and unary negation
+        "flt_rem.tuo",      // f64 and f32 remainder (fmod/fmodf vs frem)
+        "flt_compare.tuo",  // all six comparisons, including NaN cases
+        "flt_cast_sat.tuo", // float→int saturation high/low, NaN → 0
+        "flt_f32.tuo",      // F32 arithmetic + F32↔F64 casts
+        "flt_struct.tuo",   // a Float field in a struct, passed `take`
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// Borrow-mode (`in`/`mut`) call arguments: both backends pass the address of
+/// the caller's place and the callee works through the pointer directly (no
+/// copy-in, no copy-back) — observably identical to the interpreter's
+/// copy-in/copy-back because the borrow checker forbids aliasing and the
+/// borrow lasts only for the call.
+#[test]
+fn borrow_mode_calls_agree_across_all_three_engines() {
+    for name in [
+        "brw_scalar_in.tuo",  // scalar read through `in`
+        "brw_scalar_mut.tuo", // scalar write-back observed through `mut`
+        "brw_agg_in.tuo",     // struct fields read through `in` (twice — no move)
+        "brw_agg_mut.tuo",    // struct field written through `mut`
+        "brw_arr_in.tuo",     // `[Int; 4]` borrowed `in`, folded by `for`
+        "brw_forward.tuo",    // an `in` parameter forwarded as an `in` argument
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// An out-of-bounds index traps identically on all three engines: the
 /// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
 /// runtime's fixed trap status (the bounds `Assert` is lowered before the

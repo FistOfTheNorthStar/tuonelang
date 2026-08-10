@@ -21,25 +21,49 @@
 //!
 //! Each MIR local is classified once, up front (see [`LocalKind`]):
 //!
-//! - a **scalar** local (bool/char/int) becomes a Cranelift [`Variable`], read
-//!   and written by index, held in a register;
+//! - a **scalar** local (bool/char/int/float) becomes a Cranelift [`Variable`],
+//!   read and written by index, held in a register;
+//! - a scalar local whose address a **borrow-mode call argument** takes is
+//!   demoted to an explicit [`StackSlot`] (reads load, writes store), so the
+//!   callee's pointer aliases real caller memory;
 //! - a **unit** local carries no value;
 //! - an **aggregate** local (a Stage-1 product type — struct/tuple/enum whose
 //!   transitive fields are all scalars — or an ADR-0004 Stage 2 fixed array
 //!   `[T; N]`) gets one explicit [`StackSlot`], and its fields/elements are
 //!   accessed by computing a byte address into the slot from the runtime ABI's
-//!   offsets (see [`tuo_runtime::abi`]).
+//!   offsets (see [`tuo_runtime::abi`]);
+//! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
+//!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type has no v0 layout at all (growable `Array[T]`, strings,
-//! floats, heap-backed aggregates) still makes the whole function unsupported.
-//! Aggregate lowering follows ADR-0004: scalar leaves, by-pointer/sret call
-//! ABI. Fixed arrays are laid out inline — element `i` at `i × stride(T)` —
-//! and indexed by unchecked address arithmetic, because MIR asserts the bounds
-//! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use.
+//! A local whose type is heap-backed (`Str`, `String`, the growable
+//! `Array[T]`, `Box`/`Shared`/`Weak`) still makes the whole function
+//! unsupported. Aggregate lowering follows ADR-0004: scalar leaves,
+//! by-pointer/sret call ABI. Fixed arrays are laid out inline — element `i` at
+//! `i × stride(T)` — and indexed by unchecked address arithmetic, because MIR
+//! asserts the bounds (`Assert { IndexOutOfBounds }`) before every
+//! `Projection::Index` use.
+//!
+//! # Borrow-mode calling convention
+//!
+//! Pinned here and implemented **identically** in the LLVM backend (see
+//! `specification/abi.md`, "Passing modes"):
+//!
+//! - the **caller** passes the ADDRESS of the argument place as a pointer
+//!   argument — for a scalar root local that local is demoted to slot storage
+//!   so it has an address; an aggregate already lives in a slot;
+//! - the **callee** receives that pointer and reads/writes through it
+//!   directly: **no copy-in and no copy-back**. The interpreter's
+//!   copy-in/copy-back is observably identical because the borrow checker
+//!   forbids aliasing (any number of `in` XOR one `mut`) and the borrow lives
+//!   only for the call;
+//! - forwarding a borrowed parameter as another `in`/`mut` argument passes the
+//!   pointer value itself;
+//! - a unit-typed borrow occupies no ABI slot, like every unit value;
+//! - `take` parameters and returns are unchanged.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{
     AbiParam, InstBuilder, MemFlags, Signature, StackSlot, Type, Value as ClifValue, types,
@@ -51,23 +75,28 @@ use cranelift_object::ObjectModule;
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, Function, Operand, Place, Program, Projection, Rvalue, Statement,
-    Terminator, Trap, UnOp,
+    BinOp, CastKind, Const, Function, Operand, PassMode, Place, Program, Projection, Rvalue,
+    Statement, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{Layout, layout_of, struct_field_offsets, variant_field_offsets};
 use tuo_runtime::{TRAP_SYMBOL, TrapCode};
-use tuo_types::{IntKind, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
 
-use crate::abi::{int_type, int_width_bits, is_signed, scalar_type};
+use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 use crate::{CodegenCtx, FUNCTION_LINKAGE};
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. This is the third outcome added to the original scalar/unit
 /// pair: an aggregate local backed by an explicit stack slot.
 enum LocalKind {
-    /// A scalar (bool/char/int) held in an SSA [`Variable`] of the given type.
+    /// A scalar (bool/char/int/float) held in an SSA [`Variable`] of the given
+    /// type.
     Scalar(Variable, Type),
+    /// A scalar local forced into an explicit stack slot because a borrow-mode
+    /// call argument takes its address. Reads load and writes store through the
+    /// slot, so a callee's pointer aliases this local's real memory.
+    ScalarSlot(StackSlot, Type),
     /// A `Unit` local (or a zero-sized aggregate): carries no value, no slot.
     Unit,
     /// A Stage-1 aggregate held in an explicit stack slot; `ty` is the local's
@@ -76,6 +105,17 @@ enum LocalKind {
         /// The stack slot holding the aggregate's bytes.
         slot: StackSlot,
         /// The aggregate's declared type (source of truth for offsets).
+        ty: Ty,
+    },
+    /// A borrow-mode (`in`/`mut`) parameter: a pointer to caller-owned memory,
+    /// held in a pointer-typed [`Variable`]. Scalar reads load through the
+    /// pointer, `mut` scalar writes store through it, projections use it as the
+    /// base address, and forwarding it as another borrow argument passes the
+    /// pointer value itself. There is **no** copy-in and **no** copy-back.
+    Borrowed {
+        /// The pointer-typed variable holding the incoming address.
+        var: Variable,
+        /// The parameter's declared type (source of truth for offsets).
         ty: Ty,
     },
 }
@@ -101,9 +141,18 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type has no v0 runtime layout (the
-/// growable `Array[T]`, strings, floats, heap-backed aggregates).
+/// [`CodegenError::unsupported`] if the type is heap-backed (`Str`, `String`,
+/// the growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before
+/// any layout query, so the refusal names the concrete type) or has no v0
+/// runtime layout.
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
+    // Heap-backed types have an ABI *layout* (their headers), but the backend
+    // has no allocator or string runtime to give them meaning yet. Refuse them
+    // at classification time with a message naming the type and the road back,
+    // so they can never wander into an internal invariant error downstream.
+    if let Some(refusal) = heap_type_refusal(ty, context) {
+        return Err(CodegenError::unsupported(refusal));
+    }
     if scalar_type(ty).is_some() {
         return Ok(Storage::Scalar);
     }
@@ -112,7 +161,6 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
     }
     // Not scalar, not unit: it must be an aggregate with a real layout — a
     // scalar-leaf product type (Stage 1) or a fixed array `[T; N]` (Stage 2).
-    // `layout_of` refuses growable arrays/strings/floats/wrappers transitively.
     match layout_of(ty, types) {
         Ok(layout) if layout.size == 0 => Ok(Storage::Unit),
         Ok(layout) => Ok(Storage::Aggregate(layout)),
@@ -120,6 +168,34 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
             "`{context}` uses a type the Cranelift backend does not lower yet: {error}"
         ))),
     }
+}
+
+/// The clean refusal message for a heap-backed type the backend does not lower
+/// yet, or `None` if `ty` is not one. Mirrors the LLVM backend's
+/// `heap_type_refusal` word for word (bar the backend name), so the two
+/// backends refuse the same boundary with the same explanation.
+fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
+    let (what, road_back) = match ty {
+        Ty::Str => ("a `Str` value", "runtime strings await ADR-0006"),
+        Ty::String => ("a `String` value", "runtime strings await ADR-0006"),
+        Ty::Array(_) => (
+            "the growable `Array[T]`",
+            "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
+        ),
+        Ty::Wrapper(kind, _) => {
+            return Some(format!(
+                "`{context}` uses a `{}[T]` heap wrapper, which the Cranelift backend does not \
+                 lower yet (heap wrappers await the allocator ADR); the interpreter \
+                 (`tuo spec`/`tuo verify`) remains the reference",
+                kind.name()
+            ));
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "`{context}` uses {what}, which the Cranelift backend does not lower yet ({road_back}); \
+         the interpreter (`tuo spec`/`tuo verify`) remains the reference"
+    ))
 }
 
 /// Declare then define every lowerable function of `program` into `module`.
@@ -193,25 +269,26 @@ fn function_signature(
         signature.params.push(AbiParam::new(pointer_type));
     }
 
-    // Every parameter must be `Value` mode. Borrow-mode parameters are not
-    // lowered yet (they alias caller memory).
+    // Parameters, in declaration order after the (optional) sret pointer.
+    // Borrow-mode calling convention (identical in the LLVM backend's
+    // `function_type`, per `specification/abi.md` "Passing modes"): an
+    // `in`/`mut` parameter arrives as a **pointer to the caller's place** —
+    // scalar or aggregate alike — read (and, for `mut`, written) through
+    // directly, with no copy-in and no copy-back. A `take` parameter is
+    // unchanged: scalar by value, aggregate by pointer to a caller-owned copy,
+    // unit occupying no ABI slot (in any mode).
     for (index, mode) in function.params.iter().enumerate() {
-        if *mode != tuo_mir::PassMode::Value {
-            return Err(CodegenError::unsupported(format!(
-                "`{}` takes a borrow-mode parameter, which the Cranelift backend does not \
-                 lower yet",
-                function.name
-            )));
-        }
         let ty = &function.locals[index].ty;
-        match classify_storage(ty, types, &function.name)? {
-            Storage::Scalar => signature
+        let storage = classify_storage(ty, types, &function.name)?;
+        match (mode, storage) {
+            (_, Storage::Unit) => {}
+            (PassMode::Value, Storage::Scalar) => signature
                 .params
                 .push(AbiParam::new(require_scalar(ty, &function.name)?)),
-            // A unit parameter carries no value; it occupies no ABI slot.
-            Storage::Unit => {}
-            // An aggregate parameter is passed as a pointer to a caller copy.
-            Storage::Aggregate(_) => signature.params.push(AbiParam::new(pointer_type)),
+            (PassMode::Value, Storage::Aggregate(_))
+            | (PassMode::Borrow | PassMode::BorrowMut, _) => {
+                signature.params.push(AbiParam::new(pointer_type));
+            }
         }
     }
 
@@ -331,18 +408,56 @@ impl<'a> Lowering<'a> {
             .map(|_| self.builder.create_block())
             .collect();
 
+        // Pre-scan for locals whose address a borrow-mode call argument takes:
+        // those must be memory-backed even when scalar, so the callee's pointer
+        // aliases real caller memory. Aggregates already live in slots.
+        let borrowed_roots: HashSet<u32> = self
+            .function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.statements)
+            .filter_map(|statement| match statement {
+                Statement::Call { args, .. } => Some(args),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|arg| match arg {
+                tuo_mir::Arg::Borrow(place) | tuo_mir::Arg::BorrowMut(place) => Some(place.local.0),
+                tuo_mir::Arg::Value(_) => None,
+            })
+            .collect();
+
         // Classify and allocate storage for every local: a scalar gets an SSA
-        // Variable; a unit local carries no value; an aggregate local gets one
-        // explicit stack slot addressed by its ABI layout.
+        // Variable (or a stack slot, if borrowed); a unit local carries no
+        // value; an aggregate local gets one explicit stack slot addressed by
+        // its ABI layout; a borrow-mode parameter gets a pointer-typed Variable
+        // holding the caller's address (seeded below).
         self.kinds = Vec::with_capacity(self.function.locals.len());
-        for local in &self.function.locals {
-            let kind = match classify_storage(&local.ty, self.types, &self.function.name)? {
+        for (index, local) in self.function.locals.iter().enumerate() {
+            let storage = classify_storage(&local.ty, self.types, &self.function.name)?;
+            let borrow_param = self
+                .function
+                .params
+                .get(index)
+                .is_some_and(|mode| *mode != PassMode::Value);
+            let kind = match storage {
+                // A unit-typed local carries no value in every mode (a borrow
+                // of a unit place likewise occupies no ABI slot).
+                Storage::Unit => LocalKind::Unit,
+                _ if borrow_param => LocalKind::Borrowed {
+                    var: self.builder.declare_var(self.pointer_type),
+                    ty: local.ty.clone(),
+                },
                 Storage::Scalar => {
                     // `require_scalar` cannot fail here (classify said scalar).
                     let ty = require_scalar(&local.ty, &self.function.name)?;
-                    LocalKind::Scalar(self.builder.declare_var(ty), ty)
+                    if borrowed_roots.contains(&(index as u32)) {
+                        let layout = self.layout(&local.ty)?;
+                        LocalKind::ScalarSlot(self.new_temp_slot(layout)?, ty)
+                    } else {
+                        LocalKind::Scalar(self.builder.declare_var(ty), ty)
+                    }
                 }
-                Storage::Unit => LocalKind::Unit,
                 Storage::Aggregate(layout) => {
                     let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
                         StackSlotKind::ExplicitSlot,
@@ -376,15 +491,23 @@ impl<'a> Lowering<'a> {
         let mut native = usize::from(returns_aggregate);
 
         // Seed each MIR parameter local from its native parameter. A scalar is
-        // defined directly; an aggregate parameter's incoming pointer is copied
-        // into the callee's own slot (owned-copy semantics); a unit parameter
-        // occupies no native slot.
+        // defined directly (or stored into its slot, if borrowed onward); an
+        // aggregate `take` parameter's incoming pointer is copied into the
+        // callee's own slot (owned-copy semantics); a borrow-mode parameter's
+        // incoming pointer is kept as-is (no copy-in — it aliases the caller's
+        // place); a unit parameter occupies no native slot.
         for index in 0..self.function.params.len() {
             match &self.kinds[index] {
                 LocalKind::Scalar(var, _) => {
                     let var = *var;
                     let value = param_values[native];
                     self.builder.def_var(var, value);
+                    native += 1;
+                }
+                LocalKind::ScalarSlot(slot, _) => {
+                    let slot = *slot;
+                    let value = param_values[native];
+                    self.builder.ins().stack_store(value, slot, 0);
                     native += 1;
                 }
                 LocalKind::Unit => {}
@@ -397,18 +520,31 @@ impl<'a> Lowering<'a> {
                     let dest = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
                     self.emit_memcpy(dest, src, layout);
                 }
+                LocalKind::Borrowed { var, .. } => {
+                    let var = *var;
+                    let addr = param_values[native];
+                    self.builder.def_var(var, addr);
+                    native += 1;
+                }
             }
         }
 
         // Seed non-parameter scalar locals with a zero so a Variable is always
         // defined before use on every path (the ownership checker guarantees no
         // *semantic* read of an uninitialized local, but Cranelift's SSA
-        // construction still requires a definition to exist). Aggregate slots
-        // need no such seeding — a stack slot is always addressable.
+        // construction still requires a definition to exist). Stack slots
+        // (aggregate or scalar) need no such seeding — a slot is always
+        // addressable.
         for index in self.function.params.len()..self.function.locals.len() {
             if let LocalKind::Scalar(var, ty) = &self.kinds[index] {
                 let (var, ty) = (*var, *ty);
-                let zero = self.builder.ins().iconst(ty, 0);
+                let zero = if ty == types::F32 {
+                    self.builder.ins().f32const(0.0)
+                } else if ty == types::F64 {
+                    self.builder.ins().f64const(0.0)
+                } else {
+                    self.builder.ins().iconst(ty, 0)
+                };
                 self.builder.def_var(var, zero);
             }
         }
@@ -526,10 +662,19 @@ impl<'a> Lowering<'a> {
                         arg_values.push(self.lower_operand(operand)?);
                     }
                 }
-                tuo_mir::Arg::Borrow(_) | tuo_mir::Arg::BorrowMut(_) => {
-                    return Err(CodegenError::unsupported(
-                        "borrow-mode call arguments are not lowered by the Cranelift backend yet",
-                    ));
+                tuo_mir::Arg::Borrow(place) | tuo_mir::Arg::BorrowMut(place) => {
+                    // Borrow-mode argument: pass the ADDRESS of the caller's
+                    // place (the callee reads/writes through it directly; no
+                    // copy-in, no copy-back). A unit-typed borrow occupies no
+                    // ABI slot, matching the signature builder.
+                    let ty = self.place_type(place);
+                    match classify_storage(&ty, self.types, &self.function.name)? {
+                        Storage::Unit => {}
+                        Storage::Scalar | Storage::Aggregate(_) => {
+                            let addr = self.borrow_address(place)?;
+                            arg_values.push(addr);
+                        }
+                    }
                 }
             }
         }
@@ -598,6 +743,34 @@ impl<'a> Lowering<'a> {
         let dest = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
         self.emit_memcpy(dest, src, layout);
         Ok(dest)
+    }
+
+    /// The address of `place` for a borrow-mode (`in`/`mut`) call argument.
+    ///
+    /// A bare local resolves to its own storage: a borrowed-root scalar's slot
+    /// (the pre-scan forced it into memory), an aggregate's slot, or — when
+    /// forwarding a borrowed parameter — the incoming pointer value itself. A
+    /// projected place resolves through the shared address walk.
+    fn borrow_address(&mut self, place: &Place) -> Result<ClifValue, CodegenError> {
+        if place.projection.is_empty() {
+            return match &self.kinds[place.local.0 as usize] {
+                LocalKind::ScalarSlot(slot, _) => {
+                    Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0))
+                }
+                LocalKind::Aggregate { slot, .. } => {
+                    Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0))
+                }
+                LocalKind::Borrowed { var, .. } => Ok(self.builder.use_var(*var)),
+                LocalKind::Scalar(..) => Err(CodegenError::backend(
+                    "borrowed scalar local was not slot-backed (pre-scan invariant)",
+                )),
+                LocalKind::Unit => Err(CodegenError::backend(
+                    "address of a unit local requested for a borrow argument",
+                )),
+            };
+        }
+        let (addr, _leaf) = self.place_address(place)?;
+        Ok(addr)
     }
 
     /// Allocate a fresh temporary stack slot of `layout`.
@@ -755,14 +928,21 @@ impl<'a> Lowering<'a> {
                 let bits = *value as i64;
                 Ok(self.builder.ins().iconst(ty, bits))
             }
+            // The MIR constant is stored at f64 width, already normalized to
+            // its kind's precision, so materializing an `F32` by rounding the
+            // f64 payload to f32 is exact.
+            Const::Float(value, FloatKind::F32) => Ok(self.builder.ins().f32const(*value as f32)),
+            Const::Float(value, FloatKind::F64) => Ok(self.builder.ins().f64const(*value)),
             Const::Unit => Err(CodegenError::unsupported(
                 "a unit constant has no scalar representation to place in a value context",
             )),
-            Const::Float(..) => Err(CodegenError::unsupported(
-                "float constants are not lowered by the Cranelift backend yet",
-            )),
+            // Unreachable for locals/fields of type `Str` (classification
+            // refuses those up front); kept for a bare `Str` literal in an
+            // operand position.
             Const::Str(_) => Err(CodegenError::unsupported(
-                "string constants are not lowered by the Cranelift backend yet",
+                "a `Str` string constant is not lowered by the Cranelift backend yet (runtime \
+                 strings await ADR-0006); the interpreter (`tuo spec`/`tuo verify`) remains the \
+                 reference",
             )),
         }
     }
@@ -779,6 +959,11 @@ impl<'a> Lowering<'a> {
             UnOp::Not => {
                 // Boolean negation: xor with 1 (values are 0/1).
                 Ok(self.builder.ins().bxor_imm(value, 1))
+            }
+            UnOp::Neg if matches!(self.operand_ty(operand), Some(Ty::Float(_))) => {
+                // Float negation flips the sign bit (IEEE 754, works on NaN
+                // too) and never traps — exactly the interpreter's `-v`.
+                Ok(self.builder.ins().fneg(value))
             }
             UnOp::Neg => {
                 let kind = self.operand_int_kind(operand)?;
@@ -800,6 +985,11 @@ impl<'a> Lowering<'a> {
         l: ClifValue,
         r: ClifValue,
     ) -> Result<ClifValue, CodegenError> {
+        // Floats take their own IEEE-754 path (never trapping); everything
+        // else reduces to integer compares/arithmetic.
+        if let Some(Ty::Float(kind)) = self.operand_ty(lhs) {
+            return self.lower_float_binary(op, kind, l, r);
+        }
         // Comparisons on chars/bools/ints all reduce to integer compares; the
         // arithmetic operators are integer-only in the supported subset.
         if let Some(cc) = comparison_code(op, self.operand_signed(lhs)) {
@@ -820,6 +1010,68 @@ impl<'a> Lowering<'a> {
                 CodegenError::backend("comparison fell through arithmetic path"),
             ),
         }
+    }
+
+    /// Lower a float binary operation: IEEE 754 (round to nearest even), never
+    /// trapping — `x / 0.0` is an infinity or NaN, exactly as the interpreter
+    /// computes with Rust `f64`/`f32` arithmetic. `Rem` has C `fmod` semantics
+    /// (the sign of the dividend), which is Rust `%` — Cranelift has no `frem`
+    /// instruction, so it is lowered as a call to the C library's
+    /// `fmod`/`fmodf` (the exact function Rust's `%` lowers to).
+    ///
+    /// Comparisons use Cranelift's [`FloatCC`]: the four orderings are
+    /// *ordered* (false when either side is NaN) and `NotEqual` is
+    /// unordered-or-unequal (true on NaN) — exactly Rust's float comparison
+    /// semantics, which the interpreter uses.
+    fn lower_float_binary(
+        &mut self,
+        op: BinOp,
+        kind: FloatKind,
+        l: ClifValue,
+        r: ClifValue,
+    ) -> Result<ClifValue, CodegenError> {
+        if let Some(cc) = float_comparison_code(op) {
+            // `fcmp` yields an `i8` boolean (0 or 1), the backend's `Bool`.
+            return Ok(self.builder.ins().fcmp(cc, l, r));
+        }
+        Ok(match op {
+            BinOp::Add => self.builder.ins().fadd(l, r),
+            BinOp::Sub => self.builder.ins().fsub(l, r),
+            BinOp::Mul => self.builder.ins().fmul(l, r),
+            BinOp::Div => self.builder.ins().fdiv(l, r),
+            BinOp::Rem => {
+                let func_ref = self.fmod_func_ref(kind);
+                let call = self.builder.ins().call(func_ref, &[l, r]);
+                self.builder.inst_results(call)[0]
+            }
+            // Comparisons handled above; reaching here is impossible.
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                return Err(CodegenError::backend(
+                    "float comparison fell through the arithmetic path",
+                ));
+            }
+        })
+    }
+
+    /// Declare (on demand) and reference the C library's `fmod` (f64) or
+    /// `fmodf` (f32) for [`BinOp::Rem`] on floats, mirroring how the runtime
+    /// trap symbol is imported. The CLI links with `-lm` so the symbol resolves
+    /// on every supported host.
+    fn fmod_func_ref(&mut self, kind: FloatKind) -> cranelift_codegen::ir::FuncRef {
+        let float_ty = float_type(kind);
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        signature.params.push(AbiParam::new(float_ty));
+        signature.params.push(AbiParam::new(float_ty));
+        signature.returns.push(AbiParam::new(float_ty));
+        let name = match kind {
+            FloatKind::F32 => "fmodf",
+            FloatKind::F64 => "fmod",
+        };
+        let id = self
+            .module
+            .declare_function(name, Linkage::Import, &signature)
+            .expect("declaring the libm fmod symbol");
+        self.module.declare_func_in_func(id, self.builder.func)
     }
 
     /// Lower a trapping add/sub/mul: compute at full width, then trap if the
@@ -902,10 +1154,60 @@ impl<'a> Lowering<'a> {
                 let from = self.operand_int_kind(operand)?;
                 Ok(self.resize_int(value, from, *target))
             }
-            CastKind::IntToFloat | CastKind::FloatToInt | CastKind::FloatToFloat => {
-                Err(CodegenError::unsupported(
-                    "float casts are not lowered by the Cranelift backend yet",
-                ))
+            CastKind::IntToFloat => {
+                let Ty::Float(target) = to else {
+                    return Err(CodegenError::backend("int-to-float cast to a non-float"));
+                };
+                // Round to nearest even, by the SOURCE's signedness. The
+                // interpreter computes `v as f64` and then re-rounds an `F32`
+                // (`normalize_float`); this takes the same literal two-step
+                // int→f64→f32 path. (The double rounding is provably
+                // innocuous — 53 ≥ 2·24+2 — so it equals a direct int→f32
+                // conversion; the two-step form keeps the correspondence to
+                // the interpreter self-evident.)
+                let from = self.operand_int_kind(operand)?;
+                let wide = if is_signed(from) {
+                    self.builder.ins().fcvt_from_sint(types::F64, value)
+                } else {
+                    self.builder.ins().fcvt_from_uint(types::F64, value)
+                };
+                Ok(match target {
+                    FloatKind::F64 => wide,
+                    FloatKind::F32 => self.builder.ins().fdemote(types::F32, wide),
+                })
+            }
+            CastKind::FloatToInt => {
+                let Ty::Int(target) = to else {
+                    return Err(CodegenError::backend("float-to-int cast to a non-integer"));
+                };
+                // Cranelift's saturating conversions truncate toward zero,
+                // saturate to the TARGET's range, and map NaN to 0 — exactly
+                // the interpreter's `saturating_float_to_int`. Never traps.
+                let to_ty = int_type(*target);
+                Ok(if is_signed(*target) {
+                    self.builder.ins().fcvt_to_sint_sat(to_ty, value)
+                } else {
+                    self.builder.ins().fcvt_to_uint_sat(to_ty, value)
+                })
+            }
+            CastKind::FloatToFloat => {
+                let Ty::Float(target) = to else {
+                    return Err(CodegenError::backend("float-to-float cast to a non-float"));
+                };
+                let Some(Ty::Float(from)) = self.operand_ty(operand) else {
+                    return Err(CodegenError::backend("float-to-float cast of a non-float"));
+                };
+                // IEEE 754 conversion: exact when widening, round to nearest
+                // even when narrowing — the interpreter's `normalize_float`.
+                Ok(match (from, target) {
+                    (FloatKind::F32, FloatKind::F64) => {
+                        self.builder.ins().fpromote(types::F64, value)
+                    }
+                    (FloatKind::F64, FloatKind::F32) => {
+                        self.builder.ins().fdemote(types::F32, value)
+                    }
+                    (FloatKind::F32, FloatKind::F32) | (FloatKind::F64, FloatKind::F64) => value,
+                })
             }
         }
     }
@@ -938,6 +1240,25 @@ impl<'a> Lowering<'a> {
             let local = place.local.0 as usize;
             return match &self.kinds[local] {
                 LocalKind::Scalar(var, _) => Ok(self.builder.use_var(*var)),
+                LocalKind::ScalarSlot(slot, ty) => {
+                    let (slot, ty) = (*slot, *ty);
+                    Ok(self.builder.ins().stack_load(ty, slot, 0))
+                }
+                LocalKind::Borrowed { var, ty } => {
+                    // A scalar borrowed parameter: load through the caller's
+                    // pointer. (A whole-aggregate read goes through the
+                    // aggregate path, exactly as for `Aggregate` locals.)
+                    let var = *var;
+                    let ty = ty.clone();
+                    let clif = require_scalar(&ty, &self.function.name).map_err(|_| {
+                        CodegenError::backend(
+                            "reading a whole aggregate as a scalar (should go through the \
+                             aggregate path)",
+                        )
+                    })?;
+                    let addr = self.builder.use_var(var);
+                    Ok(self.builder.ins().load(clif, MemFlags::trusted(), addr, 0))
+                }
                 LocalKind::Unit => Err(CodegenError::backend(
                     "reading a scalar value from a unit local",
                 )),
@@ -962,6 +1283,22 @@ impl<'a> Lowering<'a> {
             return match &self.kinds[local] {
                 LocalKind::Scalar(var, _) => {
                     self.builder.def_var(*var, value);
+                    Ok(())
+                }
+                LocalKind::ScalarSlot(slot, _) => {
+                    let slot = *slot;
+                    self.builder.ins().stack_store(value, slot, 0);
+                    Ok(())
+                }
+                LocalKind::Borrowed { var, .. } => {
+                    // A `mut` scalar parameter: store through the caller's
+                    // pointer, so the write is visible to the caller with no
+                    // copy-back.
+                    let var = *var;
+                    let addr = self.builder.use_var(var);
+                    self.builder
+                        .ins()
+                        .store(MemFlags::trusted(), value, addr, 0);
                     Ok(())
                 }
                 // A unit-typed destination carries no value; skip it.
@@ -996,6 +1333,13 @@ impl<'a> Lowering<'a> {
                 let base = self.builder.ins().stack_addr(self.pointer_type, *slot, 0);
                 (base, ty.clone())
             }
+            // A borrowed parameter's incoming pointer is the base address of
+            // the caller's place; projections advance from it exactly as from
+            // a local slot.
+            LocalKind::Borrowed { var, ty } => {
+                let (var, ty) = (*var, ty.clone());
+                (self.builder.use_var(var), ty)
+            }
             // A zero-sized aggregate root (e.g. `[T; 0]`) classifies as unit
             // storage yet may still be projected in MIR — only in code the
             // preceding bounds `Assert` makes unreachable at runtime (any index
@@ -1005,12 +1349,14 @@ impl<'a> Lowering<'a> {
                 self.builder.ins().iconst(self.pointer_type, 0),
                 self.function.locals[local].ty.clone(),
             ),
-            LocalKind::Scalar(..) | LocalKind::Unit if place.projection.is_empty() => {
+            LocalKind::Scalar(..) | LocalKind::ScalarSlot(..) | LocalKind::Unit
+                if place.projection.is_empty() =>
+            {
                 return Err(CodegenError::backend(
                     "place_address called on a non-aggregate local with no projection",
                 ));
             }
-            LocalKind::Scalar(..) | LocalKind::Unit => {
+            LocalKind::Scalar(..) | LocalKind::ScalarSlot(..) | LocalKind::Unit => {
                 // A projection on a scalar local is impossible in well-formed
                 // MIR; refuse rather than mis-address.
                 return Err(CodegenError::backend("projection on a non-aggregate local"));
@@ -1061,6 +1407,10 @@ impl<'a> Lowering<'a> {
                     // bounds by the MIR before this use.
                     let index_value = match &self.kinds[index_local.0 as usize] {
                         LocalKind::Scalar(var, _) => self.builder.use_var(*var),
+                        LocalKind::ScalarSlot(slot, ty) => {
+                            let (slot, ty) = (*slot, *ty);
+                            self.builder.ins().stack_load(ty, slot, 0)
+                        }
                         _ => {
                             return Err(CodegenError::backend("array index local is not a scalar"));
                         }
@@ -1203,12 +1553,17 @@ impl<'a> Lowering<'a> {
     /// projected destination resolves through the address walk.
     fn aggregate_dest_address(&mut self, dest: &Place) -> Result<ClifValue, CodegenError> {
         if dest.projection.is_empty() {
-            if let LocalKind::Aggregate { slot, .. } = &self.kinds[dest.local.0 as usize] {
-                return Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0));
-            }
-            return Err(CodegenError::backend(
-                "aggregate rvalue assigned to a non-aggregate local",
-            ));
+            return match &self.kinds[dest.local.0 as usize] {
+                LocalKind::Aggregate { slot, .. } => {
+                    Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0))
+                }
+                // A whole-aggregate write to a `mut` borrowed parameter goes
+                // straight through the caller's pointer (no copy-back).
+                LocalKind::Borrowed { var, .. } => Ok(self.builder.use_var(*var)),
+                _ => Err(CodegenError::backend(
+                    "aggregate rvalue assigned to a non-aggregate local",
+                )),
+            };
         }
         let (addr, _leaf) = self.place_address(dest)?;
         Ok(addr)
@@ -1223,6 +1578,9 @@ impl<'a> Lowering<'a> {
                 LocalKind::Aggregate { slot, .. } => {
                     self.builder.ins().stack_addr(self.pointer_type, *slot, 0)
                 }
+                // The discriminant of a borrowed enum parameter reads through
+                // the caller's pointer.
+                LocalKind::Borrowed { var, .. } => self.builder.use_var(*var),
                 _ => {
                     return Err(CodegenError::backend(
                         "discriminant of a non-aggregate local",
@@ -1310,6 +1668,7 @@ impl<'a> Lowering<'a> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => Some(self.place_type(place)),
             Operand::Const(Const::Int(_, kind)) => Some(Ty::Int(*kind)),
+            Operand::Const(Const::Float(_, kind)) => Some(Ty::Float(*kind)),
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             _ => None,
@@ -1449,6 +1808,9 @@ impl<'a> Lowering<'a> {
                     LocalKind::Aggregate { slot, .. } => {
                         Ok(self.builder.ins().stack_addr(self.pointer_type, *slot, 0))
                     }
+                    // A whole-aggregate read of a borrowed parameter copies
+                    // from the caller's memory through the incoming pointer.
+                    LocalKind::Borrowed { var, .. } => Ok(self.builder.use_var(*var)),
                     _ => Err(CodegenError::backend(
                         "aggregate address requested for a non-aggregate local",
                     )),
@@ -1519,6 +1881,22 @@ fn comparison_code(op: BinOp, signed: bool) -> Option<IntCC> {
         BinOp::Gt => IntCC::UnsignedGreaterThan,
         BinOp::Ge if signed => IntCC::SignedGreaterThanOrEqual,
         BinOp::Ge => IntCC::UnsignedGreaterThanOrEqual,
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
+    })
+}
+
+/// The Cranelift float condition code for a comparison operator, or `None` if
+/// `op` is not a comparison. The four orderings are **ordered** (false when
+/// either operand is NaN) and `NotEqual` is **unordered-or-unequal** (true on
+/// NaN) — exactly Rust's float comparisons, which the interpreter uses.
+fn float_comparison_code(op: BinOp) -> Option<FloatCC> {
+    Some(match op {
+        BinOp::Eq => FloatCC::Equal,
+        BinOp::Ne => FloatCC::NotEqual,
+        BinOp::Lt => FloatCC::LessThan,
+        BinOp::Le => FloatCC::LessThanOrEqual,
+        BinOp::Gt => FloatCC::GreaterThan,
+        BinOp::Ge => FloatCC::GreaterThanOrEqual,
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
     })
 }

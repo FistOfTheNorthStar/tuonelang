@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let a = 1.5 as F32;
+    let b = 0.25 as F32;
+    let s = a + b;
+    let w = s as F64;
+    let n = 3 as F32;
+    let back = (2.5 as F64) as F32;
+    ((w * 4.0) as Int) + ((n * n) as Int) + ((back + back) as Int)
+}

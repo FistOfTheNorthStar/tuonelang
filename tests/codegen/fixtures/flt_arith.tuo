@@ -1,0 +1,11 @@
+fn scale(take x: Float, take k: Float) -> Float { x * k }
+fn main() -> Int {
+    let a = 6.25;
+    let b = 1.75;
+    let sum = a + b;
+    let diff = a - b;
+    let prod = scale(diff, 2.0);
+    let quot = prod / 4.0;
+    let neg = -quot;
+    ((sum + prod) as Int) + ((0.0 - neg) as Int)
+}

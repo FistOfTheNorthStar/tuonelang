@@ -25,53 +25,77 @@
 //!
 //! Each MIR local is classified once, up front (see [`LocalKind`]):
 //!
-//! - a **scalar** local (bool/char/int) is an `alloca` of a single integer, read
-//!   with `load` and written with `store`; `mem2reg` promotes it to a register;
+//! - a **scalar** local (bool/char/int/float) is an `alloca` of a single
+//!   scalar, read with `load` and written with `store`; `mem2reg` promotes it
+//!   to a register;
 //! - a **unit** local carries no value;
 //! - an **aggregate** local (a Stage-1 product type, or an ADR-0004 Stage 2
 //!   fixed array `[T; N]`) is an `alloca` of the aggregate's exact byte layout,
 //!   force-aligned to the ABI alignment, whose fields/elements are accessed by
-//!   GEP-ing a byte offset from the ABI (see [`tuo_runtime::abi`]).
+//!   GEP-ing a byte offset from the ABI (see [`tuo_runtime::abi`]);
+//! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
+//!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type has no v0 layout (the growable `Array[T]`, strings,
-//! floats, heap-backed aggregates) still makes the whole function unsupported.
-//! Aggregate lowering follows ADR-0004 and is byte-for-byte identical to the
-//! Cranelift backend: scalar leaves, by-pointer/sret call ABI, every
-//! size/offset from the runtime ABI. Fixed arrays are laid out inline —
-//! element `i` at `i × stride(T)` — and indexed by unchecked address
+//! A local whose type is heap-backed (`Str`, `String`, the growable
+//! `Array[T]`, `Box`/`Shared`/`Weak`) still makes the whole function
+//! unsupported. Aggregate lowering follows ADR-0004 and is byte-for-byte
+//! identical to the Cranelift backend: scalar leaves, by-pointer/sret call
+//! ABI, every size/offset from the runtime ABI. Fixed arrays are laid out
+//! inline — element `i` at `i × stride(T)` — and indexed by unchecked address
 //! arithmetic, because MIR asserts the bounds (`Assert { IndexOutOfBounds }`)
 //! before every `Projection::Index` use.
+//!
+//! # Borrow-mode calling convention
+//!
+//! Pinned identically in the Cranelift backend's `lower` module (see
+//! `specification/abi.md`, "Passing modes"):
+//!
+//! - the **caller** passes the ADDRESS of the argument place as a pointer
+//!   argument — every local is already an `alloca` here, so a scalar root's
+//!   own alloca is that address (its escape into the call is exactly what
+//!   stops `mem2reg` promoting it, mirroring the Cranelift backend's explicit
+//!   slot demotion); an aggregate passes its alloca;
+//! - the **callee** receives that pointer and reads/writes through it
+//!   directly: **no copy-in and no copy-back**. The interpreter's
+//!   copy-in/copy-back is observably identical because the borrow checker
+//!   forbids aliasing (any number of `in` XOR one `mut`) and the borrow lives
+//!   only for the call;
+//! - forwarding a borrowed parameter as another `in`/`mut` argument passes the
+//!   pointer value itself;
+//! - a unit-typed borrow occupies no ABI slot, like every unit value;
+//! - `take` parameters and returns are unchanged.
 
 use std::collections::HashMap;
 
 use inkwell::AddressSpace;
+use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage, Module};
-use inkwell::types::{BasicMetadataTypeEnum, IntType};
-use inkwell::values::{BasicValue, FunctionValue, IntValue, PointerValue};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, IntType};
+use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, Function, Operand, Place, Program, Projection, Rvalue, Statement,
-    Terminator, Trap, UnOp,
+    BinOp, CastKind, Const, Function, Operand, PassMode, Place, Program, Projection, Rvalue,
+    Statement, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{Layout, layout_of, struct_field_offsets, variant_field_offsets};
 use tuo_runtime::{TRAP_SYMBOL, TrapCode};
-use tuo_types::{IntKind, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
 
-use crate::abi::{int_type, int_width_bits, is_signed, scalar_type};
+use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. Parallels the Cranelift backend's `LocalKind` so the two make
 /// identical ABI choices.
 enum LocalKind<'ctx> {
-    /// A scalar (bool/char/int) `alloca` of the given integer type.
-    Scalar(PointerValue<'ctx>, IntType<'ctx>),
+    /// A scalar (bool/char/int/float) `alloca` of the given scalar type.
+    Scalar(PointerValue<'ctx>, BasicTypeEnum<'ctx>),
     /// A `Unit` local (or a zero-sized aggregate): carries no value, no slot.
     Unit,
     /// A Stage-1 aggregate `alloca` (byte array, ABI-aligned); `ty` is the
@@ -80,6 +104,18 @@ enum LocalKind<'ctx> {
         /// The pointer to the aggregate's byte storage.
         ptr: PointerValue<'ctx>,
         /// The aggregate's declared type.
+        ty: Ty,
+    },
+    /// A borrow-mode (`in`/`mut`) parameter: a pointer to caller-owned memory,
+    /// kept in a pointer-cell `alloca` (`mem2reg` promotes it). Scalar reads
+    /// load through the pointer, `mut` scalar writes store through it,
+    /// projections use it as the base address, and forwarding it as another
+    /// borrow argument passes the pointer value itself. There is **no**
+    /// copy-in and **no** copy-back.
+    Borrowed {
+        /// The alloca holding the incoming caller address.
+        cell: PointerValue<'ctx>,
+        /// The parameter's declared type (source of truth for offsets).
         ty: Ty,
     },
 }
@@ -96,8 +132,18 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type has no v0 runtime layout.
+/// [`CodegenError::unsupported`] if the type is heap-backed (`Str`, `String`,
+/// the growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before
+/// any layout query, so the refusal names the concrete type) or has no v0
+/// runtime layout.
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
+    // Heap-backed types have an ABI *layout* (their headers), but the backend
+    // has no allocator or string runtime to give them meaning yet. Refuse them
+    // at classification time with a message naming the type and the road back,
+    // so they can never wander into an internal invariant error downstream.
+    if let Some(refusal) = heap_type_refusal(ty, context) {
+        return Err(CodegenError::unsupported(refusal));
+    }
     if scalar_type_is_some(ty) {
         return Ok(Storage::Scalar);
     }
@@ -113,10 +159,38 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
     }
 }
 
-/// Whether `ty` is a scalar the backend maps to an LLVM integer, without needing
-/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int).
+/// The clean refusal message for a heap-backed type the backend does not lower
+/// yet, or `None` if `ty` is not one. Mirrors the Cranelift backend's
+/// `heap_type_refusal` word for word (bar the backend name), so the two
+/// backends refuse the same boundary with the same explanation.
+fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
+    let (what, road_back) = match ty {
+        Ty::Str => ("a `Str` value", "runtime strings await ADR-0006"),
+        Ty::String => ("a `String` value", "runtime strings await ADR-0006"),
+        Ty::Array(_) => (
+            "the growable `Array[T]`",
+            "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
+        ),
+        Ty::Wrapper(kind, _) => {
+            return Some(format!(
+                "`{context}` uses a `{}[T]` heap wrapper, which the LLVM backend does not \
+                 lower yet (heap wrappers await the allocator ADR); the interpreter \
+                 (`tuo spec`/`tuo verify`) remains the reference",
+                kind.name()
+            ));
+        }
+        _ => return None,
+    };
+    Some(format!(
+        "`{context}` uses {what}, which the LLVM backend does not lower yet ({road_back}); \
+         the interpreter (`tuo spec`/`tuo verify`) remains the reference"
+    ))
+}
+
+/// Whether `ty` is a scalar the backend maps to an LLVM scalar, without needing
+/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int/float).
 fn scalar_type_is_some(ty: &Ty) -> bool {
-    matches!(ty, Ty::Bool | Ty::Char | Ty::Int(_))
+    matches!(ty, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
 }
 
 /// The linkage a compiled tuonelang function gets: external, so the entry (and
@@ -191,20 +265,24 @@ fn function_type<'ctx>(
         params.push(ptr_ty.into());
     }
 
-    // Every parameter must be `Value` mode. Borrow-mode parameters are not
-    // lowered yet (they alias caller memory).
+    // Parameters, in declaration order after the (optional) sret pointer.
+    // Borrow-mode calling convention (identical in the Cranelift backend's
+    // `function_signature`, per `specification/abi.md` "Passing modes"): an
+    // `in`/`mut` parameter arrives as a **pointer to the caller's place** —
+    // scalar or aggregate alike — read (and, for `mut`, written) through
+    // directly, with no copy-in and no copy-back. A `take` parameter is
+    // unchanged: scalar by value, aggregate by pointer to a caller-owned copy,
+    // unit occupying no ABI slot (in any mode).
     for (index, mode) in function.params.iter().enumerate() {
-        if *mode != tuo_mir::PassMode::Value {
-            return Err(CodegenError::unsupported(format!(
-                "`{}` takes a borrow-mode parameter, which the LLVM backend does not lower yet",
-                function.name
-            )));
-        }
         let ty = &function.locals[index].ty;
-        match classify_storage(ty, types, &function.name)? {
-            Storage::Scalar => params.push(require_scalar(ctx, ty, &function.name)?.into()),
-            Storage::Unit => {}
-            Storage::Aggregate(_) => params.push(ptr_ty.into()),
+        let storage = classify_storage(ty, types, &function.name)?;
+        match (mode, storage) {
+            (_, Storage::Unit) => {}
+            (PassMode::Value, Storage::Scalar) => {
+                params.push(require_scalar(ctx, ty, &function.name)?.into());
+            }
+            (PassMode::Value, Storage::Aggregate(_))
+            | (PassMode::Borrow | PassMode::BorrowMut, _) => params.push(ptr_ty.into()),
         }
     }
 
@@ -218,13 +296,12 @@ fn function_type<'ctx>(
     })
 }
 
-/// The scalar LLVM integer type of `ty`, or an unsupported error naming
-/// `context`.
+/// The scalar LLVM type of `ty`, or an unsupported error naming `context`.
 fn require_scalar<'ctx>(
     ctx: &'ctx Context,
     ty: &Ty,
     context: &str,
-) -> Result<IntType<'ctx>, CodegenError> {
+) -> Result<BasicTypeEnum<'ctx>, CodegenError> {
     scalar_type(ctx, ty).ok_or_else(|| {
         CodegenError::unsupported(format!(
             "`{context}` uses a non-scalar type the LLVM backend does not lower yet"
@@ -299,12 +376,36 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let entry = self.blocks[0];
         self.builder.position_at_end(entry);
 
-        // Allocate storage for every local: a scalar `alloca` of its integer
-        // type; a unit local carries no value; an aggregate `alloca` of its exact
-        // byte layout, force-aligned to the ABI alignment.
+        // Allocate storage for every local: a scalar `alloca` of its scalar
+        // type; a unit local carries no value; an aggregate `alloca` of its
+        // exact byte layout, force-aligned to the ABI alignment; a borrow-mode
+        // parameter a pointer-cell `alloca` holding the caller's address
+        // (seeded below). Unlike the Cranelift backend, no explicit slot
+        // demotion is needed for borrowed-out scalar locals: every scalar is
+        // already an alloca, and its address escaping into a call is exactly
+        // what keeps `mem2reg` from promoting it.
         self.kinds = Vec::with_capacity(self.function.locals.len());
         for (index, local) in self.function.locals.iter().enumerate() {
-            let kind = match classify_storage(&local.ty, self.types, &self.function.name)? {
+            let storage = classify_storage(&local.ty, self.types, &self.function.name)?;
+            let borrow_param = self
+                .function
+                .params
+                .get(index)
+                .is_some_and(|mode| *mode != PassMode::Value);
+            let kind = match storage {
+                // A unit-typed local carries no value in every mode (a borrow
+                // of a unit place likewise occupies no ABI slot).
+                Storage::Unit => LocalKind::Unit,
+                _ if borrow_param => {
+                    let cell = self
+                        .builder
+                        .build_alloca(self.ptr_ty, &format!("brw{index}"))
+                        .map_err(builder_err("allocating a borrow pointer cell"))?;
+                    LocalKind::Borrowed {
+                        cell,
+                        ty: local.ty.clone(),
+                    }
+                }
                 Storage::Scalar => {
                     let ty = require_scalar(self.ctx, &local.ty, &self.function.name)?;
                     let ptr = self
@@ -313,7 +414,6 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         .map_err(builder_err("allocating a scalar slot"))?;
                     LocalKind::Scalar(ptr, ty)
                 }
-                Storage::Unit => LocalKind::Unit,
                 Storage::Aggregate(layout) => {
                     let ptr = self.alloca_aggregate(layout, index)?;
                     LocalKind::Aggregate {
@@ -334,9 +434,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let mut native = u32::from(returns_aggregate);
 
         // Seed each MIR parameter local from its native parameter. A scalar is
-        // stored into its slot; an aggregate parameter's incoming pointer is
-        // memcpy'd into the callee's own slot (owned-copy semantics); a unit
-        // parameter occupies no native slot.
+        // stored into its slot; an aggregate `take` parameter's incoming
+        // pointer is memcpy'd into the callee's own slot (owned-copy
+        // semantics); a borrow-mode parameter's incoming pointer is kept as-is
+        // (no copy-in — it aliases the caller's place); a unit parameter
+        // occupies no native slot.
         for index in 0..self.function.params.len() {
             match &self.kinds[index] {
                 LocalKind::Scalar(ptr, _) => {
@@ -344,8 +446,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     let param = self
                         .value
                         .get_nth_param(native)
-                        .ok_or_else(|| CodegenError::backend("missing LLVM parameter"))?
-                        .into_int_value();
+                        .ok_or_else(|| CodegenError::backend("missing LLVM parameter"))?;
                     self.builder
                         .build_store(ptr, param)
                         .map_err(builder_err("storing a parameter"))?;
@@ -363,6 +464,18 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     native += 1;
                     let layout = self.layout(&ty)?;
                     self.emit_memcpy(dest, src, layout)?;
+                }
+                LocalKind::Borrowed { cell, .. } => {
+                    let cell = *cell;
+                    let addr = self
+                        .value
+                        .get_nth_param(native)
+                        .ok_or_else(|| CodegenError::backend("missing LLVM parameter"))?
+                        .into_pointer_value();
+                    self.builder
+                        .build_store(cell, addr)
+                        .map_err(builder_err("storing a borrow pointer"))?;
+                    native += 1;
                 }
             }
         }
@@ -458,10 +571,19 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         arg_values.push(self.lower_operand(operand)?.into());
                     }
                 }
-                tuo_mir::Arg::Borrow(_) | tuo_mir::Arg::BorrowMut(_) => {
-                    return Err(CodegenError::unsupported(
-                        "borrow-mode call arguments are not lowered by the LLVM backend yet",
-                    ));
+                tuo_mir::Arg::Borrow(place) | tuo_mir::Arg::BorrowMut(place) => {
+                    // Borrow-mode argument: pass the ADDRESS of the caller's
+                    // place (the callee reads/writes through it directly; no
+                    // copy-in, no copy-back). A unit-typed borrow occupies no
+                    // ABI slot, matching the signature builder.
+                    let ty = self.place_type(place);
+                    match classify_storage(&ty, self.types, &self.function.name)? {
+                        Storage::Unit => {}
+                        Storage::Scalar | Storage::Aggregate(_) => {
+                            let addr = self.borrow_address(place)?;
+                            arg_values.push(addr.into());
+                        }
+                    }
                 }
             }
         }
@@ -481,7 +603,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         } else if let inkwell::values::ValueKind::Basic(value) = call.try_as_basic_value() {
             // A unit-returning callee yields no result; a scalar callee yields
             // one, stored into the (scalar) destination.
-            self.write_place(dest, value.into_int_value())?;
+            self.write_place(dest, value)?;
         }
         Ok(())
     }
@@ -519,6 +641,41 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let dest = self.alloca_aggregate(layout, usize::MAX)?;
         self.emit_memcpy(dest, src, layout)?;
         Ok(dest)
+    }
+
+    /// The address of `place` for a borrow-mode (`in`/`mut`) call argument.
+    ///
+    /// A bare local resolves to its own storage: a scalar's or aggregate's
+    /// alloca, or — when forwarding a borrowed parameter — the incoming
+    /// pointer value itself. A projected place resolves through the shared
+    /// address walk.
+    fn borrow_address(&mut self, place: &Place) -> Result<PointerValue<'ctx>, CodegenError> {
+        if place.projection.is_empty() {
+            return match &self.kinds[place.local.0 as usize] {
+                LocalKind::Scalar(ptr, _) | LocalKind::Aggregate { ptr, .. } => Ok(*ptr),
+                LocalKind::Borrowed { .. } => self.borrowed_addr(place.local.0 as usize),
+                LocalKind::Unit => Err(CodegenError::backend(
+                    "address of a unit local requested for a borrow argument",
+                )),
+            };
+        }
+        let (addr, _leaf) = self.place_address(place)?;
+        Ok(addr)
+    }
+
+    /// The caller address held by the borrowed parameter at `index` (a load of
+    /// its pointer cell).
+    fn borrowed_addr(&mut self, index: usize) -> Result<PointerValue<'ctx>, CodegenError> {
+        let LocalKind::Borrowed { cell, .. } = &self.kinds[index] else {
+            return Err(CodegenError::backend(
+                "borrowed_addr called on a non-borrowed local",
+            ));
+        };
+        Ok(self
+            .builder
+            .build_load(self.ptr_ty, *cell, "brw_addr")
+            .map_err(builder_err("loading a borrow pointer"))?
+            .into_pointer_value())
     }
 
     /// The MIR function with symbol `callee`, for its return type and name.
@@ -579,7 +736,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 then_block,
                 else_block,
             } => {
-                let value = self.lower_operand(cond)?;
+                let value = self.lower_operand(cond)?.into_int_value();
                 // The condition is a `Bool` (i8, 0/1); LLVM branches want an i1.
                 let cond_i1 = self.truthy(value)?;
                 let then_b = self.blocks[then_block.0 as usize];
@@ -594,7 +751,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 arms,
                 otherwise,
             } => {
-                let value = self.lower_operand(discr)?;
+                let value = self.lower_operand(discr)?.into_int_value();
                 let otherwise_block = self.blocks[otherwise.0 as usize];
                 let cases: Vec<(IntValue<'ctx>, LlvmBlock<'ctx>)> = arms
                     .iter()
@@ -611,7 +768,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 Ok(())
             }
             Terminator::Assert { cond, trap, target } => {
-                let value = self.lower_operand(cond)?;
+                let value = self.lower_operand(cond)?.into_int_value();
                 let cond_i1 = self.truthy(value)?;
                 let ok_block = self.blocks[target.0 as usize];
                 let trap_block = self.ctx.append_basic_block(self.value, "assert_fail");
@@ -628,7 +785,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
     // ----- rvalues & operands -----
 
-    fn lower_rvalue(&mut self, rvalue: &Rvalue) -> Result<IntValue<'ctx>, CodegenError> {
+    fn lower_rvalue(&mut self, rvalue: &Rvalue) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         match rvalue {
             Rvalue::Use(operand) => self.lower_operand(operand),
             Rvalue::Unary { op, operand } => {
@@ -647,7 +804,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Rvalue::Aggregate { .. } => Err(CodegenError::backend(
                 "aggregate construction reached the scalar rvalue path",
             )),
-            Rvalue::Discriminant(place) => self.lower_discriminant(place),
+            Rvalue::Discriminant(place) => Ok(self.lower_discriminant(place)?.into()),
             // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
             // length is lowered as a constant and the MIR verifier rejects
             // `Len` of a fixed-array place), so refusing it entirely stays
@@ -658,20 +815,21 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         }
     }
 
-    fn lower_operand(&mut self, operand: &Operand) -> Result<IntValue<'ctx>, CodegenError> {
+    fn lower_operand(&mut self, operand: &Operand) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.read_place(place),
             Operand::Const(constant) => self.lower_const(constant),
         }
     }
 
-    fn lower_const(&mut self, constant: &Const) -> Result<IntValue<'ctx>, CodegenError> {
+    fn lower_const(&mut self, constant: &Const) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         match constant {
-            Const::Bool(b) => Ok(self.ctx.i8_type().const_int(u64::from(*b), false)),
+            Const::Bool(b) => Ok(self.ctx.i8_type().const_int(u64::from(*b), false).into()),
             Const::Char(c) => Ok(self
                 .ctx
                 .i32_type()
-                .const_int(u64::from(u32::from(*c)), false)),
+                .const_int(u64::from(u32::from(*c)), false)
+                .into()),
             Const::Int(value, kind) => {
                 let ty = int_type(self.ctx, *kind);
                 // Reinterpret the mathematical value's low bits at the target
@@ -679,16 +837,22 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 // takes the low 64 bits and (with sign_extend=false) zero-fills
                 // above the type width, so the stored bit pattern is exactly the
                 // value's two's-complement representation at that width.
-                Ok(ty.const_int(*value as u64, false))
+                Ok(ty.const_int(*value as u64, false).into())
             }
+            // The MIR constant is stored at f64 width, already normalized to
+            // its kind's precision, so materializing an `F32` by rounding the
+            // f64 payload to f32 is exact.
+            Const::Float(value, kind) => Ok(float_type(self.ctx, *kind).const_float(*value).into()),
             Const::Unit => Err(CodegenError::unsupported(
                 "a unit constant has no scalar representation to place in a value context",
             )),
-            Const::Float(..) => Err(CodegenError::unsupported(
-                "float constants are not lowered by the LLVM backend yet",
-            )),
+            // Unreachable for locals/fields of type `Str` (classification
+            // refuses those up front); kept for a bare `Str` literal in an
+            // operand position.
             Const::Str(_) => Err(CodegenError::unsupported(
-                "string constants are not lowered by the LLVM backend yet",
+                "a `Str` string constant is not lowered by the LLVM backend yet (runtime \
+                 strings await ADR-0006); the interpreter (`tuo spec`/`tuo verify`) remains the \
+                 reference",
             )),
         }
     }
@@ -699,17 +863,30 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         &mut self,
         op: UnOp,
         operand: &Operand,
-        value: IntValue<'ctx>,
-    ) -> Result<IntValue<'ctx>, CodegenError> {
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         match op {
             UnOp::Not => {
                 // Boolean negation: xor with 1 (values are 0/1).
+                let value = value.into_int_value();
                 let one = value.get_type().const_int(1, false);
-                self.builder
+                Ok(self
+                    .builder
                     .build_xor(value, one, "not")
-                    .map_err(builder_err("emitting boolean not"))
+                    .map_err(builder_err("emitting boolean not"))?
+                    .into())
+            }
+            UnOp::Neg if matches!(self.operand_ty(operand), Some(Ty::Float(_))) => {
+                // Float negation flips the sign bit (IEEE 754, works on NaN
+                // too) and never traps — exactly the interpreter's `-v`.
+                Ok(self
+                    .builder
+                    .build_float_neg(value.into_float_value(), "fneg")
+                    .map_err(builder_err("emitting float negation"))?
+                    .into())
             }
             UnOp::Neg => {
+                let value = value.into_int_value();
                 let kind = self.operand_int_kind(operand)?;
                 // Integer negation traps on MIN (two's complement, §24): -MIN is
                 // not representable. Detect it as `value == MIN`.
@@ -720,9 +897,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     .build_int_compare(IntPredicate::EQ, value, min, "is_min")
                     .map_err(builder_err("comparing against MIN"))?;
                 self.guard(is_min, TrapCode::IntegerOverflow)?;
-                self.builder
+                Ok(self
+                    .builder
                     .build_int_neg(value, "neg")
-                    .map_err(builder_err("emitting negation"))
+                    .map_err(builder_err("emitting negation"))?
+                    .into())
             }
         }
     }
@@ -731,9 +910,15 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         &mut self,
         op: BinOp,
         lhs: &Operand,
-        l: IntValue<'ctx>,
-        r: IntValue<'ctx>,
-    ) -> Result<IntValue<'ctx>, CodegenError> {
+        l: BasicValueEnum<'ctx>,
+        r: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        // Floats take their own IEEE-754 path (never trapping); everything
+        // else reduces to integer compares/arithmetic.
+        if matches!(self.operand_ty(lhs), Some(Ty::Float(_))) {
+            return self.lower_float_binary(op, l.into_float_value(), r.into_float_value());
+        }
+        let (l, r) = (l.into_int_value(), r.into_int_value());
         // Comparisons on chars/bools/ints all reduce to integer compares; the
         // arithmetic operators are integer-only in the supported subset.
         if let Some(pred) = comparison_pred(op, self.operand_signed(lhs)) {
@@ -743,24 +928,87 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 .map_err(builder_err("emitting a comparison"))?;
             // `icmp` yields an i1; widen to the backend's `Bool` (i8, 0/1) so it
             // shares the scalar representation the rest of the lowering expects.
-            return self
+            return Ok(self
                 .builder
                 .build_int_z_extend(cmp, self.ctx.i8_type(), "cmp_bool")
-                .map_err(builder_err("widening a comparison result"));
+                .map_err(builder_err("widening a comparison result"))?
+                .into());
         }
 
         let kind = self.operand_int_kind(lhs)?;
-        match op {
-            BinOp::Add => self.checked_arith(kind, l, r, ArithOp::Add),
-            BinOp::Sub => self.checked_arith(kind, l, r, ArithOp::Sub),
-            BinOp::Mul => self.checked_arith(kind, l, r, ArithOp::Mul),
-            BinOp::Div => self.checked_divrem(kind, l, r, true),
-            BinOp::Rem => self.checked_divrem(kind, l, r, false),
+        Ok(match op {
+            BinOp::Add => self.checked_arith(kind, l, r, ArithOp::Add)?,
+            BinOp::Sub => self.checked_arith(kind, l, r, ArithOp::Sub)?,
+            BinOp::Mul => self.checked_arith(kind, l, r, ArithOp::Mul)?,
+            BinOp::Div => self.checked_divrem(kind, l, r, true)?,
+            BinOp::Rem => self.checked_divrem(kind, l, r, false)?,
             // Comparisons handled above; reaching here is impossible.
-            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Err(
-                CodegenError::backend("comparison fell through arithmetic path"),
-            ),
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                return Err(CodegenError::backend(
+                    "comparison fell through arithmetic path",
+                ));
+            }
         }
+        .into())
+    }
+
+    /// Lower a float binary operation: IEEE 754 (round to nearest even), never
+    /// trapping — `x / 0.0` is an infinity or NaN, exactly as the interpreter
+    /// computes with Rust `f64`/`f32` arithmetic. `Rem` is LLVM's `frem`,
+    /// which has C `fmod` semantics (the sign of the dividend) — Rust `%`.
+    ///
+    /// Comparisons use [`FloatPredicate`]: the four orderings and equality are
+    /// **ordered** (`O*`, false when either side is NaN) and inequality is
+    /// **unordered-or-unequal** (`UNE`, true on NaN) — exactly Rust's float
+    /// comparison semantics, which the interpreter uses. Mirrors the Cranelift
+    /// backend's `lower_float_binary` decision for decision.
+    fn lower_float_binary(
+        &mut self,
+        op: BinOp,
+        l: inkwell::values::FloatValue<'ctx>,
+        r: inkwell::values::FloatValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        if let Some(pred) = float_comparison_pred(op) {
+            let cmp = self
+                .builder
+                .build_float_compare(pred, l, r, "fcmp")
+                .map_err(builder_err("emitting a float comparison"))?;
+            // `fcmp` yields an i1; widen to the backend's `Bool` (i8, 0/1).
+            return Ok(self
+                .builder
+                .build_int_z_extend(cmp, self.ctx.i8_type(), "fcmp_bool")
+                .map_err(builder_err("widening a float comparison result"))?
+                .into());
+        }
+        Ok(match op {
+            BinOp::Add => self
+                .builder
+                .build_float_add(l, r, "fadd")
+                .map_err(builder_err("emitting float addition"))?,
+            BinOp::Sub => self
+                .builder
+                .build_float_sub(l, r, "fsub")
+                .map_err(builder_err("emitting float subtraction"))?,
+            BinOp::Mul => self
+                .builder
+                .build_float_mul(l, r, "fmul")
+                .map_err(builder_err("emitting float multiplication"))?,
+            BinOp::Div => self
+                .builder
+                .build_float_div(l, r, "fdiv")
+                .map_err(builder_err("emitting float division"))?,
+            BinOp::Rem => self
+                .builder
+                .build_float_rem(l, r, "frem")
+                .map_err(builder_err("emitting float remainder"))?,
+            // Comparisons handled above; reaching here is impossible.
+            BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
+                return Err(CodegenError::backend(
+                    "float comparison fell through the arithmetic path",
+                ));
+            }
+        }
+        .into())
     }
 
     /// Lower a trapping add/sub/mul: use LLVM's overflow-checking intrinsic,
@@ -872,21 +1120,118 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         &mut self,
         kind: CastKind,
         operand: &Operand,
-        value: IntValue<'ctx>,
+        value: BasicValueEnum<'ctx>,
         to: &Ty,
-    ) -> Result<IntValue<'ctx>, CodegenError> {
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         match kind {
             CastKind::IntToInt => {
                 let Ty::Int(target) = to else {
                     return Err(CodegenError::backend("int-to-int cast to a non-integer"));
                 };
                 let from = self.operand_int_kind(operand)?;
-                self.resize_int(value, from, *target)
+                Ok(self
+                    .resize_int(value.into_int_value(), from, *target)?
+                    .into())
             }
-            CastKind::IntToFloat | CastKind::FloatToInt | CastKind::FloatToFloat => Err(
-                CodegenError::unsupported("float casts are not lowered by the LLVM backend yet"),
-            ),
+            CastKind::IntToFloat => {
+                let Ty::Float(target) = to else {
+                    return Err(CodegenError::backend("int-to-float cast to a non-float"));
+                };
+                // Round to nearest even, by the SOURCE's signedness. The
+                // interpreter computes `v as f64` and then re-rounds an `F32`
+                // (`normalize_float`); this takes the same literal two-step
+                // int→f64→f32 path, mirroring the Cranelift backend. (The
+                // double rounding is provably innocuous — 53 ≥ 2·24+2 — so it
+                // equals a direct int→f32 conversion; the two-step form keeps
+                // the correspondence to the interpreter self-evident.)
+                let from = self.operand_int_kind(operand)?;
+                let value = value.into_int_value();
+                let wide = if is_signed(from) {
+                    self.builder
+                        .build_signed_int_to_float(value, self.ctx.f64_type(), "sitofp")
+                        .map_err(builder_err("emitting a signed int-to-float cast"))?
+                } else {
+                    self.builder
+                        .build_unsigned_int_to_float(value, self.ctx.f64_type(), "uitofp")
+                        .map_err(builder_err("emitting an unsigned int-to-float cast"))?
+                };
+                Ok(match target {
+                    FloatKind::F64 => wide.into(),
+                    FloatKind::F32 => self
+                        .builder
+                        .build_float_trunc(wide, self.ctx.f32_type(), "fptrunc")
+                        .map_err(builder_err("re-rounding an int-to-F32 cast"))?
+                        .into(),
+                })
+            }
+            CastKind::FloatToInt => {
+                let Ty::Int(target) = to else {
+                    return Err(CodegenError::backend("float-to-int cast to a non-integer"));
+                };
+                // The `llvm.fptosi.sat`/`llvm.fptoui.sat` intrinsics truncate
+                // toward zero, saturate to the TARGET's range, and map NaN to
+                // 0 — exactly the interpreter's `saturating_float_to_int` and
+                // the Cranelift backend's fcvt_to_{s,u}int_sat. Never traps
+                // (unlike plain `fptosi`, which is poison out of range).
+                self.saturating_float_to_int_cast(value.into_float_value(), *target)
+            }
+            CastKind::FloatToFloat => {
+                let Ty::Float(target) = to else {
+                    return Err(CodegenError::backend("float-to-float cast to a non-float"));
+                };
+                let Some(Ty::Float(from)) = self.operand_ty(operand) else {
+                    return Err(CodegenError::backend("float-to-float cast of a non-float"));
+                };
+                let value = value.into_float_value();
+                // IEEE 754 conversion: exact when widening, round to nearest
+                // even when narrowing — the interpreter's `normalize_float`.
+                Ok(match (from, target) {
+                    (FloatKind::F32, FloatKind::F64) => self
+                        .builder
+                        .build_float_ext(value, self.ctx.f64_type(), "fpext")
+                        .map_err(builder_err("emitting a float widening cast"))?
+                        .into(),
+                    (FloatKind::F64, FloatKind::F32) => self
+                        .builder
+                        .build_float_trunc(value, self.ctx.f32_type(), "fptrunc")
+                        .map_err(builder_err("emitting a float narrowing cast"))?
+                        .into(),
+                    (FloatKind::F32, FloatKind::F32) | (FloatKind::F64, FloatKind::F64) => {
+                        value.into()
+                    }
+                })
+            }
         }
+    }
+
+    /// Lower a saturating float→int cast through the `llvm.fptosi.sat` /
+    /// `llvm.fptoui.sat` intrinsic (by the TARGET's signedness), overloaded on
+    /// the concrete (int, float) type pair.
+    fn saturating_float_to_int_cast(
+        &mut self,
+        value: inkwell::values::FloatValue<'ctx>,
+        target: IntKind,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let intrinsic_name = if is_signed(target) {
+            "llvm.fptosi.sat"
+        } else {
+            "llvm.fptoui.sat"
+        };
+        let intrinsic = Intrinsic::find(intrinsic_name).ok_or_else(|| {
+            CodegenError::backend(format!("missing LLVM intrinsic {intrinsic_name}"))
+        })?;
+        let int_ty = int_type(self.ctx, target);
+        let float_ty = value.get_type();
+        let decl = intrinsic
+            .get_declaration(self.module, &[int_ty.into(), float_ty.into()])
+            .ok_or_else(|| {
+                CodegenError::backend(format!("declaring LLVM intrinsic {intrinsic_name}"))
+            })?;
+        let call = self
+            .builder
+            .build_call(decl, &[value.into()], "fptoint_sat")
+            .map_err(builder_err("calling a saturating float-to-int intrinsic"))?;
+        Ok(call.try_as_basic_value().unwrap_basic())
     }
 
     /// Resize an integer from `from` to `target` width with two's-complement
@@ -924,15 +1269,31 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     /// Read the scalar value of `place`. An empty projection on a scalar local
     /// loads its alloca; a non-empty projection resolves to a leaf byte address
     /// (a scalar leaf in Stage 1) and loads it.
-    fn read_place(&mut self, place: &Place) -> Result<IntValue<'ctx>, CodegenError> {
+    fn read_place(&mut self, place: &Place) -> Result<BasicValueEnum<'ctx>, CodegenError> {
         if place.projection.is_empty() {
             let index = place.local.0 as usize;
             return match &self.kinds[index] {
-                LocalKind::Scalar(ptr, ty) => Ok(self
+                LocalKind::Scalar(ptr, ty) => self
                     .builder
                     .build_load(*ty, *ptr, "load")
-                    .map_err(builder_err("loading a local"))?
-                    .into_int_value()),
+                    .map_err(builder_err("loading a local")),
+                LocalKind::Borrowed { ty, .. } => {
+                    // A scalar borrowed parameter: load through the caller's
+                    // pointer. (A whole-aggregate read goes through the
+                    // aggregate path, exactly as for `Aggregate` locals.)
+                    let ty = ty.clone();
+                    let scalar =
+                        require_scalar(self.ctx, &ty, &self.function.name).map_err(|_| {
+                            CodegenError::backend(
+                                "reading a whole aggregate as a scalar (should go through the \
+                                 aggregate path)",
+                            )
+                        })?;
+                    let addr = self.borrowed_addr(index)?;
+                    self.builder
+                        .build_load(scalar, addr, "brw_load")
+                        .map_err(builder_err("loading through a borrow pointer"))
+                }
                 LocalKind::Unit => Err(CodegenError::backend(
                     "reading a scalar value from a unit local",
                 )),
@@ -942,19 +1303,21 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             };
         }
         let (addr, leaf_ty) = self.place_address(place)?;
-        let int_ty = require_scalar(self.ctx, &leaf_ty, &self.function.name)?;
-        Ok(self
-            .builder
-            .build_load(int_ty, addr, "fload")
-            .map_err(builder_err("loading a projected field"))?
-            .into_int_value())
+        let scalar = require_scalar(self.ctx, &leaf_ty, &self.function.name)?;
+        self.builder
+            .build_load(scalar, addr, "fload")
+            .map_err(builder_err("loading a projected field"))
     }
 
     /// Write the scalar `value` to `place`. An empty projection on a scalar local
     /// stores its alloca; a non-empty projection resolves to a leaf byte address
     /// (a scalar leaf in Stage 1) and stores there. A unit destination carries no
     /// value.
-    fn write_place(&mut self, place: &Place, value: IntValue<'ctx>) -> Result<(), CodegenError> {
+    fn write_place(
+        &mut self,
+        place: &Place,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<(), CodegenError> {
         if place.projection.is_empty() {
             let index = place.local.0 as usize;
             return match &self.kinds[index] {
@@ -962,6 +1325,16 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     self.builder
                         .build_store(*ptr, value)
                         .map_err(builder_err("storing a local"))?;
+                    Ok(())
+                }
+                LocalKind::Borrowed { .. } => {
+                    // A `mut` scalar parameter: store through the caller's
+                    // pointer, so the write is visible to the caller with no
+                    // copy-back.
+                    let addr = self.borrowed_addr(index)?;
+                    self.builder
+                        .build_store(addr, value)
+                        .map_err(builder_err("storing through a borrow pointer"))?;
                     Ok(())
                 }
                 LocalKind::Unit => Ok(()),
@@ -990,6 +1363,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let local = place.local.0 as usize;
         let (mut addr, mut cur_ty) = match &self.kinds[local] {
             LocalKind::Aggregate { ptr, ty } => (*ptr, ty.clone()),
+            // A borrowed parameter's incoming pointer is the base address of
+            // the caller's place; projections advance from it exactly as from
+            // a local alloca.
+            LocalKind::Borrowed { ty, .. } => {
+                let ty = ty.clone();
+                (self.borrowed_addr(local)?, ty)
+            }
             // A zero-sized aggregate root (e.g. `[T; 0]`) classifies as unit
             // storage yet may still be projected in MIR — only in code the
             // preceding bounds `Assert` makes unreachable at runtime (any index
@@ -1042,9 +1422,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     // The index is a `Usize` scalar local, pre-asserted in
                     // bounds by the MIR before this use.
                     let index_value = match &self.kinds[index_local.0 as usize] {
-                        LocalKind::Scalar(ptr, int_ty) => self
+                        LocalKind::Scalar(ptr, scalar_ty) => self
                             .builder
-                            .build_load(*int_ty, *ptr, "idx")
+                            .build_load(*scalar_ty, *ptr, "idx")
                             .map_err(builder_err("loading an array index"))?
                             .into_int_value(),
                         _ => {
@@ -1236,12 +1616,15 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     /// destination is an aggregate.
     fn aggregate_dest_address(&mut self, dest: &Place) -> Result<PointerValue<'ctx>, CodegenError> {
         if dest.projection.is_empty() {
-            if let LocalKind::Aggregate { ptr, .. } = &self.kinds[dest.local.0 as usize] {
-                return Ok(*ptr);
-            }
-            return Err(CodegenError::backend(
-                "aggregate rvalue assigned to a non-aggregate local",
-            ));
+            return match &self.kinds[dest.local.0 as usize] {
+                LocalKind::Aggregate { ptr, .. } => Ok(*ptr),
+                // A whole-aggregate write to a `mut` borrowed parameter goes
+                // straight through the caller's pointer (no copy-back).
+                LocalKind::Borrowed { .. } => self.borrowed_addr(dest.local.0 as usize),
+                _ => Err(CodegenError::backend(
+                    "aggregate rvalue assigned to a non-aggregate local",
+                )),
+            };
         }
         let (addr, _leaf) = self.place_address(dest)?;
         Ok(addr)
@@ -1253,6 +1636,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let base = if place.projection.is_empty() {
             match &self.kinds[place.local.0 as usize] {
                 LocalKind::Aggregate { ptr, .. } => *ptr,
+                // The discriminant of a borrowed enum parameter reads through
+                // the caller's pointer.
+                LocalKind::Borrowed { .. } => self.borrowed_addr(place.local.0 as usize)?,
                 _ => {
                     return Err(CodegenError::backend(
                         "discriminant of a non-aggregate local",
@@ -1358,6 +1744,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => Some(self.place_type(place)),
             Operand::Const(Const::Int(_, kind)) => Some(Ty::Int(*kind)),
+            Operand::Const(Const::Float(_, kind)) => Some(Ty::Float(*kind)),
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             _ => None,
@@ -1498,6 +1885,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
                 match &self.kinds[place.local.0 as usize] {
                     LocalKind::Aggregate { ptr, .. } => Ok(*ptr),
+                    // A whole-aggregate read of a borrowed parameter copies
+                    // from the caller's memory through the incoming pointer.
+                    LocalKind::Borrowed { .. } => self.borrowed_addr(place.local.0 as usize),
                     _ => Err(CodegenError::backend(
                         "aggregate address requested for a non-aggregate local",
                     )),
@@ -1616,6 +2006,24 @@ fn comparison_pred(op: BinOp, signed: bool) -> Option<IntPredicate> {
         BinOp::Gt => IntPredicate::UGT,
         BinOp::Ge if signed => IntPredicate::SGE,
         BinOp::Ge => IntPredicate::UGE,
+        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
+    })
+}
+
+/// The LLVM float predicate for a comparison operator, or `None` if `op` is
+/// not a comparison. Equality and the four orderings are **ordered** (`O*`,
+/// false when either operand is NaN) and inequality is
+/// **unordered-or-unequal** (`UNE`, true on NaN) — exactly Rust's float
+/// comparisons, which the interpreter uses. Mirrors the Cranelift backend's
+/// `float_comparison_code`.
+fn float_comparison_pred(op: BinOp) -> Option<FloatPredicate> {
+    Some(match op {
+        BinOp::Eq => FloatPredicate::OEQ,
+        BinOp::Ne => FloatPredicate::UNE,
+        BinOp::Lt => FloatPredicate::OLT,
+        BinOp::Le => FloatPredicate::OLE,
+        BinOp::Gt => FloatPredicate::OGT,
+        BinOp::Ge => FloatPredicate::OGE,
         BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
     })
 }

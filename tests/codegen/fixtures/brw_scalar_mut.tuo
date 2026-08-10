@@ -1,0 +1,7 @@
+fn bump(mut x: Int) { x = x + 10; }
+fn main() -> Int {
+    var v = 7;
+    bump(v);
+    bump(v);
+    v
+}

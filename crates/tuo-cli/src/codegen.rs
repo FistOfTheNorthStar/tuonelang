@@ -421,12 +421,16 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     std::fs::write(&runtime_c, tuo_runtime::trap_runtime_c_source())
         .map_err(|error| format!("writing the runtime shim: {error}"))?;
 
-    // `cc object runtime.c -o exe` — the platform driver picks the linker and
-    // the correct startup files, so the produced binary has a real `main` entry
-    // point and a working C ABI on every supported host.
+    // `cc object runtime.c -lm -o exe` — the platform driver picks the linker
+    // and the correct startup files, so the produced binary has a real `main`
+    // entry point and a working C ABI on every supported host. `-lm` resolves
+    // the C math library's `fmod`/`fmodf`, which the Cranelift backend calls
+    // for float remainder (Cranelift has no `frem` instruction) — harmless on
+    // macOS (libm is part of libSystem), required on Linux.
     let status = Command::new("cc")
         .arg(&object_path)
         .arg(&runtime_c)
+        .arg("-lm")
         .arg("-o")
         .arg(exe_path)
         .status()

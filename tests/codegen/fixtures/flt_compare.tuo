@@ -1,0 +1,17 @@
+fn main() -> Int {
+    let a = 1.5;
+    let b = 2.5;
+    let nan = 0.0 / 0.0;
+    var acc = 0;
+    if a == a { acc = acc + 1; }
+    if a != b { acc = acc + 2; }
+    if a < b { acc = acc + 4; }
+    if a <= a { acc = acc + 8; }
+    if b > a { acc = acc + 16; }
+    if b >= b { acc = acc + 32; }
+    if nan == nan { acc = acc + 64; }
+    if nan != nan { acc = acc + 128; }
+    if nan < b { acc = acc + 100; }
+    if nan >= b { acc = acc + 100; }
+    acc
+}

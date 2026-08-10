@@ -11,25 +11,36 @@
 //!
 //! The reference semantics of a program is what [`tuo_mir_interp`] computes for
 //! its MIR; this backend must agree with the interpreter instruction for
-//! instruction. v0 lowers the **scalar, control-flow core** that the language
-//! already exercises end to end:
+//! instruction. v0 lowers the **runnable core** the language already exercises
+//! end to end:
 //!
-//! - integer, boolean, and `Char` values (scalars held in machine registers);
+//! - integer, boolean, `Char`, and IEEE-754 float values (scalars held in
+//!   machine registers);
 //! - integer arithmetic with **trapping overflow** (Constitution §24), and
 //!   trapping division/remainder by zero and `MIN / -1`;
-//! - unary negation (trapping on `MIN`) and boolean `not`;
+//! - float arithmetic (IEEE 754, never trapping; `%` has C `fmod` semantics)
+//!   and Rust-semantics float comparison (NaN: `==` false, `!=` true,
+//!   orderings false);
+//! - unary negation (trapping on integer `MIN`; sign-bit flip on floats) and
+//!   boolean `not`;
 //! - the full comparison suite;
-//! - integer-to-integer casts (wrapping/extension);
+//! - the four numeric cast directions (int↔int wrapping/extension,
+//!   int→float round-to-nearest-even, float→int truncate-then-saturate with
+//!   NaN → 0, float↔float IEEE conversion) — all total, never trapping;
 //! - `Goto`, two-way `Branch`, multi-way `Switch`, `Return`;
 //! - explicit `Assert` and `Trap` terminators, lowered to a call into the
 //!   [runtime trap](tuo_runtime::TRAP_SYMBOL);
-//! - direct calls and recursion.
+//! - direct calls and recursion, including borrow-mode (`in`/`mut`) arguments
+//!   passed as pointers to the caller's place;
+//! - the ADR-0004 aggregates: structs, tuples, enums, `Option`/`Result`, and
+//!   fixed `[T; N]` arrays, laid out by [`tuo_runtime::abi`].
 //!
-//! Aggregates, arrays, strings, floats, borrows, and drops are **not** lowered
-//! yet: a program that reaches one is refused with
-//! [`CodegenError::unsupported`](tuo_codegen::CodegenError), and the caller can
-//! fall back to the interpreter (the reference). Correctness on this core comes
-//! first; broadening the subset and optimizing come later.
+//! Heap-backed types (`Str`, `String`, the growable `Array[T]`,
+//! `Box`/`Shared`/`Weak`) are **not** lowered yet: a program that reaches one
+//! is refused with [`CodegenError::unsupported`](tuo_codegen::CodegenError),
+//! and the caller can fall back to the interpreter (the reference).
+//! Correctness on this core comes first; broadening the subset and optimizing
+//! come later.
 //!
 //! # Output
 //!
