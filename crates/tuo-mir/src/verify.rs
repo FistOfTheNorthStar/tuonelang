@@ -60,8 +60,8 @@ use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
 use tuo_types::{Ty, TypeckResult};
 
 use crate::mir::{
-    AggregateKind, Arg, BinOp, BlockId, Function, LocalId, Operand, Place, Program, Projection,
-    Rvalue, Statement, Terminator,
+    AggregateKind, Arg, BinOp, BlockId, EffectOp, Function, LocalId, Operand, Place, Program,
+    Projection, Rvalue, Statement, StrOp, Terminator,
 };
 
 /// MIR diagnostic codes. Once shipped a number is never reused (the code
@@ -85,6 +85,12 @@ mod code {
     pub(super) const BAD_TERMINATOR: u16 = 8;
     /// An ownership invariant that must survive lowering is violated.
     pub(super) const OWNERSHIP: u16 = 9;
+    /// A `StrOp` rvalue is malformed (wrong operand count or operand
+    /// types for its op) — ADR-0006 Stage A.
+    pub(super) const STR_OP: u16 = 10;
+    /// An `Effect` statement is malformed (wrong operand count, operand
+    /// types, or destination type) — ADR-0006 Stage A.
+    pub(super) const EFFECT: u16 = 11;
 }
 
 /// Verify a whole lowered [`Program`], returning one [`Diagnostic`] per
@@ -352,7 +358,61 @@ impl Verifier<'_> {
                     self.check_arg(block, arg);
                 }
             }
+            Statement::Effect { op, args, dest } => {
+                self.check_place(block, dest);
+                for arg in args {
+                    self.check_operand(block, arg);
+                }
+                self.check_effect_types(block, *op, args, dest);
+            }
             Statement::Drop { place } => self.check_place(block, place),
+        }
+    }
+
+    /// Type-check an `Effect` statement: exactly the op's operand count,
+    /// each operand of its fixed type, and an `I64` destination
+    /// (`specification/mir.md` §4.2).
+    fn check_effect_types(&mut self, block: usize, op: EffectOp, args: &[Operand], dest: &Place) {
+        let name = self.fn_name().to_owned();
+        if args.len() != op.arg_count() {
+            self.error(
+                code::EFFECT,
+                format!(
+                    "fn `{name}`: bb{block} performs effect `{}` with {} operand(s) (expected {})",
+                    op.name(),
+                    args.len(),
+                    op.arg_count()
+                ),
+            );
+            return;
+        }
+        let expected: Vec<Ty> = match op {
+            EffectOp::Write => vec![Ty::int(), Ty::Str],
+            EffectOp::ReadByte | EffectOp::Exit => vec![Ty::int()],
+        };
+        for (position, (arg, want)) in args.iter().zip(&expected).enumerate() {
+            if let Some(ty) = self.operand_ty(arg)
+                && !types_agree(&ty, want)
+            {
+                self.error(
+                    code::EFFECT,
+                    format!(
+                        "fn `{name}`: bb{block} passes a mistyped operand {position} to effect                          `{}`",
+                        op.name()
+                    ),
+                );
+            }
+        }
+        if let Some(ty) = self.place_ty(dest)
+            && !types_agree(&ty, &Ty::int())
+        {
+            self.error(
+                code::EFFECT,
+                format!(
+                    "fn `{name}`: bb{block} stores effect `{}` into a non-`I64` destination",
+                    op.name()
+                ),
+            );
         }
     }
 
@@ -447,6 +507,11 @@ impl Verifier<'_> {
             }
             Rvalue::Discriminant(place) => self.check_discriminant(block, place),
             Rvalue::Len(place) => self.check_len(block, place),
+            Rvalue::StrOp { args, .. } => {
+                for arg in args {
+                    self.check_operand(block, arg);
+                }
+            }
         }
     }
 
@@ -568,6 +633,58 @@ impl Verifier<'_> {
                 }
             }
         }
+        // A string operation (ADR-0006 Stage A): exactly the op's operand
+        // count, each operand of its fixed type, and a destination of the
+        // op's result type (`specification/mir.md` §5.6).
+        if let Rvalue::StrOp { op, args } = rvalue {
+            let name = self.fn_name().to_owned();
+            if args.len() != op.arg_count() {
+                self.error(
+                    code::STR_OP,
+                    format!(
+                        "fn `{name}`: bb{block} applies string op `{}` to {} operand(s)                          (expected {})",
+                        op.name(),
+                        args.len(),
+                        op.arg_count()
+                    ),
+                );
+                return;
+            }
+            let expected: Vec<Ty> = match op {
+                StrOp::Len => vec![Ty::Str],
+                StrOp::ByteAt => vec![Ty::Str, Ty::int()],
+                StrOp::Slice => vec![Ty::Str, Ty::int(), Ty::int()],
+            };
+            for (position, (arg, want)) in args.iter().zip(&expected).enumerate() {
+                if let Some(ty) = self.operand_ty(arg)
+                    && !types_agree(&ty, want)
+                {
+                    self.error(
+                        code::STR_OP,
+                        format!(
+                            "fn `{name}`: bb{block} passes a mistyped operand {position} to                              string op `{}`",
+                            op.name()
+                        ),
+                    );
+                }
+            }
+            let result = match op {
+                StrOp::Len | StrOp::ByteAt => Ty::int(),
+                StrOp::Slice => Ty::Str,
+            };
+            if let Some(dest) = self.place_ty(place)
+                && !types_agree(&dest, &result)
+            {
+                self.error(
+                    code::STR_OP,
+                    format!(
+                        "fn `{name}`: bb{block} assigns string op `{}` to a destination that is                          not `{}`",
+                        op.name(),
+                        if matches!(result, Ty::Str) { "Str" } else { "I64" }
+                    ),
+                );
+            }
+        }
         let _ = place;
     }
 
@@ -644,6 +761,11 @@ impl Verifier<'_> {
                             {
                                 ever.insert(place.local.0);
                             }
+                        }
+                    }
+                    Statement::Effect { dest, .. } => {
+                        if dest.projection.is_empty() {
+                            ever.insert(dest.local.0);
                         }
                     }
                     Statement::Assign { .. } | Statement::Drop { .. } => {}
@@ -798,6 +920,11 @@ impl Verifier<'_> {
                 }
                 self.check_call_ownership(block, args);
             }
+            Statement::Effect { args, .. } => {
+                for arg in args {
+                    collect_operand_read(arg, &mut reads);
+                }
+            }
             Statement::Drop { place } => reads.push((place.local, ReadKind::Consume)),
         }
         self.report_reads(block, &reads, init, ever);
@@ -927,6 +1054,14 @@ fn apply_statement(statement: &Statement, init: &mut BTreeSet<u32>) {
                 defined.push(dest.local.0);
             }
         }
+        Statement::Effect { args, dest, .. } => {
+            for arg in args {
+                collect_consumed_operand(arg, &mut consumed);
+            }
+            if dest.projection.is_empty() {
+                defined.push(dest.local.0);
+            }
+        }
         Statement::Drop { place } => {
             if place.projection.is_empty() {
                 consumed.push(place.local.0);
@@ -974,6 +1109,11 @@ fn collect_rvalue_move_roots(rvalue: &Rvalue, out: &mut Vec<u32>) {
                 push(field, out);
             }
         }
+        Rvalue::StrOp { args, .. } => {
+            for arg in args {
+                push(arg, out);
+            }
+        }
         Rvalue::Discriminant(_) | Rvalue::Len(_) => {}
     }
 }
@@ -1013,6 +1153,11 @@ fn collect_rvalue_reads(rvalue: &Rvalue, out: &mut Vec<(LocalId, ReadKind)>) {
         Rvalue::Aggregate { fields, .. } => {
             for field in fields {
                 collect_operand_read(field, out);
+            }
+        }
+        Rvalue::StrOp { args, .. } => {
+            for arg in args {
+                collect_operand_read(arg, out);
             }
         }
         Rvalue::Discriminant(place) | Rvalue::Len(place) => {
@@ -1068,8 +1213,8 @@ mod tests {
 
     use super::{debug_assert_verified, is_well_formed, verify};
     use crate::mir::{
-        Arg, BasicBlock, BinOp, BlockId, Const, Function, LocalDecl, LocalId, Operand, PassMode,
-        Place, Program, Projection, Rvalue, Statement, Terminator,
+        Arg, BasicBlock, BinOp, BlockId, Const, EffectOp, Function, LocalDecl, LocalId, Operand,
+        PassMode, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
     };
 
     fn span() -> Span {
@@ -1556,6 +1701,185 @@ mod tests {
         );
         // Must not panic.
         debug_assert_verified("noop", &program, &TypeckResult::default());
+    }
+
+    // ----- ADR-0006 Stage A: StrOp rvalues and Effect statements -----
+
+    fn str_const(text: &str) -> Operand {
+        Operand::Const(Const::Str(text.to_owned()))
+    }
+
+    /// `_0 = <rvalue>; return copy _0` over one local of type `ret`.
+    fn one_assign(rvalue: Rvalue, ret: Ty) -> Program {
+        func(
+            vec![],
+            vec![local(ret.clone())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue,
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+            }],
+            ret,
+        )
+    }
+
+    #[test]
+    fn well_formed_str_ops_verify_clean() {
+        for (op, args, ret) in [
+            (StrOp::Len, vec![str_const("abc")], Ty::int()),
+            (StrOp::ByteAt, vec![str_const("abc"), int(0)], Ty::int()),
+            (
+                StrOp::Slice,
+                vec![str_const("abc"), int(0), int(1)],
+                Ty::Str,
+            ),
+        ] {
+            let program = one_assign(Rvalue::StrOp { op, args }, ret);
+            assert!(
+                is_well_formed(&program, &TypeckResult::default()),
+                "{op:?} should verify"
+            );
+        }
+    }
+
+    #[test]
+    fn a_str_op_with_the_wrong_operand_count_is_reported() {
+        let program = one_assign(
+            Rvalue::StrOp {
+                op: StrOp::ByteAt,
+                args: vec![str_const("abc")],
+            },
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::STR_OP]);
+    }
+
+    #[test]
+    fn a_str_op_with_a_mistyped_operand_is_reported() {
+        // byte_at(Int, Int): the string operand is not a `Str`.
+        let program = one_assign(
+            Rvalue::StrOp {
+                op: StrOp::ByteAt,
+                args: vec![int(1), int(0)],
+            },
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::STR_OP]);
+    }
+
+    #[test]
+    fn a_str_op_with_the_wrong_destination_type_is_reported() {
+        // slice yields a `Str`; storing it into an `I64` local is malformed.
+        let program = one_assign(
+            Rvalue::StrOp {
+                op: StrOp::Slice,
+                args: vec![str_const("abc"), int(0), int(1)],
+            },
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::STR_OP]);
+    }
+
+    #[test]
+    fn a_well_formed_effect_verifies_and_initializes_its_destination() {
+        // _0 = effect read_byte(const 0); return copy _0 — the destination
+        // counts as initialized after the statement (dataflow).
+        let program = func(
+            vec![],
+            vec![local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::ReadByte,
+                    args: vec![int(0)],
+                    dest: Place::local(LocalId(0)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+            }],
+            Ty::int(),
+        );
+        assert!(is_well_formed(&program, &TypeckResult::default()));
+    }
+
+    #[test]
+    fn an_effect_with_the_wrong_operand_count_is_reported() {
+        let program = func(
+            vec![],
+            vec![local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::Write,
+                    args: vec![int(1)],
+                    dest: Place::local(LocalId(0)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::EFFECT]);
+    }
+
+    #[test]
+    fn an_effect_with_a_mistyped_operand_is_reported() {
+        // write(Str, Str): the fd operand is not an `I64`.
+        let program = func(
+            vec![],
+            vec![local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::Write,
+                    args: vec![str_const("nope"), str_const("x")],
+                    dest: Place::local(LocalId(0)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::EFFECT]);
+    }
+
+    #[test]
+    fn an_effect_with_a_non_int_destination_is_reported() {
+        let program = func(
+            vec![],
+            vec![local(Ty::Bool), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![
+                    Statement::Effect {
+                        op: EffectOp::Exit,
+                        args: vec![int(0)],
+                        dest: Place::local(LocalId(0)),
+                    },
+                    Statement::Assign {
+                        place: Place::local(LocalId(1)),
+                        rvalue: Rvalue::Use(int(0)),
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(1)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::EFFECT]);
+    }
+
+    #[test]
+    fn an_effect_reading_an_uninitialized_operand_is_reported() {
+        // _1 is never assigned but is passed to the effect.
+        let program = func(
+            vec![],
+            vec![local(Ty::int()), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::ReadByte,
+                    args: vec![Operand::Copy(Place::local(LocalId(1)))],
+                    dest: Place::local(LocalId(0)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::USE_UNINIT]);
     }
 
     #[test]

@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym10)",
-        "fn_body(sym8)",
-        "fn_body(sym9)",
+        "fn_body(sym17)",
+        "fn_body(sym18)",
+        "fn_body(sym19)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym10)",
-        "fn_body(sym8)",
-        "fn_body(sym9)",
+        "fn_body(sym17)",
+        "fn_body(sym18)",
+        "fn_body(sym19)",
         "interface(file#0)",
-        "mir_of(sym8)",
+        "mir_of(sym17)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym10)",
-        "type_of(sym8)",
-        "type_of(sym9)"
+        "type_of(sym17)",
+        "type_of(sym18)",
+        "type_of(sym19)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym10)",
-        "fn_body(sym8)",
-        "fn_body(sym9)",
+        "fn_body(sym17)",
+        "fn_body(sym18)",
+        "fn_body(sym19)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:11"
+        "spec:20"
       ],
       "reexecuted_count": 1
     }

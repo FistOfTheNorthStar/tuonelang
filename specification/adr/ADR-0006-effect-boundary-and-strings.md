@@ -80,3 +80,48 @@
   I/O performance is backed by a number the compiler produced. No "fast I/O" claim
   is admissible until that entry exists. This ADR is not "accepted" until the
   string workload and the effect-crossing benchmark are committed.
+
+## Amendments (2026-08-10)
+
+Two corrections to the proposal above, made while staging the implementation
+(Stage A = spec text, front end, MIR + verifier, reference interpreter; Stage B =
+native lowering; Stage C = stdlib/examples/lab, at which point this ADR can be
+accepted):
+
+1. **`concat` and the owned-`String` operations move to the forthcoming
+   allocator ADR.** The proposal's part 1 coupled the string surface to the
+   heap (`tuo_rt_alloc`) because it included growable/owned operations such as
+   `concat`. That coupling is unnecessary for the effect boundary itself and
+   would sequence this ADR behind allocator work it does not actually need.
+   ADR-0006's string surface is the **borrowed `Str`**: string literals (whose
+   bytes are static data), `Str == Str` byte equality (already defined), and
+   the three pure byte-level operations `std::str::len`, `std::str::byte_at`,
+   and `std::str::slice`. A `Str` is a `{ptr, len}` view of an existing
+   buffer — slicing narrows the view and byte-at reads through it — so **no
+   heap is required**, and the ADR stands on its own. Building an owned,
+   growable `String` value (and with it `concat`, formatting, and
+   `String`→`Str` borrowing) is real allocator-dependent work and gets its own
+   ADR rather than riding along here. These operations are deliberately
+   **byte-level on the UTF-8 buffer**: `byte_at` returns one byte, and `slice`
+   may split a multi-byte code point — that is the plainly documented v0
+   contract, not an oversight; code-point-aware iteration is `String`-ADR
+   material.
+
+2. **The `networking` lab workload is *not* unblocked by this ADR.** The
+   proposal claimed both `string-processing` and `networking`. That was wrong:
+   the effect set specified here — `std::rt::write(fd)`, `std::rt::read_byte(fd)`,
+   `std::rt::exit` — can write to and read from **already-open file
+   descriptors** and terminate the process, but it cannot **open a socket**
+   (no `socket`/`bind`/`listen`/`accept`/`connect` effect exists). A
+   networking benchmark that cannot create a connection is not a networking
+   benchmark. `networking` therefore stays `Support::Unsupported`, with its
+   reason updated to name the missing socket effects, until ADR-0007 (or a
+   successor effect ADR) specifies them. **`string-processing` is the workload
+   this ADR flips**: once Stage B lands the native lowering, a committed
+   program using `Str` literals and `std::str::{len, byte_at, slice}` and its
+   C peer are measurable under the lab's equivalent-semantics rule.
+
+The acceptance oracle is adjusted accordingly: the `http-service` contracts
+this ADR makes runnable are the ones expressible over open descriptors and the
+pure `Str` core; `serve` (socket setup) remains contract-tier pending the
+socket effects.

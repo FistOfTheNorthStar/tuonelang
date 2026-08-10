@@ -20,6 +20,7 @@ use tuo_ast::{
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 use tuo_source::Span;
 
+use crate::builtin::Builtin;
 use crate::ids::{ModuleId, SymbolId};
 use crate::resolution::{ModuleInfo, Resolution};
 use crate::symbol::{Reference, SpecTarget, Symbol, SymbolKind};
@@ -49,6 +50,10 @@ pub fn is_builtin_type(name: &str) -> bool {
 /// - `R0004` — ambiguous name.
 /// - `R0005` — private item accessed from outside its module.
 /// - `R0006` — spec target is not a function.
+/// - `R0007` — spec reaches an effectful function; reserved here, **emitted
+///   by the type-checking stage** (`tuo-types`), which owns the effect
+///   discipline the rule depends on. It shares this namespace because it
+///   belongs to the same spec-semantics rule family as `R0006`.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Resolution, number)
 }
@@ -64,6 +69,7 @@ fn code(number: u16) -> DiagnosticCode {
 pub fn resolve(files: &[Ast<'_>]) -> Resolution {
     let mut resolver = Resolver::default();
     resolver.install_prelude();
+    resolver.install_builtins();
     let modules: Vec<ModuleId> = files
         .iter()
         .map(|ast| resolver.collect_file(*ast))
@@ -241,6 +247,29 @@ impl Resolver {
             }
             self.enum_variants.insert(id, by_name);
             self.out.variants.insert(id, ordered);
+        }
+    }
+
+    /// Install the six builtin functions of ADR-0006 ([`Builtin`]) as real
+    /// `pub` function symbols in the always-present `std::rt` / `std::str`
+    /// modules, so `std::rt::write(1, "x")` resolves through ordinary path
+    /// navigation in every program (with no stdlib loaded). The modules are
+    /// created **before** user files are collected, so a file declaring
+    /// `module std::rt;` shares them and redeclaring a builtin's name there
+    /// is an ordinary `R0001` duplicate definition — a builtin is never
+    /// silently rebound at its own path.
+    fn install_builtins(&mut self) {
+        for builtin in Builtin::ALL {
+            let path: Vec<String> = builtin
+                .module_path()
+                .iter()
+                .map(|&segment| segment.to_owned())
+                .collect();
+            let module = self.ensure_module(&path, None);
+            let id = self.new_symbol(builtin.name(), SymbolKind::Function, module, true, None);
+            self.scope_mut(module)
+                .insert(builtin.name().to_owned(), Binding::Decl(id));
+            self.out.builtins.push((builtin, id));
         }
     }
 

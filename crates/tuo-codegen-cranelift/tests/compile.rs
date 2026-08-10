@@ -461,3 +461,103 @@ fn an_array_index_projection_is_still_unsupported() {
         .expect_err("array indexing is a Stage 2 concern and must be refused");
     assert_eq!(error.kind, CodegenErrorKind::Unsupported);
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0006 Stage A: Effect statements and StrOp rvalues are refused (interim)
+// ---------------------------------------------------------------------------
+
+/// `fn main() -> Int { _0 = effect read_byte(const 0); return copy _0 }` —
+/// well-formed, verifiable MIR (all locals are scalars), so it reaches the
+/// statement lowering and must be *refused* there, never mis-compiled,
+/// until ADR-0006 Stage B lands the native effect lowering.
+#[test]
+fn an_effect_statement_is_refused_until_stage_b() {
+    use tuo_mir::{EffectOp, Statement};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![LocalDecl {
+            ty: Ty::int(),
+            name: None,
+            span: span(),
+        }],
+        blocks: vec![BasicBlock {
+            statements: vec![Statement::Effect {
+                op: EffectOp::ReadByte,
+                args: vec![Operand::Const(Const::Int(0, tuo_types::IntKind::I64))],
+                dest: Place::local(tuo_mir::LocalId(0)),
+            }],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let error = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect_err("an effect must be refused, never mis-compiled");
+    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+    assert!(
+        error.message.contains("std::rt::read_byte") && error.message.contains("ADR-0006 Stage B"),
+        "the refusal names the effect and the road forward: {}",
+        error.message
+    );
+}
+
+/// `_0 = str_len(const "x")` over scalar locals: reaches the rvalue lowering
+/// and must be refused there until Stage B (with `Str`'s value layout).
+#[test]
+fn a_str_op_rvalue_is_refused_until_stage_b() {
+    use tuo_mir::{Rvalue, Statement, StrOp};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![LocalDecl {
+            ty: Ty::int(),
+            name: None,
+            span: span(),
+        }],
+        blocks: vec![BasicBlock {
+            statements: vec![Statement::Assign {
+                place: Place::local(tuo_mir::LocalId(0)),
+                rvalue: Rvalue::StrOp {
+                    op: StrOp::Len,
+                    args: vec![Operand::Const(Const::Str("x".to_owned()))],
+                },
+            }],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let error = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect_err("a string op must be refused, never mis-compiled");
+    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+    assert!(
+        error.message.contains("std::str::len") && error.message.contains("ADR-0006 Stage B"),
+        "the refusal names the operation and the road forward: {}",
+        error.message
+    );
+}

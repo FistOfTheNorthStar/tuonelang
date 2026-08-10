@@ -74,7 +74,14 @@ fn fold_rvalue(rvalue: &Rvalue) -> Option<Const> {
         Rvalue::Unary { op, operand } => fold_unary(*op, as_const(operand)?),
         Rvalue::Binary { op, lhs, rhs } => fold_binary(*op, as_const(lhs)?, as_const(rhs)?),
         Rvalue::Cast { kind, operand, to } => fold_cast(*kind, as_const(operand)?, to),
-        Rvalue::Aggregate { .. } | Rvalue::Discriminant(_) | Rvalue::Len(_) => None,
+        // A `StrOp` is never folded (ADR-0006): `ByteAt`/`Slice` trap on an
+        // out-of-range argument, so folding would erase an observable abort,
+        // and folding only the safe cases is not worth a byte-level constant
+        // evaluator here — the interpreter stays the one implementation.
+        Rvalue::Aggregate { .. }
+        | Rvalue::Discriminant(_)
+        | Rvalue::Len(_)
+        | Rvalue::StrOp { .. } => None,
     }
 }
 

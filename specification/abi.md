@@ -15,12 +15,17 @@ stay semantically equivalent to.
 
 ## Why an ABI now, and why version it
 
-The Cranelift backend today lowers only the **scalar, control-flow core**;
-aggregates, strings, arrays, and the memory wrappers are still refused rather
-than mis-compiled (see `tuo-codegen-cranelift`). This document therefore
-specifies more than any backend currently *emits*: it is the target the
-backends grow into, fixed up front so two backends (Cranelift and LLVM) and the
-reference interpreter cannot drift into two incompatible memory models.
+The backends today (Cranelift and LLVM alike) lower the **v0 runnable core**:
+the scalar control-flow core plus floats, borrow-mode calls, and the ADR-0004
+aggregates — structs, enums, `Option`/`Result`, and fixed `[T; N]` arrays,
+laid out solely by this document's rules. Heap-backed values — `Str`/`String`,
+the growable `Array[T]`, and the memory wrappers — and the ADR-0006 effect
+statements and string operations are still **refused** rather than
+mis-compiled (see `tuo-codegen-cranelift`; the effect/string lowering lands
+with ADR-0006 Stage B). This document therefore specifies more than any
+backend currently *emits*: it is the target the backends grow into, fixed up
+front so two backends and the reference interpreter cannot drift into two
+incompatible memory models.
 
 Because it is not yet frozen, the ABI carries an explicit integer
 **version** (`ABI_VERSION`), bumped on any layout-affecting change, exactly as
@@ -269,8 +274,49 @@ change; the shim seam is where it will attach.
   differential suite checks.
 - **Trap exit:** `TRAP_EXIT_STATUS` (134), as above — distinguishable from any
   small integer a program deliberately returns.
-- There is no other exit path in v0: no `exit()` builtin, no unwinding to top of
+- There is no other exit path in the shipped v0 runtime: no unwinding to top of
   stack. A function either returns (propagating to the shim) or traps.
+  ADR-0006 Stage A specifies a `std::rt::exit` builtin; its native path is the
+  **planned** `tuo_rt_exit` symbol below, which lands with the Stage B
+  lowering.
+
+## Effect symbols (planned — ADR-0006 Stage B)
+
+ADR-0006 Stage A gives the language its effect boundary in the front end, MIR
+(`Statement::Effect`, `mir.md` §4.2), and the reference interpreter (which
+never performs an effect). The **native** side of the boundary is three
+C-ABI runtime symbols, specified here now so the seam is fixed, and **landing
+with the Stage B lowering** — until then both backends refuse an `Effect`
+statement, and no generated binary references these symbols:
+
+```
+i64  tuo_rt_write(i64 fd, const u8 *ptr, usize len);  // bytes written, or negative on host error
+i64  tuo_rt_read_byte(i64 fd);                        // 0..=255, -1 on EOF, other negative on host error
+void tuo_rt_exit(i64 code);                           // terminates with (code & 0xff); never returns
+```
+
+- `tuo_rt_write` writes the `len` bytes at `ptr` to file descriptor `fd` and
+  returns the number written, or a negative value on host error. It never
+  traps; a `Str` argument is passed as its `{ptr, len}` pair.
+- `tuo_rt_read_byte` reads one byte from `fd`, returning it (`0..=255`), `-1`
+  on end of input, or another negative value on host error. It never traps.
+- `tuo_rt_exit` terminates the process with `code & 0xff` as the exit status.
+  Like `tuo_rt_trap` it **never returns** — but it is a *normal* exit path
+  (the program asked for it), not a trap: it writes nothing to stderr and
+  runs no destructors (none are pending by construction: a trap-free v0
+  program's drops are statically placed, and an exit abandons them exactly as
+  the documented trap rule abandons cleanup).
+
+**Static string data.** A `Str` *constant*'s bytes (a string literal, or a
+literal narrowed by `std::str::slice`) live in **read-only static data** in
+the emitted object; its runtime value is exactly the `{ptr, len}` fat pointer
+this document already specifies under Slices. No allocation and no copy is
+involved in materializing a `Str` constant — Stage B lowers `Const::Str` to a
+pointer into `.rodata` plus a length.
+
+Adding these symbols is an additive change (a new runtime surface, no layout
+altered); the commit that lands them bumps `ABI_VERSION` per the versioning
+rule, together with the tests that pin their behavior.
 
 ## Memory allocation boundary
 

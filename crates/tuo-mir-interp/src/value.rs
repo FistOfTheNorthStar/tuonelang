@@ -37,10 +37,15 @@ pub enum Value {
     Float(f64, FloatKind),
     /// A Unicode scalar value.
     Char(char),
-    /// An owned or borrowed UTF-8 string. `Str` and `String` share this
-    /// representation at runtime; the type distinction is a compile-time
-    /// ownership concern the interpreter has already had checked for it.
-    Str(String),
+    /// An owned or borrowed string as its **byte buffer**. `Str` and
+    /// `String` share this representation at runtime; the type distinction
+    /// is a compile-time ownership concern the interpreter has already had
+    /// checked for it. The bytes of a literal are UTF-8, but a value need
+    /// not stay valid UTF-8: `std::str::slice` is a byte-range operation
+    /// and may split a multi-byte code point (the documented ADR-0006 v0
+    /// contract), so the representation is bytes, with equality,
+    /// comparison, and `len` all byte-wise.
+    Str(Vec<u8>),
     /// A tuple, struct, or range: positional fields in declaration order
     /// (a range is `[start, end]`).
     Aggregate(Vec<Value>),
@@ -94,7 +99,10 @@ impl Value {
             Self::Int(value, kind) => format!("{value}{}", kind.name()),
             Self::Float(value, kind) => format!("{value}{}", kind.name()),
             Self::Char(c) => format!("'{}'", c.escape_default()),
-            Self::Str(s) => format!("{s:?}"),
+            // Render through a lossy UTF-8 view: identical to the literal
+            // for valid UTF-8, and a replacement-character marker for bytes
+            // a code-point-splitting slice produced.
+            Self::Str(s) => format!("{:?}", String::from_utf8_lossy(s)),
             Self::Aggregate(fields) => {
                 let inner: Vec<String> = fields.iter().map(Self::render).collect();
                 format!("({})", inner.join(", "))

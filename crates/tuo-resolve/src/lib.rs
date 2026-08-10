@@ -16,7 +16,15 @@
 //! - structured diagnostics in the reserved `Rxxxx` namespace: duplicate
 //!   definitions (`R0001`), undefined names (`R0002`), unresolved imports
 //!   (`R0003`), ambiguous names (`R0004`), visibility violations (`R0005`),
-//!   and non-function spec targets (`R0006`).
+//!   and non-function spec targets (`R0006`). (`R0007` — a spec reaching an
+//!   effectful function — belongs to the same spec-semantics code group but
+//!   is computed by the type-checking stage, which owns the effect
+//!   discipline; see `specification/static-semantics.md` §2.3, §3.6.)
+//!
+//! Alongside the prelude, resolution installs the six **builtin functions**
+//! of ADR-0006 ([`Builtin`]) as real symbols in the always-present
+//! `std::rt` / `std::str` modules, so `std::rt::write(1, "x")` resolves in
+//! every program with no stdlib loaded ([`Resolution::builtin`]).
 //!
 //! Module-level declarations are collected before any use is resolved, so
 //! **forward references** across items and files always work. Lexical
@@ -32,11 +40,13 @@
 //! combines the AST with this crate's stable IDs so HIR nodes carry
 //! resolved names.
 
+mod builtin;
 mod ids;
 mod resolution;
 mod resolver;
 mod symbol;
 
+pub use builtin::{Builtin, BuiltinParamMode};
 pub use ids::{ModuleId, SymbolId};
 pub use resolution::{ModuleInfo, Resolution};
 pub use resolver::{is_builtin_type, resolve};

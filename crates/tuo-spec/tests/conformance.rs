@@ -272,3 +272,86 @@ fn results_are_deterministic() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0006 Stage A: pure `std::str` specs run; effectful specs never do
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_pure_spec_using_the_string_builtins_runs_green() {
+    let report = run(concat!(
+        "fn shout_len(in s: Str) -> Int { std::str::len(s) }\n",
+        "spec shout_len {\n",
+        "    then shout_len(\"hello\") == 5;\n",
+        "    then std::str::byte_at(\"abc\", 1) == 98;\n",
+        "    then std::str::slice(\"abcd\", 1, 3) == \"bc\";\n",
+        "}\n",
+    ));
+    assert!(report.passed(), "the pure string spec should pass");
+    assert_eq!(report.ran(), 1);
+    assert_eq!(passing_assertions(&report), 3);
+}
+
+#[test]
+fn an_out_of_bounds_byte_op_in_a_spec_traps_deterministically() {
+    let source = concat!(
+        "spec \"oob\" { then std::str::byte_at(\"abc\", 9) == 0; }\n",
+        "spec \"oob slice\" { then std::str::slice(\"abc\", 2, 9) == \"c\"; }\n",
+    );
+    let first = run(source);
+    let second = run(source);
+    for report in [&first, &second] {
+        assert!(!report.passed());
+        for spec_run in &report.runs {
+            match &spec_run.assertions[0].outcome {
+                Outcome::Errored(trap) => {
+                    assert_eq!(
+                        trap.label, "index_out_of_bounds",
+                        "byte ops trap IndexOutOfBounds"
+                    );
+                }
+                other => panic!("expected a trap, got {other:?}"),
+            }
+        }
+    }
+    // Deterministic: both runs produce identical outcomes.
+    let labels = |report: &SpecReport| -> Vec<String> {
+        report
+            .runs
+            .iter()
+            .map(|run| match &run.assertions[0].outcome {
+                Outcome::Errored(trap) => trap.label.clone(),
+                other => panic!("expected a trap, got {other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(labels(&first), labels(&second));
+}
+
+#[test]
+fn a_spec_reaching_an_effect_is_refused_before_execution() {
+    // The purity gate (`R0007`) is a front-end error, so the runner refuses
+    // the whole program — the interpreter is never involved.
+    let mut map = SourceMap::new();
+    let file = map.intern_file("effectful.tuo");
+    let id = map
+        .add_source(
+            file,
+            concat!(
+                "fn emit() -> Int { std::rt::write(1, \"x\") }\n",
+                "spec emit { then emit() == 1; }\n",
+            ),
+        )
+        .expect("source interns");
+    match tuo_spec::run(&map, &[id], &Selection::All, Limits::default()) {
+        RunOutcome::NotChecked(problems) => {
+            assert!(
+                problems
+                    .iter()
+                    .any(|diagnostic| diagnostic.code.to_string() == "R0007"),
+                "the refusal carries the spec-purity diagnostic: {problems:#?}"
+            );
+        }
+        RunOutcome::Ran(report) => panic!("an effectful spec must not run: {report:#?}"),
+    }
+}

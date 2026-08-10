@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use tuo_mir::{
     AggregateKind, Arg, BinOp, BlockId, CastKind, Const, Function, LocalId, Operand, Place,
-    Program, Projection, Rvalue, Statement, Terminator, Trap, UnOp,
+    Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_source::Span;
@@ -351,6 +351,24 @@ impl Machine<'_, '_> {
             Statement::Call { dest, callee, args } => {
                 self.exec_call(function, locals, dest, *callee, args)
             }
+            Statement::Effect { op, .. } => {
+                // The interpreter's sandbox performs no I/O, ever. The
+                // spec-purity gate (`R0007`) statically refuses any spec
+                // whose closure could reach an effect, so under the spec
+                // runner this statement is unreachable by construction;
+                // being asked to execute one anyway is an internal error —
+                // never a silent no-op and never a real effect
+                // (`specification/mir.md` §4.2, §8).
+                Err(self.abort(
+                    TrapKind::Internal(format!(
+                        "effect `{}` reached the interpreter",
+                        op.name()
+                    )),
+                    "the interpreter's deterministic sandbox performs no host effects;                      effectful code runs natively (ADR-0006 Stage B), and the spec purity                      gate keeps effects out of everything the spec runner executes"
+                        .to_owned(),
+                    function.span,
+                ))
+            }
             Statement::Drop { place } => {
                 // Drop ends the value's initialization. v0 has no user
                 // destructors (ADR-0003) and every runtime value the
@@ -569,6 +587,13 @@ impl Machine<'_, '_> {
                 };
                 Ok(Value::Int(discr, IntKind::Usize))
             }
+            Rvalue::StrOp { op, args } => {
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_operand(function, locals, arg)?);
+                }
+                self.eval_str_op(function, *op, &values)
+            }
             Rvalue::Len(place) => {
                 let value = self.read_place_copying(function, locals, place)?;
                 let len = match &value {
@@ -609,7 +634,7 @@ impl Machine<'_, '_> {
             Const::Int(v, kind) => Value::Int(*v, *kind),
             Const::Float(v, kind) => Value::Float(normalize_float(*v, *kind), *kind),
             Const::Char(c) => Value::Char(*c),
-            Const::Str(s) => Value::Str(s.clone()),
+            Const::Str(s) => Value::Str(s.clone().into_bytes()),
         }
     }
 
@@ -797,6 +822,67 @@ impl Machine<'_, '_> {
                 Ok(Value::Float(normalize_float(v, target), target))
             }
             (_, other) => Err(self.type_bug(function, "cast of a mismatched value", &other)),
+        }
+    }
+
+    /// Evaluate a pure byte-level string operation (ADR-0006 Stage A),
+    /// exactly per `specification/mir.md` §5.6: `Len` never traps;
+    /// `ByteAt`/`Slice` trap `IndexOutOfBounds` on an out-of-range
+    /// argument. Slicing is a byte-range operation and may split a
+    /// multi-byte code point.
+    fn eval_str_op(&mut self, function: &Function, op: StrOp, values: &[Value]) -> RunResult {
+        let text = match values.first() {
+            Some(Value::Str(bytes)) => bytes,
+            other => {
+                let value = other.cloned().unwrap_or(Value::Unit);
+                return Err(self.type_bug(function, "string op on a non-Str", &value));
+            }
+        };
+        let index_at = |position: usize, this: &mut Self| -> Result<i128, RuntimeError> {
+            match values.get(position) {
+                Some(Value::Int(value, _)) => Ok(*value),
+                other => {
+                    let value = other.cloned().unwrap_or(Value::Unit);
+                    Err(this.type_bug(function, "string op index is not an integer", &value))
+                }
+            }
+        };
+        let len = text.len() as i128;
+        match op {
+            StrOp::Len => Ok(Value::Int(len, IntKind::I64)),
+            StrOp::ByteAt => {
+                let index = index_at(1, self)?;
+                if index < 0 || index >= len {
+                    return Err(self.abort(
+                        TrapKind::IndexOutOfBounds,
+                        format!("byte index {index} out of bounds for a Str of length {len}"),
+                        function.span,
+                    ));
+                }
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "guarded to be within 0..len by the bounds check above"
+                )]
+                Ok(Value::Int(i128::from(text[index as usize]), IntKind::I64))
+            }
+            StrOp::Slice => {
+                let start = index_at(1, self)?;
+                let end = index_at(2, self)?;
+                if start < 0 || start > end || end > len {
+                    return Err(self.abort(
+                        TrapKind::IndexOutOfBounds,
+                        format!(
+                            "byte range {start}..{end} out of bounds for a Str of length {len}"
+                        ),
+                        function.span,
+                    ));
+                }
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "guarded to be within 0..=len by the bounds check above"
+                )]
+                Ok(Value::Str(text[start as usize..end as usize].to_vec()))
+            }
         }
     }
 
@@ -1278,6 +1364,9 @@ fn render_statement(statement: &Statement) -> String {
     match statement {
         Statement::Assign { place, .. } => format!("assign _{}", place.local.0),
         Statement::Call { dest, .. } => format!("call -> _{}", dest.local.0),
+        Statement::Effect { op, dest, .. } => {
+            format!("effect {} -> _{}", op.name(), dest.local.0)
+        }
         Statement::Drop { place } => format!("drop _{}", place.local.0),
     }
 }
@@ -1413,6 +1502,6 @@ mod tests {
             3
         );
         // A string costs 1 + its byte length.
-        assert_eq!(value_cost(&Value::Str("abc".to_owned())), 4);
+        assert_eq!(value_cost(&Value::Str(b"abc".to_vec())), 4);
     }
 }

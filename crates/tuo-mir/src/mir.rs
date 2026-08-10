@@ -214,6 +214,29 @@ pub enum Statement {
         /// The arguments, in declaration order.
         args: Vec<Arg>,
     },
+    /// Perform one host effect (ADR-0006 Stage A) and store its `I64`
+    /// result into `dest`. Calls to the `std::rt` builtins lower to this
+    /// statement; there is no other way to construct one, and it is the
+    /// **only** MIR construct whose meaning involves the host — see
+    /// [`EffectOp`] for the per-op semantics and `specification/mir.md`
+    /// §4.2 for the normative text. The reference interpreter **never
+    /// performs an effect**: the spec-purity gate (`R0007`) makes this
+    /// statement unreachable under the spec runner, and actually executing
+    /// one there is an interpreter internal error, never a silent no-op
+    /// and never real I/O. The native lowering lands with ADR-0006
+    /// Stage B; until then both backends refuse (never mis-compile) it.
+    Effect {
+        /// Which host effect.
+        op: EffectOp,
+        /// The operands, in the builtin's declaration order (see
+        /// [`EffectOp`]).
+        args: Vec<Operand>,
+        /// The destination of the `I64` result. For [`EffectOp::Exit`] it
+        /// is never observably written — control does not continue — but
+        /// carrying it keeps the statement uniform with the other effects
+        /// (the surface builtin is declared `-> Int`).
+        dest: Place,
+    },
     /// Destroy the value held by `place`, which must be initialized.
     /// Drop glue is compiler-generated only (no user destructors in v0,
     /// ADR-0003): a `Box` frees its allocation after dropping the
@@ -230,6 +253,48 @@ pub enum Statement {
         /// The dropped place.
         place: Place,
     },
+}
+
+/// One host effect (ADR-0006 Stage A): the runtime seam behind the
+/// `std::rt` builtins. Every effect stores an `I64` result; none traps.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EffectOp {
+    /// `write(fd: I64, text: Str) -> I64` — write the `Str`'s bytes to
+    /// file descriptor `fd`; the result is the number of bytes written, or
+    /// a negative value on host error. Never traps.
+    Write,
+    /// `read_byte(fd: I64) -> I64` — read one byte from `fd`; the result
+    /// is `0..=255`, `-1` on end of input, or another negative value on
+    /// host error. Never traps.
+    ReadByte,
+    /// `exit(code: I64) -> I64` — terminate the process with `code & 0xff`
+    /// as the exit status. **Never returns**: the destination is never
+    /// observably written and the statements after it are never executed
+    /// (natively, `tuo_rt_exit` does not return). It is a statement, not a
+    /// terminator, so lowering stays uniform with the other effects — see
+    /// `specification/mir.md` §4.2 for the full rationale.
+    Exit,
+}
+
+impl EffectOp {
+    /// The stable lowercase name (`write`, `read_byte`, `exit`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::ReadByte => "read_byte",
+            Self::Exit => "exit",
+        }
+    }
+
+    /// How many operands the op takes.
+    #[must_use]
+    pub const fn arg_count(self) -> usize {
+        match self {
+            Self::Write => 2,
+            Self::ReadByte | Self::Exit => 1,
+        }
+    }
 }
 
 /// One call argument, carrying its passing semantics (must agree with the
@@ -295,6 +360,66 @@ pub enum Rvalue {
     /// emits `Const N : Usize` instead, and the verifier rejects `Len` of
     /// a fixed-array place (ADR-0004 Stage 2).
     Len(Place),
+    /// A pure byte-level string operation (ADR-0006 Stage A); calls to the
+    /// `std::str` builtins lower to it. Operand counts and types are fixed
+    /// per op and verified (`M0010`); see [`StrOp`] for semantics.
+    /// [`StrOp::ByteAt`] and [`StrOp::Slice`] carry their trap semantics
+    /// **in the operation** — a *statement-level* deterministic
+    /// `IndexOutOfBounds` abort on an out-of-range argument, the same
+    /// source of abort as trapping integer arithmetic ([`BinOp`]), not an
+    /// explicit [`Terminator::Assert`]. Array indexing uses an `Assert`
+    /// because its bound is already a MIR value lowering compares against;
+    /// a `Str`'s byte length is a runtime property of the operand itself,
+    /// so the bound lives in the op (spelling it as asserts would cost a
+    /// `StrOp::Len` temp and two compares per use for the same observable
+    /// behavior). The interpreter and verifier agree on this encoding.
+    StrOp {
+        /// Which string operation.
+        op: StrOp,
+        /// The operands, in the builtin's declaration order (see
+        /// [`StrOp`]).
+        args: Vec<Operand>,
+    },
+}
+
+/// A pure byte-level string operation over the UTF-8 buffer of a `Str`
+/// (ADR-0006 Stage A). Let `len(s)` be the byte length of `s`. These are
+/// **byte** operations: a [`StrOp::Slice`] may split a multi-byte code
+/// point — the documented v0 contract (`specification/mir.md` §5.6).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StrOp {
+    /// `len(s: Str) -> I64` — `len(s)`. Never traps.
+    Len,
+    /// `byte_at(s: Str, index: I64) -> I64` — the byte value (`0..=255`)
+    /// at `index`. **Traps `IndexOutOfBounds`** when `index < 0` or
+    /// `index >= len(s)`.
+    ByteAt,
+    /// `slice(s: Str, start: I64, end: I64) -> Str` — the byte range
+    /// `[start, end)` of `s`. **Traps `IndexOutOfBounds`** unless
+    /// `0 <= start <= end <= len(s)`.
+    Slice,
+}
+
+impl StrOp {
+    /// The stable lowercase name (`len`, `byte_at`, `slice`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Len => "len",
+            Self::ByteAt => "byte_at",
+            Self::Slice => "slice",
+        }
+    }
+
+    /// How many operands the op takes.
+    #[must_use]
+    pub const fn arg_count(self) -> usize {
+        match self {
+            Self::Len => 1,
+            Self::ByteAt => 2,
+            Self::Slice => 3,
+        }
+    }
 }
 
 /// A unary operator.

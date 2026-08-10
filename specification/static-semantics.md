@@ -109,6 +109,37 @@ module).
 | `R0004` | Ambiguous name. |
 | `R0005` | Visibility violation. |
 | `R0006` | Non-function spec target (a `spec` naming something that is not a function). |
+| `R0007` | Spec reaches an effectful function (§3.6) — specs execute only the pure core. |
+
+`R0007` belongs to the spec-semantics code group that `R0006` opened. It is
+*computed* by the type-checking stage (the effect discipline is part of the type
+system, §3.6), but its number lives here because diagnostic codes are stable
+data grouped by rule family, and both codes pin what a `spec` block may name or
+reach.
+
+### 2.4 Builtin functions (`[EXPERIMENTAL]`, ADR-0006 Stage A)
+
+The language provides six **builtin functions** that resolve without any
+declaration, exactly as the prelude's `Option`/`Some`/`None`/`Result`/`Ok`/`Err`
+resolve without one. They live in two real, always-present modules — `std::rt`
+(the effect builtins) and `std::str` (the pure string builtins) — and are
+reached by ordinary path resolution (`std::rt::write(1, "x")`); they have **no
+tuonelang bodies** and are not loadable source (the stdlib's `.tuo` modules are
+a separate, host-loaded mechanism).
+
+Because `std`, `std::rt`, and `std::str` are real modules in every resolution:
+
+- a file declaring `module std::rt;` (or `std::str`) shares those modules, and
+  declaring a function named `write`/`read_byte`/`exit` (resp. `len`/`byte_at`/
+  `slice`) there collides with the builtin — an ordinary `R0001` duplicate
+  definition. The builtins are not shadowable *at their own paths*.
+- a local binding or module-level declaration named `std` shadows the module in
+  that scope, exactly as any name shadows any other (§2.2); the builtins are
+  then unreachable from that scope, never silently rebound.
+
+Calls to the builtins are checked as ordinary calls (arity `T0002`, argument
+types `T0001`, modes by the ownership checker); their signatures are fixed in
+§3.6.
 
 ---
 
@@ -232,6 +263,53 @@ reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
 elements by value, `O0007`), and the repeat literal `[x; N]` requires a `Copy`
 element (`O0010`).
 
+### 3.6 The effect system (`[EXPERIMENTAL]`, ADR-0006 Stage A)
+
+v0 gains one narrow, explicit effect seam: three **effect builtins** in
+`std::rt`, plus three **pure string builtins** in `std::str` (no effect). All
+six are ordinary functions to the checker — fixed, non-generic signatures,
+normal call checking — resolved per §2.4.
+
+**Effect builtins (`std::rt`):**
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn write(take fd: Int, in text: Str) -> Int` | Writes `text`'s bytes to file descriptor `fd`. Returns the number of bytes written, or a negative value on host error. **Never traps.** |
+| `fn read_byte(take fd: Int) -> Int` | Reads one byte from `fd`. Returns `0..=255`, or `-1` on end of input, or another negative value on host error. **Never traps.** |
+| `fn exit(take code: Int) -> Int` | Terminates the process with `code & 0xff` as the exit status. Declared as returning `Int` so it composes in expression position, but it **never returns**. |
+
+**Pure string builtins (`std::str`)** — byte-level operations on the UTF-8
+buffer of a `Str` (a `slice` may split a multi-byte code point; that is the v0
+contract, see ADR-0006's amendments):
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn len(in s: Str) -> Int` | The byte length of `s`. Never traps. |
+| `fn byte_at(in s: Str, take index: Int) -> Int` | The byte at `index` (`0..=255`). **Traps `IndexOutOfBounds`** when `index < 0` or `index >= len(s)`. |
+| `fn slice(in s: Str, take start: Int, take end: Int) -> Str` | The byte range `[start, end)` of `s`. **Traps `IndexOutOfBounds`** unless `0 <= start <= end <= len(s)`. |
+
+**Purity is computed per function, transitively.** A function is **effectful**
+iff its body contains a call to (or any reference to) an effect builtin, or
+transitively calls an effectful function. The computation is a fixed point over
+the program's call graph (cycles converge: a recursive cluster is effectful iff
+some member reaches an effect), performed by the type-checking stage over the
+resolved call edges of every checked body; it is deliberately **conservative** —
+merely naming an effectful function as a value taints the referrer, which can
+never wrongly accept. The result is queryable from the check pipeline's
+`TypeckResult` (`is_effectful`), so the spec runner, the CLI, and the agent
+read one computation. `std::str`'s builtins are **pure**; `main` and ordinary
+functions **may** be effectful — no diagnostic attaches to them.
+
+**Specs execute only pure code.** A `spec` whose executed closure — its
+resolved dependencies (§2, ADR-0002) transitively closed over the call graph —
+would include an effectful function is rejected **statically** with `R0007`,
+before the interpreter is ever involved: "spec `X` reaches the effectful
+function `Y`; specs execute only the pure core in the deterministic sandbox."
+This turns the spec sandbox's honesty split (the interpreter performs no I/O,
+ever — [`mir.md`](mir.md) §8) into a *checked* property: `tuo check`, `tuo
+spec`, and `tuo verify` all refuse such a spec as a front-end error. The rule
+applies to direct calls, transitive calls, and `std::rt::exit` alike.
+
 ---
 
 ## 4. Ownership of each rule (the syntax/semantics boundary)
@@ -255,7 +333,8 @@ rule the grammar deliberately does not decide.
 | Integer overflow traps (runtime / interp) | codegen / interp | §24 |
 | `Weak` must be upgraded to `Option` before use | type checker | §25 |
 | `unsafe`-only operations confined to `unsafe` blocks | type checker | §26 |
-| Spec purity / determinism; runs on shared MIR | spec runner | §27 |
+| Spec purity: a spec's closure is effect-free (`R0007`, §3.6) | type checker | §27, ADR-0006 |
+| Spec determinism; runs on shared MIR | spec runner | §27 |
 | Receiver (`self`) only as first parameter of an `impl` method | resolver | §19 |
 | Struct-literal-in-condition restriction | parser | `syntax.md` |
 
@@ -270,15 +349,16 @@ The static semantics are executable: `tests/types/` is the fixture corpus that
 holds this document honest.
 
 - `tests/types/fixtures/ok/` — programs that must resolve **and** type-check with
-  **zero diagnostics** (`adts`, `arrays`, `casts`, `control_flow`, `functions`,
-  `impls`, `inference`, `option_result`, `specs`).
+  **zero diagnostics** (`adts`, `arrays`, `casts`, `control_flow`, `effects`,
+  `functions`, `impls`, `inference`, `option_result`, `specs`).
 - `tests/types/fixtures/err/` — programs that resolve cleanly but contain type
   errors; their diagnostics (code, span, message, structured expected/actual) are
   snapshotted under `tests/types/snapshots/`. The err stems map onto the code
   groups above: `mismatch` → `T0001`, `arity` → `T0002`, `constructors` →
   `T0005`/`T0010`, `fields` → `T0004`, `operators` → `T0006`, `exhaustive` →
   `T0007`, `casts` → `T0008`, `fallibility` → `T0009`, `annotations` → `T0011`,
-  `loops` → `T0013`.
+  `loops` → `T0013`, `effects` → builtin-call typing plus the `R0007`
+  spec-purity gate (§3.6).
 
 Every code `T0001`..`T0013` is exercised by the snapshot corpus (harness
 `crates/tuo-types/tests/fixtures.rs`; re-bless with

@@ -632,7 +632,7 @@ fn result_constructs_and_question_mark_short_circuits() {
         value(src, "double_parse", vec![Value::Bool(false)]),
         Value::Variant {
             variant: 1,
-            fields: vec![Value::Str("bad".to_owned())]
+            fields: vec![Value::Str(b"bad".to_vec())]
         }
     );
 }
@@ -671,7 +671,7 @@ fn a_moved_value_flows_through_a_chain_of_locals() {
             c
         }
     "#;
-    assert_eq!(value(src, "chain", vec![]), Value::Str("hello".to_owned()));
+    assert_eq!(value(src, "chain", vec![]), Value::Str(b"hello".to_vec()));
 }
 
 #[test]
@@ -818,4 +818,110 @@ fn execution_is_deterministic() {
     let second = interp.run("fib", vec![int(12)]).unwrap();
     assert_eq!(first, second);
     assert_eq!(first, int(144));
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0006 Stage A: `std::str` byte operations and the effect sandbox
+// ---------------------------------------------------------------------------
+
+#[test]
+fn str_len_counts_bytes_including_multibyte_utf8() {
+    let src = r#"
+        fn ascii_len() -> Int { std::str::len("hello") }
+        fn accented_len() -> Int { std::str::len("héllo") }
+        fn empty_len() -> Int { std::str::len("") }
+    "#;
+    assert_eq!(value(src, "ascii_len", vec![]), int(5));
+    // `é` is two UTF-8 bytes: len is 6, not 5 code points.
+    assert_eq!(value(src, "accented_len", vec![]), int(6));
+    assert_eq!(value(src, "empty_len", vec![]), int(0));
+}
+
+#[test]
+fn str_byte_at_reads_bytes_and_traps_out_of_bounds() {
+    let src = r#"
+        fn probe(take index: Int) -> Int { std::str::byte_at("héllo", index) }
+    "#;
+    // 'h' = 0x68; the first byte of the two-byte `é` is 0xC3 = 195.
+    assert_eq!(value(src, "probe", vec![int(0)]), int(0x68));
+    assert_eq!(value(src, "probe", vec![int(1)]), int(0xC3));
+    for bad in [-1, 6, 100] {
+        let error = run(src, "probe", vec![int(bad)]).expect_err("out of bounds traps");
+        assert_eq!(
+            error.kind,
+            TrapKind::IndexOutOfBounds,
+            "byte_at({bad}) must trap IndexOutOfBounds"
+        );
+    }
+}
+
+#[test]
+fn str_slice_takes_byte_ranges_and_traps_out_of_range() {
+    let src = r#"
+        fn cut(take start: Int, take end: Int) -> Str { std::str::slice("héllo", start, end) }
+        fn roundtrip() -> Bool { std::str::slice("abcd", 1, 3) == "bc" }
+        fn empty_ok() -> Bool { std::str::slice("abc", 3, 3) == "" }
+    "#;
+    assert_eq!(value(src, "roundtrip", vec![]), Value::Bool(true));
+    assert_eq!(value(src, "empty_ok", vec![]), Value::Bool(true));
+    // A byte slice may split the two-byte `é` (the documented v0 contract):
+    // bytes [1, 3) of "héllo" are exactly é's two bytes.
+    assert_eq!(
+        value(src, "cut", vec![int(1), int(3)]),
+        Value::Str(vec![0xC3, 0xA9])
+    );
+    // start < 0, start > end, end > len each trap.
+    for (start, end) in [(-1, 2), (3, 1), (0, 7)] {
+        let error = run(src, "cut", vec![int(start), int(end)]).expect_err("range traps");
+        assert_eq!(
+            error.kind,
+            TrapKind::IndexOutOfBounds,
+            "slice({start}, {end}) must trap IndexOutOfBounds"
+        );
+    }
+}
+
+#[test]
+fn str_ops_compose_with_equality_on_sliced_values() {
+    // len and byte_at agree on a value slice produced (all byte-wise).
+    let src = r#"
+        fn check() -> Bool {
+            let tail = std::str::slice("héllo", 3, 6);
+            std::str::len(tail) == 3 && std::str::byte_at(tail, 0) == 108
+        }
+    "#;
+    assert_eq!(value(src, "check", vec![]), Value::Bool(true));
+}
+
+#[test]
+fn an_effect_reaching_the_interpreter_is_an_internal_error_not_io() {
+    // An effectful program is front-end-clean (`main` may be effectful) and
+    // lowers to an `Effect` statement — but the interpreter's sandbox never
+    // performs I/O: executing the statement is a structured internal error,
+    // not a silent no-op and not a real write.
+    let src = r#"
+        fn main() -> Int { std::rt::write(1, "never printed") }
+    "#;
+    let error = run(src, "main", vec![]).expect_err("the sandbox refuses effects");
+    match &error.kind {
+        TrapKind::Internal(detail) => {
+            assert!(
+                detail.contains("effect `write`"),
+                "the internal error names the effect: {detail}"
+            );
+        }
+        other => panic!("expected TrapKind::Internal, got {other:?}"),
+    }
+    assert!(
+        error.message.contains("no host effects"),
+        "the message states the sandbox rule: {}",
+        error.message
+    );
+}
+
+#[test]
+fn exit_reaching_the_interpreter_is_also_an_internal_error() {
+    let src = "fn main() -> Int { std::rt::exit(3) }\n";
+    let error = run(src, "main", vec![]).expect_err("the sandbox refuses exit");
+    assert!(matches!(&error.kind, TrapKind::Internal(detail) if detail.contains("effect `exit`")));
 }

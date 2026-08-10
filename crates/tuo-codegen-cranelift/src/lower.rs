@@ -577,6 +577,16 @@ impl<'a> Lowering<'a> {
         match statement {
             Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
             Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
+            // A host effect (`std::rt`, ADR-0006) is refused, never
+            // mis-compiled: its native lowering (the `tuo_rt_write`/
+            // `tuo_rt_read_byte`/`tuo_rt_exit` runtime symbols) lands with
+            // ADR-0006 Stage B. Until then the interpreter is the reference
+            // for the pure core and effectful programs cannot be built.
+            Statement::Effect { op, .. } => Err(CodegenError::unsupported(format!(
+                "the `std::rt::{}` effect is not lowered by the Cranelift backend yet; \
+                 its native lowering lands with ADR-0006 Stage B",
+                op.name()
+            ))),
             Statement::Drop { .. } => {
                 // v0 supported values own no host resource; a Stage-1 aggregate
                 // owns no heap (scalar fields only), so its drop is a no-op too,
@@ -904,6 +914,14 @@ impl<'a> Lowering<'a> {
                 "the growable `Array[T]` (and its `Len`) is not lowered by the Cranelift \
                  backend yet",
             )),
+            // The `std::str` byte operations (ADR-0006) are refused, never
+            // mis-compiled: their native lowering lands with ADR-0006
+            // Stage B, together with `Str`'s `{ptr, len}` value layout.
+            Rvalue::StrOp { op, .. } => Err(CodegenError::unsupported(format!(
+                "the `std::str::{}` string operation is not lowered by the Cranelift backend \
+                 yet; its native lowering lands with ADR-0006 Stage B",
+                op.name()
+            ))),
         }
     }
 

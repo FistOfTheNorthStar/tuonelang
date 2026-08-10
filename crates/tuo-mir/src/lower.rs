@@ -33,14 +33,14 @@ use tuo_hir::{
     Arm, BindingDef, Block, Expr, ExprKind, Function as HirFunction, Hir, Item, Lit, ParamMode,
     Pat, PatKind, Res, SpecStmt, Stmt, StmtKind,
 };
-use tuo_resolve::{Resolution, SymbolId, SymbolKind};
+use tuo_resolve::{Builtin, Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
 use tuo_types::{FnTy, IntKind, Ty, TypeckResult};
 
 use crate::mir::{
-    AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, Function, LocalDecl, LocalId,
-    Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, Terminator, Trap,
-    UnOp,
+    AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, EffectOp, Function, LocalDecl,
+    LocalId, Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, StrOp,
+    Terminator, Trap, UnOp,
 };
 
 /// Lower every function body of a front-end-clean snapshot.
@@ -1598,6 +1598,11 @@ impl FnLower<'_> {
         if self.cx.resolution.symbol(*symbol).kind != SymbolKind::Function {
             return Err("calls through function-typed values are not lowered in v0".to_owned());
         }
+        // A builtin function (ADR-0006) has no body to call: the call
+        // lowers to its dedicated MIR form instead.
+        if let Some(builtin) = self.cx.resolution.builtin(*symbol) {
+            return self.builtin_call(expr, builtin, args);
+        }
         let modes = self
             .cx
             .modes
@@ -1638,6 +1643,58 @@ impl FnLower<'_> {
             callee: *symbol,
             args: lowered_args,
         });
+        self.uninit.remove(&dest);
+        Ok(Some(Value::Place(dest_place)))
+    }
+
+    /// Lower a call to one of the six builtin functions (ADR-0006 Stage A)
+    /// into its dedicated MIR form: `std::str` builtins become a pure
+    /// [`Rvalue::StrOp`] assignment, `std::rt` builtins become a
+    /// [`Statement::Effect`]. Every builtin parameter type (`Int`, `Str`)
+    /// is `Copy`, so each argument is read as an ordinary operand; the
+    /// freeze mirrors [`Self::call`]'s evaluation-order guard against a
+    /// later argument writing a place an earlier operand read.
+    fn builtin_call(&mut self, expr: &Expr, builtin: Builtin, args: &[Expr]) -> Lowered {
+        let mut operands = Vec::with_capacity(args.len());
+        for (position, arg) in args.iter().enumerate() {
+            let arg_ty = self.expr_ty(arg)?;
+            let Some(value) = self.expr(arg)? else {
+                return Ok(None);
+            };
+            let operand = self.use_value(value, &arg_ty);
+            let later: Vec<&Expr> = args[position + 1..].iter().collect();
+            let operand = self.freeze_before(operand, arg.span, &later)?;
+            operands.push(operand);
+        }
+        let ret_ty = self.expr_ty(expr)?;
+        let dest = self.temp(ret_ty, expr.span);
+        let dest_place = Place::local(dest);
+        let statement = match builtin {
+            Builtin::StrLen | Builtin::StrByteAt | Builtin::StrSlice => {
+                let op = match builtin {
+                    Builtin::StrLen => StrOp::Len,
+                    Builtin::StrByteAt => StrOp::ByteAt,
+                    _ => StrOp::Slice,
+                };
+                Statement::Assign {
+                    place: dest_place.clone(),
+                    rvalue: Rvalue::StrOp { op, args: operands },
+                }
+            }
+            Builtin::RtWrite | Builtin::RtReadByte | Builtin::RtExit => {
+                let op = match builtin {
+                    Builtin::RtWrite => EffectOp::Write,
+                    Builtin::RtReadByte => EffectOp::ReadByte,
+                    _ => EffectOp::Exit,
+                };
+                Statement::Effect {
+                    op,
+                    args: operands,
+                    dest: dest_place.clone(),
+                }
+            }
+        };
+        self.push(statement);
         self.uninit.remove(&dest);
         Ok(Some(Value::Place(dest_place)))
     }

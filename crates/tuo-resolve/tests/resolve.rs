@@ -863,3 +863,81 @@ fn resolution_is_deterministic() {
     assert_eq!(first.references(), second.references());
     assert_eq!(codes(&first), codes(&second));
 }
+
+// ----------------------------------------------------------------------
+// Builtin functions (ADR-0006 Stage A)
+// ----------------------------------------------------------------------
+
+#[test]
+fn effect_and_string_builtins_resolve_without_any_stdlib() {
+    // No stdlib source is loaded here: the six builtins resolve through the
+    // always-present `std::rt` / `std::str` modules alone.
+    let resolution = resolve_one(
+        "fn go() -> Int {\n\
+         \x20   let n = std::rt::write(1, \"x\");\n\
+         \x20   let b = std::rt::read_byte(0);\n\
+         \x20   let l = std::str::len(\"abc\");\n\
+         \x20   let c = std::str::byte_at(\"abc\", 0);\n\
+         \x20   let s = std::str::slice(\"abc\", 0, 1);\n\
+         \x20   std::rt::exit(n + b + l + c)\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    for builtin in tuo_resolve::Builtin::ALL {
+        let symbol = resolution
+            .builtin_symbol(builtin)
+            .expect("every builtin has a symbol");
+        assert_eq!(resolution.builtin(symbol), Some(builtin));
+        let data = resolution.symbol(symbol);
+        assert_eq!(data.kind, SymbolKind::Function);
+        assert_eq!(data.name, builtin.name());
+        assert!(data.is_pub, "builtins are reachable from any module");
+        assert!(
+            data.declaration.is_none(),
+            "builtins have no written declaration"
+        );
+        assert!(
+            resolution.references_to(symbol).next().is_some(),
+            "each builtin was referenced by the program"
+        );
+    }
+}
+
+#[test]
+fn builtin_modules_are_navigable_but_not_loadable_source() {
+    // `std`, `std::rt`, and `std::str` are real modules with real paths.
+    let resolution = resolve_one("fn f() -> Int { std::str::len(\"a\") }\n");
+    assert_clean(&resolution);
+    let paths: Vec<Vec<String>> = resolution
+        .modules()
+        .iter()
+        .map(|module| module.path.clone())
+        .collect();
+    assert!(paths.contains(&vec!["std".to_owned()]));
+    assert!(paths.contains(&vec!["std".to_owned(), "rt".to_owned()]));
+    assert!(paths.contains(&vec!["std".to_owned(), "str".to_owned()]));
+}
+
+#[test]
+fn redefining_a_builtin_at_its_own_path_is_a_duplicate_definition() {
+    // A file declaring `module std::rt;` shares the builtin module, so a
+    // function named `write` there collides with the builtin: R0001. The
+    // builtins are not shadowable at their own paths.
+    let resolution = resolve_one("module std::rt;\nfn write() {}\n");
+    assert_eq!(codes(&resolution), vec!["R0001"]);
+}
+
+#[test]
+fn a_local_named_std_shadows_the_builtin_modules_in_that_scope() {
+    // Ordinary shadowing (static-semantics §2.4): a binding named `std`
+    // hides the module, so `std::rt::write` no longer resolves through it —
+    // the path tail hangs off a local and is skipped as type-dependent,
+    // never silently rebound to the builtin.
+    let resolution = resolve_one(
+        "fn f() -> Int {\n\
+         \x20   let std = 1;\n\
+         \x20   std\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+}

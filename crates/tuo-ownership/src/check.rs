@@ -173,6 +173,20 @@ pub(crate) fn run(
     for ast in files {
         cx.collect_modes(*ast);
     }
+    // The builtin functions (ADR-0006) have no declaration to collect modes
+    // from; seed their fixed `take`/`in` signatures so calls to them get the
+    // same per-argument-list checking as calls to declared functions.
+    for (builtin, symbol) in resolution.builtins() {
+        let modes = builtin
+            .param_modes()
+            .iter()
+            .map(|mode| match mode {
+                tuo_resolve::BuiltinParamMode::Take => Mode::Take,
+                tuo_resolve::BuiltinParamMode::In => Mode::In,
+            })
+            .collect();
+        cx.fn_modes.insert(symbol, modes);
+    }
     let mut diagnostics = Vec::new();
     for ast in files {
         for item in ast.file().items() {
