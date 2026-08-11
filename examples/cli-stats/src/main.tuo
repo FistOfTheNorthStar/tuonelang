@@ -1,19 +1,33 @@
 module cli_stats;
 
+import std::io;
+
 // cli-stats — a command-line statistics tool, dogfooded on the v0 core.
 //
 // A real CLI reads a list of numbers from argv or stdin and prints summary
-// statistics. v0 has neither argument access nor stdout (see DOGFOODING.md and
-// the ADRs it links), so this program holds its dataset in a fixed `[Int; 7]`
-// array and returns one selected statistic as its process exit status — the
-// only output channel the core has.
+// statistics. v0 still has no argument access (no argv effect primitive), so
+// this program holds its dataset in a fixed `[Int; 7]` array — but since
+// ADR-0006 (accepted) landed the effect boundary, it *prints its report* to
+// stdout through `std::io::print`/`println` before returning `report()` as
+// its exit status. The `std::io` module is the standard library consumed as
+// input: `src/std_io.tuo` is a verbatim copy of `tdg-stdlib`'s `std/io.tuo`,
+// pinned byte-for-byte against the catalog by
+// `crates/tuo-cli/tests/dogfood_examples.rs` so it can never drift.
 //
 // Everything below is genuine, non-toy computation: a numeric reduction
 // library (count, sum, min, max, mean, range, a scaled variance, and a bounded
 // integer square root) written entirely in the runnable subset, with
-// executable `spec` blocks pinning each function. It compiles with
-// `tuo check`, its specs run under `tuo spec`, and it runs natively with
-// `tuo run` — the exit status is `report()`'s value truncated to a byte.
+// executable `spec` blocks pinning each pure function. The printing shell is
+// the EFFECT tier: effectful functions can carry no spec (`R0007`), so the
+// dogfood test asserts the exact bytes `main` prints instead. It compiles
+// with `tuo check`, its specs run under `tuo test`, and it runs natively with
+// `tuo run` — stdout is the four-line report below and the exit status is
+// `report()`'s value truncated to a byte:
+//
+//   count 7
+//   mean 12
+//   sd 6
+//   report 18
 
 // --- The dataset -----------------------------------------------------------
 //
@@ -126,14 +140,100 @@ fn isqrt(take n: Int) -> Int {
     }
 }
 
+/// The integer standard deviation (floored): the square root of the mean
+/// squared deviation. For this dataset it floors to 6.
+fn sd() -> Int {
+    isqrt(dispersion() / count())
+}
+
 /// A single reported figure small enough to survive exit-status truncation:
 /// the mean plus the integer standard deviation. For this dataset mean = 12
 /// and the standard deviation floors to 6, so the program exits 18.
 fn report() -> Int {
-    mean() + isqrt(dispersion() / count())
+    mean() + sd()
+}
+
+// --- The printing shell (EFFECT tier) --------------------------------------
+//
+// Real output over the ADR-0006 effect boundary, through the `std::io` module
+// consumed as input. v0 has no owned String to format into (allocator ADR),
+// so decimal rendering prints digit-by-digit from a static digit table — a
+// pure `digit_str` (spec-checked) under an effectful writer (no spec, R0007;
+// pinned by the dogfood test's exact-stdout assertion).
+
+/// The digit character for one decimal digit 0..=9 — the static text a digit
+/// prints as. Pure, so it is spec-checked.
+fn digit_str(take d: Int) -> Str {
+    if d == 0 {
+        "0"
+    } else if d == 1 {
+        "1"
+    } else if d == 2 {
+        "2"
+    } else if d == 3 {
+        "3"
+    } else if d == 4 {
+        "4"
+    } else if d == 5 {
+        "5"
+    } else if d == 6 {
+        "6"
+    } else if d == 7 {
+        "7"
+    } else if d == 8 {
+        "8"
+    } else {
+        "9"
+    }
+}
+
+/// The bytes a write reported, or -1 on an I/O error. Pure over the
+/// already-computed `Result`, so it is spec-checked.
+fn ok_bytes(take outcome: Result[Int, std::io::IoError]) -> Int {
+    match outcome {
+        Ok { value } => value,
+        Err { error } => 0 - 1,
+    }
+}
+
+/// EFFECT: print one decimal digit via `std::io::print`; bytes written.
+fn print_digit(take d: Int) -> Int {
+    ok_bytes(std::io::print(digit_str(d)))
+}
+
+/// EFFECT: print a non-negative integer in decimal (most significant digit
+/// first, by recursion); bytes written. The statistics here are all
+/// non-negative, so no sign handling is needed.
+fn print_uint(take n: Int) -> Int {
+    if n < 10 {
+        print_digit(n)
+    } else {
+        let high = print_uint(n / 10);
+        high + print_digit(n % 10)
+    }
+}
+
+/// EFFECT: print one `label value` report line; bytes written. The trailing
+/// `println("")` supplies the newline.
+fn print_stat(in label: Str, take value: Int) -> Int {
+    let wrote_label = ok_bytes(std::io::print(label));
+    let wrote_value = print_uint(value);
+    let wrote_newline = ok_bytes(std::io::println(""));
+    wrote_label + wrote_value + wrote_newline
+}
+
+/// EFFECT: print the whole four-line report; bytes written. The exact bytes
+/// are asserted by `crates/tuo-cli/tests/dogfood_examples.rs`.
+fn print_report() -> Int {
+    let a = print_stat("count ", count());
+    let b = print_stat("mean ", mean());
+    let c = print_stat("sd ", sd());
+    let d = print_stat("report ", report());
+    a + b + c + d
 }
 
 fn main() -> Int {
+    print_report();
     report()
 }
 
@@ -174,10 +274,21 @@ spec isqrt {
     then isqrt(25) == 5;
 }
 
+spec "the standard deviation floors to six" {
+    then sd() == 6;
+}
+
 spec "report is the mean plus the integer standard deviation" {
     then report() == 18;
 }
 
-spec main {
-    then main() == 18;
+spec digit_str {
+    then digit_str(0) == "0";
+    then digit_str(4) == "4";
+    then digit_str(9) == "9";
+}
+
+spec ok_bytes {
+    then ok_bytes(Ok { value: 3 }) == 3;
+    then ok_bytes(Err { error: std::io::IoError::Other }) == 0 - 1;
 }

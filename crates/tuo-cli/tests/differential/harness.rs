@@ -22,12 +22,15 @@
 //!   ([`tuo_runtime::TRAP_EXIT_STATUS`]); the two must agree on *which* happens.
 //!
 //! Two further behaviors named by the differential charter — **stdout** and
-//! **observable destruction** — are not yet expressible: the language has no I/O
-//! facility, and the backend lowers no type with a destructor. [`Outcome`]
-//! carries an explicit place for stdout so the comparison extends the day an
-//! output facility lands, and the design note in the suite root records why
-//! destruction is out of reach for now. The harness never fabricates a behavior
-//! the compiler cannot perform.
+//! **observable destruction** — are not exercised here: the generator emits
+//! only *pure* programs, because the reference interpreter's sandbox performs
+//! no I/O (an effectful program cannot run through the interpreter side of the
+//! comparison — native effect behavior is pinned separately by
+//! `effects_native.rs`), and the backend lowers no type with a destructor.
+//! [`Outcome`] carries an explicit place for stdout so the comparison extends
+//! if an interpreter-observable output model ever lands, and the design note
+//! in the suite root records why destruction is out of reach for now. The
+//! harness never fabricates a behavior the compiler cannot perform.
 
 // This is a test-support module: its `pub` items are the API the differential
 // test binary consumes, but the linter cannot see across the `#[path]` module
@@ -56,9 +59,10 @@ pub enum Outcome {
     Returned {
         /// The exit byte: `value & 0xff`.
         exit_byte: i32,
-        /// Anything the program wrote to stdout. Always empty today (no I/O
-        /// facility exists); present so the comparison covers stdout the moment
-        /// one does.
+        /// Anything the program wrote to stdout. Always empty today: the
+        /// generator emits only pure programs, since the interpreter side of
+        /// the comparison can never perform an effect. Present so the
+        /// comparison covers stdout if that ever changes.
         stdout: Vec<u8>,
     },
     /// The program aborted with the runtime's fixed trap status. Both engines

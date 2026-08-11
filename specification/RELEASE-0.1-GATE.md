@@ -202,9 +202,11 @@ artifact that decides it, and its current status with a one-line justification.
 - **Requirement:** substantial real programs compile and run.
 - **Proving artifact:** `crates/tuo-cli/tests/dogfood_examples.rs` (five programs
   driven through the real binary to exact exit codes) + `examples/` + `DOGFOODING.md`.
-- **Status:** **MET.** The CLI-stats, data-pipeline, HTTP-router-core,
+- **Status:** **MET.** The CLI-stats, data-pipeline, HTTP-service,
   concurrent-scheduler-core, and multi-package workspace examples check, run their
-  specs green, and execute to their asserted exit codes.
+  specs green, and execute to their asserted exit codes — and, since ADR-0006
+  landed the effect boundary, cli-stats prints its report and http-service its
+  response line, with stdout asserted byte-for-byte.
 
 ### G16 — All known semantic divergences are resolved or explicitly release-blocking
 
@@ -216,9 +218,10 @@ artifact that decides it, and its current status with a one-line justification.
 - **Status:** **MET.** As of this gate there are **zero** open interpreter/backend
   semantic divergences: the differential suites are green, so the backends agree
   with the reference interpreter on every fixture and every generated program. The
-  only remaining open items are the dogfooding ADRs (ADR-0006/0007/0008;
-  ADR-0004 is now **accepted and landed**), which are *capability gaps*, not
-  divergences — they are enumerated below and none is a silent deferral.
+  only remaining open items are the dogfooding ADRs (ADR-0007/0008 and the
+  forthcoming allocator ADR; ADR-0004 and ADR-0006 are now **accepted and
+  landed**), which are *capability gaps*, not divergences — they are enumerated
+  below and none is a silent deferral.
 
 ---
 
@@ -253,9 +256,10 @@ open semantic divergences. Per the gate's own rule, 0.1 may be declared ready.
 
 The remaining items enumerated under "Capability gaps" below are **not** gate
 criteria — 0.1 ships the scalar control-flow core **plus the ADR-0004
-aggregates** (structs, enums, fixed `[T; N]` arrays, bounded iteration)
-deliberately, and each remaining gap is a proposed ADR with a scope decision of
-its own, not a silent deferral.
+aggregates** (structs, enums, fixed `[T; N]` arrays, bounded iteration) **and
+the ADR-0006 `Str` + effect boundary** (borrowed strings, `std::rt` descriptor
+I/O and process exit, `R0007`-pure specs) deliberately, and each remaining gap
+is a proposed ADR with a scope decision of its own, not a silent deferral.
 
 ## Remaining work before 0.1
 
@@ -268,14 +272,16 @@ difference between "specified, distributed" and "specified, collected."
 ## Capability gaps (not gate criteria, tracked for honesty)
 
 These are **not** 0.1 release-gate criteria — 0.1 ships the scalar control-flow
-core plus the ADR-0004 aggregates deliberately — but the gate records them so no
-reader mistakes their absence for a divergence. Each has an ADR from the Prompt
-39 dogfooding exercise (`DOGFOODING.md`) and a benchmark plan:
+core plus the ADR-0004 aggregates and the ADR-0006 `Str`/effect boundary
+deliberately — but the gate records them so no reader mistakes their absence
+for a divergence. Each has an ADR from the Prompt 39 dogfooding exercise
+(`DOGFOODING.md`) and a benchmark plan:
 
 | Gap | ADR | Benchmark consideration |
 |-----|-----|-------------------------|
 | Aggregates + iteration in the runnable core | ADR-0004 (**accepted, landed**) | done — the perf-lab `collections` workload is `Supported` with its committed program and C peer |
-| Effect boundary + runtime strings | ADR-0006 (proposed) | unblocks `string-processing` + `networking` |
+| Effect boundary + runtime strings | ADR-0006 (**accepted, landed**) | done — the perf-lab `string-processing` workload is `Supported` with its committed program and C peer; per its amendments, `networking` is *not* unblocked (no socket effect) and owned `String`/`concat` moved to the allocator ADR |
+| Heap allocation (owned `String`, growable collections) | allocator ADR (forthcoming, per ADR-0006 amendment 1) | unblocks `allocation` |
 | Concurrency model | ADR-0007 (proposed) | new parallel-speedup benchmark category |
 | First-class functions | ADR-0008 (proposed) | extends `function-calls` with indirect calls |
 

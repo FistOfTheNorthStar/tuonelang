@@ -141,12 +141,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   backends lower the **v0 runnable core** — the scalar control-flow core plus the
   ADR-0004 aggregates (structs, enums, `Option`/`Result`, fixed `[T; N]` arrays
   with checked indexing, bounded `for`), floats (IEEE-754, saturating `as`
-  casts, `%` via the C `fmod`), and borrow-mode (`in`/`mut`) calls (a pointer
-  to the caller's place, per `specification/abi.md`), laid out solely by
-  `tdg-runtime`'s `abi` module — and *refuse* — never mis-compile — anything
-  outside it (strings, the growable `Array[T]`, the `Box`/`Shared`/`Weak` heap
-  wrappers), refusing at storage-classification time with a message naming the
-  type and pointing the user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  casts, `%` via the C `fmod`), borrow-mode (`in`/`mut`) calls (a pointer
+  to the caller's place, per `specification/abi.md`), and — since ADR-0006 —
+  the borrowed `Str` (a two-word fat pointer; literals as read-only static
+  data; equality; the trapping `std::str` byte ops) and the `std::rt` effect
+  primitives (`write`/`read_byte`/`exit`, via the runtime's effect shim), laid
+  out solely by `tdg-runtime`'s `abi` module — and *refuse* — never
+  mis-compile — anything outside it (the owned `String`, the growable
+  `Array[T]`, the `Box`/`Shared`/`Weak` heap wrappers), refusing at
+  storage-classification time with a message naming the type and pointing the
+  user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
@@ -256,13 +260,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
   honesty rule the prompt demands is enforced structurally: of the eight required
-  runtime workloads exactly five (**startup, integer-computation, function-calls,
-  recursion**, and — since ADR-0004's fixed arrays landed — **collections**, an
-  `[Int; 8]` insert/scan with its C peer) carry a real program and are
-  `Support::Supported`, while **allocation, string-processing, networking** are
+  runtime workloads exactly six (**startup, integer-computation, function-calls,
+  recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
+  `[Int; 8]` insert/scan with its C peer, and — since ADR-0006's `Str` core
+  landed — **string-processing**, a byte-level tokenize/scan/slice-compare
+  over a fixed request-log line with its C peer) carry a real program and are
+  `Support::Supported`, while **allocation, networking** are
   `Support::Unsupported` with the *exact reason* the v0 core cannot express them
-  and emit **no number** — the entry becomes measurable the moment the feature
-  lands, with no other change (exactly how `collections` flipped). The compiler
+  (the allocator ADR; no socket-open effect) and emit **no number** — the entry
+  becomes measurable the moment the feature lands, with no other change
+  (exactly how `collections` and then `string-processing` flipped). The compiler
   lab's cold stages measure the aggregate/loop program
   (`lab::compiler::COLD_AGGREGATE`, acceptance test-pinned) so the ADR-0004
   lowering's compile cost is tracked too. Cross-language
@@ -340,17 +347,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `concurrent-worker` (a worker-pool scheduling model). The three that fit the
   runnable core **run natively** — and since ADR-0004 landed they use it for
   real: `geometry` passes a `Point` struct, `data-pipeline` folds an `[Int; 8]`
-  batch, and `cli-stats` holds an `[Int; 7]` dataset, with the same spec
-  verdicts and exit bytes as their pre-aggregate forms. The two that cannot run
-  (an HTTP service needs I/O; a worker pool needs concurrency) have their
-  **pure decision core** written in the runnable subset — which really runs and is
-  spec-checked — while the effectful shell is a documented `CONTRACT:` tier, exactly
-  as `tdg-stdlib` splits executable from contract code; nothing advertises behavior
-  the compiler cannot perform. The examples are kept honest by
-  `tdg-cli/tests/dogfood_examples.rs`, which drives the **real** `tuo` binary over
-  every one (`check` accepts it, `test` runs its specs to `0 failed`, and each
-  runnable program `run`s/`build`s to the exact documented exit byte), so a
-  committed example can never rot. The exercise's measurements across the six axes
+  batch, and `cli-stats` holds an `[Int; 7]` dataset. Since ADR-0006 landed the
+  effect boundary, `http-service` **runs natively too**: its request-line
+  parsing is pure `std::str` byte scanning (spec-checked) under a thin
+  `std::rt::write` response shell, and its demo `main` prints
+  `HTTP/1.1 200 OK` and exits 200, while `cli-stats` prints its four-line
+  report through `std::io::println`, consuming the stdlib's `std::io` module
+  as input (`src/std_io.tuo`, a verbatim copy pinned byte-for-byte against
+  the catalog). What still cannot run (a socket accept-loop needs a socket
+  effect; a worker pool needs concurrency) keeps its **pure decision core**
+  written in the runnable subset — which really runs and is spec-checked —
+  while the effectful shell is a documented `CONTRACT:` tier naming the
+  missing primitive, exactly as `tdg-stdlib` splits its tiers; nothing
+  advertises behavior the compiler cannot perform. The examples are kept
+  honest by `tdg-cli/tests/dogfood_examples.rs`, which drives the **real**
+  `tuo` binary over every one (`check` accepts it, `test` runs its specs to
+  `0 failed`, each runnable program `run`s/`build`s to the exact documented
+  exit byte, and the two printing examples' stdout is asserted
+  byte-for-byte), so a committed example can never rot. The exercise's measurements across the six axes
   the prompt names — compiler usability, diagnostic quality, incremental
   compilation, LLM generation success, stdlib gaps, runtime performance — are
   written up in top-level [`DOGFOODING.md`](DOGFOODING.md) with evidence from the
@@ -360,10 +374,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   and a benchmark plan, never an ad-hoc feature to make one example compile** — so
   the exercise opened `specification/adr/ADR-0004` (aggregates + iteration in the
   runnable core — since **accepted and landed**, having unblocked its named
-  `collections` workload), `ADR-0006` (the effect boundary + runtime strings),
-  `ADR-0007` (the concurrency model), and `ADR-0008` (first-class functions),
-  the latter three still `proposed` and each naming the performance-lab
-  workload it must unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
+  `collections` workload), `ADR-0006` (the effect boundary + runtime strings —
+  since **accepted and landed**, having unblocked its named
+  `string-processing` workload; per its amendments, owned-`String`/`concat`
+  moved to the forthcoming allocator ADR and `networking` was explicitly *not*
+  unblocked), `ADR-0007` (the concurrency model), and `ADR-0008` (first-class
+  functions), the latter two still `proposed` and each naming the
+  performance-lab workload it must unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
   paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -575,8 +592,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   worse and, on that corpus, strictly better. It is a proxy for the queries' discriminative
   power, not a live-LLM eval (no provider is embedded); the doc says so plainly.
 - **The standard library is written in tuonelang, consumed as input, and split
-  into an honest executable tier and a contract tier — it never advertises an
-  effect the v0 core cannot perform.** `tdg-stdlib` is a *catalog* crate (no
+  into three honest tiers — executable, effect, and contract — it never
+  advertises an effect the compiler cannot perform.** `tdg-stdlib` is a
+  *catalog* crate (no
   compiler machinery, layer 90): each of the eight initial modules — `std::core`,
   `std::collections`, `std::io`, `std::fs`, `std::time`, `std::process`,
   `std::sync`, `std::test` — is a `.tuo` source file under `src/std/`, embedded
@@ -584,22 +602,31 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (`MODULES`, `module(path)`), so any host loads them into its own `SourceMap`
   and runs its own pipeline. Every public API carries an exact signature, a doc
   comment, a worked example, machine-queryable symbol information (the same
-  `Resolution` symbols the agent/LSP project), and — where executable — an
+  `Resolution` symbols the agent/LSP project), and — where pure-executable — an
   executable `spec`; there is deliberately **one** obvious API per fundamental
-  task, never competing spellings. Because v0 has **no native effect boundary**
-  (no FFI/syscalls — effects await ADR-0006; the runnable core is pure
-  computation) and **methods are not lowered** (`impl` method calls are v0
-  no-ops pending the trait system), the library is *free functions only* and each
-  module separates an **executable tier** (pure computation — ordering,
-  `Option`/`Result` combinators, `Duration` arithmetic, error classification, the
-  pure state models of a latch/lock — which runs and whose specs run) from a
-  **contract tier** (the effectful entry points `println`/`read`/`now`/`exit`/
-  `lock`, given as exact signatures + documented contracts marked `CONTRACT:`,
+  task, never competing spellings. Because **methods are not lowered** (`impl`
+  method calls are v0 no-ops pending the trait system), the library is *free
+  functions only*, and each module separates an **executable tier** (pure
+  computation — ordering, `Option`/`Result` combinators, `Duration` arithmetic,
+  error classification, the pure state models of a latch/lock — which runs and
+  whose specs run), an **effect tier** (ADR-0006: `std::io::print`/`println`
+  over `std::rt::write` and `std::process::exit` over `std::rt::exit` — real
+  tuonelang implementations that run natively but can carry **no** spec, since
+  `R0007` keeps the spec sandbox pure; each is marked `EFFECT:` and names the
+  native CLI test that pins it), and a
+  **contract tier** (the effectful entry points whose primitive does not exist
+  yet — `read_line` awaits the allocator ADR's owned `String`, `read`/`now`/
+  `lock`/`arg_count` a file/clock/thread/argv primitive — given as exact
+  signatures + documented contracts marked `CONTRACT:`,
   with **no** executable spec so nothing claims to run that cannot). The promise
   is enforced, not asserted: `tdg-cli/tests/stdlib.rs` really compiles every
-  module (alone and together) with zero errors and runs every shipped spec to
+  module (alone and together) with zero errors, runs every shipped spec to
   green with **no skips** (a skipped spec would mean a dishonest, unrunnable
-  contract slipped into the executable tier), and
+  contract slipped into the executable tier), enforces the three-tier rule
+  textually per public function (pure ⇒ spec'd; `EFFECT:` ⇒ no spec + a named
+  native test; `CONTRACT:` ⇒ no spec), and proves the effect tier natively on
+  both backends (`println` prints `hi\n` exactly; `exit` really exits with the
+  status's code), and
   `tdg-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
   benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
   plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by

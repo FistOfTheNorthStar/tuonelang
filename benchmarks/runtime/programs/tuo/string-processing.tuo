@@ -1,0 +1,62 @@
+fn line() -> Str {
+    "GET /users/42 HTTP/1.1 200 1532"
+}
+
+fn count_byte(in text: Str, take target: Int) -> Int {
+    var found = 0;
+    var index = 0;
+    while index < std::str::len(text) {
+        if std::str::byte_at(text, index) == target {
+            found = found + 1;
+        }
+        index = index + 1;
+    }
+    found
+}
+
+fn count_digits(in text: Str) -> Int {
+    var found = 0;
+    var index = 0;
+    while index < std::str::len(text) {
+        let byte = std::str::byte_at(text, index);
+        if byte >= 48 && byte <= 57 {
+            found = found + 1;
+        }
+        index = index + 1;
+    }
+    found
+}
+
+fn method_is_get(in text: Str) -> Int {
+    if std::str::slice(text, 0, 3) == "GET" {
+        1
+    } else {
+        0
+    }
+}
+
+fn version_ok(in text: Str) -> Int {
+    if std::str::slice(text, 14, 22) == "HTTP/1.1" {
+        1
+    } else {
+        0
+    }
+}
+
+fn score(in text: Str) -> Int {
+    count_byte(text, 32)
+        + count_byte(text, 47)
+        + count_digits(text)
+        + method_is_get(text)
+        + version_ok(text)
+}
+
+fn main() -> Int {
+    var total = 0;
+    var round = 0;
+    while round < 200 {
+        total = total + score(line());
+        round = round + 1;
+    }
+    total
+}

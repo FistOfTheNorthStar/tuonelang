@@ -3,10 +3,14 @@
 //   Executable tier — `ExitStatus`, the meaning of a process exit code, and the
 //   pure reasoning over it (success, failure, the code itself).
 //
-//   Contract tier — the operations that affect the real process (`exit`,
-//   `args`, `env`). Ending or inspecting the OS process is an effect the v0
-//   core cannot perform, so these are exact signatures with documented
-//   contracts and no executable spec, marked `CONTRACT:`.
+//   Effect tier — `exit`, implemented in tuonelang over the `std::rt::exit`
+//   effect primitive (ADR-0006). It compiles and runs natively, but an
+//   effectful function can never appear in a spec (`R0007`), so it is pinned
+//   by a native CLI test instead and marked `EFFECT:`.
+//
+//   Contract tier — inspecting the OS process (`arg_count`): `std::rt` exposes
+//   no argv primitive, so this stays an exact signature with a documented
+//   contract and no executable spec, marked `CONTRACT:`.
 //
 // One exit-status model — a wrapped integer code — used everywhere.
 
@@ -65,25 +69,33 @@ pub fn is_success(in status: ExitStatus) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Process control — the CONTRACT tier.
+// Process control — the EFFECT tier (`exit`) and the CONTRACT tier
+// (`arg_count`).
 // ----------------------------------------------------------------------------
 
-/// CONTRACT (not executable in v0): terminate the current process with `status`.
+/// EFFECT (executable and effectful): terminate the current process with
+/// `status`.
 ///
-/// This never returns; its declared return type `ExitStatus` exists only to
-/// satisfy the type checker for the contract. Ending the process is an effect
-/// the v0 core cannot perform, so this does not run yet.
+/// Implemented over the `std::rt::exit` effect primitive: the process ends
+/// immediately with `code(status) & 0xff` as its exit status. This never
+/// returns — the declared `ExitStatus` return type exists only so the
+/// signature composes, and the trailing expression is never reached.
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
-/// // std::process::exit(std::process::failure(1));
+/// // std::process::exit(std::process::failure(1)); // process ends, status 1
 /// ```
 pub fn exit(in status: ExitStatus) -> ExitStatus {
-    // Contract placeholder: the real implementation terminates the process.
+    std::rt::exit(code(status));
     status
 }
 
 /// CONTRACT (not executable in v0): the number of command-line arguments.
+///
+/// `std::rt` exposes no argv effect primitive (ADR-0006 landed descriptor
+/// I/O and process exit only), so this stays a contract until one exists.
 ///
 /// # Example
 /// ```tuo

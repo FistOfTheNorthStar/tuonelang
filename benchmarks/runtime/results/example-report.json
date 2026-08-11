@@ -130,19 +130,20 @@
       }
     },
     {
+      "label": "string-processing",
+      "description": "byte-level tokenizing, scanning, and slice comparison over the borrowed `Str` (ADR-0006): space/slash/digit counts and method/version slice checks over a fixed request-log line",
+      "support": {
+        "support": "supported",
+        "source": "fn line() -> Str {\n    \"GET /users/42 HTTP/1.1 200 1532\"\n}\n\nfn count_byte(in text: Str, take target: Int) -> Int {\n    var found = 0;\n    var index = 0;\n    while index < std::str::len(text) {\n        if std::str::byte_at(text, index) == target {\n            found = found + 1;\n        }\n        index = index + 1;\n    }\n    found\n}\n\nfn count_digits(in text: Str) -> Int {\n    var found = 0;\n    var index = 0;\n    while index < std::str::len(text) {\n        let byte = std::str::byte_at(text, index);\n        if byte >= 48 && byte <= 57 {\n            found = found + 1;\n        }\n        index = index + 1;\n    }\n    found\n}\n\nfn method_is_get(in text: Str) -> Int {\n    if std::str::slice(text, 0, 3) == \"GET\" {\n        1\n    } else {\n        0\n    }\n}\n\nfn version_ok(in text: Str) -> Int {\n    if std::str::slice(text, 14, 22) == \"HTTP/1.1\" {\n        1\n    } else {\n        0\n    }\n}\n\nfn score(in text: Str) -> Int {\n    count_byte(text, 32)\n        + count_byte(text, 47)\n        + count_digits(text)\n        + method_is_get(text)\n        + version_ok(text)\n}\n\nfn main() -> Int {\n    var total = 0;\n    var round = 0;\n    while round < 200 {\n        total = total + score(line());\n        round = round + 1;\n    }\n    total\n}\n",
+        "expected_exit": 160
+      }
+    },
+    {
       "label": "allocation",
       "description": "heap allocation and deallocation throughput",
       "support": {
         "support": "unsupported",
-        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet (the fixed `[T; N]` is inline and allocates nothing). No program can exercise allocation."
-      }
-    },
-    {
-      "label": "string-processing",
-      "description": "building and scanning string data",
-      "support": {
-        "support": "unsupported",
-        "reason": "v0 has no runtime String value: string literals exist in the grammar but no String operations are lowered to native code. No program can exercise string processing."
+        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet (the fixed `[T; N]` is inline and a `Str` is a borrowed view of static data; both allocate nothing). Awaits the allocator ADR. No program can exercise allocation."
       }
     },
     {
@@ -150,7 +151,7 @@
       "description": "a basic socket round-trip",
       "support": {
         "support": "unsupported",
-        "reason": "v0 has no effect boundary (no FFI/syscalls); std::io/std::process are contract-tier only. No program can perform I/O, so networking cannot be measured."
+        "reason": "ADR-0006's effect seam covers already-open descriptors only (std::rt::write/read_byte) plus process exit; no socket-open effect primitive exists (no socket/bind/listen/accept/connect), so no program can create a connection (ADR-0006, amendment 2). Awaits ADR-0007 or a successor effect ADR."
       }
     }
   ],
@@ -215,6 +216,19 @@
         "expected_exit": 8
       },
       "tuonelang_exit": 8,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "string-processing",
+        "peer": "c",
+        "peer_source": "static const char line_text[] = \"GET /users/42 HTTP/1.1 200 1532\";\nstatic const int line_len = (int)(sizeof line_text - 1);\n\nstatic int count_byte(const char *text, int len, int target) {\n    int found = 0;\n    for (int i = 0; i < len; i++) {\n        if ((unsigned char)text[i] == target) {\n            found++;\n        }\n    }\n    return found;\n}\n\nstatic int count_digits(const char *text, int len) {\n    int found = 0;\n    for (int i = 0; i < len; i++) {\n        unsigned char byte = (unsigned char)text[i];\n        if (byte >= 48 && byte <= 57) {\n            found++;\n        }\n    }\n    return found;\n}\n\nstatic int slice_equals(const char *text, int start, int end, const char *expect) {\n    for (int i = start; i < end; i++) {\n        if (text[i] != expect[i - start]) {\n            return 0;\n        }\n    }\n    return expect[end - start] == '\\0';\n}\n\nstatic int score(const char *text, int len) {\n    return count_byte(text, len, 32) + count_byte(text, len, 47) +\n           count_digits(text, len) + slice_equals(text, 0, 3, \"GET\") +\n           slice_equals(text, 14, 22, \"HTTP/1.1\");\n}\n\nint main(void) {\n    int total = 0;\n    for (int round = 0; round < 200; round++) {\n        total += score(line_text, line_len);\n    }\n    return total;\n}\n",
+        "expected_exit": 160
+      },
+      "tuonelang_exit": 160,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

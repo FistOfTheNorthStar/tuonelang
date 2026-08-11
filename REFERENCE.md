@@ -475,10 +475,13 @@ numeric = { path = "../numeric" }   # v0: local path deps only
 
 ## 14. Standard library
 
-Free functions only, one obvious API per task. Two tiers: **executable**
-(runs today, has specs) and **`CONTRACT:`** (exact signature + documented
-contract for an effect v0 cannot perform — no executable spec, so nothing
-pretends to run).
+Free functions only, one obvious API per task. Three tiers: **executable**
+(pure computation — runs today, has specs), **`EFFECT:`** (real
+implementations over the `std::rt` effect primitives — they run natively, but
+an effectful spec is impossible by `R0007`, so each is pinned by a named
+native CLI test instead), and **`CONTRACT:`** (exact signature + documented
+contract for an effect whose primitive does not exist yet — no executable
+spec, so nothing pretends to run).
 
 ### `std::core` — all executable
 
@@ -512,15 +515,36 @@ Contract (await growable arrays): `get`, `sum`, `contains` over `Array[Int]`.
 
 ### `std::io`, `std::fs`, `std::process`, `std::sync`, `std::time`
 
-Each pairs an executable pure core with a contract tier:
+Each pairs an executable pure core with an effect tier (where the `std::rt`
+primitive exists) and a contract tier (where it does not):
 
-| Module | Executable today | `CONTRACT:` (not yet runnable) |
-|--------|------------------|-------------------------------|
-| `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println`, `read_line` |
-| `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | `read`, `write`, `exists`, `remove` |
-| `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit`, `arg_count` |
-| `std::sync` | `Once`/`LockState` pure state models | `lock`, `unlock`, `spawn` |
-| `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …) | `Instant`, `now`, `elapsed` |
+| Module | Executable today | `EFFECT:` (runs natively, no spec) | `CONTRACT:` (not yet runnable) |
+|--------|------------------|------------------------------------|-------------------------------|
+| `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`) | `read_line` (needs owned `String`) |
+| `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | — | `read`, `write`, `exists`, `remove` (no file primitive) |
+| `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`) | `arg_count` (no argv primitive) |
+| `std::sync` | `Once`/`LockState` pure state models | — | `lock`, `unlock`, `spawn` (no threads) |
+| `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …) | — | `Instant`, `now`, `elapsed` (no clock primitive) |
+
+A real program printing through the stdlib (compile the `std::io` module
+source alongside your own — the stdlib is consumed as input):
+
+```tuo
+module app;
+
+import std::io;
+
+fn main() -> Int {
+    match std::io::println("hello, world") {
+        Ok { value } => 0,       // "hello, world\n" is on stdout
+        Err { error } => std::io::error_code(error),
+    }
+}
+```
+
+An effectful function like `main` here cannot appear in a `spec` (`R0007`);
+observable output is tested from outside the process, the way
+`crates/tuo-cli/tests/stdlib.rs` pins `println` itself.
 
 ---
 
@@ -556,9 +580,10 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Stdlib effect tier: `std::io::print`/`println`, `std::process::exit` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | Owned `String`, growable `Array[T]`, `Box`/`Shared`/`Weak` heap values | declared | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
-| Filesystem, clock, processes, threads | contract sigs only | ❌ (sandbox) | ❌ |
+| Filesystem, clock, argv, threads, sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
 
 "Refused" means a clear `Unsupported` error naming the construct, pointing you
 back to the interpreter as the reference — never silent mis-compilation.
