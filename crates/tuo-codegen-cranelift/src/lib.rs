@@ -33,14 +33,19 @@
 //! - direct calls and recursion, including borrow-mode (`in`/`mut`) arguments
 //!   passed as pointers to the caller's place;
 //! - the ADR-0004 aggregates: structs, tuples, enums, `Option`/`Result`, and
-//!   fixed `[T; N]` arrays, laid out by [`tuo_runtime::abi`].
+//!   fixed `[T; N]` arrays, laid out by [`tuo_runtime::abi`];
+//! - the ADR-0006 Stage B strings and effects: `Str` as a two-word fat
+//!   pointer over read-only static data, the `std::str` byte operations
+//!   (with their deterministic `IndexOutOfBounds` traps), byte-wise `Str`
+//!   equality via the C library's `memcmp`, and the `std::rt` host effects
+//!   as direct calls to the [`tuo_runtime::effect`] symbols.
 //!
-//! Heap-backed types (`Str`, `String`, the growable `Array[T]`,
-//! `Box`/`Shared`/`Weak`) are **not** lowered yet: a program that reaches one
-//! is refused with [`CodegenError::unsupported`](tuo_codegen::CodegenError),
-//! and the caller can fall back to the interpreter (the reference).
-//! Correctness on this core comes first; broadening the subset and optimizing
-//! come later.
+//! Heap-owning types (`String`, the growable `Array[T]`,
+//! `Box`/`Shared`/`Weak`) are **not** lowered yet (they await the allocator
+//! ADR): a program that reaches one is refused with
+//! [`CodegenError::unsupported`](tuo_codegen::CodegenError), and the caller
+//! can fall back to the interpreter (the reference). Correctness on this core
+//! comes first; broadening the subset and optimizing come later.
 //!
 //! # Output
 //!

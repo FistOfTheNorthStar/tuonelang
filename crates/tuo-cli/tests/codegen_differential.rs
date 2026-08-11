@@ -199,6 +199,42 @@ fn borrow_mode_calls_match_the_interpreter() {
 }
 
 #[test]
+fn strings_match_the_interpreter() {
+    // ADR-0006 Stage B: `Str` as a native two-word fat pointer over static
+    // data. Literal length (UTF-8 is bytes: len("héllo") == 6), byte-wise
+    // equality (equal, unequal, and empty-string cases, via memcmp), slice +
+    // byte_at scanning in a loop, `Str` crossing call boundaries (take/in
+    // params and an sret return), and a `Str` field inside a struct.
+    for name in [
+        "str_len.tuo",
+        "str_eq.tuo",
+        "str_slice_scan.tuo",
+        "str_param.tuo",
+        "str_in_struct.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn a_str_byte_at_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
+    // `std::str::byte_at` past the end traps `IndexOutOfBounds` in the
+    // interpreter (`specification/mir.md` §5.6); the native binary must abort
+    // with the runtime's fixed trap status through the same trap path the
+    // array bounds asserts use.
+    let path = fixture("str_trap_oob.tuo");
+    assert!(
+        interpret_main(&path).is_err(),
+        "the reference interpreter should trap on the out-of-bounds byte index"
+    );
+    assert_eq!(
+        run_native(&path),
+        TRAP_EXIT_STATUS,
+        "a native Str out-of-bounds trap must terminate with the runtime's fixed trap status"
+    );
+}
+
+#[test]
 fn a_fixed_array_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
     // The interpreter traps `IndexOutOfBounds`; the native binary must abort
     // with the runtime's fixed trap status (the bounds `Assert` is in the MIR
@@ -234,11 +270,12 @@ fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
 
 #[test]
 fn a_program_outside_the_backend_subset_is_refused_not_miscompiled() {
-    // A program the native backend does not lower yet (an aggregate carrying a
-    // `String`/`Str`, which ADR-0004 Stage 1 does not cover) must be *refused*
-    // with a failure exit, never silently mis-compiled. The interpreter remains
-    // the reference and can still run it (checked elsewhere); here we assert
-    // `tuo build` declines cleanly.
+    // A program the native backend does not lower yet (a function with an
+    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
+    // lowered since ADR-0006 Stage B) must be *refused* with a failure exit,
+    // never silently mis-compiled. The interpreter remains the reference and
+    // can still run it (checked elsewhere); here we assert `tuo build`
+    // declines cleanly.
     let path = fixture("unsupported_string.tuo");
     let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
         .arg("build")

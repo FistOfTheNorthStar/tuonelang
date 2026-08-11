@@ -269,14 +269,35 @@ fn a_fixed_array_out_of_bounds_trap_agrees_across_all_three_engines() {
     assert_three_way_agreement("arr_trap_oob.tuo");
 }
 
+/// ADR-0006 Stage B strings: the `Str` fat pointer over static data, the
+/// `std::str` byte operations, byte-wise equality via `memcmp`, and `Str`
+/// crossing every call boundary shape. Both backends must agree with the
+/// interpreter's byte semantics (UTF-8 is bytes: `len("héllo") == 6`) — and
+/// with each other — including the deterministic `IndexOutOfBounds` trap on
+/// an out-of-range `byte_at`.
+#[test]
+fn strings_agree_across_all_three_engines() {
+    for name in [
+        "str_len.tuo",        // multi-byte literal length (bytes, not chars)
+        "str_eq.tuo",         // equal / unequal / empty-string comparisons
+        "str_slice_scan.tuo", // slice + byte_at folded over a while loop
+        "str_param.tuo",      // Str take/in params and an sret Str return
+        "str_in_struct.tuo",  // a Str field inside a struct, passed take
+        "str_trap_oob.tuo",   // byte_at out of bounds traps on all three
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
-    // A program still outside the native subset (an aggregate carrying a
-    // `String`/`Str`, which Stage 1 does not lower) must be *refused* by both
-    // backends with a failure exit and an explanatory message, never silently
-    // mis-compiled. The interpreter remains the reference and can still run it.
-    // This asserts the two backends agree on the *boundary* of what they lower,
-    // not just on results inside it.
+    // A program still outside the native subset (a function with an
+    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
+    // lowered since ADR-0006 Stage B) must be *refused* by both backends with
+    // a failure exit and an explanatory message, never silently mis-compiled.
+    // The interpreter remains the reference and can still run it. This asserts
+    // the two backends agree on the *boundary* of what they lower, not just on
+    // results inside it.
     let path = fixture("unsupported_string.tuo");
     for release in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));

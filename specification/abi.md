@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `2` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `3` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -16,13 +16,14 @@ stay semantically equivalent to.
 ## Why an ABI now, and why version it
 
 The backends today (Cranelift and LLVM alike) lower the **v0 runnable core**:
-the scalar control-flow core plus floats, borrow-mode calls, and the ADR-0004
-aggregates — structs, enums, `Option`/`Result`, and fixed `[T; N]` arrays,
-laid out solely by this document's rules. Heap-backed values — `Str`/`String`,
-the growable `Array[T]`, and the memory wrappers — and the ADR-0006 effect
-statements and string operations are still **refused** rather than
-mis-compiled (see `tuo-codegen-cranelift`; the effect/string lowering lands
-with ADR-0006 Stage B). This document therefore specifies more than any
+the scalar control-flow core plus floats, borrow-mode calls, the ADR-0004
+aggregates — structs, enums, `Option`/`Result`, and fixed `[T; N]` arrays —
+and, since ADR-0006 Stage B, the `Str` fat pointer, the `std::str` byte
+operations, and the `std::rt` effect statements (through the effect runtime
+symbols below), all laid out solely by this document's rules. Heap-*owning*
+values — `String`, the growable `Array[T]`, and the memory wrappers — are
+still **refused** rather than mis-compiled (see `tuo-codegen-cranelift`; they
+await the allocator ADR). This document therefore specifies more than any
 backend currently *emits*: it is the target the backends grow into, fixed up
 front so two backends and the reference interpreter cannot drift into two
 incompatible memory models.
@@ -275,31 +276,36 @@ change; the shim seam is where it will attach.
 - **Trap exit:** `TRAP_EXIT_STATUS` (134), as above — distinguishable from any
   small integer a program deliberately returns.
 - There is no other exit path in the shipped v0 runtime: no unwinding to top of
-  stack. A function either returns (propagating to the shim) or traps.
-  ADR-0006 Stage A specifies a `std::rt::exit` builtin; its native path is the
-  **planned** `tuo_rt_exit` symbol below, which lands with the Stage B
-  lowering.
+  stack. A function either returns (propagating to the shim), traps, or asks
+  for an exit: ADR-0006's `std::rt::exit` builtin terminates through the
+  `tuo_rt_exit` effect symbol below.
 
-## Effect symbols (planned — ADR-0006 Stage B)
+## Effect symbols (ADR-0006 Stage B)
 
-ADR-0006 Stage A gives the language its effect boundary in the front end, MIR
+ADR-0006 Stage A gave the language its effect boundary in the front end, MIR
 (`Statement::Effect`, `mir.md` §4.2), and the reference interpreter (which
-never performs an effect). The **native** side of the boundary is three
-C-ABI runtime symbols, specified here now so the seam is fixed, and **landing
-with the Stage B lowering** — until then both backends refuse an `Effect`
-statement, and no generated binary references these symbols:
+never performs an effect). The **native** side of the boundary — landed with
+the Stage B lowering — is three C-ABI runtime symbols, implemented by
+`tuo_runtime::effect::effect_runtime_c_source` and linked into every built
+binary alongside the trap shim. Both backends lower `Statement::Effect` to a
+direct call:
 
-```
-i64  tuo_rt_write(i64 fd, const u8 *ptr, usize len);  // bytes written, or negative on host error
-i64  tuo_rt_read_byte(i64 fd);                        // 0..=255, -1 on EOF, other negative on host error
-void tuo_rt_exit(i64 code);                           // terminates with (code & 0xff); never returns
+```c
+long long tuo_rt_write(long long fd, const unsigned char *ptr, unsigned long long len);
+                                       /* total bytes written, or -1 on host error */
+long long tuo_rt_read_byte(long long fd);
+                                       /* 0..=255; -1 on EOF; -2 on host error */
+_Noreturn void tuo_rt_exit(long long code);
+                                       /* terminates with (code & 0xff); never returns */
 ```
 
-- `tuo_rt_write` writes the `len` bytes at `ptr` to file descriptor `fd` and
-  returns the number written, or a negative value on host error. It never
-  traps; a `Str` argument is passed as its `{ptr, len}` pair.
-- `tuo_rt_read_byte` reads one byte from `fd`, returning it (`0..=255`), `-1`
-  on end of input, or another negative value on host error. It never traps.
+- `tuo_rt_write` writes the `len` bytes at `ptr` to file descriptor `fd`,
+  looping over partial writes and retrying `EINTR`, and returns the total
+  bytes written, or `-1` on any other host error. It never traps; a `Str`
+  argument is passed as its `{ptr, len}` pair.
+- `tuo_rt_read_byte` reads one byte from `fd` (retrying `EINTR`), returning
+  it (`0..=255`), `-1` on end of input, or `-2` on any other host error. It
+  never traps.
 - `tuo_rt_exit` terminates the process with `code & 0xff` as the exit status.
   Like `tuo_rt_trap` it **never returns** — but it is a *normal* exit path
   (the program asked for it), not a trap: it writes nothing to stderr and
@@ -307,16 +313,19 @@ void tuo_rt_exit(i64 code);                           // terminates with (code &
   program's drops are statically placed, and an exit abandons them exactly as
   the documented trap rule abandons cleanup).
 
-**Static string data.** A `Str` *constant*'s bytes (a string literal, or a
-literal narrowed by `std::str::slice`) live in **read-only static data** in
-the emitted object; its runtime value is exactly the `{ptr, len}` fat pointer
-this document already specifies under Slices. No allocation and no copy is
-involved in materializing a `Str` constant — Stage B lowers `Const::Str` to a
-pointer into `.rodata` plus a length.
+**Static string data.** A `Str` *constant*'s bytes (a string literal) live in
+**read-only static data** in the emitted object, deduplicated per module; its
+runtime value is exactly the `{ptr, len}` fat pointer this document specifies
+under Slices. No allocation and no copy is involved in materializing a `Str`
+constant — both backends lower `Const::Str` to the address of that static
+data plus a length. (An empty literal carries `len = 0` and a fixed non-null,
+never-dereferenced pointer.) A `Str` produced by `std::str::slice` is a
+derived fat pointer `{ptr + start, end - start}` into the same bytes.
 
-Adding these symbols is an additive change (a new runtime surface, no layout
-altered); the commit that lands them bumps `ABI_VERSION` per the versioning
-rule, together with the tests that pin their behavior.
+Adding these symbols was an additive change (a new runtime surface, no layout
+altered); the commit that landed them bumped `ABI_VERSION` to `3` per the
+versioning rule, together with the tests that pin their behavior
+(`tuo-runtime`'s `effect` module tests and `tuo-cli/tests/effects_native.rs`).
 
 ## Memory allocation boundary
 
@@ -394,12 +403,14 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `2`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `3`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
 it. Version `1` corrected `Option`'s variant numbering (`Some` = 0, `None` = 1)
 to match the interpreter and MIR. Version `2` added the inline `[T; N]`
 fixed-size array layout (`size = N × stride(T)`, `align = align(T)`, element
-`i` at `i × stride(T)`); no existing layout changed. The version is asserted by the crate's tests so a silent reinterpretation of
+`i` at `i × stride(T)`); no existing layout changed. Version `3` added the
+ADR-0006 Stage B effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
+`tuo_rt_exit`); no layout changed. The version is asserted by the crate's tests so a silent reinterpretation of
 bytes is impossible.

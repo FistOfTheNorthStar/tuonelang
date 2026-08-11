@@ -223,8 +223,8 @@ pub enum Statement {
     /// performs an effect**: the spec-purity gate (`R0007`) makes this
     /// statement unreachable under the spec runner, and actually executing
     /// one there is an interpreter internal error, never a silent no-op
-    /// and never real I/O. The native lowering lands with ADR-0006
-    /// Stage B; until then both backends refuse (never mis-compile) it.
+    /// and never real I/O. Natively (ADR-0006 Stage B) both backends lower
+    /// it to a direct call to the matching `tuo_rt_*` runtime symbol.
     Effect {
         /// Which host effect.
         op: EffectOp,

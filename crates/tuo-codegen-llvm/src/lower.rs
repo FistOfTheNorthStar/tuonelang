@@ -36,14 +36,33 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is heap-backed (`Str`, `String`, the growable
-//! `Array[T]`, `Box`/`Shared`/`Weak`) still makes the whole function
-//! unsupported. Aggregate lowering follows ADR-0004 and is byte-for-byte
-//! identical to the Cranelift backend: scalar leaves, by-pointer/sret call
-//! ABI, every size/offset from the runtime ABI. Fixed arrays are laid out
-//! inline — element `i` at `i × stride(T)` — and indexed by unchecked address
-//! arithmetic, because MIR asserts the bounds (`Assert { IndexOutOfBounds }`)
-//! before every `Projection::Index` use.
+//! A local whose type is heap-**owning** (`String`, the growable `Array[T]`,
+//! `Box`/`Shared`/`Weak`) still makes the whole function unsupported (they
+//! await the allocator ADR). Aggregate lowering follows ADR-0004 and is
+//! byte-for-byte identical to the Cranelift backend: scalar leaves,
+//! by-pointer/sret call ABI, every size/offset from the runtime ABI. Fixed
+//! arrays are laid out inline — element `i` at `i × stride(T)` — and indexed
+//! by unchecked address arithmetic, because MIR asserts the bounds
+//! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use.
+//!
+//! # Strings and effects (ADR-0006 Stage B)
+//!
+//! Mirrors the Cranelift backend's `lower` module decision for decision. A
+//! `Str` is an ordinary two-word aggregate — the `{u8 *ptr, usize len}` fat
+//! pointer of `specification/abi.md` ("Slices"), laid out by
+//! [`tuo_runtime::abi::layout_of`] — and flows through the existing aggregate
+//! machinery unchanged. A `Const::Str`'s bytes are emitted once per module
+//! into a private, unnamed-addr, read-only global (identical literals
+//! deduplicated) and the constant materializes as `{data address, len}`; an
+//! empty literal carries `len = 0` and a fixed non-null pointer that is never
+//! dereferenced. `Str` equality is byte-wise (lengths equal AND bytes equal,
+//! via the C library's `memcmp` when the lengths match), the `std::str` byte
+//! operations ([`Rvalue::StrOp`]) trap `IndexOutOfBounds` exactly as the
+//! interpreter's `eval_str_op` does, and a host effect
+//! ([`Statement::Effect`]) is a direct call to the matching
+//! [`tuo_runtime::effect`] symbol (`tuo_rt_write`/`tuo_rt_read_byte`/
+//! `tuo_rt_exit` — the last never returns, so the block is terminated with
+//! `unreachable`, the same shape the trap path uses).
 //!
 //! # Borrow-mode calling convention
 //!
@@ -76,19 +95,28 @@ use inkwell::context::Context;
 use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, IntType};
-use inkwell::values::{BasicValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{
+    BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
+};
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, Function, Operand, PassMode, Place, Program, Projection, Rvalue,
-    Statement, Terminator, Trap, UnOp,
+    BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
+    Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
-use tuo_runtime::abi::{Layout, layout_of, struct_field_offsets, variant_field_offsets};
-use tuo_runtime::{TRAP_SYMBOL, TrapCode};
+use tuo_runtime::abi::{
+    Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
+};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, effect};
 use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
+
+/// The byte offset of the `len` word inside a `Str` fat pointer — one pointer
+/// word past the data pointer (`{u8 *ptr, usize len}`, `specification/abi.md`
+/// "Slices").
+const STR_LEN_OFFSET: u64 = POINTER_SIZE;
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. Parallels the Cranelift backend's `LocalKind` so the two make
@@ -132,15 +160,16 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type is heap-backed (`Str`, `String`,
-/// the growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before
-/// any layout query, so the refusal names the concrete type) or has no v0
-/// runtime layout.
+/// [`CodegenError::unsupported`] if the type is heap-owning (`String`, the
+/// growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before any
+/// layout query, so the refusal names the concrete type) or has no v0 runtime
+/// layout. `Str` is *not* refused (ADR-0006 Stage B): it is an ordinary
+/// two-word aggregate whose bytes live in static data.
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
-    // Heap-backed types have an ABI *layout* (their headers), but the backend
-    // has no allocator or string runtime to give them meaning yet. Refuse them
-    // at classification time with a message naming the type and the road back,
-    // so they can never wander into an internal invariant error downstream.
+    // Heap-owning types have an ABI *layout* (their headers), but the backend
+    // has no allocator to give them meaning yet. Refuse them at classification
+    // time with a message naming the type and the road back, so they can never
+    // wander into an internal invariant error downstream.
     if let Some(refusal) = heap_type_refusal(ty, context) {
         return Err(CodegenError::unsupported(refusal));
     }
@@ -159,14 +188,17 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
     }
 }
 
-/// The clean refusal message for a heap-backed type the backend does not lower
+/// The clean refusal message for a heap-owning type the backend does not lower
 /// yet, or `None` if `ty` is not one. Mirrors the Cranelift backend's
 /// `heap_type_refusal` word for word (bar the backend name), so the two
-/// backends refuse the same boundary with the same explanation.
+/// backends refuse the same boundary with the same explanation. `Str` is no
+/// longer here: ADR-0006 Stage B lowers it as an ordinary two-word aggregate.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     let (what, road_back) = match ty {
-        Ty::Str => ("a `Str` value", "runtime strings await ADR-0006"),
-        Ty::String => ("a `String` value", "runtime strings await ADR-0006"),
+        Ty::String => (
+            "a `String` value",
+            "the owned `String` awaits the allocator ADR",
+        ),
         Ty::Array(_) => (
             "the growable `Array[T]`",
             "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
@@ -223,8 +255,11 @@ pub(crate) fn lower_program<'ctx>(
         ids.insert(function.symbol, value);
     }
 
-    // Pass 2: define each body.
+    // Pass 2: define each body. The string-literal global pool is shared
+    // across bodies so identical literals dedupe to one read-only global per
+    // module (ADR-0006 Stage B).
     let builder = ctx.create_builder();
+    let mut str_globals: HashMap<Vec<u8>, GlobalValue<'ctx>> = HashMap::new();
     for function in &program.functions {
         let mut lowering = Lowering::new(
             ctx,
@@ -234,6 +269,7 @@ pub(crate) fn lower_program<'ctx>(
             function,
             &program.functions,
             types,
+            &mut str_globals,
         )?;
         lowering.run()?;
     }
@@ -328,9 +364,18 @@ struct Lowering<'a, 'ctx> {
     /// How each MIR local is stored (index = local id): scalar alloca, unit, or
     /// aggregate byte alloca. Filled during `run`.
     kinds: Vec<LocalKind<'ctx>>,
+    /// The module's string-literal global pool: the read-only global emitted
+    /// for each distinct literal's bytes, shared across function bodies so
+    /// identical literals dedupe (ADR-0006 Stage B).
+    str_globals: &'a mut HashMap<Vec<u8>, GlobalValue<'ctx>>,
 }
 
 impl<'a, 'ctx> Lowering<'a, 'ctx> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a private plumbing seam mirroring the Cranelift backend's `Lowering::new`; \
+                  bundling these into a context struct would only move the argument list"
+    )]
     fn new(
         ctx: &'ctx Context,
         module: &'a Module<'ctx>,
@@ -339,6 +384,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         function: &'a Function,
         functions: &'a [Function],
         types: &'a TypeckResult,
+        str_globals: &'a mut HashMap<Vec<u8>, GlobalValue<'ctx>>,
     ) -> Result<Self, CodegenError> {
         // Classify every local up front so an unsupported (Stage-2) type fails
         // before any IR is built. Concrete allocas are created in `run`.
@@ -358,6 +404,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             value,
             blocks: Vec::new(),
             kinds: Vec::new(),
+            str_globals,
         })
     }
 
@@ -498,16 +545,10 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         match statement {
             Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
             Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
-            // A host effect (`std::rt`, ADR-0006) is refused, never
-            // mis-compiled: its native lowering (the `tuo_rt_write`/
-            // `tuo_rt_read_byte`/`tuo_rt_exit` runtime symbols) lands with
-            // ADR-0006 Stage B. Until then the interpreter is the reference
-            // for the pure core and effectful programs cannot be built.
-            Statement::Effect { op, .. } => Err(CodegenError::unsupported(format!(
-                "the `std::rt::{}` effect is not lowered by the LLVM backend yet; \
-                 its native lowering lands with ADR-0006 Stage B",
-                op.name()
-            ))),
+            // A host effect (`std::rt`, ADR-0006 Stage B): a direct call to
+            // the matching `tuo_runtime::effect` symbol, which the CLI links
+            // into every built binary alongside the trap shim.
+            Statement::Effect { op, args, dest } => self.lower_effect(*op, args, dest),
             Statement::Drop { .. } => {
                 // v0 supported values own no host resource; a Stage-1 aggregate
                 // owns no heap (scalar fields only), so its drop is a no-op too,
@@ -522,6 +563,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_assign(&mut self, place: &Place, rvalue: &Rvalue) -> Result<(), CodegenError> {
         match rvalue {
             Rvalue::Aggregate { kind, fields } => self.lower_aggregate(place, kind, fields),
+            // `slice` yields a `Str` (a two-word aggregate), so it is
+            // materialized in place into the destination's byte storage rather
+            // than through the scalar rvalue path (ADR-0006 Stage B).
+            Rvalue::StrOp {
+                op: StrOp::Slice,
+                args,
+            } => self.lower_str_slice(place, args),
             // A unit-valued copy/move (a unit local, or a zero-sized aggregate
             // such as `[T; 0]`) carries no bytes: nothing to emit.
             Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
@@ -803,6 +851,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 self.lower_unary(*op, operand, value)
             }
             Rvalue::Binary { op, lhs, rhs } => {
+                // `Str` operands take their own byte-wise equality path (the
+                // type checker forbids ordering on `Str`, so only `Eq`/`Ne`
+                // can reach here — ADR-0006 Stage B).
+                if matches!(self.operand_ty(lhs), Some(Ty::Str)) {
+                    return self.lower_str_equality(*op, lhs, rhs);
+                }
                 let l = self.lower_operand(lhs)?;
                 let r = self.lower_operand(rhs)?;
                 self.lower_binary(*op, lhs, l, r)
@@ -815,18 +869,28 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 "aggregate construction reached the scalar rvalue path",
             )),
             Rvalue::Discriminant(place) => Ok(self.lower_discriminant(place)?.into()),
+            // The scalar-valued `std::str` byte operations (ADR-0006 Stage B).
+            // `slice` yields a `Str` aggregate and is handled by
+            // `lower_assign`; reaching it here is a lowering fault.
+            Rvalue::StrOp { op, args } => match op {
+                StrOp::Len => {
+                    let s = args
+                        .first()
+                        .ok_or_else(|| CodegenError::backend("str len is missing its operand"))?;
+                    // The fat pointer's `len` word IS the result (`I64`).
+                    let (_ptr, len) = self.str_operand_parts(s)?;
+                    Ok(len.into())
+                }
+                StrOp::ByteAt => self.lower_str_byte_at(args),
+                StrOp::Slice => Err(CodegenError::backend(
+                    "Str slice reached the scalar rvalue path (it is materialized by \
+                     `lower_assign`)",
+                )),
+            },
             // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
             // length is lowered as a constant and the MIR verifier rejects
             // `Len` of a fixed-array place), so refusing it entirely stays
             // sound for fixed arrays.
-            // The `std::str` byte operations (ADR-0006) are refused, never
-            // mis-compiled: their native lowering lands with ADR-0006
-            // Stage B, together with `Str`'s `{ptr, len}` value layout.
-            Rvalue::StrOp { op, .. } => Err(CodegenError::unsupported(format!(
-                "the `std::str::{}` string operation is not lowered by the LLVM backend yet; \
-                 its native lowering lands with ADR-0006 Stage B",
-                op.name()
-            ))),
             Rvalue::Len(_) => Err(CodegenError::unsupported(
                 "the growable `Array[T]` (and its `Len`) is not lowered by the LLVM backend yet",
             )),
@@ -864,13 +928,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Const::Unit => Err(CodegenError::unsupported(
                 "a unit constant has no scalar representation to place in a value context",
             )),
-            // Unreachable for locals/fields of type `Str` (classification
-            // refuses those up front); kept for a bare `Str` literal in an
-            // operand position.
-            Const::Str(_) => Err(CodegenError::unsupported(
-                "a `Str` string constant is not lowered by the LLVM backend yet (runtime \
-                 strings await ADR-0006); the interpreter (`tuo spec`/`tuo verify`) remains the \
-                 reference",
+            // A `Str` constant is a two-word aggregate, materialized through
+            // the aggregate/static-data machinery (`operand_aggregate_address`,
+            // `str_operand_parts`); it never has a single-scalar value.
+            Const::Str(_) => Err(CodegenError::backend(
+                "a `Str` constant reached the scalar constant path (it is materialized via \
+                 static data by the aggregate machinery)",
             )),
         }
     }
@@ -1677,6 +1740,341 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .map_err(builder_err("zero-extending a discriminant"))
     }
 
+    // ----- strings & effects (ADR-0006 Stage B) -----
+
+    /// The `{ptr, len}` pair of a `Str` literal: the address of its read-only
+    /// global (private, unnamed-addr, constant — deduplicated per module,
+    /// keyed by the emitted contents) and its byte length as an `i64`
+    /// constant. An empty literal still gets a real one-byte global so its
+    /// address is a fixed, non-null, aligned pointer — never dereferenced,
+    /// because its `len` is 0.
+    fn str_const_parts(
+        &mut self,
+        text: &str,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), CodegenError> {
+        let contents: Vec<u8> = if text.is_empty() {
+            vec![0]
+        } else {
+            text.as_bytes().to_vec()
+        };
+        let ptr = if let Some(global) = self.str_globals.get(&contents) {
+            global.as_pointer_value()
+        } else {
+            let count = u32::try_from(contents.len())
+                .map_err(|_| CodegenError::backend("string literal longer than u32::MAX bytes"))?;
+            let ty = self.ctx.i8_type().array_type(count);
+            let global = self.module.add_global(ty, None, "tuo_str");
+            global.set_initializer(&self.ctx.const_string(&contents, false));
+            global.set_constant(true);
+            global.set_linkage(Linkage::Private);
+            global.set_unnamed_addr(true);
+            global.set_alignment(1);
+            self.str_globals.insert(contents, global);
+            global.as_pointer_value()
+        };
+        let len = u64::try_from(text.len())
+            .map_err(|_| CodegenError::backend("string literal longer than u64::MAX bytes"))?;
+        let len = self.ctx.i64_type().const_int(len, false);
+        Ok((ptr, len))
+    }
+
+    /// The `{ptr, len}` fat-pointer fields of a `Str`-typed operand: a literal
+    /// yields its global's address and constant length directly; a place loads
+    /// the two words from its aggregate storage (the shared address
+    /// machinery). Mirrors the Cranelift backend's `str_operand_parts`.
+    fn str_operand_parts(
+        &mut self,
+        operand: &Operand,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), CodegenError> {
+        if let Operand::Const(Const::Str(text)) = operand {
+            let text = text.clone();
+            return self.str_const_parts(&text);
+        }
+        let addr = self.operand_aggregate_address(operand)?;
+        let ptr = self
+            .builder
+            .build_load(self.ptr_ty, addr, "str_ptr")
+            .map_err(builder_err("loading a Str data pointer"))?
+            .into_pointer_value();
+        let len_addr = self.byte_gep(addr, STR_LEN_OFFSET)?;
+        let len = self
+            .builder
+            .build_load(self.ctx.i64_type(), len_addr, "str_len")
+            .map_err(builder_err("loading a Str length"))?
+            .into_int_value();
+        Ok((ptr, len))
+    }
+
+    /// Lower `Eq`/`Ne` on `Str` operands: byte-wise equality, exactly as the
+    /// interpreter compares its byte buffers — lengths equal AND bytes equal.
+    /// The byte compare (the C library's `memcmp`, imported like the trap
+    /// symbol) runs only when the lengths match, so comparing `len_a` bytes of
+    /// both sides is always in bounds; a zero-length pair is equal without
+    /// dereferencing (`memcmp` with a zero count reads nothing). The type
+    /// checker forbids ordering on `Str`, so no other operator can reach here.
+    /// Mirrors the Cranelift backend's `lower_str_equality` decision for
+    /// decision.
+    fn lower_str_equality(
+        &mut self,
+        op: BinOp,
+        lhs: &Operand,
+        rhs: &Operand,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        if !matches!(op, BinOp::Eq | BinOp::Ne) {
+            return Err(CodegenError::backend(
+                "a non-equality comparison on `Str` operands (the type checker forbids \
+                 ordering on `Str`)",
+            ));
+        }
+        let (ptr_a, len_a) = self.str_operand_parts(lhs)?;
+        let (ptr_b, len_b) = self.str_operand_parts(rhs)?;
+
+        let lens_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, len_a, len_b, "str_len_eq")
+            .map_err(builder_err("comparing Str lengths"))?;
+        let start_block = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| CodegenError::backend("Str equality lowered outside a block"))?;
+        let cmp_block = self.ctx.append_basic_block(self.value, "str_cmp");
+        let join_block = self.ctx.append_basic_block(self.value, "str_eq_join");
+        self.builder
+            .build_conditional_branch(lens_eq, cmp_block, join_block)
+            .map_err(builder_err("branching on the Str length compare"))?;
+
+        self.builder.position_at_end(cmp_block);
+        let memcmp = self.memcmp_function();
+        let call = self
+            .builder
+            .build_call(
+                memcmp,
+                &[ptr_a.into(), ptr_b.into(), len_a.into()],
+                "memcmp",
+            )
+            .map_err(builder_err("calling memcmp"))?;
+        let verdict = call.try_as_basic_value().unwrap_basic().into_int_value();
+        let zero = self.ctx.i32_type().const_zero();
+        let bytes_eq = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, verdict, zero, "str_bytes_eq")
+            .map_err(builder_err("comparing the memcmp verdict to zero"))?;
+        self.builder
+            .build_unconditional_branch(join_block)
+            .map_err(builder_err("joining the Str equality branches"))?;
+
+        self.builder.position_at_end(join_block);
+        let phi = self
+            .builder
+            .build_phi(self.ctx.bool_type(), "str_eq")
+            .map_err(builder_err("merging the Str equality verdict"))?;
+        let false_i1 = self.ctx.bool_type().const_zero();
+        phi.add_incoming(&[(&false_i1, start_block), (&bytes_eq, cmp_block)]);
+        let eq_i1 = phi.as_basic_value().into_int_value();
+        // Widen to the backend's `Bool` (i8, 0/1), then invert for `Ne`.
+        let eq = self
+            .builder
+            .build_int_z_extend(eq_i1, self.ctx.i8_type(), "str_eq_bool")
+            .map_err(builder_err("widening the Str equality verdict"))?;
+        Ok(match op {
+            BinOp::Ne => {
+                let one = self.ctx.i8_type().const_int(1, false);
+                self.builder
+                    .build_xor(eq, one, "str_ne")
+                    .map_err(builder_err("inverting the Str equality verdict"))?
+                    .into()
+            }
+            _ => eq.into(),
+        })
+    }
+
+    /// Lower `byte_at(s, index)`: a deterministic `IndexOutOfBounds` trap
+    /// unless `0 <= index < len(s)` (`specification/mir.md` §5.6, exactly the
+    /// interpreter's `eval_str_op`), then load the byte at `ptr + index` and
+    /// zero-extend it to the `i64` the destination expects. One unsigned
+    /// compare implements both bounds: a negative index reinterprets as a
+    /// huge unsigned value, and `len` is never negative. Mirrors the
+    /// Cranelift backend's `lower_str_byte_at`.
+    fn lower_str_byte_at(
+        &mut self,
+        args: &[Operand],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let [s, index] = args else {
+            return Err(CodegenError::backend("byte_at expects exactly 2 operands"));
+        };
+        let (ptr, len) = self.str_operand_parts(s)?;
+        let index = self.lower_operand(index)?.into_int_value();
+        let oob = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, index, len, "str_oob")
+            .map_err(builder_err("bounds-checking a Str byte index"))?;
+        self.guard(oob, TrapCode::IndexOutOfBounds)?;
+        let addr = self.dynamic_byte_gep(ptr, index, 1)?;
+        let byte = self
+            .builder
+            .build_load(self.ctx.i8_type(), addr, "str_byte")
+            .map_err(builder_err("loading a Str byte"))?
+            .into_int_value();
+        Ok(self
+            .builder
+            .build_int_z_extend(byte, self.ctx.i64_type(), "str_byte_i64")
+            .map_err(builder_err("widening a Str byte"))?
+            .into())
+    }
+
+    /// Lower `dest = slice(s, start, end)`: a deterministic `IndexOutOfBounds`
+    /// trap unless `0 <= start <= end <= len(s)` (`specification/mir.md`
+    /// §5.6), then write the derived fat pointer `{ptr + start, end - start}`
+    /// into the destination's aggregate storage. Two unsigned compares cover
+    /// all four bounds: `start >u end` catches `start > end` and a negative
+    /// `start`; `end >u len` catches `end > len` and a negative `end`. The
+    /// source's words are loaded before the destination is written, so
+    /// `s = slice(s, ..)` re-slicing in place is sound. Mirrors the Cranelift
+    /// backend's `lower_str_slice`.
+    fn lower_str_slice(&mut self, dest: &Place, args: &[Operand]) -> Result<(), CodegenError> {
+        let [s, start, end] = args else {
+            return Err(CodegenError::backend("slice expects exactly 3 operands"));
+        };
+        let (ptr, len) = self.str_operand_parts(s)?;
+        let start = self.lower_operand(start)?.into_int_value();
+        let end = self.lower_operand(end)?.into_int_value();
+        let bad_order = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, start, end, "str_bad_order")
+            .map_err(builder_err("comparing the slice bounds to each other"))?;
+        self.guard(bad_order, TrapCode::IndexOutOfBounds)?;
+        let bad_end = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, end, len, "str_bad_end")
+            .map_err(builder_err("comparing the slice end to the length"))?;
+        self.guard(bad_end, TrapCode::IndexOutOfBounds)?;
+
+        let new_ptr = self.dynamic_byte_gep(ptr, start, 1)?;
+        let new_len = self
+            .builder
+            .build_int_sub(end, start, "str_slice_len")
+            .map_err(builder_err("computing the slice length"))?;
+        let base = self.aggregate_dest_address(dest)?;
+        self.builder
+            .build_store(base, new_ptr)
+            .map_err(builder_err("storing the slice data pointer"))?;
+        let len_addr = self.byte_gep(base, STR_LEN_OFFSET)?;
+        self.builder
+            .build_store(len_addr, new_len)
+            .map_err(builder_err("storing the slice length"))?;
+        Ok(())
+    }
+
+    /// Lower one host effect (`Statement::Effect`, ADR-0006 Stage B): a direct
+    /// call to the matching [`tuo_runtime::effect`] symbol, with the `i64`
+    /// result stored into `dest`. `exit` never returns, so after its call the
+    /// block is terminated with `unreachable` (the same shape the trap path
+    /// uses) and the (dead) remainder of the MIR block is lowered into a fresh
+    /// unreachable block — LLVM's verifier does not constrain unreachable
+    /// code, and none of it ever executes. Mirrors the Cranelift backend's
+    /// `lower_effect`.
+    fn lower_effect(
+        &mut self,
+        op: EffectOp,
+        args: &[Operand],
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        match op {
+            EffectOp::Write => {
+                let [fd, text] = args else {
+                    return Err(CodegenError::backend("write expects exactly 2 operands"));
+                };
+                let fd = self.lower_operand(fd)?;
+                let (ptr, len) = self.str_operand_parts(text)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[fd.into(), ptr.into(), len.into()],
+                        "rt_write",
+                    )
+                    .map_err(builder_err("calling the write effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::ReadByte => {
+                let [fd] = args else {
+                    return Err(CodegenError::backend("read_byte expects exactly 1 operand"));
+                };
+                let fd = self.lower_operand(fd)?;
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[fd.into()], "rt_read_byte")
+                    .map_err(builder_err("calling the read_byte effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::Exit => {
+                let [code] = args else {
+                    return Err(CodegenError::backend("exit expects exactly 1 operand"));
+                };
+                let code = self.lower_operand(code)?;
+                self.builder
+                    .build_call(self.effect_function(op), &[code.into()], "")
+                    .map_err(builder_err("calling the exit effect"))?;
+                // The call never returns; `dest` is never observably written.
+                self.builder
+                    .build_unreachable()
+                    .map_err(builder_err("emitting unreachable after exit"))?;
+                let dead = self.ctx.append_basic_block(self.value, "after_exit");
+                self.builder.position_at_end(dead);
+                Ok(())
+            }
+        }
+    }
+
+    /// Declare (once per module, on demand) and return the runtime effect
+    /// symbol for `op`, mirroring how the trap symbol is imported. The CLI
+    /// links the effect C shim into every built binary, so the symbols
+    /// resolve.
+    fn effect_function(&self, op: EffectOp) -> FunctionValue<'ctx> {
+        let i64_ty = self.ctx.i64_type();
+        let (name, fn_type) = match op {
+            EffectOp::Write => (
+                effect::WRITE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), self.ptr_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::ReadByte => (
+                effect::READ_BYTE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::Exit => (
+                effect::EXIT_SYMBOL,
+                self.ctx.void_type().fn_type(&[i64_ty.into()], false),
+            ),
+        };
+        if let Some(existing) = self.module.get_function(name) {
+            return existing;
+        }
+        self.module
+            .add_function(name, fn_type, Some(Linkage::External))
+    }
+
+    /// Declare (once per module, on demand) and return the C library's
+    /// `memcmp` for `Str` equality (`int memcmp(const void *, const void *,
+    /// size_t)`), mirroring how the trap symbol is imported. The platform `cc`
+    /// link resolves it from libc on every supported host.
+    fn memcmp_function(&self) -> FunctionValue<'ctx> {
+        if let Some(existing) = self.module.get_function("memcmp") {
+            return existing;
+        }
+        let fn_type = self.ctx.i32_type().fn_type(
+            &[
+                self.ptr_ty.into(),
+                self.ptr_ty.into(),
+                self.ctx.i64_type().into(),
+            ],
+            false,
+        );
+        self.module
+            .add_function("memcmp", fn_type, Some(Linkage::External))
+    }
+
     // ----- traps -----
 
     /// If `condition` (an i1 or i8 boolean) is true, trap with `code`: branch to
@@ -1765,6 +2163,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Operand::Const(Const::Float(_, kind)) => Some(Ty::Float(*kind)),
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
+            Operand::Const(Const::Str(_)) => Some(Ty::Str),
             _ => None,
         }
     }
@@ -1857,7 +2256,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
     /// Whether an operand refers to an aggregate value: a place whose leaf type
     /// (the declared type of a bare local, or the projected leaf — e.g. a
-    /// struct-typed array element) classifies as aggregate storage.
+    /// struct-typed array element) classifies as aggregate storage, or a `Str`
+    /// literal (a two-word aggregate materialized from static data,
+    /// ADR-0006 Stage B).
     fn operand_is_aggregate(&self, operand: &Operand) -> bool {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1866,6 +2267,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     Ok(Storage::Aggregate(_))
                 )
             }
+            Operand::Const(Const::Str(_)) => true,
             _ => false,
         }
     }
@@ -1915,7 +2317,26 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 let (addr, _leaf) = self.place_address(place)?;
                 Ok(addr)
             }
-            _ => Err(CodegenError::backend(
+            // A `Str` literal (ADR-0006 Stage B): materialize its `{ptr, len}`
+            // fat pointer into a fresh temporary alloca and hand that alloca's
+            // address to the aggregate machinery, so a literal flows through
+            // copies, call arguments, and returns exactly like any aggregate
+            // place. Mirrors the Cranelift backend's temporary-slot arm.
+            Operand::Const(Const::Str(text)) => {
+                let text = text.clone();
+                let layout = self.layout(&Ty::Str)?;
+                let addr = self.alloca_aggregate(layout, usize::MAX)?;
+                let (ptr, len) = self.str_const_parts(&text)?;
+                self.builder
+                    .build_store(addr, ptr)
+                    .map_err(builder_err("storing a Str literal's data pointer"))?;
+                let len_addr = self.byte_gep(addr, STR_LEN_OFFSET)?;
+                self.builder
+                    .build_store(len_addr, len)
+                    .map_err(builder_err("storing a Str literal's length"))?;
+                Ok(addr)
+            }
+            Operand::Const(_) => Err(CodegenError::backend(
                 "aggregate address requested for a non-place operand",
             )),
         }

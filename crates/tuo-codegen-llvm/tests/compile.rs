@@ -190,15 +190,15 @@ fn main_with_local(ty: Ty) -> Program {
 
 #[test]
 fn heap_types_are_refused_at_classification_time_with_a_clean_message() {
-    // `Str`, `String`, the growable `Array[T]`, and the heap wrappers all have
-    // an ABI layout (their headers), so without the explicit gate they would
+    // `String`, the growable `Array[T]`, and the heap wrappers all have an
+    // ABI layout (their headers), so without the explicit gate they would
     // slip past classification and die later on an internal invariant error.
     // The gate must refuse them up front, naming the concrete type and the
     // road back to the interpreter — with the same wording as the Cranelift
-    // backend (bar the backend name).
+    // backend (bar the backend name). (`Str` is no longer refused: ADR-0006
+    // Stage B lowers it as an ordinary two-word aggregate.)
     use tuo_types::WrapperKind;
     for (ty, marker) in [
-        (Ty::Str, "a `Str` value"),
         (Ty::String, "a `String` value"),
         (Ty::Array(Box::new(Ty::int())), "the growable `Array[T]`"),
         (
@@ -240,15 +240,16 @@ fn heap_types_are_refused_at_classification_time_with_a_clean_message() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0006 Stage A: Effect statements and StrOp rvalues are refused (interim)
+// ADR-0006 Stage B: Effect statements, StrOp rvalues, and Str values compile
 // ---------------------------------------------------------------------------
 
 /// `fn main() -> Int { _0 = effect read_byte(const 0); return copy _0 }` —
-/// well-formed, verifiable MIR (all locals are scalars), so it reaches the
-/// statement lowering and must be *refused* there, never mis-compiled,
-/// until ADR-0006 Stage B lands the native effect lowering.
+/// well-formed, verifiable MIR. Since ADR-0006 Stage B the effect lowers to a
+/// direct call to the `tuo_rt_read_byte` runtime symbol, so the backend must
+/// *accept* it and emit an object. (End-to-end behavior — the piped byte
+/// echoing as the exit status — is pinned in `tuo-cli/tests/effects_native.rs`.)
 #[test]
-fn an_effect_statement_is_refused_until_stage_b() {
+fn an_effect_statement_now_compiles() {
     use tuo_mir::{EffectOp, Statement};
     let function = Function {
         symbol: SymbolId::from_raw(0),
@@ -274,7 +275,7 @@ fn an_effect_statement_is_refused_until_stage_b() {
         functions: vec![function],
         skipped: Vec::new(),
     };
-    let error = LlvmBackend::new()
+    let artifact = LlvmBackend::new()
         .compile(
             &program,
             &TypeckResult::default(),
@@ -282,19 +283,16 @@ fn an_effect_statement_is_refused_until_stage_b() {
             EntryAbi::IntReturn,
             &TargetSpec::host(),
         )
-        .expect_err("an effect must be refused, never mis-compiled");
-    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
-    assert!(
-        error.message.contains("std::rt::read_byte") && error.message.contains("ADR-0006 Stage B"),
-        "the refusal names the effect and the road forward: {}",
-        error.message
-    );
+        .expect("an effect statement compiles since ADR-0006 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
 }
 
-/// `_0 = str_len(const "x")` over scalar locals: reaches the rvalue lowering
-/// and must be refused there until Stage B (with `Str`'s value layout).
+/// `_0 = str_len(const "x")` over scalar locals: since ADR-0006 Stage B the
+/// literal's bytes go to static data and its length word is the result, so
+/// the backend must *accept* it and emit an object. (Execution agreement with
+/// the interpreter is pinned by the `str_*.tuo` differential fixtures.)
 #[test]
-fn a_str_op_rvalue_is_refused_until_stage_b() {
+fn a_str_op_rvalue_now_compiles() {
     use tuo_mir::{Rvalue, Statement, StrOp};
     let function = Function {
         symbol: SymbolId::from_raw(0),
@@ -322,7 +320,7 @@ fn a_str_op_rvalue_is_refused_until_stage_b() {
         functions: vec![function],
         skipped: Vec::new(),
     };
-    let error = LlvmBackend::new()
+    let artifact = LlvmBackend::new()
         .compile(
             &program,
             &TypeckResult::default(),
@@ -330,11 +328,62 @@ fn a_str_op_rvalue_is_refused_until_stage_b() {
             EntryAbi::IntReturn,
             &TargetSpec::host(),
         )
-        .expect_err("a string op must be refused, never mis-compiled");
-    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
-    assert!(
-        error.message.contains("std::str::len") && error.message.contains("ADR-0006 Stage B"),
-        "the refusal names the operation and the road forward: {}",
-        error.message
-    );
+        .expect("a string operation compiles since ADR-0006 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
+}
+
+/// A `Str` local — the two-word `{ptr, len}` fat-pointer aggregate — now
+/// classifies as ordinary aggregate storage: assigning a literal to it and
+/// taking its length compiles. (`String` and friends stay refused above.)
+#[test]
+fn a_str_local_now_compiles() {
+    use tuo_mir::{Rvalue, Statement, StrOp};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::Str,
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                Statement::Assign {
+                    place: Place::local(tuo_mir::LocalId(1)),
+                    rvalue: Rvalue::Use(Operand::Const(Const::Str("hé".to_owned()))),
+                },
+                Statement::Assign {
+                    place: Place::local(tuo_mir::LocalId(0)),
+                    rvalue: Rvalue::StrOp {
+                        op: StrOp::Len,
+                        args: vec![Operand::Copy(Place::local(tuo_mir::LocalId(1)))],
+                    },
+                },
+            ],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    LlvmBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("a Str local compiles since ADR-0006 Stage B");
 }

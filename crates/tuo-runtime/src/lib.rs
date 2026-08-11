@@ -30,13 +30,19 @@
 //!   ([`alloc::ALLOC_SYMBOL`], [`alloc::DEALLOC_SYMBOL`]) through which every
 //!   heap allocation (`Box`, `Shared`, `String`, `Array`) flows, so the
 //!   allocator is one swappable seam.
+//! - **The effect boundary** ([`effect`], ADR-0006 Stage B) — the three C-ABI
+//!   symbols ([`effect::WRITE_SYMBOL`], [`effect::READ_BYTE_SYMBOL`],
+//!   [`effect::EXIT_SYMBOL`]) through which every host effect (the `std::rt`
+//!   builtins, MIR `Statement::Effect`) flows, so the effect boundary is one
+//!   inspectable seam.
 //!
 //! # How it reaches a generated binary
 //!
 //! The runtime's C-ABI symbols must be present in the final executable, but the
 //! runtime is a Rust library, not something a generated object links to
-//! directly. So this crate exposes its trap and its allocator as portable **C
-//! source** ([`trap_runtime_c_source`], [`alloc::alloc_runtime_c_source`]) that
+//! directly. So this crate exposes its trap, its allocator, and its effect
+//! boundary as portable **C source** ([`trap_runtime_c_source`],
+//! [`alloc::alloc_runtime_c_source`], [`effect::effect_runtime_c_source`]) that
 //! the build driver compiles and links alongside the backend's object. Keeping
 //! them as C (a) needs no Rust-runtime machinery in the target binary and (b)
 //! makes the ABI contract between backend and runtime explicit and
@@ -49,6 +55,7 @@
 
 pub mod abi;
 pub mod alloc;
+pub mod effect;
 
 use std::process::abort;
 

@@ -35,13 +35,32 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is heap-backed (`Str`, `String`, the growable
-//! `Array[T]`, `Box`/`Shared`/`Weak`) still makes the whole function
-//! unsupported. Aggregate lowering follows ADR-0004: scalar leaves,
-//! by-pointer/sret call ABI. Fixed arrays are laid out inline — element `i` at
-//! `i × stride(T)` — and indexed by unchecked address arithmetic, because MIR
-//! asserts the bounds (`Assert { IndexOutOfBounds }`) before every
-//! `Projection::Index` use.
+//! A local whose type is heap-**owning** (`String`, the growable `Array[T]`,
+//! `Box`/`Shared`/`Weak`) still makes the whole function unsupported (they
+//! await the allocator ADR). Aggregate lowering follows ADR-0004: scalar
+//! leaves, by-pointer/sret call ABI. Fixed arrays are laid out inline —
+//! element `i` at `i × stride(T)` — and indexed by unchecked address
+//! arithmetic, because MIR asserts the bounds (`Assert { IndexOutOfBounds }`)
+//! before every `Projection::Index` use.
+//!
+//! # Strings and effects (ADR-0006 Stage B)
+//!
+//! A `Str` is an ordinary two-word aggregate — the `{u8 *ptr, usize len}` fat
+//! pointer of `specification/abi.md` ("Slices"), laid out by
+//! [`tuo_runtime::abi::layout_of`] — and flows through the existing aggregate
+//! machinery unchanged: stack slots, memcpy moves, by-pointer `take`
+//! parameters, sret returns, borrow-mode pointers. A `Const::Str`'s bytes are
+//! emitted once per module into read-only static data (identical literals
+//! deduplicated) and the constant materializes as `{data address, len}`; an
+//! empty literal carries `len = 0` and a fixed non-null pointer that is never
+//! dereferenced. `Str` equality is byte-wise (lengths equal AND bytes equal,
+//! via the C library's `memcmp` when the lengths match), the `std::str` byte
+//! operations ([`Rvalue::StrOp`]) trap `IndexOutOfBounds` exactly as the
+//! interpreter's `eval_str_op` does, and a host effect
+//! ([`Statement::Effect`]) is a direct call to the matching
+//! [`tuo_runtime::effect`] symbol (`tuo_rt_write`/`tuo_rt_read_byte`/
+//! `tuo_rt_exit` — the last never returns, so the block is terminated with
+//! the same unreachable shape the trap path uses).
 //!
 //! # Borrow-mode calling convention
 //!
@@ -70,21 +89,28 @@ use cranelift_codegen::ir::{
 };
 use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variable};
-use cranelift_module::{FuncId, Linkage, Module};
+use cranelift_module::{DataDescription, DataId, FuncId, Linkage, Module};
 use cranelift_object::ObjectModule;
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, Function, Operand, PassMode, Place, Program, Projection, Rvalue,
-    Statement, Terminator, Trap, UnOp,
+    BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
+    Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
-use tuo_runtime::abi::{Layout, layout_of, struct_field_offsets, variant_field_offsets};
-use tuo_runtime::{TRAP_SYMBOL, TrapCode};
+use tuo_runtime::abi::{
+    Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
+};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, effect};
 use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 use crate::{CodegenCtx, FUNCTION_LINKAGE};
+
+/// The byte offset of the `len` word inside a `Str` fat pointer — one pointer
+/// word past the data pointer (`{u8 *ptr, usize len}`, `specification/abi.md`
+/// "Slices").
+const STR_LEN_OFFSET: i32 = POINTER_SIZE as i32;
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. This is the third outcome added to the original scalar/unit
@@ -141,15 +167,16 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type is heap-backed (`Str`, `String`,
-/// the growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before
-/// any layout query, so the refusal names the concrete type) or has no v0
-/// runtime layout.
+/// [`CodegenError::unsupported`] if the type is heap-owning (`String`, the
+/// growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before any
+/// layout query, so the refusal names the concrete type) or has no v0 runtime
+/// layout. `Str` is *not* refused (ADR-0006 Stage B): it is an ordinary
+/// two-word aggregate whose bytes live in static data.
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
-    // Heap-backed types have an ABI *layout* (their headers), but the backend
-    // has no allocator or string runtime to give them meaning yet. Refuse them
-    // at classification time with a message naming the type and the road back,
-    // so they can never wander into an internal invariant error downstream.
+    // Heap-owning types have an ABI *layout* (their headers), but the backend
+    // has no allocator to give them meaning yet. Refuse them at classification
+    // time with a message naming the type and the road back, so they can never
+    // wander into an internal invariant error downstream.
     if let Some(refusal) = heap_type_refusal(ty, context) {
         return Err(CodegenError::unsupported(refusal));
     }
@@ -160,7 +187,8 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
         return Ok(Storage::Unit);
     }
     // Not scalar, not unit: it must be an aggregate with a real layout — a
-    // scalar-leaf product type (Stage 1) or a fixed array `[T; N]` (Stage 2).
+    // scalar-leaf product type (Stage 1), a fixed array `[T; N]` (Stage 2),
+    // or the `Str` fat pointer (ADR-0006 Stage B).
     match layout_of(ty, types) {
         Ok(layout) if layout.size == 0 => Ok(Storage::Unit),
         Ok(layout) => Ok(Storage::Aggregate(layout)),
@@ -170,14 +198,17 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
     }
 }
 
-/// The clean refusal message for a heap-backed type the backend does not lower
+/// The clean refusal message for a heap-owning type the backend does not lower
 /// yet, or `None` if `ty` is not one. Mirrors the LLVM backend's
 /// `heap_type_refusal` word for word (bar the backend name), so the two
-/// backends refuse the same boundary with the same explanation.
+/// backends refuse the same boundary with the same explanation. `Str` is no
+/// longer here: ADR-0006 Stage B lowers it as an ordinary two-word aggregate.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     let (what, road_back) = match ty {
-        Ty::Str => ("a `Str` value", "runtime strings await ADR-0006"),
-        Ty::String => ("a `String` value", "runtime strings await ADR-0006"),
+        Ty::String => (
+            "a `String` value",
+            "the owned `String` awaits the allocator ADR",
+        ),
         Ty::Array(_) => (
             "the growable `Array[T]`",
             "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
@@ -224,9 +255,11 @@ pub(crate) fn lower_program(
         ids.insert(function.symbol, id);
     }
 
-    // Pass 2: define each body.
+    // Pass 2: define each body. The string-literal data pool is shared across
+    // bodies so identical literals dedupe to one static data object per module.
     let mut ctx = CodegenCtx::new(module);
     let mut builder_ctx = FunctionBuilderContext::new();
+    let mut str_data: HashMap<Vec<u8>, DataId> = HashMap::new();
     for function in &program.functions {
         define_function(
             module,
@@ -236,6 +269,7 @@ pub(crate) fn lower_program(
             function,
             &program.functions,
             types,
+            &mut str_data,
         )?;
     }
     Ok(ids)
@@ -314,6 +348,11 @@ fn require_scalar(ty: &Ty, context: &str) -> Result<Type, CodegenError> {
 }
 
 /// Define one function body.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a private plumbing seam between `lower_program` and `Lowering::new`; bundling \
+              these into a context struct would only move the argument list"
+)]
 fn define_function(
     module: &mut ObjectModule,
     ctx: &mut CodegenCtx,
@@ -322,6 +361,7 @@ fn define_function(
     function: &Function,
     functions: &[Function],
     types: &TypeckResult,
+    str_data: &mut HashMap<Vec<u8>, DataId>,
 ) -> Result<(), CodegenError> {
     let signature = function_signature(module, function, types)?;
     let self_id = ids[&function.symbol];
@@ -335,6 +375,7 @@ fn define_function(
         function,
         functions,
         types,
+        str_data,
     )?;
     lowering.run()?;
     lowering.finish();
@@ -365,9 +406,18 @@ struct Lowering<'a> {
     /// How each MIR local is stored (index = local id): scalar variable, unit,
     /// or aggregate stack slot. Filled during `run` once the builder exists.
     kinds: Vec<LocalKind>,
+    /// The module's string-literal data pool: the static data object emitted
+    /// for each distinct literal's bytes, shared across function bodies so
+    /// identical literals dedupe (ADR-0006 Stage B).
+    str_data: &'a mut HashMap<Vec<u8>, DataId>,
 }
 
 impl<'a> Lowering<'a> {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a private plumbing seam mirroring `define_function`; bundling these into a \
+                  context struct would only move the argument list"
+    )]
     fn new(
         module: &'a mut ObjectModule,
         context: &'a mut cranelift_codegen::Context,
@@ -376,6 +426,7 @@ impl<'a> Lowering<'a> {
         function: &'a Function,
         functions: &'a [Function],
         types: &'a TypeckResult,
+        str_data: &'a mut HashMap<Vec<u8>, DataId>,
     ) -> Result<Self, CodegenError> {
         // Classify every local up front so an unsupported (Stage-2) type fails
         // before any IR is built. The concrete slots/variables are created in
@@ -398,6 +449,7 @@ impl<'a> Lowering<'a> {
             frontend_config,
             blocks: Vec::new(),
             kinds: Vec::new(),
+            str_data,
         })
     }
 
@@ -577,16 +629,10 @@ impl<'a> Lowering<'a> {
         match statement {
             Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
             Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
-            // A host effect (`std::rt`, ADR-0006) is refused, never
-            // mis-compiled: its native lowering (the `tuo_rt_write`/
-            // `tuo_rt_read_byte`/`tuo_rt_exit` runtime symbols) lands with
-            // ADR-0006 Stage B. Until then the interpreter is the reference
-            // for the pure core and effectful programs cannot be built.
-            Statement::Effect { op, .. } => Err(CodegenError::unsupported(format!(
-                "the `std::rt::{}` effect is not lowered by the Cranelift backend yet; \
-                 its native lowering lands with ADR-0006 Stage B",
-                op.name()
-            ))),
+            // A host effect (`std::rt`, ADR-0006 Stage B): a direct call to
+            // the matching `tuo_runtime::effect` symbol, which the CLI links
+            // into every built binary alongside the trap shim.
+            Statement::Effect { op, args, dest } => self.lower_effect(*op, args, dest),
             Statement::Drop { .. } => {
                 // v0 supported values own no host resource; a Stage-1 aggregate
                 // owns no heap (scalar fields only), so its drop is a no-op too,
@@ -604,6 +650,13 @@ impl<'a> Lowering<'a> {
     fn lower_assign(&mut self, place: &Place, rvalue: &Rvalue) -> Result<(), CodegenError> {
         match rvalue {
             Rvalue::Aggregate { kind, fields } => self.lower_aggregate(place, kind, fields),
+            // `slice` yields a `Str` (a two-word aggregate), so it is
+            // materialized in place into the destination's byte storage rather
+            // than through the scalar rvalue path (ADR-0006 Stage B).
+            Rvalue::StrOp {
+                op: StrOp::Slice,
+                args,
+            } => self.lower_str_slice(place, args),
             // A unit-valued copy/move (a unit local, or a zero-sized aggregate
             // such as `[T; 0]`) carries no bytes: nothing to emit.
             Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
@@ -894,6 +947,12 @@ impl<'a> Lowering<'a> {
                 self.lower_unary(*op, operand, value)
             }
             Rvalue::Binary { op, lhs, rhs } => {
+                // `Str` operands take their own byte-wise equality path (the
+                // type checker forbids ordering on `Str`, so only `Eq`/`Ne`
+                // can reach here — ADR-0006 Stage B).
+                if matches!(self.operand_ty(lhs), Some(Ty::Str)) {
+                    return self.lower_str_equality(*op, lhs, rhs);
+                }
                 let l = self.lower_operand(lhs)?;
                 let r = self.lower_operand(rhs)?;
                 self.lower_binary(*op, lhs, l, r)
@@ -914,14 +973,24 @@ impl<'a> Lowering<'a> {
                 "the growable `Array[T]` (and its `Len`) is not lowered by the Cranelift \
                  backend yet",
             )),
-            // The `std::str` byte operations (ADR-0006) are refused, never
-            // mis-compiled: their native lowering lands with ADR-0006
-            // Stage B, together with `Str`'s `{ptr, len}` value layout.
-            Rvalue::StrOp { op, .. } => Err(CodegenError::unsupported(format!(
-                "the `std::str::{}` string operation is not lowered by the Cranelift backend \
-                 yet; its native lowering lands with ADR-0006 Stage B",
-                op.name()
-            ))),
+            // The scalar-valued `std::str` byte operations (ADR-0006 Stage B).
+            // `slice` yields a `Str` aggregate and is handled by
+            // `lower_assign`; reaching it here is a lowering fault.
+            Rvalue::StrOp { op, args } => match op {
+                StrOp::Len => {
+                    let s = args
+                        .first()
+                        .ok_or_else(|| CodegenError::backend("str len is missing its operand"))?;
+                    // The fat pointer's `len` word IS the result (`I64`).
+                    let (_ptr, len) = self.str_operand_parts(s)?;
+                    Ok(len)
+                }
+                StrOp::ByteAt => self.lower_str_byte_at(args),
+                StrOp::Slice => Err(CodegenError::backend(
+                    "Str slice reached the scalar rvalue path (it is materialized by \
+                     `lower_assign`)",
+                )),
+            },
         }
     }
 
@@ -954,13 +1023,12 @@ impl<'a> Lowering<'a> {
             Const::Unit => Err(CodegenError::unsupported(
                 "a unit constant has no scalar representation to place in a value context",
             )),
-            // Unreachable for locals/fields of type `Str` (classification
-            // refuses those up front); kept for a bare `Str` literal in an
-            // operand position.
-            Const::Str(_) => Err(CodegenError::unsupported(
-                "a `Str` string constant is not lowered by the Cranelift backend yet (runtime \
-                 strings await ADR-0006); the interpreter (`tuo spec`/`tuo verify`) remains the \
-                 reference",
+            // A `Str` constant is a two-word aggregate, materialized through
+            // the aggregate/static-data machinery (`operand_aggregate_address`,
+            // `str_operand_parts`); it never has a single-scalar value.
+            Const::Str(_) => Err(CodegenError::backend(
+                "a `Str` constant reached the scalar constant path (it is materialized via \
+                 static data by the aggregate machinery)",
             )),
         }
     }
@@ -1617,6 +1685,287 @@ impl<'a> Lowering<'a> {
         Ok(self.builder.ins().uextend(types::I64, tag))
     }
 
+    // ----- strings & effects (ADR-0006 Stage B) -----
+
+    /// The static data object holding a string literal's bytes, deduplicated
+    /// per module (keyed by the emitted contents). An empty literal still gets
+    /// a real one-byte data object so its address is a fixed, non-null,
+    /// aligned pointer — never dereferenced, because its `len` is 0.
+    fn str_const_data(&mut self, text: &str) -> Result<DataId, CodegenError> {
+        let contents: Vec<u8> = if text.is_empty() {
+            vec![0]
+        } else {
+            text.as_bytes().to_vec()
+        };
+        if let Some(&id) = self.str_data.get(&contents) {
+            return Ok(id);
+        }
+        let id = self
+            .module
+            .declare_anonymous_data(false, false)
+            .map_err(|error| CodegenError::backend(format!("declaring string data: {error}")))?;
+        let mut description = DataDescription::new();
+        description.define(contents.clone().into_boxed_slice());
+        description.set_align(1);
+        self.module
+            .define_data(id, &description)
+            .map_err(|error| CodegenError::backend(format!("defining string data: {error}")))?;
+        self.str_data.insert(contents, id);
+        Ok(id)
+    }
+
+    /// The `{ptr, len}` pair of a `Str` literal: the address of its static
+    /// data and its byte length as an `I64` constant.
+    fn str_const_parts(&mut self, text: &str) -> Result<(ClifValue, ClifValue), CodegenError> {
+        let data_id = self.str_const_data(text)?;
+        let sym = self.module.declare_data_in_func(data_id, self.builder.func);
+        let ptr = self.builder.ins().symbol_value(self.pointer_type, sym);
+        let len = i64::try_from(text.len())
+            .map_err(|_| CodegenError::backend("string literal longer than i64::MAX bytes"))?;
+        let len = self.builder.ins().iconst(types::I64, len);
+        Ok((ptr, len))
+    }
+
+    /// The `{ptr, len}` fat-pointer fields of a `Str`-typed operand: a literal
+    /// yields its static data address and constant length directly; a place
+    /// loads the two words from its aggregate storage (the shared address
+    /// machinery).
+    fn str_operand_parts(
+        &mut self,
+        operand: &Operand,
+    ) -> Result<(ClifValue, ClifValue), CodegenError> {
+        if let Operand::Const(Const::Str(text)) = operand {
+            let text = text.clone();
+            return self.str_const_parts(&text);
+        }
+        let addr = self.operand_aggregate_address(operand)?;
+        let ptr = self
+            .builder
+            .ins()
+            .load(self.pointer_type, MemFlags::trusted(), addr, 0);
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), addr, STR_LEN_OFFSET);
+        Ok((ptr, len))
+    }
+
+    /// Lower `Eq`/`Ne` on `Str` operands: byte-wise equality, exactly as the
+    /// interpreter compares its byte buffers — lengths equal AND bytes equal.
+    /// The byte compare (the C library's `memcmp`, imported like `fmod`) runs
+    /// only when the lengths match, so comparing `len_a` bytes of both sides
+    /// is always in bounds; a zero-length pair is equal without dereferencing
+    /// (`memcmp` with a zero count reads nothing). The type checker forbids
+    /// ordering on `Str`, so no other operator can reach here.
+    fn lower_str_equality(
+        &mut self,
+        op: BinOp,
+        lhs: &Operand,
+        rhs: &Operand,
+    ) -> Result<ClifValue, CodegenError> {
+        if !matches!(op, BinOp::Eq | BinOp::Ne) {
+            return Err(CodegenError::backend(
+                "a non-equality comparison on `Str` operands (the type checker forbids \
+                 ordering on `Str`)",
+            ));
+        }
+        let (ptr_a, len_a) = self.str_operand_parts(lhs)?;
+        let (ptr_b, len_b) = self.str_operand_parts(rhs)?;
+
+        // join(i8): the equality verdict — false from the length mismatch
+        // edge, the memcmp verdict from the byte-compare edge.
+        let join = self.builder.create_block();
+        self.builder.append_block_param(join, types::I8);
+        let cmp_block = self.builder.create_block();
+
+        let lens_eq = self.builder.ins().icmp(IntCC::Equal, len_a, len_b);
+        let false_value = self.builder.ins().iconst(types::I8, 0);
+        self.builder
+            .ins()
+            .brif(lens_eq, cmp_block, &[], join, &[false_value.into()]);
+
+        self.builder.switch_to_block(cmp_block);
+        self.builder.seal_block(cmp_block);
+        let func_ref = self.memcmp_func_ref();
+        let call = self.builder.ins().call(func_ref, &[ptr_a, ptr_b, len_a]);
+        let verdict = self.builder.inst_results(call)[0];
+        let zero = self.builder.ins().iconst(types::I32, 0);
+        let bytes_eq = self.builder.ins().icmp(IntCC::Equal, verdict, zero);
+        self.builder.ins().jump(join, &[bytes_eq.into()]);
+
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        let eq = self.builder.block_params(join)[0];
+        Ok(match op {
+            BinOp::Ne => self.builder.ins().bxor_imm(eq, 1),
+            _ => eq,
+        })
+    }
+
+    /// Lower `byte_at(s, index)`: a deterministic `IndexOutOfBounds` trap
+    /// unless `0 <= index < len(s)` (`specification/mir.md` §5.6, exactly the
+    /// interpreter's `eval_str_op`), then load the byte at `ptr + index` and
+    /// zero-extend it to the `I64` the destination expects. One unsigned
+    /// compare implements both bounds: a negative index reinterprets as a
+    /// huge unsigned value, and `len` is never negative.
+    fn lower_str_byte_at(&mut self, args: &[Operand]) -> Result<ClifValue, CodegenError> {
+        let [s, index] = args else {
+            return Err(CodegenError::backend("byte_at expects exactly 2 operands"));
+        };
+        let (ptr, len) = self.str_operand_parts(s)?;
+        let index = self.lower_operand(index)?;
+        let oob = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        self.guard(oob, TrapCode::IndexOutOfBounds);
+        let addr = self.builder.ins().iadd(ptr, index);
+        let byte = self
+            .builder
+            .ins()
+            .load(types::I8, MemFlags::trusted(), addr, 0);
+        Ok(self.builder.ins().uextend(types::I64, byte))
+    }
+
+    /// Lower `dest = slice(s, start, end)`: a deterministic `IndexOutOfBounds`
+    /// trap unless `0 <= start <= end <= len(s)` (`specification/mir.md`
+    /// §5.6), then write the derived fat pointer `{ptr + start, end - start}`
+    /// into the destination's aggregate storage. Two unsigned compares cover
+    /// all four bounds: `start >u end` catches `start > end` and a negative
+    /// `start`; `end >u len` catches `end > len` and a negative `end`. The
+    /// source's words are loaded before the destination is written, so
+    /// `s = slice(s, ..)` re-slicing in place is sound.
+    fn lower_str_slice(&mut self, dest: &Place, args: &[Operand]) -> Result<(), CodegenError> {
+        let [s, start, end] = args else {
+            return Err(CodegenError::backend("slice expects exactly 3 operands"));
+        };
+        let (ptr, len) = self.str_operand_parts(s)?;
+        let start = self.lower_operand(start)?;
+        let end = self.lower_operand(end)?;
+        let bad_order = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThan, start, end);
+        self.guard(bad_order, TrapCode::IndexOutOfBounds);
+        let bad_end = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThan, end, len);
+        self.guard(bad_end, TrapCode::IndexOutOfBounds);
+
+        let new_ptr = self.builder.ins().iadd(ptr, start);
+        let new_len = self.builder.ins().isub(end, start);
+        let base = self.aggregate_dest_address(dest)?;
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), new_ptr, base, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), new_len, base, STR_LEN_OFFSET);
+        Ok(())
+    }
+
+    /// Lower one host effect (`Statement::Effect`, ADR-0006 Stage B): a direct
+    /// call to the matching [`tuo_runtime::effect`] symbol, with the `I64`
+    /// result stored into `dest`. `exit` never returns, so after its call the
+    /// block is terminated with the same unreachable shape the trap path uses,
+    /// and the (dead) remainder of the MIR block is lowered into a fresh
+    /// unreachable block — cranelift-frontend fills variable uses there with
+    /// placeholder zeros, and none of it ever executes.
+    fn lower_effect(
+        &mut self,
+        op: EffectOp,
+        args: &[Operand],
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        match op {
+            EffectOp::Write => {
+                let [fd, text] = args else {
+                    return Err(CodegenError::backend("write expects exactly 2 operands"));
+                };
+                let fd = self.lower_operand(fd)?;
+                let (ptr, len) = self.str_operand_parts(text)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[fd, ptr, len]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::ReadByte => {
+                let [fd] = args else {
+                    return Err(CodegenError::backend("read_byte expects exactly 1 operand"));
+                };
+                let fd = self.lower_operand(fd)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[fd]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::Exit => {
+                let [code] = args else {
+                    return Err(CodegenError::backend("exit expects exactly 1 operand"));
+                };
+                let code = self.lower_operand(code)?;
+                let func_ref = self.effect_func_ref(op);
+                self.builder.ins().call(func_ref, &[code]);
+                // The call never returns; `dest` is never observably written.
+                self.builder
+                    .ins()
+                    .trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                let dead = self.builder.create_block();
+                self.builder.switch_to_block(dead);
+                self.builder.seal_block(dead);
+                Ok(())
+            }
+        }
+    }
+
+    /// Declare (on demand) and reference the runtime effect symbol for `op`,
+    /// mirroring how the trap and `fmod` symbols are imported. The CLI links
+    /// the effect C shim into every built binary, so the symbols resolve.
+    fn effect_func_ref(&mut self, op: EffectOp) -> cranelift_codegen::ir::FuncRef {
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        let name = match op {
+            EffectOp::Write => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::WRITE_SYMBOL
+            }
+            EffectOp::ReadByte => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::READ_BYTE_SYMBOL
+            }
+            EffectOp::Exit => {
+                signature.params.push(AbiParam::new(types::I64));
+                effect::EXIT_SYMBOL
+            }
+        };
+        let id = self
+            .module
+            .declare_function(name, Linkage::Import, &signature)
+            .expect("declaring an effect runtime symbol");
+        self.module.declare_func_in_func(id, self.builder.func)
+    }
+
+    /// Declare (on demand) and reference the C library's `memcmp` for `Str`
+    /// equality, mirroring how `fmod` is imported (`int memcmp(const void *,
+    /// const void *, size_t)`). The platform `cc` link resolves it from libc
+    /// on every supported host.
+    fn memcmp_func_ref(&mut self) -> cranelift_codegen::ir::FuncRef {
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        signature.params.push(AbiParam::new(self.pointer_type));
+        signature.params.push(AbiParam::new(self.pointer_type));
+        signature.params.push(AbiParam::new(types::I64));
+        signature.returns.push(AbiParam::new(types::I32));
+        let id = self
+            .module
+            .declare_function("memcmp", Linkage::Import, &signature)
+            .expect("declaring the libc memcmp symbol");
+        self.module.declare_func_in_func(id, self.builder.func)
+    }
+
     // ----- traps -----
 
     /// If `condition` is true, trap with `code`: branch to a fresh trap block
@@ -1689,6 +2038,7 @@ impl<'a> Lowering<'a> {
             Operand::Const(Const::Float(_, kind)) => Some(Ty::Float(*kind)),
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
+            Operand::Const(Const::Str(_)) => Some(Ty::Str),
             _ => None,
         }
     }
@@ -1781,7 +2131,9 @@ impl<'a> Lowering<'a> {
 
     /// Whether an operand refers to an aggregate value: a place whose leaf type
     /// (the declared type of a bare local, or the projected leaf — e.g. a
-    /// struct-typed array element) classifies as aggregate storage.
+    /// struct-typed array element) classifies as aggregate storage, or a `Str`
+    /// literal (a two-word aggregate materialized from static data,
+    /// ADR-0006 Stage B).
     fn operand_is_aggregate(&self, operand: &Operand) -> bool {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -1790,6 +2142,7 @@ impl<'a> Lowering<'a> {
                     Ok(Storage::Aggregate(_))
                 )
             }
+            Operand::Const(Const::Str(_)) => true,
             _ => false,
         }
     }
@@ -1838,7 +2191,24 @@ impl<'a> Lowering<'a> {
                 let (addr, _leaf) = self.place_address(place)?;
                 Ok(addr)
             }
-            _ => Err(CodegenError::backend(
+            // A `Str` literal (ADR-0006 Stage B): materialize its `{ptr, len}`
+            // fat pointer into a fresh temporary slot and hand that slot's
+            // address to the aggregate machinery, so a literal flows through
+            // copies, call arguments, and returns exactly like any aggregate
+            // place.
+            Operand::Const(Const::Str(text)) => {
+                let text = text.clone();
+                let layout = self.layout(&Ty::Str)?;
+                let slot = self.new_temp_slot(layout)?;
+                let addr = self.builder.ins().stack_addr(self.pointer_type, slot, 0);
+                let (ptr, len) = self.str_const_parts(&text)?;
+                self.builder.ins().store(MemFlags::trusted(), ptr, addr, 0);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), len, addr, STR_LEN_OFFSET);
+                Ok(addr)
+            }
+            Operand::Const(_) => Err(CodegenError::backend(
                 "aggregate address requested for a non-place operand",
             )),
         }

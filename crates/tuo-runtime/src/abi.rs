@@ -29,7 +29,7 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 
 /// The version of the runtime ABI these layouts implement.
 ///
-/// `2` — unstable. Any change to a layout, offset, discriminant numbering,
+/// `3` — unstable. Any change to a layout, offset, discriminant numbering,
 /// calling-convention rule, or runtime-symbol meaning **must** increment this
 /// in the same commit that updates the tests pinning the affected layout.
 /// Additive, non-layout-affecting clarifications do not bump it.
@@ -42,7 +42,11 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `2` — adds the inline `[T; N]` fixed-size array layout
 /// (`size = N × stride(T)`, `align = align(T)`, element `i` at
 /// `i × stride(T)`); no existing layout changed. (ADR-0004 Stage 2.)
-pub const ABI_VERSION: u32 = 2;
+///
+/// `3` — adds the effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
+/// `tuo_rt_exit`; see [`crate::effect`]); no layout changed. (ADR-0006
+/// Stage B.)
+pub const ABI_VERSION: u32 = 3;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -437,10 +441,11 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_two() {
+    fn the_abi_is_version_three() {
         // A deliberate tripwire: bump this in the same commit that changes a
-        // layout, never silently.
-        assert_eq!(ABI_VERSION, 2);
+        // layout (or, as with the ADR-0006 effect symbols, the runtime
+        // surface), never silently.
+        assert_eq!(ABI_VERSION, 3);
     }
 
     #[test]

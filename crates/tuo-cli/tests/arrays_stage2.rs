@@ -245,13 +245,13 @@ fn borrow_mode_parameters_now_run_natively() {
 
 #[test]
 fn native_backends_still_refuse_the_unsupported_loudly() {
-    // Heap-backed types stay outside the native subset: the program checks
-    // clean and runs on the interpreter, and both backends refuse it loudly
-    // at classification time — naming the concrete type — instead of
-    // mis-compiling it.
+    // Heap-owning types stay outside the native subset (`Str` itself is
+    // lowered since ADR-0006 Stage B): the program checks clean, and both
+    // backends refuse it loudly at classification time — naming the concrete
+    // type — instead of mis-compiling it.
     let path = write(
         "heap.tuo",
-        "fn tag_len(take s: Str) -> Int {\n    1\n}\n\nfn main() -> Int {\n    tag_len(\"hi\")\n}\n",
+        "fn keep(take s: String) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
     );
     let check = run(&["check", &path]);
     assert!(check.status.success(), "the front end accepts: {check:?}");
@@ -267,7 +267,7 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         );
         let stderr = String::from_utf8(build.stderr).expect("utf-8");
         assert!(
-            stderr.contains("`Str` value") && stderr.contains("does not lower yet"),
+            stderr.contains("`String` value") && stderr.contains("does not lower yet"),
             "the refusal names the unsupported type: {stderr}"
         );
         assert!(

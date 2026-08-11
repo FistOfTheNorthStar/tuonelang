@@ -1,0 +1,11 @@
+fn main() -> Int {
+    let s = "hello";
+    let mid = std::str::slice(s, 1, 4);
+    var total = 0;
+    var i = 0;
+    while i < std::str::len(mid) {
+        total = total + std::str::byte_at(mid, i);
+        i = i + 1;
+    }
+    total
+}

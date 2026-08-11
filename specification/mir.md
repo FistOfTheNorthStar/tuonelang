@@ -209,8 +209,9 @@ statement is unreachable by construction; an interpreter that is nevertheless
 asked to execute one reports it as an **internal error**
 (`TrapKind::Internal`, §8) — the same family as its other impossible-state
 signals — never a silent no-op and never a real effect. Effectful programs run
-natively (`tuo run`) once ADR-0006 Stage B lands the lowering; until then both
-backends **refuse** (never mis-compile) an `Effect`.
+**natively** (`tuo run`): since ADR-0006 Stage B both backends lower an
+`Effect` to a direct call to the matching runtime symbol (`tuo_rt_write`/
+`tuo_rt_read_byte`/`tuo_rt_exit`, `abi.md` "Effect symbols").
 
 ---
 
@@ -315,9 +316,10 @@ documented v0 contract (ADR-0006 amendments). `Str` equality (`Eq`/`Ne`, §5.3)
 remains byte-wise, `Len` counts bytes, and a sliced value slices bytes, so the
 three operations and equality are mutually consistent on any value they can
 produce. The corresponding surface builtins are `std::str::len`, `byte_at`,
-and `slice` (`static-semantics.md` §3.6); the native lowering lands with
-ADR-0006 Stage B, and until it does both backends **refuse** (never
-mis-compile) a `StrOp`.
+and `slice` (`static-semantics.md` §3.6); since ADR-0006 Stage B both
+backends lower a `StrOp` natively over the `{ptr, len}` fat pointer
+(`abi.md` "Slices"), with the same deterministic traps, pinned by the
+`str_*.tuo` fixtures in the differential suites.
 
 ---
 

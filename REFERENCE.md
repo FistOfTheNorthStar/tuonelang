@@ -9,10 +9,11 @@ compiler actually accepts and executes — nothing aspirational.
 > accepts the full v0 language. The *runnable core* — what `tuo spec`, `tuo run`,
 > and `tuo build` execute — is pure integer computation: scalars, structs, enums,
 > `Option`/`Result`, fixed `[T; N]` arrays, `for`/`while`/`match`, calls and
-> recursion, floats, and borrow-mode (`in`/`mut`) calls. Strings run in the
-> *interpreter* (`spec`/`verify`) but are not yet compiled *natively*; I/O,
-> concurrency, and first-class functions are tracked ADRs (0006/0007/0008) and
-> are not in v0.
+> recursion, floats, borrow-mode (`in`/`mut`) calls, `Str` values with the
+> `std::str` byte operations, and the `std::rt` host effects
+> (`write`/`read_byte`/`exit` — native only; the spec sandbox stays pure).
+> Concurrency and first-class functions are tracked ADRs (0007/0008) and are
+> not in v0.
 > Anything outside the core is **refused with a clear error, never mis-compiled**.
 
 ---
@@ -53,8 +54,10 @@ spec add {
 
 The entry point is `fn main() -> Int` — **nullary, returning an integer**. Its
 return value becomes the process exit status, truncated to a byte (`& 0xff`).
-There is no `println` at runtime in v0 (effects await ADR-0006), so the exit
-code and spec verdicts are how a program communicates.
+A natively-compiled program can also write real output:
+`std::rt::write(1, "hello\n")` prints to stdout (ADR-0006). Specs stay pure —
+inside the spec sandbox the exit value and verdicts are how a program
+communicates.
 
 ---
 
@@ -90,7 +93,7 @@ type names and unusable as binding names.
 | Float | `1.0`, `0.5`, `2.0e3`, `1.5f32` | `1.` and `.5` are **not** floats. |
 | Bool | `true`, `false` | |
 | Char | `'a'`, `'\n'`, `'\u{1F600}'` | Escapes: `\" \' \\ \n \r \t \0 \u{HEX}` |
-| String | `"hello"` | One canonical form. No raw strings, no interpolation. (Runs in specs/the interpreter; not yet compiled natively.) |
+| String | `"hello"` | One canonical form. No raw strings, no interpolation. (A literal is a `Str`; runs everywhere, natively as a `{ptr, len}` view of static data.) |
 | Unit | `()` | |
 
 ---
@@ -551,10 +554,11 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | `[T; N]` arrays, literals, checked indexing, `for` over arrays | ✅ | ✅ | ✅ |
 | Borrow-mode (`in`/`mut`) calls | ✅ | ✅ | ✅ |
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
-| `Str` / `String` values (literals, `==`, `if`/`match` over them) | ✅ | ✅ | ❌ refused |
-| Growable `Array[T]`, `Box`/`Shared`/`Weak` heap values | declared | ❌ | ❌ refused |
+| `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
+| `std::rt::write`/`read_byte`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Owned `String`, growable `Array[T]`, `Box`/`Shared`/`Weak` heap values | declared | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
-| I/O, filesystem, clock, processes, threads | contract sigs only | ❌ (sandbox) | ❌ |
+| Filesystem, clock, processes, threads | contract sigs only | ❌ (sandbox) | ❌ |
 
 "Refused" means a clear `Unsupported` error naming the construct, pointing you
 back to the interpreter as the reference — never silent mis-compilation.
