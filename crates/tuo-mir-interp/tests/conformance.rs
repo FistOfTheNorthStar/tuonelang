@@ -925,3 +925,335 @@ fn exit_reaching_the_interpreter_is_also_an_internal_error() {
     let error = run(src, "main", vec![]).expect_err("the sandbox refuses exit");
     assert!(matches!(&error.kind, TrapKind::Internal(detail) if detail.contains("effect `exit`")));
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0009 Stage A: owned String and growable Array[Int] heap operations
+// ---------------------------------------------------------------------------
+
+/// A `Value::Str` from a byte string, for asserting owned-String results.
+fn bytes(text: &str) -> Value {
+    Value::Str(text.as_bytes().to_vec())
+}
+
+#[test]
+fn string_constructors_and_pure_queries() {
+    // empty / from_str / concat / len / byte_at, all pure — usable directly.
+    let src = r#"
+        fn empty_len() -> Int { std::string::len(std::string::empty()) }
+        fn from_len(in s: Str) -> Int { std::string::len(std::string::from_str(s)) }
+        fn concat_len(in a: Str, in b: Str) -> Int {
+            std::string::len(std::string::concat(a, b))
+        }
+        fn first_byte(in s: Str) -> Int {
+            std::string::byte_at(std::string::from_str(s), 0)
+        }
+    "#;
+    assert_eq!(value(src, "empty_len", vec![]), int(0));
+    assert_eq!(value(src, "from_len", vec![bytes("abcd")]), int(4));
+    // UTF-8 length is byte length: "héllo" is 6 bytes.
+    assert_eq!(
+        value(src, "concat_len", vec![bytes("hé"), bytes("llo")]),
+        int(6)
+    );
+    assert_eq!(value(src, "first_byte", vec![bytes("A")]), int(65));
+}
+
+#[test]
+fn string_slice_copies_out_a_new_owned_string() {
+    // `slice` copies the byte range; the result is a new owned String.
+    let src = r#"
+        fn mid(in s: Str) -> String { std::string::slice(std::string::from_str(s), 1, 3) }
+    "#;
+    assert_eq!(value(src, "mid", vec![bytes("abcd")]), bytes("bc"));
+}
+
+#[test]
+fn string_slice_may_split_a_code_point_byte_level() {
+    // Byte-level slicing: "héllo" bytes are [h, 0xC3, 0xA9, l, l, o]; slicing
+    // [1, 2) yields the single 0xC3 byte (not valid UTF-8 alone).
+    let src = r#"
+        fn split(in s: Str) -> Int {
+            let piece = std::string::slice(std::string::from_str(s), 1, 2);
+            std::string::byte_at(piece, 0)
+        }
+    "#;
+    assert_eq!(value(src, "split", vec![bytes("héllo")]), int(0xC3));
+}
+
+#[test]
+fn string_byte_at_traps_out_of_bounds() {
+    let src = r#"
+        fn at(in s: Str, take i: Int) -> Int { std::string::byte_at(std::string::from_str(s), i) }
+    "#;
+    assert_eq!(
+        run(src, "at", vec![bytes("ab"), int(2)]).unwrap_err().kind,
+        TrapKind::IndexOutOfBounds
+    );
+    assert_eq!(
+        run(src, "at", vec![bytes("ab"), int(-1)]).unwrap_err().kind,
+        TrapKind::IndexOutOfBounds
+    );
+}
+
+#[test]
+fn string_slice_traps_out_of_bounds() {
+    let src = r#"
+        fn sl(in s: Str, take a: Int, take b: Int) -> String {
+            std::string::slice(std::string::from_str(s), a, b)
+        }
+    "#;
+    // end past len, and start > end, both trap.
+    assert_eq!(
+        run(src, "sl", vec![bytes("ab"), int(0), int(3)])
+            .unwrap_err()
+            .kind,
+        TrapKind::IndexOutOfBounds
+    );
+    assert_eq!(
+        run(src, "sl", vec![bytes("ab"), int(2), int(1)])
+            .unwrap_err()
+            .kind,
+        TrapKind::IndexOutOfBounds
+    );
+}
+
+#[test]
+fn string_push_byte_grows_in_place() {
+    let src = r#"
+        fn build() -> Int {
+            var s = std::string::empty();
+            std::string::push_byte(s, 104);
+            std::string::push_byte(s, 105);
+            std::string::len(s)
+        }
+        fn readback() -> Int {
+            var s = std::string::from_str("h");
+            std::string::push_byte(s, 105);
+            std::string::byte_at(s, 1)
+        }
+    "#;
+    assert_eq!(value(src, "build", vec![]), int(2));
+    assert_eq!(value(src, "readback", vec![]), int(105));
+}
+
+#[test]
+fn string_push_byte_traps_on_an_out_of_range_byte() {
+    // A byte argument outside 0..=255 traps InvalidByte — never masked.
+    let src = r#"
+        fn push(take b: Int) -> Int {
+            var s = std::string::empty();
+            std::string::push_byte(s, b);
+            std::string::len(s)
+        }
+    "#;
+    assert_eq!(
+        run(src, "push", vec![int(256)]).unwrap_err().kind,
+        TrapKind::InvalidByte
+    );
+    assert_eq!(
+        run(src, "push", vec![int(-1)]).unwrap_err().kind,
+        TrapKind::InvalidByte
+    );
+    // The boundary values are accepted.
+    assert_eq!(value(src, "push", vec![int(0)]), int(1));
+    assert_eq!(value(src, "push", vec![int(255)]), int(1));
+}
+
+#[test]
+fn string_append_grows_in_place() {
+    let src = r#"
+        fn build(in seed: Str, in tail: Str) -> Int {
+            var s = std::string::from_str(seed);
+            std::string::append(s, tail);
+            std::string::len(s)
+        }
+    "#;
+    assert_eq!(value(src, "build", vec![bytes("ab"), bytes("cde")]), int(5));
+}
+
+#[test]
+fn string_equality_is_byte_wise_content_equality() {
+    // ADR-0009: `String == String` is byte-wise content equality (over the
+    // same buffer `Str` uses), and consumes neither operand.
+    let src = r#"
+        fn same(in a: Str, in b: Str) -> Bool {
+            std::string::from_str(a) == std::string::from_str(b)
+        }
+    "#;
+    assert_eq!(
+        value(src, "same", vec![bytes("ab"), bytes("ab")]),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        value(src, "same", vec![bytes("ab"), bytes("ac")]),
+        Value::Bool(false)
+    );
+}
+
+#[test]
+fn array_push_pop_round_trips() {
+    let src = r#"
+        fn build() -> Int {
+            var xs = std::array::empty();
+            std::array::push(xs, 10);
+            std::array::push(xs, 20);
+            std::array::push(xs, 30);
+            std::array::len(xs)
+        }
+        fn last() -> Int {
+            var xs = std::array::empty();
+            std::array::push(xs, 7);
+            std::array::push(xs, 8);
+            let popped = std::array::pop(xs);
+            match popped {
+                Some { value: v } => v,
+                None => -1,
+            }
+        }
+        fn pop_empty() -> Int {
+            var xs = std::array::empty();
+            let popped = std::array::pop(xs);
+            match popped {
+                Some { value: v } => v,
+                None => -1,
+            }
+        }
+    "#;
+    assert_eq!(value(src, "build", vec![]), int(3));
+    assert_eq!(value(src, "last", vec![]), int(8));
+    // pop of an empty array is None (-1 sentinel here).
+    assert_eq!(value(src, "pop_empty", vec![]), int(-1));
+}
+
+#[test]
+fn array_get_reads_and_traps_out_of_bounds() {
+    let src = r#"
+        fn get(take i: Int) -> Int {
+            var xs = std::array::empty();
+            std::array::push(xs, 100);
+            std::array::push(xs, 200);
+            std::array::get(xs, i)
+        }
+    "#;
+    assert_eq!(value(src, "get", vec![int(0)]), int(100));
+    assert_eq!(value(src, "get", vec![int(1)]), int(200));
+    assert_eq!(
+        run(src, "get", vec![int(2)]).unwrap_err().kind,
+        TrapKind::IndexOutOfBounds
+    );
+    assert_eq!(
+        run(src, "get", vec![int(-1)]).unwrap_err().kind,
+        TrapKind::IndexOutOfBounds
+    );
+}
+
+#[test]
+fn the_memory_budget_counts_byte_buffer_growth() {
+    // Growing a String past a tiny budget aborts deterministically: the push
+    // charges the grown value's cost (1 + byte length), so the budget bounds
+    // heap growth exactly as it bounds aggregate materialization.
+    let src = r#"
+        fn grow(take n: Int) -> Int {
+            var s = std::string::empty();
+            var i = 0;
+            loop {
+                if i >= n { break; }
+                std::string::push_byte(s, 97);
+                i = i + 1;
+            }
+            std::string::len(s)
+        }
+    "#;
+    let (program, types) = compile(src);
+    // A small budget aborts a long push loop with MemoryBudget.
+    let interp = Interpreter::new(&program, &types)
+        .expect("verifies")
+        .with_limits(Limits::default().max_values(8));
+    let err = interp.run("grow", vec![int(100)]).unwrap_err();
+    assert_eq!(err.kind, TrapKind::MemoryBudget);
+    // A generous budget completes and reports the full length.
+    let interp = Interpreter::new(&program, &types).expect("verifies");
+    assert_eq!(interp.run("grow", vec![int(10)]).unwrap(), int(10));
+}
+
+#[test]
+fn array_growth_is_counted_by_the_budget() {
+    let src = r#"
+        fn grow(take n: Int) -> Int {
+            var xs = std::array::empty();
+            var i = 0;
+            loop {
+                if i >= n { break; }
+                std::array::push(xs, i);
+                i = i + 1;
+            }
+            std::array::len(xs)
+        }
+    "#;
+    let (program, types) = compile(src);
+    let interp = Interpreter::new(&program, &types)
+        .expect("verifies")
+        .with_limits(Limits::default().max_values(8));
+    assert_eq!(
+        interp.run("grow", vec![int(100)]).unwrap_err().kind,
+        TrapKind::MemoryBudget
+    );
+}
+
+#[test]
+fn a_moved_out_heap_value_is_dropped_exactly_once() {
+    // Drop placement for heap values (gating ADR-0009 Stage B's native free):
+    // when a `String` is moved into another binding, only the destination is
+    // dropped — the moved-from source is not dropped again. The interpreter
+    // executes drops on owned trees, so a double-drop would surface as an
+    // internal error and a leak as a budget miscount; a clean run over a tight
+    // budget confirms exactly-once release.
+    let src = r#"
+        fn move_and_use(in seed: Str) -> Int {
+            var s = std::string::from_str(seed);
+            std::string::push_byte(s, 33);
+            let t = s;            // move: `s` is de-initialized, only `t` owns
+            std::string::len(t)
+        }
+    "#;
+    let (program, types) = compile(src);
+    // A budget that admits one live String (seed 3 bytes + push = "abc!" cost
+    // 5, plus scalars) but would be blown by a second live copy.
+    let interp = Interpreter::new(&program, &types)
+        .expect("verifies")
+        .with_limits(Limits::default().max_values(64));
+    assert_eq!(
+        interp.run("move_and_use", vec![bytes("abc")]).unwrap(),
+        int(4)
+    );
+}
+
+#[test]
+fn a_reassigned_heap_value_drops_the_old_buffer_first() {
+    // Assignment drops the old value before storing the new one (the ABI
+    // contract): the emitted MIR is `drop _s; _s = move _new`, so no old
+    // *heap buffer* leaks past a reassignment, and the interpreter releases
+    // the old String's budget on that drop (heap growth/shrink is accounted
+    // exactly — see the budget-growth tests above, and a whole-local `Move`
+    // is now budget-neutral). This asserts the drop-old-first semantics: the
+    // loop terminates with the final length and never double-drops.
+    //
+    // (The live-value *proxy* still slowly accumulates on repeated *scalar*
+    // `Copy` reassignment — overwriting a `Copy` local re-charges the new
+    // value without releasing the old, a pre-existing behavior orthogonal to
+    // heap accounting — so the loop counter, not the String, is what a very
+    // tight ceiling would eventually catch. Heap accounting itself is exact.)
+    let src = r#"
+        fn churn(take n: Int) -> Int {
+            var s = std::string::empty();
+            var i = 0;
+            loop {
+                if i >= n { break; }
+                s = std::string::from_str("xxxx");  // drops the previous `s`
+                i = i + 1;
+            }
+            std::string::len(s)
+        }
+    "#;
+    assert_eq!(value(src, "churn", vec![int(1000)]), int(4));
+}

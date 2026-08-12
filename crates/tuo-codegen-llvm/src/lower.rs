@@ -101,7 +101,7 @@ use inkwell::values::{
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
+    Arg, BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
     Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
@@ -197,16 +197,16 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     let (what, road_back) = match ty {
         Ty::String => (
             "a `String` value",
-            "the owned `String` awaits the allocator ADR",
+            "the owned `String` lands with ADR-0009 Stage B",
         ),
         Ty::Array(_) => (
             "the growable `Array[T]`",
-            "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
+            "it lands with ADR-0009 Stage B (the fixed `[T; N]` is lowered)",
         ),
         Ty::Wrapper(kind, _) => {
             return Some(format!(
                 "`{context}` uses a `{}[T]` heap wrapper, which the LLVM backend does not \
-                 lower yet (heap wrappers await the allocator ADR); the interpreter \
+                 lower yet (heap wrappers await a later ADR); the interpreter \
                  (`tuo spec`/`tuo verify`) remains the reference",
                 kind.name()
             ));
@@ -549,6 +549,15 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             // the matching `tuo_runtime::effect` symbol, which the CLI links
             // into every built binary alongside the trap shim.
             Statement::Effect { op, args, dest } => self.lower_effect(*op, args, dest),
+            // An in-place heap mutation (ADR-0009 Stage A) mutates an owned
+            // `String`/`Array[I64]`, which classification already refuses;
+            // this arm keeps the refusal clean if one is ever reached
+            // another way.
+            Statement::HeapMutate { .. } => Err(CodegenError::unsupported(
+                "the owned `String`/`Array[Int]` heap mutations are not lowered by the LLVM \
+                 backend yet (they land with ADR-0009 Stage B); the interpreter \
+                 (`tuo spec`/`tuo verify`) remains the reference",
+            )),
             Statement::Drop { .. } => {
                 // v0 supported values own no host resource; a Stage-1 aggregate
                 // owns no heap (scalar fields only), so its drop is a no-op too,
@@ -590,7 +599,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         &mut self,
         dest: &Place,
         callee: SymbolId,
-        args: &[tuo_mir::Arg],
+        args: &[Arg],
     ) -> Result<(), CodegenError> {
         let Some(&callee_fn) = self.ids.get(&callee) else {
             return Err(CodegenError::unsupported(
@@ -619,7 +628,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         for arg in args {
             match arg {
-                tuo_mir::Arg::Value(operand) => {
+                Arg::Value(operand) => {
                     if self.operand_is_unit(operand) {
                         // A unit argument carries no native value.
                     } else if self.operand_is_aggregate(operand) {
@@ -629,7 +638,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         arg_values.push(self.lower_operand(operand)?.into());
                     }
                 }
-                tuo_mir::Arg::Borrow(place) | tuo_mir::Arg::BorrowMut(place) => {
+                Arg::Borrow(place) | Arg::BorrowMut(place) => {
                     // Borrow-mode argument: pass the ADDRESS of the caller's
                     // place (the callee reads/writes through it directly; no
                     // copy-in, no copy-back). A unit-typed borrow occupies no
@@ -887,6 +896,15 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                      `lower_assign`)",
                 )),
             },
+            // The ADR-0009 heap operations produce or read owned
+            // `String`/`Array[I64]` values, which classification already
+            // refuses; this arm keeps the refusal clean (never a
+            // mis-compile) if one is ever reached another way.
+            Rvalue::HeapOp { .. } => Err(CodegenError::unsupported(
+                "the owned `String`/`Array[Int]` heap operations are not lowered by the LLVM \
+                 backend yet (they land with ADR-0009 Stage B); the interpreter \
+                 (`tuo spec`/`tuo verify`) remains the reference",
+            )),
             // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
             // length is lowered as a constant and the MIR verifier rejects
             // `Len` of a fixed-array place), so refusing it entirely stays
@@ -1976,16 +1994,26 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_effect(
         &mut self,
         op: EffectOp,
-        args: &[Operand],
+        args: &[Arg],
         dest: &Place,
     ) -> Result<(), CodegenError> {
+        // Every ADR-0006 effect argument is a by-value operand; the borrow
+        // form only appears with `WriteString`, which is refused below.
+        let value_arg = |arg: &Arg| -> Result<Operand, CodegenError> {
+            match arg {
+                Arg::Value(operand) => Ok(operand.clone()),
+                Arg::Borrow(_) | Arg::BorrowMut(_) => Err(CodegenError::backend(
+                    "an ADR-0006 effect argument must be a by-value operand",
+                )),
+            }
+        };
         match op {
             EffectOp::Write => {
                 let [fd, text] = args else {
-                    return Err(CodegenError::backend("write expects exactly 2 operands"));
+                    return Err(CodegenError::backend("write expects exactly 2 arguments"));
                 };
-                let fd = self.lower_operand(fd)?;
-                let (ptr, len) = self.str_operand_parts(text)?;
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let (ptr, len) = self.str_operand_parts(&value_arg(text)?)?;
                 let call = self
                     .builder
                     .build_call(
@@ -1999,9 +2027,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
             EffectOp::ReadByte => {
                 let [fd] = args else {
-                    return Err(CodegenError::backend("read_byte expects exactly 1 operand"));
+                    return Err(CodegenError::backend(
+                        "read_byte expects exactly 1 argument",
+                    ));
                 };
-                let fd = self.lower_operand(fd)?;
+                let fd = self.lower_operand(&value_arg(fd)?)?;
                 let call = self
                     .builder
                     .build_call(self.effect_function(op), &[fd.into()], "rt_read_byte")
@@ -2009,11 +2039,19 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 let result = call.try_as_basic_value().unwrap_basic();
                 self.write_place(dest, result)
             }
+            // `write_string` borrows an owned `String`, which classification
+            // already refuses; this arm keeps the refusal clean if the
+            // statement is ever reached another way.
+            EffectOp::WriteString => Err(CodegenError::unsupported(
+                "`std::rt::write_string` is not lowered by the LLVM backend yet (it lands \
+                 with ADR-0009 Stage B); the interpreter cannot run effects either — \
+                 effectful programs await the Stage B lowering",
+            )),
             EffectOp::Exit => {
                 let [code] = args else {
-                    return Err(CodegenError::backend("exit expects exactly 1 operand"));
+                    return Err(CodegenError::backend("exit expects exactly 1 argument"));
                 };
-                let code = self.lower_operand(code)?;
+                let code = self.lower_operand(&value_arg(code)?)?;
                 self.builder
                     .build_call(self.effect_function(op), &[code.into()], "")
                     .map_err(builder_err("calling the exit effect"))?;
@@ -2047,6 +2085,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 effect::EXIT_SYMBOL,
                 self.ctx.void_type().fn_type(&[i64_ty.into()], false),
             ),
+            // `WriteString` is refused before any symbol is needed
+            // (ADR-0009 Stage B lands its lowering and runtime symbol).
+            EffectOp::WriteString => {
+                unreachable!("write_string is refused before its symbol is referenced")
+            }
         };
         if let Some(existing) = self.module.get_function(name) {
             return existing;

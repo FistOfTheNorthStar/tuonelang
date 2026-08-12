@@ -263,7 +263,10 @@ fn an_effect_statement_now_compiles() {
         blocks: vec![BasicBlock {
             statements: vec![Statement::Effect {
                 op: EffectOp::ReadByte,
-                args: vec![Operand::Const(Const::Int(0, tuo_types::IntKind::I64))],
+                args: vec![tuo_mir::Arg::Value(Operand::Const(Const::Int(
+                    0,
+                    tuo_types::IntKind::I64,
+                )))],
                 dest: Place::local(tuo_mir::LocalId(0)),
             }],
             terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
@@ -386,4 +389,82 @@ fn a_str_local_now_compiles() {
             &TargetSpec::host(),
         )
         .expect("a Str local compiles since ADR-0006 Stage B");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0009 Stage A: the allocator-core MIR forms are refused cleanly
+// ---------------------------------------------------------------------------
+
+/// The LLVM backend must refuse ADR-0009's `HeapOp`/`HeapMutate` forms cleanly
+/// — never mis-compile them — until Stage B lands their native lowering.
+/// Mirrors the Cranelift backend's refusal test.
+fn string_builder_main() -> Program {
+    use tuo_mir::{HeapMutOp, HeapOp, LocalId, Rvalue, Statement};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::String,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::Unit,
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::StringEmpty,
+                        subject: None,
+                        args: Vec::new(),
+                    },
+                },
+                Statement::HeapMutate {
+                    op: HeapMutOp::PushByte,
+                    target: Place::local(LocalId(1)),
+                    args: vec![Operand::Const(Const::Int(65, tuo_types::IntKind::I64))],
+                    dest: Place::local(LocalId(2)),
+                },
+            ],
+            terminator: Terminator::Return(Operand::Const(Const::Int(0, tuo_types::IntKind::I64))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    }
+}
+
+#[test]
+fn the_allocator_core_forms_are_refused_cleanly() {
+    let program = string_builder_main();
+    let error = LlvmBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect_err("the ADR-0009 heap forms are not lowered until Stage B");
+    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+    assert!(
+        error.message.contains("does not lower yet") || error.message.contains("ADR-0009 Stage B"),
+        "the refusal points back to the interpreter / Stage B; got: {}",
+        error.message
+    );
 }

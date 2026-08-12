@@ -1,0 +1,58 @@
+// The ADR-0009 Stage A allocator-core builtins type-check as ordinary calls.
+//
+// `std::string` and `std::array` are pure (allocation is deterministic, not
+// I/O), so they may be used anywhere — including a spec's closure — while
+// `std::rt::write_string` is effectful and stays out of specs (see the err
+// fixture). Owned `String`/`Array[Int]` are non-`Copy`: a `mut` mutator needs
+// a `var` binding, and a `take`/`in` argument moves/borrows.
+
+fn build(in seed: Str) -> String {
+    var s = std::string::from_str(seed);
+    std::string::push_byte(s, 33);
+    std::string::append(s, "!!");
+    s
+}
+
+fn join(in a: Str, in b: Str) -> String {
+    std::string::concat(a, b)
+}
+
+fn head(in s: String) -> Int {
+    if std::string::len(s) == 0 {
+        -1
+    } else {
+        std::string::byte_at(s, 0)
+    }
+}
+
+fn window(in s: String) -> String {
+    std::string::slice(s, 0, 1)
+}
+
+fn empties() -> Int {
+    let s = std::string::empty();
+    let xs = std::array::empty();
+    std::string::len(s) + std::array::len(xs)
+}
+
+fn collect() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 10);
+    std::array::push(xs, 20);
+    let last = std::array::pop(xs);
+    let first = std::array::get(xs, 0);
+    match last {
+        Some { value: v } => first + v,
+        None => first,
+    }
+}
+
+fn print_owned(take fd: Int, in s: String) -> Int {
+    std::rt::write_string(fd, s)
+}
+
+// A spec may build strings/arrays — the ops are pure.
+spec join {
+    then std::string::len(std::string::concat("ab", "cd")) == 4;
+    then std::string::byte_at(std::string::from_str("A"), 0) == 65;
+}

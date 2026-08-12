@@ -79,9 +79,9 @@ mod verify;
 
 pub use lower::{lower, lower_specs};
 pub use mir::{
-    AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, EffectOp, Function, LocalDecl,
-    LocalId, Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, StrOp,
-    Terminator, Trap, UnOp,
+    AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, EffectOp, Function, HeapMutOp,
+    HeapOp, LocalDecl, LocalId, Operand, PassMode, Place, Program, Projection, Rvalue, Skipped,
+    Statement, StrOp, Terminator, Trap, UnOp,
 };
 pub use opt::{OptReport, PassReport, optimize, pass_descriptions};
 pub use print::render;

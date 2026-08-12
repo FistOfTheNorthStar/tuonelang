@@ -91,9 +91,20 @@ fn rewrite_statement_reads(statement: &mut Statement, known: &HashMap<u32, Opera
             }
             changed
         }
-        // An effect's operands are ordinary reads (ADR-0006); its
-        // destination is a write and is not rewritten.
+        // An effect's by-value arguments are ordinary reads (ADR-0006); a
+        // borrow argument and the destination are places, not rewritten.
         Statement::Effect { args, .. } => {
+            let mut changed = false;
+            for arg in args {
+                if let Arg::Value(operand) = arg {
+                    changed |= rewrite_operand(operand, known);
+                }
+            }
+            changed
+        }
+        // A heap mutation's operands are ordinary reads (ADR-0009); the
+        // mutated target and the destination are places, not rewritten.
+        Statement::HeapMutate { args, .. } => {
             let mut changed = false;
             for operand in args {
                 changed |= rewrite_operand(operand, known);
@@ -134,6 +145,15 @@ fn rewrite_rvalue(rvalue: &mut Rvalue, known: &HashMap<u32, Operand>) -> bool {
             changed
         }
         Rvalue::StrOp { args, .. } => {
+            let mut changed = false;
+            for operand in args {
+                changed |= rewrite_operand(operand, known);
+            }
+            changed
+        }
+        // A heap op's subject is a place (a borrow-read), never rewritten;
+        // its operands are ordinary reads (ADR-0009).
+        Rvalue::HeapOp { args, .. } => {
             let mut changed = false;
             for operand in args {
                 changed |= rewrite_operand(operand, known);
@@ -227,8 +247,23 @@ fn invalidate(statement: &Statement, known: &mut HashMap<u32, Operand>) {
                 }
             }
         }
-        // An effect writes its destination (its operands are plain reads).
-        Statement::Effect { dest, .. } => touched.push(dest.local.0),
+        // An effect writes its destination; a borrow argument's place is
+        // read through the borrow, so any fact about it goes stale too.
+        Statement::Effect { dest, args, .. } => {
+            touched.push(dest.local.0);
+            for arg in args {
+                match arg {
+                    Arg::Borrow(place) | Arg::BorrowMut(place) => touched.push(place.local.0),
+                    Arg::Value(_) => {}
+                }
+            }
+        }
+        // A heap mutation writes its destination and mutates its target in
+        // place, so facts about either are stale.
+        Statement::HeapMutate { target, dest, .. } => {
+            touched.push(target.local.0);
+            touched.push(dest.local.0);
+        }
         Statement::Drop { place } => touched.push(place.local.0),
     }
     for local in touched {

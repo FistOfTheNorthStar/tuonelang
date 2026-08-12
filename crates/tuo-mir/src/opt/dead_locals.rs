@@ -75,9 +75,14 @@ fn remove_dead_stores(function: &mut Function) -> bool {
                     && !rvalue_can_trap(rvalue);
                 !dead
             }
-            // Calls, effects, and drops have effects beyond their
-            // destination (an `Effect` performs host I/O — ADR-0006).
-            Statement::Call { .. } | Statement::Effect { .. } | Statement::Drop { .. } => true,
+            // Calls, effects, heap mutations, and drops have effects beyond
+            // their destination (an `Effect` performs host I/O — ADR-0006;
+            // a `HeapMutate` mutates its target in place and `push_byte`
+            // can trap — ADR-0009).
+            Statement::Call { .. }
+            | Statement::Effect { .. }
+            | Statement::HeapMutate { .. }
+            | Statement::Drop { .. } => true,
         });
         changed |= block.statements.len() != before;
     }
@@ -148,8 +153,9 @@ fn rvalue_can_trap(rvalue: &Rvalue) -> bool {
         Rvalue::Unary { op, .. } => matches!(op, UnOp::Neg),
         // `ByteAt`/`Slice` trap on an out-of-range argument (ADR-0006);
         // conservatively treat every string op as trapping so the abort
-        // survives even when its result is unread.
-        Rvalue::StrOp { .. } => true,
+        // survives even when its result is unread. The same holds for the
+        // ADR-0009 heap ops (`StringByteAt`/`StringSlice`/`ArrayGet` trap).
+        Rvalue::StrOp { .. } | Rvalue::HeapOp { .. } => true,
         // Casts never trap; `Use`/`Aggregate`/`Discriminant`/`Len` are pure.
         Rvalue::Use(_)
         | Rvalue::Cast { .. }
@@ -183,6 +189,16 @@ fn read_locals(function: &Function) -> BTreeSet<u32> {
                 }
                 Statement::Effect { args, dest, .. } => {
                     read_place_roots(dest, /*is_write=*/ true, &mut note);
+                    for arg in args {
+                        read_arg(arg, &mut note);
+                    }
+                }
+                Statement::HeapMutate {
+                    target, args, dest, ..
+                } => {
+                    read_place_roots(dest, /*is_write=*/ true, &mut note);
+                    // The target is read (and rewritten) through the borrow.
+                    read_place_roots(target, false, &mut note);
                     for operand in args {
                         read_operand(operand, &mut note);
                     }
@@ -211,6 +227,10 @@ fn referenced_locals(function: &Function) -> BTreeSet<u32> {
                 Statement::Call { dest, .. } | Statement::Effect { dest, .. } => {
                     referenced.insert(dest.local.0);
                 }
+                Statement::HeapMutate { target, dest, .. } => {
+                    referenced.insert(target.local.0);
+                    referenced.insert(dest.local.0);
+                }
                 Statement::Drop { .. } => {}
             }
         }
@@ -233,6 +253,14 @@ fn read_rvalue(rvalue: &Rvalue, note: &mut impl FnMut(LocalId)) {
             }
         }
         Rvalue::StrOp { args, .. } => {
+            for operand in args {
+                read_operand(operand, note);
+            }
+        }
+        Rvalue::HeapOp { subject, args, .. } => {
+            if let Some(place) = subject {
+                read_place_roots(place, false, note);
+            }
             for operand in args {
                 read_operand(operand, note);
             }
@@ -322,6 +350,14 @@ fn remap_rvalue(rvalue: &mut Rvalue, remap: &[Option<u32>]) {
                 remap_operand(operand, remap);
             }
         }
+        Rvalue::HeapOp { subject, args, .. } => {
+            if let Some(place) = subject {
+                remap_place(place, remap);
+            }
+            for operand in args {
+                remap_operand(operand, remap);
+            }
+        }
         Rvalue::Discriminant(place) | Rvalue::Len(place) => remap_place(place, remap),
     }
 }
@@ -343,6 +379,18 @@ fn remap_statement(statement: &mut Statement, remap: &[Option<u32>]) {
         }
         Statement::Effect { args, dest, .. } => {
             remap_place(dest, remap);
+            for arg in args {
+                match arg {
+                    Arg::Value(operand) => remap_operand(operand, remap),
+                    Arg::Borrow(place) | Arg::BorrowMut(place) => remap_place(place, remap),
+                }
+            }
+        }
+        Statement::HeapMutate {
+            target, args, dest, ..
+        } => {
+            remap_place(dest, remap);
+            remap_place(target, remap);
             for operand in args {
                 remap_operand(operand, remap);
             }

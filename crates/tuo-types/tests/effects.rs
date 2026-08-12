@@ -49,6 +49,52 @@ fn builtin_calls_type_check_like_ordinary_calls() {
 }
 
 #[test]
+fn allocator_builtins_are_pure_and_write_string_is_effectful() {
+    // ADR-0009: `std::string`/`std::array` are pure (allocation is not I/O),
+    // so a function using only them is not effectful; `std::rt::write_string`
+    // is effectful.
+    let (resolution, types) = check(
+        "fn build(in a: Str, in b: Str) -> Int {\n\
+         \x20   var s = std::string::concat(a, b);\n\
+         \x20   std::string::push_byte(s, 33);\n\
+         \x20   var xs = std::array::empty();\n\
+         \x20   std::array::push(xs, 1);\n\
+         \x20   std::string::len(s) + std::array::len(xs)\n\
+         }\n\
+         fn shout(take fd: Int, in s: String) -> Int {\n\
+         \x20   std::rt::write_string(fd, s)\n\
+         }\n",
+    );
+    assert_eq!(types.diagnostics(), &[]);
+    assert!(
+        !types.is_effectful(function(&resolution, "build")),
+        "a function using only `std::string`/`std::array` is pure"
+    );
+    assert!(
+        types.is_effectful(function(&resolution, "shout")),
+        "`std::rt::write_string` taints its caller as effectful"
+    );
+}
+
+#[test]
+fn a_spec_reaching_write_string_is_refused() {
+    // ADR-0009: `write_string` joins the effectful set, so a spec whose
+    // closure reaches it is `R0007` — exactly like the other `std::rt`
+    // effects — while a spec that only builds strings/arrays is fine.
+    let (_, types) = check(
+        "fn emit(take fd: Int, in s: String) -> Int { std::rt::write_string(fd, s) }\n\
+         spec \"pure builder\" { then std::string::len(std::string::concat(\"a\", \"b\")) == 2; }\n\
+         spec \"effectful\" { then emit(1, std::string::empty()) == 0; }\n",
+    );
+    let codes: Vec<String> = types
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+    assert_eq!(codes, vec!["R0007"], "only the effectful spec is refused");
+}
+
+#[test]
 fn effect_builtins_are_effectful_and_string_builtins_are_pure() {
     let (resolution, types) = check("fn main() -> Int { 0 }\n");
     for builtin in Builtin::ALL {
@@ -150,7 +196,8 @@ fn main_may_be_effectful_without_any_diagnostic() {
     assert!(types.is_effectful(function(&resolution, "main")));
     assert_eq!(
         types.effectful_functions().count(),
-        4,
-        "the three effect builtins plus `main`"
+        5,
+        "the four `std::rt` effect builtins (ADR-0006's three plus ADR-0009's \
+         `write_string`) plus `main`"
     );
 }

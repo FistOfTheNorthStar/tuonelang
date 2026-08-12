@@ -110,12 +110,27 @@ fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
             )
         }
         Statement::Effect { op, args, dest } => {
-            let args: Vec<String> = args.iter().map(render_operand).collect();
+            let args: Vec<String> = args.iter().map(render_arg).collect();
             format!(
                 "{} = effect {}({})",
                 render_place(dest),
                 op.name(),
                 args.join(", ")
+            )
+        }
+        Statement::HeapMutate {
+            op,
+            target,
+            args,
+            dest,
+        } => {
+            let mut parts = vec![format!("borrow mut {}", render_place(target))];
+            parts.extend(args.iter().map(render_operand));
+            format!(
+                "{} = heap_mut {}({})",
+                render_place(dest),
+                op.name(),
+                parts.join(", ")
             )
         }
         Statement::Drop { place } => format!("drop {}", render_place(place)),
@@ -192,6 +207,14 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
         Rvalue::StrOp { op, args } => {
             let args: Vec<String> = args.iter().map(render_operand).collect();
             format!("str_{}({})", op.name(), args.join(", "))
+        }
+        Rvalue::HeapOp { op, subject, args } => {
+            let mut parts = Vec::new();
+            if let Some(place) = subject {
+                parts.push(format!("borrow {}", render_place(place)));
+            }
+            parts.extend(args.iter().map(render_operand));
+            format!("heap_{}({})", op.name(), parts.join(", "))
         }
     }
 }

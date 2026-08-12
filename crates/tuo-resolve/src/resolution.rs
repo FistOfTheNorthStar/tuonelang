@@ -197,9 +197,10 @@ impl Resolution {
             .map(|(_, id)| *id)
     }
 
-    /// The [`Builtin`] behind `id`, if `id` is one of the six builtin
-    /// functions the language installs in `std::rt` / `std::str`
-    /// (ADR-0006). Downstream stages use this to give calls to a builtin
+    /// The [`Builtin`] behind `id`, if `id` is one of the builtin
+    /// functions the language installs in `std::rt` / `std::str` /
+    /// `std::string` / `std::array`
+    /// (ADR-0006, ADR-0009). Downstream stages use this to give calls to a builtin
     /// their fixed signature (type checking) and their dedicated MIR form
     /// (lowering).
     #[must_use]

@@ -117,29 +117,32 @@ system, §3.6), but its number lives here because diagnostic codes are stable
 data grouped by rule family, and both codes pin what a `spec` block may name or
 reach.
 
-### 2.4 Builtin functions (`[EXPERIMENTAL]`, ADR-0006 Stage A)
+### 2.4 Builtin functions (`[EXPERIMENTAL]`, ADR-0006/ADR-0009 Stage A)
 
-The language provides six **builtin functions** that resolve without any
+The language provides **builtin functions** that resolve without any
 declaration, exactly as the prelude's `Option`/`Some`/`None`/`Result`/`Ok`/`Err`
-resolve without one. They live in two real, always-present modules — `std::rt`
-(the effect builtins) and `std::str` (the pure string builtins) — and are
-reached by ordinary path resolution (`std::rt::write(1, "x")`); they have **no
-tuonelang bodies** and are not loadable source (the stdlib's `.tuo` modules are
-a separate, host-loaded mechanism).
+resolve without one. They live in four real, always-present modules —
+`std::rt` (the effect builtins, ADR-0006 + ADR-0009), `std::str` (the pure
+`Str` builtins, ADR-0006), and `std::string` / `std::array` (the pure
+allocator-core builtins, ADR-0009) — and are reached by ordinary path
+resolution (`std::rt::write(1, "x")`, `std::string::concat("a", "b")`); they
+have **no tuonelang bodies** and are not loadable source (the stdlib's `.tuo`
+modules are a separate, host-loaded mechanism).
 
-Because `std`, `std::rt`, and `std::str` are real modules in every resolution:
+Because `std` and its four submodules are real modules in every resolution:
 
-- a file declaring `module std::rt;` (or `std::str`) shares those modules, and
-  declaring a function named `write`/`read_byte`/`exit` (resp. `len`/`byte_at`/
-  `slice`) there collides with the builtin — an ordinary `R0001` duplicate
-  definition. The builtins are not shadowable *at their own paths*.
+- a file declaring `module std::rt;` (or `std::str`, `std::string`,
+  `std::array`) shares that module, and declaring a function with a builtin's
+  name there collides with it — an ordinary `R0001` duplicate definition. The
+  builtins are not shadowable *at their own paths*.
 - a local binding or module-level declaration named `std` shadows the module in
   that scope, exactly as any name shadows any other (§2.2); the builtins are
   then unreachable from that scope, never silently rebound.
 
 Calls to the builtins are checked as ordinary calls (arity `T0002`, argument
-types `T0001`, modes by the ownership checker); their signatures are fixed in
-§3.6.
+types `T0001`, modes by the ownership checker — a `let`-bound value passed to
+a `mut` parameter such as `std::string::push_byte`'s is `O0004`); their
+signatures are fixed in §3.6 and §3.7.
 
 ---
 
@@ -265,9 +268,9 @@ element (`O0010`).
 
 ### 3.6 The effect system (`[EXPERIMENTAL]`, ADR-0006 Stage A)
 
-v0 gains one narrow, explicit effect seam: three **effect builtins** in
+v0 gains one narrow, explicit effect seam: the **effect builtins** in
 `std::rt`, plus three **pure string builtins** in `std::str` (no effect). All
-six are ordinary functions to the checker — fixed, non-generic signatures,
+are ordinary functions to the checker — fixed, non-generic signatures,
 normal call checking — resolved per §2.4.
 
 **Effect builtins (`std::rt`):**
@@ -277,6 +280,7 @@ normal call checking — resolved per §2.4.
 | `fn write(take fd: Int, in text: Str) -> Int` | Writes `text`'s bytes to file descriptor `fd`. Returns the number of bytes written, or a negative value on host error. **Never traps.** |
 | `fn read_byte(take fd: Int) -> Int` | Reads one byte from `fd`. Returns `0..=255`, or `-1` on end of input, or another negative value on host error. **Never traps.** |
 | `fn exit(take code: Int) -> Int` | Terminates the process with `code & 0xff` as the exit status. Declared as returning `Int` so it composes in expression position, but it **never returns**. |
+| `fn write_string(take fd: Int, in s: String) -> Int` | (ADR-0009) Writes the owned `String`'s bytes to `fd` — the `String` is lent read-only for the call, so no `String`→`Str` view is needed (Q-0012 stays deferred). Same contract as `write`: bytes written or a negative host-error value. **Never traps.** |
 
 **Pure string builtins (`std::str`)** — byte-level operations on the UTF-8
 buffer of a `Str` (a `slice` may split a multi-byte code point; that is the v0
@@ -308,7 +312,56 @@ function `Y`; specs execute only the pure core in the deterministic sandbox."
 This turns the spec sandbox's honesty split (the interpreter performs no I/O,
 ever — [`mir.md`](mir.md) §8) into a *checked* property: `tuo check`, `tuo
 spec`, and `tuo verify` all refuse such a spec as a front-end error. The rule
-applies to direct calls, transitive calls, and `std::rt::exit` alike.
+applies to direct calls, transitive calls, and `std::rt::exit` alike —
+and, since ADR-0009, to `std::rt::write_string`.
+
+### 3.7 The allocator-core builtins (`[EXPERIMENTAL]`, ADR-0009 Stage A)
+
+Two further builtin modules provide the owned, growable heap values — checked
+exactly like the §3.6 builtins (fixed, non-generic signatures; arity `T0002`,
+argument types `T0001`; modes by the ownership checker). **Every
+`std::string`/`std::array` builtin is pure**: allocation is deterministic
+computation, not I/O, so specs may build strings and arrays freely (bounded by
+the interpreter sandbox's memory budget — [`mir.md`](mir.md) §8.1). Only the
+`std::rt` builtins are effectful.
+
+**Owned-string builtins (`std::string`)** — `String` is a UTF-8-by-convention
+**byte buffer**; like `std::str`, these are byte-level operations, and a
+`slice` may split a multi-byte code point:
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn empty() -> String` | The empty string. Never traps. |
+| `fn from_str(in s: Str) -> String` | Copies `s`'s bytes into a new owned buffer. Never traps. |
+| `fn push_byte(mut s: String, take b: Int)` | Appends one byte. **Traps `InvalidByte`** when `b < 0` or `b > 255` — never silently masked. |
+| `fn append(mut s: String, in t: Str)` | Appends `t`'s bytes. Never traps. |
+| `fn concat(in a: Str, in b: Str) -> String` | A new owned buffer holding `a`'s bytes then `b`'s. Never traps. |
+| `fn len(in s: String) -> Int` | The byte length of `s`. Never traps. |
+| `fn byte_at(in s: String, take i: Int) -> Int` | The byte (`0..=255`) at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(s)`. |
+| `fn slice(in s: String, take a: Int, take b: Int) -> String` | The byte range `[a, b)` **copied out** as a new owned `String` (no aliasing view). **Traps `IndexOutOfBounds`** unless `0 <= a <= b <= len(s)`. |
+
+**Growable-array builtins (`std::array`)** — a *monomorphic* v0 surface over
+the generic `Array[T]` type: the builtins operate on `Array[Int]` only, and a
+call with any other element type is an ordinary `T0001`:
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn empty() -> Array[Int]` | The empty array. Never traps. |
+| `fn push(mut xs: Array[Int], take v: Int)` | Appends `v`. Never traps. |
+| `fn pop(mut xs: Array[Int]) -> Option[Int]` | Removes and returns the last element; `None` when empty. Never traps. |
+| `fn len(in xs: Array[Int]) -> Int` | The element count. Never traps. |
+| `fn get(in xs: Array[Int], take i: Int) -> Int` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(xs)`. |
+
+**String equality.** `==`/`!=` on two `String` operands is **byte-wise content
+equality**, the same contract as `Str == Str` (§3.4); the comparison consumes
+neither operand. Ordering operators on either string type remain unsupported
+(`T0009`-family "operator not supported"), and `String` never compares equal
+to `Str` at the type level — type equality is exact, so mixing them is
+`T0001`.
+
+`String` and `Array[T]` remain **non-`Copy`** ([`ownership.md`](ownership.md)
+§2): a `take` argument moves them, and a `mut` argument requires a mutable
+place (`O0004` otherwise).
 
 ---
 

@@ -355,3 +355,62 @@ fn a_spec_reaching_an_effect_is_refused_before_execution() {
         RunOutcome::Ran(report) => panic!("an effectful spec must not run: {report:#?}"),
     }
 }
+
+#[test]
+fn specs_may_build_owned_strings_and_arrays() {
+    // ADR-0009: `std::string`/`std::array` are pure, so a spec may construct
+    // and query owned heap values in the deterministic sandbox.
+    let report = run(concat!(
+        "fn make(in a: Str, in b: Str) -> String { std::string::concat(a, b) }\n",
+        "spec make {\n",
+        "    then std::string::len(std::string::concat(\"ab\", \"cd\")) == 4;\n",
+        "    then std::string::byte_at(make(\"A\", \"B\"), 1) == 66;\n",
+        "}\n",
+    ));
+    assert!(report.passed(), "pure heap-building specs run and pass");
+    assert_eq!(passing_assertions(&report), 2);
+}
+
+#[test]
+fn a_spec_round_trips_a_pushed_array() {
+    let report = run(concat!(
+        "fn total() -> Int {\n",
+        "    var xs = std::array::empty();\n",
+        "    std::array::push(xs, 3);\n",
+        "    std::array::push(xs, 4);\n",
+        "    let last = std::array::pop(xs);\n",
+        "    let first = std::array::get(xs, 0);\n",
+        "    match last { Some { value: v } => first + v, None => first }\n",
+        "}\n",
+        "spec total { then total() == 7; }\n",
+    ));
+    assert!(report.passed(), "the push/pop round-trip spec passes");
+    assert_eq!(passing_assertions(&report), 1);
+}
+
+#[test]
+fn a_spec_reaching_write_string_is_refused_with_r0007() {
+    use tuo_source::SourceMap;
+    let mut map = SourceMap::new();
+    let file = map.intern_file("effect.tuo");
+    let id = map
+        .add_source(
+            file,
+            concat!(
+                "fn emit(in s: String) -> Int { std::rt::write_string(1, s) }\n",
+                "spec emit { then emit(std::string::empty()) == 0; }\n",
+            ),
+        )
+        .expect("source interns");
+    match tuo_spec::run(&map, &[id], &Selection::All, Limits::default()) {
+        RunOutcome::NotChecked(problems) => {
+            assert!(
+                problems
+                    .iter()
+                    .any(|diagnostic| diagnostic.code.to_string() == "R0007"),
+                "write_string in a spec is refused: {problems:#?}"
+            );
+        }
+        RunOutcome::Ran(report) => panic!("an effectful spec must not run: {report:#?}"),
+    }
+}

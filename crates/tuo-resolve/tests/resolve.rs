@@ -870,7 +870,7 @@ fn resolution_is_deterministic() {
 
 #[test]
 fn effect_and_string_builtins_resolve_without_any_stdlib() {
-    // No stdlib source is loaded here: the six builtins resolve through the
+    // No stdlib source is loaded here: the builtins resolve through the
     // always-present `std::rt` / `std::str` modules alone.
     let resolution = resolve_one(
         "fn go() -> Int {\n\
@@ -883,6 +883,9 @@ fn effect_and_string_builtins_resolve_without_any_stdlib() {
          }\n",
     );
     assert_clean(&resolution);
+    // Every builtin (ADR-0006 and ADR-0009) is installed as a real, `pub`,
+    // declaration-less function symbol reachable by `builtin_symbol`, even
+    // the ones this program does not reference.
     for builtin in tuo_resolve::Builtin::ALL {
         let symbol = resolution
             .builtin_symbol(builtin)
@@ -896,16 +899,86 @@ fn effect_and_string_builtins_resolve_without_any_stdlib() {
             data.declaration.is_none(),
             "builtins have no written declaration"
         );
+    }
+    // The six ADR-0006 builtins this program calls are each referenced.
+    for builtin in [
+        tuo_resolve::Builtin::RtWrite,
+        tuo_resolve::Builtin::RtReadByte,
+        tuo_resolve::Builtin::RtExit,
+        tuo_resolve::Builtin::StrLen,
+        tuo_resolve::Builtin::StrByteAt,
+        tuo_resolve::Builtin::StrSlice,
+    ] {
+        let symbol = resolution.builtin_symbol(builtin).expect("has a symbol");
         assert!(
             resolution.references_to(symbol).next().is_some(),
-            "each builtin was referenced by the program"
+            "{builtin:?} was referenced by the program"
         );
     }
 }
 
 #[test]
+fn allocator_core_builtins_resolve_without_any_stdlib() {
+    // ADR-0009: the `std::string`, `std::array`, and `std::rt::write_string`
+    // builtins resolve through their always-present modules with no stdlib
+    // loaded, and calls to them are referenced.
+    let resolution = resolve_one(
+        "fn go() -> Int {\n\
+         \x20   var s = std::string::from_str(\"ab\");\n\
+         \x20   std::string::push_byte(s, 99);\n\
+         \x20   std::string::append(s, \"cd\");\n\
+         \x20   let t = std::string::concat(\"x\", \"y\");\n\
+         \x20   let e = std::string::empty();\n\
+         \x20   let sl = std::string::slice(s, 0, 1);\n\
+         \x20   let sb = std::string::byte_at(s, 0);\n\
+         \x20   var xs = std::array::empty();\n\
+         \x20   std::array::push(xs, 7);\n\
+         \x20   let p = std::array::pop(xs);\n\
+         \x20   let g = std::array::get(xs, 0);\n\
+         \x20   let w = std::rt::write_string(1, s);\n\
+         \x20   std::string::len(t) + std::array::len(xs) + sb + g + w\n\
+         }\n",
+    );
+    assert_clean(&resolution);
+    for builtin in [
+        tuo_resolve::Builtin::RtWriteString,
+        tuo_resolve::Builtin::StringEmpty,
+        tuo_resolve::Builtin::StringFromStr,
+        tuo_resolve::Builtin::StringPushByte,
+        tuo_resolve::Builtin::StringAppend,
+        tuo_resolve::Builtin::StringConcat,
+        tuo_resolve::Builtin::StringLen,
+        tuo_resolve::Builtin::StringByteAt,
+        tuo_resolve::Builtin::StringSlice,
+        tuo_resolve::Builtin::ArrayEmpty,
+        tuo_resolve::Builtin::ArrayPush,
+        tuo_resolve::Builtin::ArrayPop,
+        tuo_resolve::Builtin::ArrayLen,
+        tuo_resolve::Builtin::ArrayGet,
+    ] {
+        let symbol = resolution
+            .builtin_symbol(builtin)
+            .expect("every ADR-0009 builtin has a symbol");
+        assert_eq!(resolution.builtin(symbol), Some(builtin));
+        assert!(
+            resolution.references_to(symbol).next().is_some(),
+            "{builtin:?} was referenced by the program"
+        );
+    }
+}
+
+#[test]
+fn redefining_an_allocator_builtin_at_its_own_path_is_a_duplicate() {
+    // A file declaring `module std::string;` shares the builtin module, so a
+    // function named `concat` there collides with the builtin: R0001.
+    let resolution = resolve_one("module std::string;\nfn concat() {}\n");
+    assert_eq!(codes(&resolution), vec!["R0001"]);
+}
+
+#[test]
 fn builtin_modules_are_navigable_but_not_loadable_source() {
-    // `std`, `std::rt`, and `std::str` are real modules with real paths.
+    // `std`, `std::rt`, `std::str`, `std::string`, and `std::array` are real
+    // modules with real paths.
     let resolution = resolve_one("fn f() -> Int { std::str::len(\"a\") }\n");
     assert_clean(&resolution);
     let paths: Vec<Vec<String>> = resolution
@@ -916,6 +989,8 @@ fn builtin_modules_are_navigable_but_not_loadable_source() {
     assert!(paths.contains(&vec!["std".to_owned()]));
     assert!(paths.contains(&vec!["std".to_owned(), "rt".to_owned()]));
     assert!(paths.contains(&vec!["std".to_owned(), "str".to_owned()]));
+    assert!(paths.contains(&vec!["std".to_owned(), "string".to_owned()]));
+    assert!(paths.contains(&vec!["std".to_owned(), "array".to_owned()]));
 }
 
 #[test]

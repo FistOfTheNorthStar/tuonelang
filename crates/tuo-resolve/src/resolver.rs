@@ -250,11 +250,12 @@ impl Resolver {
         }
     }
 
-    /// Install the six builtin functions of ADR-0006 ([`Builtin`]) as real
-    /// `pub` function symbols in the always-present `std::rt` / `std::str`
-    /// modules, so `std::rt::write(1, "x")` resolves through ordinary path
-    /// navigation in every program (with no stdlib loaded). The modules are
-    /// created **before** user files are collected, so a file declaring
+    /// Install the builtin functions of ADR-0006 and ADR-0009 ([`Builtin`])
+    /// as real `pub` function symbols in the always-present `std::rt` /
+    /// `std::str` / `std::string` / `std::array` modules, so
+    /// `std::rt::write(1, "x")` resolves through ordinary path navigation in
+    /// every program (with no stdlib loaded). The modules are created
+    /// **before** user files are collected, so a file declaring
     /// `module std::rt;` shares them and redeclaring a builtin's name there
     /// is an ordinary `R0001` duplicate definition — a builtin is never
     /// silently rebound at its own path.

@@ -21,10 +21,11 @@
 //!   is computed by the type-checking stage, which owns the effect
 //!   discipline; see `specification/static-semantics.md` §2.3, §3.6.)
 //!
-//! Alongside the prelude, resolution installs the six **builtin functions**
-//! of ADR-0006 ([`Builtin`]) as real symbols in the always-present
-//! `std::rt` / `std::str` modules, so `std::rt::write(1, "x")` resolves in
-//! every program with no stdlib loaded ([`Resolution::builtin`]).
+//! Alongside the prelude, resolution installs the **builtin functions**
+//! of ADR-0006 and ADR-0009 ([`Builtin`]) as real symbols in the
+//! always-present `std::rt` / `std::str` / `std::string` / `std::array`
+//! modules, so `std::rt::write(1, "x")` and `std::string::concat("a", "b")`
+//! resolve in every program with no stdlib loaded ([`Resolution::builtin`]).
 //!
 //! Module-level declarations are collected before any use is resolved, so
 //! **forward references** across items and files always work. Lexical

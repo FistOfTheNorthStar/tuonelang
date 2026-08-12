@@ -93,7 +93,11 @@ struct tuo_string {
 ```
 
 - Size = 3 × pointer-width (24 bytes on 64-bit), align = pointer-width.
-- The bytes are always valid UTF-8; `len` counts bytes, not characters.
+- The bytes are UTF-8 **by convention**, not by invariant: `len` counts bytes,
+  not characters, and the byte-level operations (ADR-0006's contract, extended
+  to `String` by ADR-0009 — `std::string::slice` copies an arbitrary byte
+  range) may produce a buffer that is not valid UTF-8 on its own. Nothing in
+  the ABI depends on the bytes' validity.
 - An empty `String` has `len == 0` and a non-null, suitably-aligned `ptr` (no
   allocation is required for the empty string; `ptr` may be a fixed non-null
   sentinel). Backends must not assume `ptr` is dereferenceable when `len == 0`.
@@ -240,7 +244,9 @@ struct tuo_weak { tuo_shared_block[T] *ptr; }   // one word, never null
 
 A **trap** is the native counterpart of the interpreter's structured abort
 (Constitution §24). At each trap site — integer overflow, division by zero, an
-out-of-bounds index, or a proved-unreachable point — generated code calls the
+out-of-bounds index, an out-of-range byte value (ADR-0009's `InvalidByte`,
+appended to the taxonomy with its interpreter counterpart), or a
+proved-unreachable point — generated code calls the
 runtime symbol `tuo_rt_trap(i32 code)` with a stable `TrapCode`. The runtime:
 
 1. writes one stable line to **stderr** (never stdout — stdout is the program's
@@ -356,8 +362,15 @@ void  tuo_rt_dealloc(void *ptr, usize size, usize align);
   keeps the runtime free of allocation metadata.
 
 Like the trap, the boundary is provided as portable **C source**
-(`tuo_runtime::alloc_runtime_c_source`) linked into every built binary, so a
-generated executable needs no Rust runtime.
+(`tuo_runtime::alloc_runtime_c_source`), so a generated executable needs no
+Rust runtime. **Linking status:** nothing generated allocates yet, so the
+allocator is specified and tested but **not yet linked** into built binaries —
+it lands with **ADR-0009 Stage B**, when the backends lower the
+`String`/`Array` heap operations natively and every construction site starts
+flowing through this seam. Until then the front end, MIR, and the reference
+interpreter accept the ADR-0009 Stage A operations while both backends refuse
+them; this document does not claim a native allocation path exists before it
+does.
 
 ## Destruction
 

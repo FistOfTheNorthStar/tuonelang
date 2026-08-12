@@ -202,14 +202,31 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
 }
 
 /// The fixed signature `(params, ret)` of a builtin function
-/// (`specification/static-semantics.md` §3.6). `Int` is `I64`.
+/// (`specification/static-semantics.md` §3.6–§3.7). `Int` is `I64`; the
+/// ADR-0009 array builtins are `Array[Int]`-monomorphic, so a call with any
+/// other element type is an ordinary `T0001`.
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
+    let int_array = || Ty::Array(Box::new(Ty::int()));
     match builtin {
         Builtin::RtWrite => (vec![Ty::int(), Ty::Str], Ty::int()),
         Builtin::RtReadByte | Builtin::RtExit => (vec![Ty::int()], Ty::int()),
+        Builtin::RtWriteString => (vec![Ty::int(), Ty::String], Ty::int()),
         Builtin::StrLen => (vec![Ty::Str], Ty::int()),
         Builtin::StrByteAt => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::StrSlice => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::Str),
+        Builtin::StringEmpty => (Vec::new(), Ty::String),
+        Builtin::StringFromStr => (vec![Ty::Str], Ty::String),
+        Builtin::StringPushByte => (vec![Ty::String, Ty::int()], Ty::Unit),
+        Builtin::StringAppend => (vec![Ty::String, Ty::Str], Ty::Unit),
+        Builtin::StringConcat => (vec![Ty::Str, Ty::Str], Ty::String),
+        Builtin::StringLen => (vec![Ty::String], Ty::int()),
+        Builtin::StringByteAt => (vec![Ty::String, Ty::int()], Ty::int()),
+        Builtin::StringSlice => (vec![Ty::String, Ty::int(), Ty::int()], Ty::String),
+        Builtin::ArrayEmpty => (Vec::new(), int_array()),
+        Builtin::ArrayPush => (vec![int_array(), Ty::int()], Ty::Unit),
+        Builtin::ArrayPop => (vec![int_array()], Ty::Option(Box::new(Ty::int()))),
+        Builtin::ArrayLen => (vec![int_array()], Ty::int()),
+        Builtin::ArrayGet => (vec![int_array(), Ty::int()], Ty::int()),
     }
 }
 
@@ -395,8 +412,8 @@ impl<'a> Checker<'a> {
             )
             .with_primary_label("this spec's executed closure performs an effect")
             .with_help(
-                "effects (`std::rt::write`/`read_byte`/`exit`) may run in `main` and \
-                 ordinary functions, never in a spec",
+                "effects (`std::rt::write`/`read_byte`/`exit`/`write_string`) may run in \
+                 `main` and ordinary functions, never in a spec",
             )
             .with_actual(StructuredValue::Name(target));
             if let Some(declaration) = self.resolution.symbol(reached).declaration {

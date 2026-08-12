@@ -158,8 +158,14 @@ pub enum Projection {
 /// A value read: how an instruction obtains each input.
 #[derive(Clone, Debug)]
 pub enum Operand {
-    /// Read the place's value, leaving it initialized. Emitted only for
-    /// `Copy` types; the copy is bitwise-equivalent and independent.
+    /// Read the place's value, leaving it initialized. Emitted for `Copy`
+    /// types (the copy is bitwise-equivalent and independent) — and, since
+    /// ADR-0009, as the documented **borrow-read** of a `String` operand of
+    /// an `Eq`/`Ne` binary (`specification/mir.md` §5.3): the read leaves
+    /// the place initialized and untouched, and observably copies nothing.
+    /// Everywhere else a non-`Copy` value is read through a *place*
+    /// ([`Rvalue::Len`], [`Rvalue::Discriminant`], a [`Rvalue::HeapOp`]
+    /// subject, a borrow [`Arg`]) or consumed by [`Operand::Move`].
     Copy(Place),
     /// Read the place's value and end its initialization: the place's
     /// contents must not be read or dropped again until reassigned. The
@@ -228,13 +234,45 @@ pub enum Statement {
     Effect {
         /// Which host effect.
         op: EffectOp,
-        /// The operands, in the builtin's declaration order (see
-        /// [`EffectOp`]).
-        args: Vec<Operand>,
+        /// The arguments, in the builtin's declaration order (see
+        /// [`EffectOp`]). Since ADR-0009 these are call-style [`Arg`]s so
+        /// an effect can *borrow* a non-`Copy` value:
+        /// [`EffectOp::WriteString`]'s `String` is an [`Arg::Borrow`]
+        /// place, lent read-only for the statement exactly as an `in` call
+        /// argument is; every other effect argument is an [`Arg::Value`]
+        /// operand. The per-op argument kinds are fixed and verified
+        /// (`M0011`).
+        args: Vec<Arg>,
         /// The destination of the `I64` result. For [`EffectOp::Exit`] it
         /// is never observably written — control does not continue — but
         /// carrying it keeps the statement uniform with the other effects
         /// (the surface builtin is declared `-> Int`).
+        dest: Place,
+    },
+    /// Mutate the owned `String`/`Array[I64]` at `target` **in place**
+    /// (ADR-0009 Stage A) and store the op's result into `dest`. Calls to
+    /// the mutating `std::string`/`std::array` builtins lower to this
+    /// statement; there is no other way to construct one. `target` is
+    /// semantically a `mut` borrow for the statement's duration: it must be
+    /// initialized before and remains initialized after (the verifier's
+    /// dataflow treats it like an [`Arg::BorrowMut`] call argument). A
+    /// `HeapMutate` is **pure computation** — growth is allocation, not I/O
+    /// — so specs may reach it; [`HeapMutOp::PushByte`] traps
+    /// `InvalidByte` on an out-of-range byte (see [`HeapMutOp`] and
+    /// `specification/mir.md` §4.3). Optimization passes never eliminate
+    /// one: the mutation of `target` is observable and `PushByte` can trap.
+    /// Native lowering is ADR-0009 Stage B; until then both backends refuse
+    /// the statement.
+    HeapMutate {
+        /// Which in-place mutation.
+        op: HeapMutOp,
+        /// The mutated `String`/`Array[I64]` place (a `mut` borrow).
+        target: Place,
+        /// The operands, in the builtin's declaration order after the
+        /// `mut` subject (see [`HeapMutOp`]).
+        args: Vec<Operand>,
+        /// The destination of the op's result: `()` for the push/append
+        /// ops, `Option[I64]` for [`HeapMutOp::Pop`].
         dest: Place,
     },
     /// Destroy the value held by `place`, which must be initialized.
@@ -274,25 +312,80 @@ pub enum EffectOp {
     /// terminator, so lowering stays uniform with the other effects — see
     /// `specification/mir.md` §4.2 for the full rationale.
     Exit,
+    /// `write_string(fd: I64, s: borrow String) -> I64` — write the owned
+    /// `String`'s bytes to file descriptor `fd`; the result is the number
+    /// of bytes written, or a negative value on host error. The `String`
+    /// argument is an [`Arg::Borrow`] place — lent read-only for the
+    /// statement, consumed by nothing. Never traps. (ADR-0009 Stage A;
+    /// native lowering is Stage B.)
+    WriteString,
 }
 
 impl EffectOp {
-    /// The stable lowercase name (`write`, `read_byte`, `exit`).
+    /// The stable lowercase name (`write`, `read_byte`, `exit`,
+    /// `write_string`).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Write => "write",
             Self::ReadByte => "read_byte",
             Self::Exit => "exit",
+            Self::WriteString => "write_string",
         }
     }
 
-    /// How many operands the op takes.
+    /// How many arguments the op takes.
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::Write => 2,
+            Self::Write | Self::WriteString => 2,
             Self::ReadByte | Self::Exit => 1,
+        }
+    }
+}
+
+/// One in-place heap mutation over an owned `String` or growable
+/// `Array[I64]` (ADR-0009 Stage A): the MIR form of the mutating
+/// `std::string`/`std::array` builtins. See [`Statement::HeapMutate`] and
+/// `specification/mir.md` §4.3.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeapMutOp {
+    /// `push_byte(target: mut String, b: I64)` — append the byte `b`.
+    /// **Traps `InvalidByte`** when `b < 0` or `b > 255`; the byte range is
+    /// enforced, never silently masked.
+    PushByte,
+    /// `append(target: mut String, t: Str)` — append `t`'s bytes. Never
+    /// traps.
+    Append,
+    /// `push(target: mut Array[I64], v: I64)` — append the element `v`.
+    /// Never traps.
+    Push,
+    /// `pop(target: mut Array[I64]) -> Option[I64]` — remove and return
+    /// the last element (`Some`), or `None` when empty. Never traps. It
+    /// both mutates and produces a value, which is exactly why it is a
+    /// statement-level mutator and not an rvalue: an rvalue must not
+    /// mutate a place.
+    Pop,
+}
+
+impl HeapMutOp {
+    /// The stable lowercase name (`push_byte`, `append`, `push`, `pop`).
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::PushByte => "push_byte",
+            Self::Append => "append",
+            Self::Push => "push",
+            Self::Pop => "pop",
+        }
+    }
+
+    /// How many operands the op takes (after the `mut` target place).
+    #[must_use]
+    pub const fn arg_count(self) -> usize {
+        match self {
+            Self::PushByte | Self::Append | Self::Push => 1,
+            Self::Pop => 0,
         }
     }
 }
@@ -380,6 +473,115 @@ pub enum Rvalue {
         /// [`StrOp`]).
         args: Vec<Operand>,
     },
+    /// A pure, value-producing heap operation over an owned `String` or
+    /// growable `Array[I64]` (ADR-0009 Stage A); calls to the non-mutating
+    /// `std::string`/`std::array` builtins lower to it. When the op reads
+    /// an existing heap value, that value is the **place** `subject` — a
+    /// non-consuming borrow-read, the same discipline [`Rvalue::Len`] and
+    /// [`Rvalue::Discriminant`] use — while the `Str`/integer inputs are
+    /// ordinary operands. Subject presence/type, operand counts/types, and
+    /// the destination type are fixed per op and verified (`M0012`).
+    /// [`HeapOp::StringByteAt`], [`HeapOp::StringSlice`], and
+    /// [`HeapOp::ArrayGet`] carry their `IndexOutOfBounds` trap **in the
+    /// operation**, exactly as [`StrOp`] does; nothing else traps. Never
+    /// constant-folded (the trapping ops for the usual reason, the
+    /// constructors because a heap value has no constant form); native
+    /// lowering is ADR-0009 Stage B, and until then both backends refuse
+    /// every `HeapOp`.
+    HeapOp {
+        /// Which heap operation.
+        op: HeapOp,
+        /// The borrowed heap-value subject (`in String` / `in Array[I64]`),
+        /// for the ops that read an existing value; `None` for the
+        /// constructors and the `Str`-only ops.
+        subject: Option<Place>,
+        /// The remaining operands (`Str` views and integers), in the
+        /// builtin's declaration order (see [`HeapOp`]).
+        args: Vec<Operand>,
+    },
+}
+
+/// A pure, value-producing heap operation (ADR-0009 Stage A). Let `len(x)`
+/// be the byte/element length of the subject. See
+/// `specification/mir.md` §5.7 for the normative table; the `String` byte
+/// operations follow `std::str`'s byte-level contract (a slice may split a
+/// multi-byte code point — `String` bytes are UTF-8 by convention, not by
+/// invariant).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum HeapOp {
+    /// `empty() -> String` — the empty owned string. Never traps.
+    StringEmpty,
+    /// `from_str(s: Str) -> String` — `s`'s bytes copied into a new owned
+    /// buffer. Never traps.
+    StringFromStr,
+    /// `concat(a: Str, b: Str) -> String` — `a`'s bytes then `b`'s, in a
+    /// new owned buffer. Never traps.
+    StringConcat,
+    /// `len(subject: String) -> I64` — `len(subject)`. Never traps.
+    StringLen,
+    /// `byte_at(subject: String, i: I64) -> I64` — the byte (`0..=255`) at
+    /// `i`. **Traps `IndexOutOfBounds`** when `i < 0` or
+    /// `i >= len(subject)`.
+    StringByteAt,
+    /// `slice(subject: String, a: I64, b: I64) -> String` — the byte range
+    /// `[a, b)` **copied out** as a new owned `String` (never an aliasing
+    /// view). **Traps `IndexOutOfBounds`** unless
+    /// `0 <= a <= b <= len(subject)`.
+    StringSlice,
+    /// `empty() -> Array[I64]` — the empty growable array. Never traps.
+    ArrayEmpty,
+    /// `len(subject: Array[I64]) -> I64` — `len(subject)`. Never traps.
+    /// Produces `I64` (the surface `-> Int` contract), unlike
+    /// [`Rvalue::Len`]'s `Usize` for the indexing path — both remain, with
+    /// different types and different jobs.
+    ArrayLen,
+    /// `get(subject: Array[I64], i: I64) -> I64` — the element at `i`.
+    /// **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`.
+    ArrayGet,
+}
+
+impl HeapOp {
+    /// The stable lowercase name, qualified by value kind
+    /// (`string_empty`, …, `array_get`) so the rendered MIR is unambiguous.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::StringEmpty => "string_empty",
+            Self::StringFromStr => "string_from_str",
+            Self::StringConcat => "string_concat",
+            Self::StringLen => "string_len",
+            Self::StringByteAt => "string_byte_at",
+            Self::StringSlice => "string_slice",
+            Self::ArrayEmpty => "array_empty",
+            Self::ArrayLen => "array_len",
+            Self::ArrayGet => "array_get",
+        }
+    }
+
+    /// Whether the op reads an existing heap value through a `subject`
+    /// place (`Some` in [`Rvalue::HeapOp`]), as opposed to constructing
+    /// one from operands alone.
+    #[must_use]
+    pub const fn has_subject(self) -> bool {
+        matches!(
+            self,
+            Self::StringLen
+                | Self::StringByteAt
+                | Self::StringSlice
+                | Self::ArrayLen
+                | Self::ArrayGet
+        )
+    }
+
+    /// How many operands the op takes (after the optional subject).
+    #[must_use]
+    pub const fn arg_count(self) -> usize {
+        match self {
+            Self::StringEmpty | Self::StringLen | Self::ArrayEmpty | Self::ArrayLen => 0,
+            Self::StringFromStr | Self::StringByteAt | Self::ArrayGet => 1,
+            Self::StringConcat | Self::StringSlice => 2,
+        }
+    }
 }
 
 /// A pure byte-level string operation over the UTF-8 buffer of a `Str`

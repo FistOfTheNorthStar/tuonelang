@@ -173,9 +173,11 @@ pub(crate) fn run(
     for ast in files {
         cx.collect_modes(*ast);
     }
-    // The builtin functions (ADR-0006) have no declaration to collect modes
-    // from; seed their fixed `take`/`in` signatures so calls to them get the
-    // same per-argument-list checking as calls to declared functions.
+    // The builtin functions (ADR-0006, ADR-0009) have no declaration to
+    // collect modes from; seed their fixed `take`/`in`/`mut` signatures so
+    // calls to them get the same per-argument-list checking as calls to
+    // declared functions — in particular, passing a `let`-bound `String` to
+    // `std::string::push_byte`'s `mut` parameter is an ordinary `O0004`.
     for (builtin, symbol) in resolution.builtins() {
         let modes = builtin
             .param_modes()
@@ -183,6 +185,7 @@ pub(crate) fn run(
             .map(|mode| match mode {
                 tuo_resolve::BuiltinParamMode::Take => Mode::Take,
                 tuo_resolve::BuiltinParamMode::In => Mode::In,
+                tuo_resolve::BuiltinParamMode::Mut => Mode::Mut,
             })
             .collect();
         cx.fn_modes.insert(symbol, modes);
