@@ -29,7 +29,7 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 
 /// The version of the runtime ABI these layouts implement.
 ///
-/// `3` — unstable. Any change to a layout, offset, discriminant numbering,
+/// `4` — unstable. Any change to a layout, offset, discriminant numbering,
 /// calling-convention rule, or runtime-symbol meaning **must** increment this
 /// in the same commit that updates the tests pinning the affected layout.
 /// Additive, non-layout-affecting clarifications do not bump it.
@@ -46,7 +46,14 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `3` — adds the effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
 /// `tuo_rt_exit`; see [`crate::effect`]); no layout changed. (ADR-0006
 /// Stage B.)
-pub const ABI_VERSION: u32 = 3;
+///
+/// `4` — the allocation seam is now linked and used (ADR-0009 Stage B): the
+/// `tuo_rt_alloc`/`tuo_rt_dealloc` symbols (see [`crate::alloc`]) went from
+/// specified-but-unlinked to load-bearing — the backends lower the
+/// `String`/`Array[Int]` heap operations through them and the CLI links the
+/// allocator C source into every built binary. No layout changed; the
+/// bump reflects the runtime-symbol meaning going from unused to load-bearing.
+pub const ABI_VERSION: u32 = 4;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -441,11 +448,11 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_three() {
+    fn the_abi_is_version_four() {
         // A deliberate tripwire: bump this in the same commit that changes a
-        // layout (or, as with the ADR-0006 effect symbols, the runtime
-        // surface), never silently.
-        assert_eq!(ABI_VERSION, 3);
+        // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
+        // allocator seam, the runtime surface), never silently.
+        assert_eq!(ABI_VERSION, 4);
     }
 
     #[test]

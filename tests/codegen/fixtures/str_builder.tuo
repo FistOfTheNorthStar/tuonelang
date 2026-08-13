@@ -1,0 +1,12 @@
+// ADR-0009 Stage B: build a String byte by byte with `push_byte` in a loop
+// (repeated growth: alloc-new + copy + dealloc-old), then return its length.
+// Appends 'A' (65) sixteen times → len 16, exit 16.
+fn main() -> Int {
+    var s = std::string::empty();
+    var i = 0;
+    while i < 16 {
+        std::string::push_byte(s, 65);
+        i = i + 1;
+    }
+    std::string::len(s)
+}

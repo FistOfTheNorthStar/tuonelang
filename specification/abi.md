@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `3` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `4` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -363,14 +363,18 @@ void  tuo_rt_dealloc(void *ptr, usize size, usize align);
 
 Like the trap, the boundary is provided as portable **C source**
 (`tuo_runtime::alloc_runtime_c_source`), so a generated executable needs no
-Rust runtime. **Linking status:** nothing generated allocates yet, so the
-allocator is specified and tested but **not yet linked** into built binaries —
-it lands with **ADR-0009 Stage B**, when the backends lower the
-`String`/`Array` heap operations natively and every construction site starts
-flowing through this seam. Until then the front end, MIR, and the reference
-interpreter accept the ADR-0009 Stage A operations while both backends refuse
-them; this document does not claim a native allocation path exists before it
-does.
+Rust runtime. **Linking status:** since **ADR-0009 Stage B** the allocator C
+source is **linked into every built binary** (unconditionally, like the trap
+and effect shims and `-lm`), and both backends lower the `String`/`Array[Int]`
+heap operations natively — every construction site flows through this seam. The
+shim stays minimal: only `tuo_rt_alloc`/`tuo_rt_dealloc`. *Growth* (the
+`push`/`append`/`push_byte` reallocation) is implemented in the **backend** as
+alloc-new + copy + dealloc-old, never in the C shim, so the seam carries no
+allocator policy beyond acquire/release. The reference interpreter models the
+same observable behavior in its deterministic sandbox (growth counts against its
+`MemoryBudget`); the native path and the interpreter agree on everything a
+program can observe (length, contents, and `pop`'s `Option`), never on
+buffer identity or capacity, which nothing observes.
 
 ## Destruction
 
@@ -416,7 +420,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `3`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `4`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -425,5 +429,9 @@ to match the interpreter and MIR. Version `2` added the inline `[T; N]`
 fixed-size array layout (`size = N × stride(T)`, `align = align(T)`, element
 `i` at `i × stride(T)`); no existing layout changed. Version `3` added the
 ADR-0006 Stage B effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
-`tuo_rt_exit`); no layout changed. The version is asserted by the crate's tests so a silent reinterpretation of
-bytes is impossible.
+`tuo_rt_exit`); no layout changed. Version `4` (ADR-0009 Stage B) made the
+allocator seam (`tuo_rt_alloc`, `tuo_rt_dealloc`) load-bearing — it is now
+linked into every built binary and used by the native `String`/`Array[Int]`
+lowering — the runtime-symbol meaning went from unused to load-bearing; no
+layout changed. The version is asserted by the crate's tests so a silent
+reinterpretation of bytes is impossible.

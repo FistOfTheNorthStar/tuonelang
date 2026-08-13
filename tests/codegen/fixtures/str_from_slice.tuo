@@ -1,0 +1,8 @@
+// ADR-0009 Stage B: from_str copies a Str into an owned String, slice copies a
+// byte range out as a new owned String, and byte_at reads a byte. "ABCDE"
+// sliced [1,4) is "BCD"; byte_at index 1 is 'C' (67) → exit 67.
+fn main() -> Int {
+    let owned = std::string::from_str("ABCDE");
+    let mid = std::string::slice(owned, 1, 4);
+    std::string::byte_at(mid, 1)
+}

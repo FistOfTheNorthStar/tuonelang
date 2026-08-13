@@ -35,13 +35,49 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is heap-**owning** (`String`, the growable `Array[T]`,
-//! `Box`/`Shared`/`Weak`) still makes the whole function unsupported (they
-//! await the allocator ADR). Aggregate lowering follows ADR-0004: scalar
+//! A local whose type is a heap **wrapper** (`Box`/`Shared`/`Weak`) still makes
+//! the whole function unsupported (they await a later ADR). The owned `String`
+//! and the growable `Array[Int]`, by contrast, are lowered since ADR-0009 Stage
+//! B: their three-word `{ptr, len, cap}` header is an ordinary aggregate held in
+//! a slot (moved by memcpy of the header, passed by-pointer, returned by sret),
+//! and the buffer it points at is real heap memory acquired through
+//! `tuo_rt_alloc` and freed by the `Drop` glue — see the "Heap values" section
+//! below. Aggregate lowering follows ADR-0004: scalar
 //! leaves, by-pointer/sret call ABI. Fixed arrays are laid out inline —
 //! element `i` at `i × stride(T)` — and indexed by unchecked address
 //! arithmetic, because MIR asserts the bounds (`Assert { IndexOutOfBounds }`)
 //! before every `Projection::Index` use.
+//!
+//! # Heap values (ADR-0009 Stage B)
+//!
+//! An owned `String` and a growable `Array[Int]` are three-word
+//! `{ptr, len, cap}` headers (`specification/abi.md`) whose header lives in a
+//! slot and whose buffer is separate heap memory. The lowering matches the
+//! reference interpreter's `eval_heap_op`/`exec_heap_mutate` operation for
+//! operation:
+//!
+//! - **Empty** (`string_empty`/`array_empty`) writes `{ptr = ZERO_SIZE_SENTINEL,
+//!   len = 0, cap = 0}` — a fixed non-null pointer never dereferenced (`len` is
+//!   0) and never freed (`cap` is 0), the same sentinel discipline empty `Str`
+//!   literals use.
+//! - **Constructors** (`from_str`, `concat`, `slice`, and every grow) call
+//!   `tuo_rt_alloc(bytes, align)` and `memcpy` the source bytes in.
+//! - **Growth** (`push`/`append`/`push_byte`) is *alloc-new + copy + dealloc-old*
+//!   in this backend — the C shim stays acquire/release only. The new capacity
+//!   is `max(1, cap * 2)` (or exactly the needed length for a bulk `append`);
+//!   the old buffer is freed only when the old `cap != 0` (never the sentinel).
+//! - **Reads** (`len`, `byte_at`, `get`) load the `len`/element, bounds-checking
+//!   `byte_at`/`get`/`string_byte_at`/`array_get` through the shared `guard()`
+//!   `IndexOutOfBounds` path exactly as the interpreter traps.
+//! - `push_byte` traps `InvalidByte` (via the same guard path) when the byte is
+//!   outside `0..=255`, before touching any memory.
+//! - **`Drop`** of a `String`/`Array[Int]` frees the buffer with
+//!   `tuo_rt_dealloc(ptr, cap × stride, align)`, guarded on `cap != 0`.
+//!
+//! Only `len`, contents, and `pop`'s `Option` are observable; the capacity and
+//! the buffer's identity are not, so any doubling policy agrees with the
+//! interpreter. A move de-initializes the moved-from place in MIR, so the header
+//! is memcpy'd once and freed exactly once — no double-free.
 //!
 //! # Strings and effects (ADR-0006 Stage B)
 //!
@@ -94,14 +130,14 @@ use cranelift_object::ObjectModule;
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    Arg, BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
-    Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
+    Arg, BinOp, CastKind, Const, EffectOp, Function, HeapMutOp, HeapOp, Operand, PassMode, Place,
+    Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
-use tuo_runtime::{TRAP_SYMBOL, TrapCode, effect};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
 use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
@@ -111,6 +147,14 @@ use crate::{CodegenCtx, FUNCTION_LINKAGE};
 /// word past the data pointer (`{u8 *ptr, usize len}`, `specification/abi.md`
 /// "Slices").
 const STR_LEN_OFFSET: i32 = POINTER_SIZE as i32;
+
+/// The byte offset of the `ptr` word inside a `String`/`Array` header
+/// (`{ptr, len, cap}`, `specification/abi.md`).
+const HDR_PTR_OFFSET: i32 = 0;
+/// The byte offset of the `len` word inside a `String`/`Array` header.
+const HDR_LEN_OFFSET: i32 = POINTER_SIZE as i32;
+/// The byte offset of the `cap` word inside a `String`/`Array` header.
+const HDR_CAP_OFFSET: i32 = 2 * POINTER_SIZE as i32;
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. This is the third outcome added to the original scalar/unit
@@ -202,31 +246,21 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
 /// yet, or `None` if `ty` is not one. Mirrors the LLVM backend's
 /// `heap_type_refusal` word for word (bar the backend name), so the two
 /// backends refuse the same boundary with the same explanation. `Str` is no
-/// longer here: ADR-0006 Stage B lowers it as an ordinary two-word aggregate.
+/// longer here (ADR-0006 Stage B lowers it as a two-word aggregate), and since
+/// ADR-0009 Stage B neither are the owned `String` and the growable
+/// `Array[Int]` — they are three-word `{ptr, len, cap}` aggregates backed by
+/// real heap memory (the buffer the header points at). Only the memory wrappers
+/// (`Box`/`Shared`/`Weak`) remain refused, awaiting a later ADR.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
-    let (what, road_back) = match ty {
-        Ty::String => (
-            "a `String` value",
-            "the owned `String` lands with ADR-0009 Stage B",
-        ),
-        Ty::Array(_) => (
-            "the growable `Array[T]`",
-            "it lands with ADR-0009 Stage B (the fixed `[T; N]` is lowered)",
-        ),
-        Ty::Wrapper(kind, _) => {
-            return Some(format!(
-                "`{context}` uses a `{}[T]` heap wrapper, which the Cranelift backend does not \
-                 lower yet (heap wrappers await a later ADR); the interpreter \
-                 (`tuo spec`/`tuo verify`) remains the reference",
-                kind.name()
-            ));
-        }
-        _ => return None,
-    };
-    Some(format!(
-        "`{context}` uses {what}, which the Cranelift backend does not lower yet ({road_back}); \
-         the interpreter (`tuo spec`/`tuo verify`) remains the reference"
-    ))
+    match ty {
+        Ty::Wrapper(kind, _) => Some(format!(
+            "`{context}` uses a `{}[T]` heap wrapper, which the Cranelift backend does not \
+             lower yet (heap wrappers await a later ADR); the interpreter \
+             (`tuo spec`/`tuo verify`) remains the reference",
+            kind.name()
+        )),
+        _ => None,
+    }
 }
 
 /// Declare then define every lowerable function of `program` into `module`.
@@ -633,21 +667,16 @@ impl<'a> Lowering<'a> {
             // the matching `tuo_runtime::effect` symbol, which the CLI links
             // into every built binary alongside the trap shim.
             Statement::Effect { op, args, dest } => self.lower_effect(*op, args, dest),
-            // An in-place heap mutation (ADR-0009 Stage A) mutates an owned
-            // `String`/`Array[I64]`, which classification already refuses;
-            // this arm keeps the refusal clean if one is ever reached
-            // another way.
-            Statement::HeapMutate { .. } => Err(CodegenError::unsupported(
-                "the owned `String`/`Array[Int]` heap mutations are not lowered by the \
-                 Cranelift backend yet (they land with ADR-0009 Stage B); the interpreter \
-                 (`tuo spec`/`tuo verify`) remains the reference",
-            )),
-            Statement::Drop { .. } => {
-                // v0 supported values own no host resource; a Stage-1 aggregate
-                // owns no heap (scalar fields only), so its drop is a no-op too,
-                // exactly like a scalar's. Nothing to emit.
-                Ok(())
-            }
+            // An in-place heap mutation (ADR-0009 Stage B): mutate the owned
+            // `String`/`Array[Int]` at `target` through its header, growing the
+            // buffer when needed, and store the op's result into `dest`.
+            Statement::HeapMutate {
+                op,
+                target,
+                args,
+                dest,
+            } => self.lower_heap_mutate(*op, target, args, dest),
+            Statement::Drop { place } => self.lower_drop(place),
         }
     }
 
@@ -666,6 +695,13 @@ impl<'a> Lowering<'a> {
                 op: StrOp::Slice,
                 args,
             } => self.lower_str_slice(place, args),
+            // A heap op that *produces* an owned `String`/`Array[Int]` (a
+            // three-word header) is materialized in place into the
+            // destination's header storage (ADR-0009 Stage B); the scalar-valued
+            // reads (`len`/`byte_at`/`get`) take the scalar rvalue path below.
+            Rvalue::HeapOp { op, subject, args } if heap_op_produces_aggregate(*op) => {
+                self.lower_heap_op_aggregate(place, *op, subject.as_ref(), args)
+            }
             // A unit-valued copy/move (a unit local, or a zero-sized aggregate
             // such as `[T; 0]`) carries no bytes: nothing to emit.
             Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
@@ -1000,15 +1036,19 @@ impl<'a> Lowering<'a> {
                      `lower_assign`)",
                 )),
             },
-            // The ADR-0009 heap operations produce or read owned
-            // `String`/`Array[I64]` values, which classification already
-            // refuses; this arm keeps the refusal clean (never a
-            // mis-compile) if one is ever reached another way.
-            Rvalue::HeapOp { .. } => Err(CodegenError::unsupported(
-                "the owned `String`/`Array[Int]` heap operations are not lowered by the \
-                 Cranelift backend yet (they land with ADR-0009 Stage B); the interpreter \
-                 (`tuo spec`/`tuo verify`) remains the reference",
-            )),
+            // The scalar-valued ADR-0009 heap reads (`string_len`,
+            // `string_byte_at`, `array_len`, `array_get`). The aggregate-
+            // producing heap ops are materialized by `lower_assign` and never
+            // reach here.
+            Rvalue::HeapOp { op, subject, args } => {
+                if heap_op_produces_aggregate(*op) {
+                    return Err(CodegenError::backend(
+                        "an aggregate-producing heap op reached the scalar rvalue path (it is \
+                         materialized by `lower_assign`)",
+                    ));
+                }
+                self.lower_heap_op_scalar(*op, subject.as_ref(), args)
+            }
         }
     }
 
@@ -1930,14 +1970,43 @@ impl<'a> Lowering<'a> {
                 let result = self.builder.inst_results(call)[0];
                 self.write_place(dest, result)
             }
-            // `write_string` borrows an owned `String`, which classification
-            // already refuses; this arm keeps the refusal clean if the
-            // statement is ever reached another way.
-            EffectOp::WriteString => Err(CodegenError::unsupported(
-                "`std::rt::write_string` is not lowered by the Cranelift backend yet (it \
-                 lands with ADR-0009 Stage B); the interpreter cannot run effects either — \
-                 effectful programs await the Stage B lowering",
-            )),
+            // `write_string(fd, in s: String)` (ADR-0009 Stage B): load the
+            // `{ptr, len}` from the borrowed `String` header and call the same
+            // `tuo_rt_write` symbol `write` uses (the runtime writes bytes; it
+            // neither knows nor cares whether they came from a `Str` view or an
+            // owned buffer).
+            EffectOp::WriteString => {
+                let [fd, s] = args else {
+                    return Err(CodegenError::backend(
+                        "write_string expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let header = match s {
+                    Arg::Borrow(place) => self.borrow_address(place)?,
+                    Arg::Value(_) | Arg::BorrowMut(_) => {
+                        return Err(CodegenError::backend(
+                            "write_string's String argument must be an `in` borrow",
+                        ));
+                    }
+                };
+                let ptr = self.builder.ins().load(
+                    self.pointer_type,
+                    MemFlags::trusted(),
+                    header,
+                    HDR_PTR_OFFSET,
+                );
+                let len = self.builder.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    header,
+                    HDR_LEN_OFFSET,
+                );
+                let func_ref = self.effect_func_ref(EffectOp::Write);
+                let call = self.builder.ins().call(func_ref, &[fd, ptr, len]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
             EffectOp::Exit => {
                 let [code] = args else {
                     return Err(CodegenError::backend("exit expects exactly 1 argument"));
@@ -1979,10 +2048,16 @@ impl<'a> Lowering<'a> {
                 signature.params.push(AbiParam::new(types::I64));
                 effect::EXIT_SYMBOL
             }
-            // `WriteString` is refused before any symbol is needed
-            // (ADR-0009 Stage B lands its lowering and runtime symbol).
+            // `write_string` writes bytes through the same `tuo_rt_write`
+            // symbol as `write` (its lowering passes `EffectOp::Write` here,
+            // extracting the `{ptr, len}` from the borrowed header); this arm
+            // maps to the write symbol so it is never a landmine.
             EffectOp::WriteString => {
-                unreachable!("write_string is refused before its symbol is referenced")
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::WRITE_SYMBOL
             }
         };
         let id = self
@@ -2007,6 +2082,571 @@ impl<'a> Lowering<'a> {
             .declare_function("memcmp", Linkage::Import, &signature)
             .expect("declaring the libc memcmp symbol");
         self.module.declare_func_in_func(id, self.builder.func)
+    }
+
+    // ----- heap values (ADR-0009 Stage B) -----
+
+    /// Declare (on demand) and reference `tuo_rt_alloc(size, align) -> ptr`,
+    /// mirroring how the trap/effect symbols are imported. The CLI links the
+    /// allocator C shim into every built binary, so the symbol resolves.
+    fn alloc_func_ref(&mut self) -> cranelift_codegen::ir::FuncRef {
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        signature.params.push(AbiParam::new(self.pointer_type)); // size (usize)
+        signature.params.push(AbiParam::new(self.pointer_type)); // align (usize)
+        signature.returns.push(AbiParam::new(self.pointer_type));
+        let id = self
+            .module
+            .declare_function(alloc::ALLOC_SYMBOL, Linkage::Import, &signature)
+            .expect("declaring the runtime alloc symbol");
+        self.module.declare_func_in_func(id, self.builder.func)
+    }
+
+    /// Declare (on demand) and reference `tuo_rt_dealloc(ptr, size, align)`.
+    fn dealloc_func_ref(&mut self) -> cranelift_codegen::ir::FuncRef {
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        signature.params.push(AbiParam::new(self.pointer_type)); // ptr
+        signature.params.push(AbiParam::new(self.pointer_type)); // size (usize)
+        signature.params.push(AbiParam::new(self.pointer_type)); // align (usize)
+        let id = self
+            .module
+            .declare_function(alloc::DEALLOC_SYMBOL, Linkage::Import, &signature)
+            .expect("declaring the runtime dealloc symbol");
+        self.module.declare_func_in_func(id, self.builder.func)
+    }
+
+    /// Call `tuo_rt_alloc(bytes, align)` and return the buffer pointer. `bytes`
+    /// is a runtime `usize` value; `align` is a compile-time constant (1 for a
+    /// `String` byte buffer, `align_of(T)` for an `Array` element buffer). The
+    /// runtime never returns null (it traps on OOM), so the result is a live
+    /// pointer.
+    fn rt_alloc(&mut self, bytes: ClifValue, align: i64) -> ClifValue {
+        let align = self.builder.ins().iconst(self.pointer_type, align);
+        let func_ref = self.alloc_func_ref();
+        let call = self.builder.ins().call(func_ref, &[bytes, align]);
+        self.builder.inst_results(call)[0]
+    }
+
+    /// Call `tuo_rt_dealloc(ptr, bytes, align)`. The C shim frees the block; a
+    /// zero-`bytes` block is the sentinel and is a no-op there, but callers
+    /// additionally guard `cap != 0` before ever reaching a dealloc so a
+    /// sentinel is never passed.
+    fn rt_dealloc(&mut self, ptr: ClifValue, bytes: ClifValue, align: i64) {
+        let align = self.builder.ins().iconst(self.pointer_type, align);
+        let func_ref = self.dealloc_func_ref();
+        self.builder.ins().call(func_ref, &[ptr, bytes, align]);
+    }
+
+    /// The fixed non-null sentinel pointer for an empty (zero-capacity) heap
+    /// value, matching `alloc::ZERO_SIZE_SENTINEL`. It is never dereferenced
+    /// (`len` is 0) and never freed (`cap` is 0).
+    fn zero_size_sentinel(&mut self) -> ClifValue {
+        self.builder
+            .ins()
+            .iconst(self.pointer_type, alloc::ZERO_SIZE_SENTINEL as i64)
+    }
+
+    /// A whole-header address for `place`: a bare `String`/`Array` local's slot,
+    /// a projected header, or a borrowed header parameter.
+    fn header_address(&mut self, place: &Place) -> Result<ClifValue, CodegenError> {
+        self.aggregate_dest_address(place)
+    }
+
+    /// Load the `{ptr, len, cap}` words of a `String`/`Array` header at `base`.
+    fn load_header(&mut self, base: ClifValue) -> (ClifValue, ClifValue, ClifValue) {
+        let ptr =
+            self.builder
+                .ins()
+                .load(self.pointer_type, MemFlags::trusted(), base, HDR_PTR_OFFSET);
+        let len = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), base, HDR_LEN_OFFSET);
+        let cap = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), base, HDR_CAP_OFFSET);
+        (ptr, len, cap)
+    }
+
+    /// Store the `{ptr, len, cap}` words of a `String`/`Array` header at `base`.
+    fn store_header(&mut self, base: ClifValue, ptr: ClifValue, len: ClifValue, cap: ClifValue) {
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), ptr, base, HDR_PTR_OFFSET);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), len, base, HDR_LEN_OFFSET);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), cap, base, HDR_CAP_OFFSET);
+    }
+
+    /// The element stride of a growable heap value's buffer: `1` for a
+    /// `String`'s bytes, `stride(Int)` (8) for an `Array[Int]`. Derived from the
+    /// header place's declared type.
+    fn heap_stride(&self, place: &Place) -> Result<i64, CodegenError> {
+        match self.place_type(place) {
+            Ty::String => Ok(1),
+            Ty::Array(element) => i64::try_from(self.layout(&element)?.stride())
+                .map_err(|_| CodegenError::backend("array element stride exceeds i64")),
+            other => Err(CodegenError::backend(format!(
+                "a heap operation targeted a non-heap type: {other:?}"
+            ))),
+        }
+    }
+
+    /// The dealloc alignment of a heap value's buffer: `1` for a `String`,
+    /// `align(Int)` for an `Array[Int]` (matching `specification/abi.md`).
+    fn heap_align(&self, place: &Place) -> Result<i64, CodegenError> {
+        match self.place_type(place) {
+            Ty::String => Ok(1),
+            Ty::Array(element) => i64::try_from(self.layout(&element)?.align)
+                .map_err(|_| CodegenError::backend("array element align exceeds i64")),
+            other => Err(CodegenError::backend(format!(
+                "a heap operation targeted a non-heap type: {other:?}"
+            ))),
+        }
+    }
+
+    /// Materialize an aggregate-producing heap op (`string_empty`,
+    /// `string_from_str`, `string_concat`, `string_slice`, `array_empty`) into
+    /// `dest`'s three-word header storage, matching the interpreter's
+    /// `eval_heap_op`. The subject-reading ops (`string_slice`) are handled
+    /// here; the scalar reads go through `lower_heap_op_scalar`.
+    fn lower_heap_op_aggregate(
+        &mut self,
+        dest: &Place,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<(), CodegenError> {
+        match op {
+            HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
+                // `{ptr = sentinel, len = 0, cap = 0}` — never dereferenced,
+                // never freed.
+                let base = self.aggregate_dest_address(dest)?;
+                let sentinel = self.zero_size_sentinel();
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                self.store_header(base, sentinel, zero, zero);
+                Ok(())
+            }
+            HeapOp::StringFromStr => {
+                // alloc `len` bytes, copy the Str's `{ptr, len}` in, header
+                // `{buf, len, len}`.
+                let s = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("string_from_str is missing its Str"))?;
+                let (src_ptr, len) = self.str_operand_parts(s)?;
+                self.build_owned_from_bytes(dest, src_ptr, len)
+            }
+            HeapOp::StringConcat => {
+                // alloc `la + lb`, copy `a` then `b`, header `{buf, la+lb, la+lb}`.
+                let [a, b] = args else {
+                    return Err(CodegenError::backend(
+                        "string_concat expects 2 Str operands",
+                    ));
+                };
+                let (ptr_a, len_a) = self.str_operand_parts(a)?;
+                let (ptr_b, len_b) = self.str_operand_parts(b)?;
+                let total = self.builder.ins().iadd(len_a, len_b);
+                let buf = self.rt_alloc(total, 1);
+                self.builder
+                    .call_memcpy(self.frontend_config, buf, ptr_a, len_a);
+                // Copy `b` at `buf + len_a`.
+                let dest_b = self.builder.ins().iadd(buf, len_a);
+                self.builder
+                    .call_memcpy(self.frontend_config, dest_b, ptr_b, len_b);
+                let base = self.aggregate_dest_address(dest)?;
+                self.store_header(base, buf, total, total);
+                Ok(())
+            }
+            HeapOp::StringSlice => {
+                // bounds-check 0 <= a <= b <= len, alloc (b - a), copy the
+                // range, header `{buf, b-a, b-a}` — a COPY (owned String out).
+                let subject = subject.ok_or_else(|| {
+                    CodegenError::backend("string_slice is missing its String subject")
+                })?;
+                let [a, b] = args else {
+                    return Err(CodegenError::backend(
+                        "string_slice expects 2 index operands",
+                    ));
+                };
+                let header = self.header_address(subject)?;
+                let (src_ptr, len, _cap) = self.load_header(header);
+                let start = self.lower_operand(a)?;
+                let end = self.lower_operand(b)?;
+                // `start >u end` catches `start > end` and negative `start`;
+                // `end >u len` catches `end > len` and negative `end` — exactly
+                // the interpreter's `0 <= a <= b <= len`.
+                let bad_order = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThan, start, end);
+                self.guard(bad_order, TrapCode::IndexOutOfBounds);
+                let bad_end = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThan, end, len);
+                self.guard(bad_end, TrapCode::IndexOutOfBounds);
+                let count = self.builder.ins().isub(end, start);
+                let range_ptr = self.builder.ins().iadd(src_ptr, start);
+                self.build_owned_from_bytes(dest, range_ptr, count)
+            }
+            _ => Err(CodegenError::backend(
+                "a non-aggregate heap op reached `lower_heap_op_aggregate`",
+            )),
+        }
+    }
+
+    /// Build an owned `String` in `dest` from `count` bytes at `src`: alloc
+    /// `count` bytes (align 1), copy them in, and store the header
+    /// `{buf, count, count}`. `src` may point into `dest`'s own old buffer
+    /// (`string_slice` of a `String`), so the source bytes are read *into a
+    /// fresh buffer* — never aliasing the header being overwritten.
+    fn build_owned_from_bytes(
+        &mut self,
+        dest: &Place,
+        src: ClifValue,
+        count: ClifValue,
+    ) -> Result<(), CodegenError> {
+        let buf = self.rt_alloc(count, 1);
+        self.builder
+            .call_memcpy(self.frontend_config, buf, src, count);
+        let base = self.aggregate_dest_address(dest)?;
+        self.store_header(base, buf, count, count);
+        Ok(())
+    }
+
+    /// Lower a scalar-valued heap read (`string_len`, `string_byte_at`,
+    /// `array_len`, `array_get`) to an `I64`, matching the interpreter's
+    /// `eval_heap_op`: the length ops load the `len` word; the element reads
+    /// bounds-check through the `guard()` `IndexOutOfBounds` path (one unsigned
+    /// compare covers `i < 0` and `i >= len`) then load the byte/element.
+    fn lower_heap_op_scalar(
+        &mut self,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<ClifValue, CodegenError> {
+        let subject = subject
+            .ok_or_else(|| CodegenError::backend("a heap read is missing its subject place"))?;
+        let header = self.header_address(subject)?;
+        let (ptr, len, _cap) = self.load_header(header);
+        match op {
+            HeapOp::StringLen | HeapOp::ArrayLen => Ok(len),
+            HeapOp::StringByteAt => {
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+                self.guard(oob, TrapCode::IndexOutOfBounds);
+                let addr = self.builder.ins().iadd(ptr, index);
+                let byte = self
+                    .builder
+                    .ins()
+                    .load(types::I8, MemFlags::trusted(), addr, 0);
+                Ok(self.builder.ins().uextend(types::I64, byte))
+            }
+            HeapOp::ArrayGet => {
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+                self.guard(oob, TrapCode::IndexOutOfBounds);
+                // Element stride is 8 (Int); address = ptr + index * 8.
+                let stride = self.heap_stride(subject)?;
+                let offset = self.builder.ins().imul_imm(index, stride);
+                let addr = self.builder.ins().iadd(ptr, offset);
+                Ok(self
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::trusted(), addr, 0))
+            }
+            _ => Err(CodegenError::backend(
+                "an aggregate-producing heap op reached `lower_heap_op_scalar`",
+            )),
+        }
+    }
+
+    /// The single integer index operand of a `byte_at`/`get` heap read.
+    fn heap_index_arg(&mut self, args: &[Operand]) -> Result<ClifValue, CodegenError> {
+        let index = args
+            .first()
+            .ok_or_else(|| CodegenError::backend("a heap index op is missing its index"))?;
+        self.lower_operand(index)
+    }
+
+    /// Lower `Statement::HeapMutate` (`push_byte`/`append`/`push`/`pop`),
+    /// mutating `target`'s buffer in place through its header and storing the
+    /// op's result into `dest`, matching the interpreter's `exec_heap_mutate`.
+    /// `push_byte` traps `InvalidByte` *before* any state change; growth is
+    /// alloc-new + copy + dealloc-old, freeing the old buffer only when the old
+    /// `cap != 0` (never the sentinel).
+    fn lower_heap_mutate(
+        &mut self,
+        op: HeapMutOp,
+        target: &Place,
+        args: &[Operand],
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        let stride = self.heap_stride(target)?;
+        let align = self.heap_align(target)?;
+        match op {
+            HeapMutOp::PushByte => {
+                // Trap `InvalidByte` unless 0 <= b <= 255 (unsigned: b >u 255),
+                // before touching any memory.
+                let byte = self.heap_index_arg(args)?;
+                let too_big = self
+                    .builder
+                    .ins()
+                    .icmp_imm(IntCC::UnsignedGreaterThan, byte, 255);
+                self.guard(too_big, TrapCode::InvalidByte);
+                let one = self.builder.ins().iconst(types::I64, 1);
+                let buf = self.ensure_capacity(target, one, stride, align)?;
+                // Store the byte at buf + len, then len += 1.
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header);
+                let addr = self.builder.ins().iadd(buf, len);
+                let byte8 = self.builder.ins().ireduce(types::I8, byte);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), byte8, addr, 0);
+                let new_len = self.builder.ins().iadd_imm(len, 1);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
+                self.write_unit_dest(dest)
+            }
+            HeapMutOp::Append => {
+                // Grow to len + t.len if needed, copy t's bytes, len += t.len.
+                let t = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("append is missing its Str"))?;
+                let (t_ptr, t_len) = self.str_operand_parts(t)?;
+                let buf = self.ensure_capacity(target, t_len, stride, align)?;
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header);
+                let dest_addr = self.builder.ins().iadd(buf, len);
+                self.builder
+                    .call_memcpy(self.frontend_config, dest_addr, t_ptr, t_len);
+                let new_len = self.builder.ins().iadd(len, t_len);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
+                self.write_unit_dest(dest)
+            }
+            HeapMutOp::Push => {
+                // Grow by one element, store `v` at buf + len*stride, len += 1.
+                let v = self
+                    .heap_index_arg(args)
+                    .map_err(|_| CodegenError::backend("push is missing its element"))?;
+                let one = self.builder.ins().iconst(types::I64, 1);
+                let buf = self.ensure_capacity(target, one, stride, align)?;
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header);
+                let offset = self.builder.ins().imul_imm(len, stride);
+                let addr = self.builder.ins().iadd(buf, offset);
+                self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
+                let new_len = self.builder.ins().iadd_imm(len, 1);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
+                self.write_unit_dest(dest)
+            }
+            HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+        }
+    }
+
+    /// Ensure `target`'s buffer has room for `extra` more elements (bytes for a
+    /// `String`, `stride`-wide elements for an `Array`): if `len + extra > cap`,
+    /// allocate a new buffer of `max(len + extra, cap * 2, 1)` capacity, copy the
+    /// live `len × stride` bytes over, free the old buffer (only when the old
+    /// `cap != 0`), and update the header's `ptr`/`cap` in place. Returns the
+    /// (possibly new) buffer pointer, with `len` unchanged. Capacity and buffer
+    /// identity are unobservable, so the doubling policy is invisible.
+    fn ensure_capacity(
+        &mut self,
+        target: &Place,
+        extra: ClifValue,
+        stride: i64,
+        align: i64,
+    ) -> Result<ClifValue, CodegenError> {
+        let header = self.header_address(target)?;
+        let (ptr, len, cap) = self.load_header(header);
+        let needed = self.builder.ins().iadd(len, extra);
+        // fits = needed <= cap ; if it fits, keep the buffer.
+        let fits = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedLessThanOrEqual, needed, cap);
+
+        let grow_block = self.builder.create_block();
+        let done_block = self.builder.create_block();
+        self.builder
+            .append_block_param(done_block, self.pointer_type);
+        self.builder
+            .ins()
+            .brif(fits, done_block, &[ptr.into()], grow_block, &[]);
+
+        // Grow: new_cap = max(needed, cap*2, 1).
+        self.builder.switch_to_block(grow_block);
+        self.builder.seal_block(grow_block);
+        let doubled = self.builder.ins().imul_imm(cap, 2);
+        let mut new_cap = self.builder.ins().umax(needed, doubled);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        new_cap = self.builder.ins().umax(new_cap, one);
+        // Allocate new_cap * stride bytes.
+        let new_bytes = self.builder.ins().imul_imm(new_cap, stride);
+        let new_buf = self.rt_alloc(new_bytes, align);
+        // Copy the live len * stride bytes from the old buffer.
+        let live_bytes = self.builder.ins().imul_imm(len, stride);
+        self.builder
+            .call_memcpy(self.frontend_config, new_buf, ptr, live_bytes);
+        // Free the old buffer only when the old cap != 0 (never the sentinel).
+        let old_cap_zero = self.builder.ins().icmp_imm(IntCC::Equal, cap, 0);
+        let free_block = self.builder.create_block();
+        let after_free = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(old_cap_zero, after_free, &[], free_block, &[]);
+        self.builder.switch_to_block(free_block);
+        self.builder.seal_block(free_block);
+        let old_bytes = self.builder.ins().imul_imm(cap, stride);
+        self.rt_dealloc(ptr, old_bytes, align);
+        self.builder.ins().jump(after_free, &[]);
+        self.builder.switch_to_block(after_free);
+        self.builder.seal_block(after_free);
+        // Write the new ptr/cap into the header (len unchanged).
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), new_buf, header, HDR_PTR_OFFSET);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), new_cap, header, HDR_CAP_OFFSET);
+        self.builder.ins().jump(done_block, &[new_buf.into()]);
+
+        self.builder.switch_to_block(done_block);
+        self.builder.seal_block(done_block);
+        Ok(self.builder.block_params(done_block)[0])
+    }
+
+    /// Lower `pop(target: mut Array[Int]) -> Option[Int]`: if `len == 0` store
+    /// `None` (variant 1, empty) into `dest`; else `len -= 1`, load the last
+    /// element, and store `Some { value }` (variant 0, payload at the ABI's
+    /// variant-field offset). Never traps; the buffer is not shrunk (capacity is
+    /// unobservable). `dest` is an `Option[Int]` aggregate.
+    fn lower_array_pop(
+        &mut self,
+        target: &Place,
+        stride: i64,
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        let header = self.header_address(target)?;
+        let (ptr, len, _cap) = self.load_header(header);
+        let dest_ty = self.place_type(dest);
+        let dest_base = self.aggregate_dest_address(dest)?;
+        let is_empty = self.builder.ins().icmp_imm(IntCC::Equal, len, 0);
+
+        let none_block = self.builder.create_block();
+        let some_block = self.builder.create_block();
+        let join = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(is_empty, none_block, &[], some_block, &[]);
+
+        // None = variant 1, empty payload: store the tag only.
+        self.builder.switch_to_block(none_block);
+        self.builder.seal_block(none_block);
+        let none_tag = self.builder.ins().iconst(types::I32, 1);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), none_tag, dest_base, 0);
+        self.builder.ins().jump(join, &[]);
+
+        // Some = variant 0, payload at the ABI offset: len -= 1, load the last
+        // element, store the tag then the payload.
+        self.builder.switch_to_block(some_block);
+        self.builder.seal_block(some_block);
+        let new_len = self.builder.ins().iadd_imm(len, -1);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
+        let offset = self.builder.ins().imul_imm(new_len, stride);
+        let elem_addr = self.builder.ins().iadd(ptr, offset);
+        let value = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), elem_addr, 0);
+        let some_tag = self.builder.ins().iconst(types::I32, 0);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), some_tag, dest_base, 0);
+        let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
+            .map_err(|error| self.layout_error(error))?;
+        let payload_offset = *payload_offsets
+            .first()
+            .ok_or_else(|| CodegenError::backend("Option[Int] Some payload has no field"))?;
+        let payload_offset = i64::try_from(payload_offset)
+            .map_err(|_| CodegenError::backend("Option payload offset exceeds i64"))?;
+        let payload_addr = self.builder.ins().iadd_imm(dest_base, payload_offset);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), value, payload_addr, 0);
+        self.builder.ins().jump(join, &[]);
+
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        Ok(())
+    }
+
+    /// A `()`-typed `HeapMutate` destination carries no value: nothing to
+    /// write. (Kept explicit so the push/append paths read clearly.)
+    fn write_unit_dest(&mut self, _dest: &Place) -> Result<(), CodegenError> {
+        Ok(())
+    }
+
+    /// Lower `Statement::Drop` (ADR-0009 Stage B). A `String`/`Array[Int]`
+    /// place frees its buffer with `tuo_rt_dealloc(ptr, cap × stride, align)`,
+    /// guarded on `cap != 0` (an empty sentinel is never freed). Every other
+    /// value (scalars, `Str`, Stage-1 aggregates, fixed arrays) owns no heap, so
+    /// its drop is a no-op. The moved-from place is de-initialized by MIR and
+    /// never dropped, so a buffer is freed exactly once.
+    fn lower_drop(&mut self, place: &Place) -> Result<(), CodegenError> {
+        let ty = self.place_type(place);
+        let (stride, align) = match &ty {
+            Ty::String => (1i64, 1i64),
+            Ty::Array(element) => {
+                // Array[Int] only in v0: the element is a scalar with no inner
+                // drop; free just the buffer. (Nested drops — arrays of strings
+                // — are out of v0 scope, `specification/abi.md`.)
+                let stride = i64::try_from(self.layout(element)?.stride())
+                    .map_err(|_| CodegenError::backend("array element stride exceeds i64"))?;
+                let align = i64::try_from(self.layout(element)?.align)
+                    .map_err(|_| CodegenError::backend("array element align exceeds i64"))?;
+                (stride, align)
+            }
+            // Scalars, Str, Stage-1 aggregates, fixed arrays: no heap to free.
+            _ => return Ok(()),
+        };
+        let base = self.header_address(place)?;
+        let (ptr, _len, cap) = self.load_header(base);
+        // Guard cap != 0: free only a real buffer, never the empty sentinel.
+        let has_buffer = self.builder.ins().icmp_imm(IntCC::NotEqual, cap, 0);
+        let free_block = self.builder.create_block();
+        let after = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(has_buffer, free_block, &[], after, &[]);
+        self.builder.switch_to_block(free_block);
+        self.builder.seal_block(free_block);
+        let bytes = self.builder.ins().imul_imm(cap, stride);
+        self.rt_dealloc(ptr, bytes, align);
+        self.builder.ins().jump(after, &[]);
+        self.builder.switch_to_block(after);
+        self.builder.seal_block(after);
+        Ok(())
     }
 
     // ----- traps -----
@@ -2346,6 +2986,21 @@ fn trap_code_of(trap: Trap) -> TrapCode {
         Trap::IndexOutOfBounds => TrapCode::IndexOutOfBounds,
         Trap::Unreachable => TrapCode::Unreachable,
     }
+}
+
+/// Whether a `Rvalue::HeapOp` produces an owned `String`/`Array[Int]` value (a
+/// three-word header, materialized in place by `lower_heap_op_aggregate`) rather
+/// than a scalar `I64` (the length/element reads, taken by
+/// `lower_heap_op_scalar`). Matches the interpreter's split in `eval_heap_op`.
+fn heap_op_produces_aggregate(op: HeapOp) -> bool {
+    matches!(
+        op,
+        HeapOp::StringEmpty
+            | HeapOp::StringFromStr
+            | HeapOp::StringConcat
+            | HeapOp::StringSlice
+            | HeapOp::ArrayEmpty
+    )
 }
 
 /// The inclusive `(min, max)` bounds of an integer kind, as `i64` (the widest

@@ -1,0 +1,6 @@
+// ADR-0009 Stage B: an owned `String` from `concat` (heap allocation + copy),
+// whose byte length is returned. "hello" + "world" = 10 bytes → exit 10.
+fn main() -> Int {
+    let s = std::string::concat("hello", "world");
+    std::string::len(s)
+}

@@ -4,9 +4,10 @@
 //! to **verified** MIR, hand it to a native backend behind the tuonelang-owned
 //! [`CodegenBackend`](tuo_codegen::CodegenBackend) interface, then link the
 //! emitted object together with the runtime's trap shim (compiled from
-//! [`tuo_runtime::trap_runtime_c_source`]) and effect shim (compiled from
-//! [`tuo_runtime::effect::effect_runtime_c_source`], ADR-0006 Stage B) into a
-//! native executable using the platform `cc`.
+//! [`tuo_runtime::trap_runtime_c_source`]), effect shim (compiled from
+//! [`tuo_runtime::effect::effect_runtime_c_source`], ADR-0006 Stage B), and
+//! allocator shim (compiled from [`tuo_runtime::alloc::alloc_runtime_c_source`],
+//! ADR-0009 Stage B) into a native executable using the platform `cc`.
 //!
 //! Which backend runs is a `--release` choice, and the *only* thing it changes
 //! is speed: the default debug build uses the [Cranelift
@@ -399,11 +400,14 @@ fn codegen_failure(error: CodegenError) -> Failure {
     }
 }
 
-/// Link the backend's object together with the runtime trap shim and the
-/// runtime effect shim into an executable at `exe_path`, using the platform
-/// `cc`. The effect shim (ADR-0006 Stage B: `tuo_rt_write`/`tuo_rt_read_byte`/
-/// `tuo_rt_exit`) is linked unconditionally, like `-lm` — harmless for a pure
-/// program, required the moment one performs an effect.
+/// Link the backend's object together with the runtime trap shim, the runtime
+/// effect shim, and the runtime allocator shim into an executable at
+/// `exe_path`, using the platform `cc`. The effect shim (ADR-0006 Stage B:
+/// `tuo_rt_write`/`tuo_rt_read_byte`/`tuo_rt_exit`) and the allocator shim
+/// (ADR-0009 Stage B: `tuo_rt_alloc`/`tuo_rt_dealloc`) are linked
+/// unconditionally, like `-lm` — harmless for a program that never allocates or
+/// performs an effect, required the moment one builds a `String`/`Array` or
+/// writes to a descriptor.
 fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     let dir = exe_path
         .parent()
@@ -427,17 +431,22 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     let effect_c = dir.join(format!("{stem}.tuo_rt_effect.c"));
     std::fs::write(&effect_c, tuo_runtime::effect::effect_runtime_c_source())
         .map_err(|error| format!("writing the effect runtime shim: {error}"))?;
+    let alloc_c = dir.join(format!("{stem}.tuo_rt_alloc.c"));
+    std::fs::write(&alloc_c, tuo_runtime::alloc::alloc_runtime_c_source())
+        .map_err(|error| format!("writing the allocator runtime shim: {error}"))?;
 
-    // `cc object runtime.c effect.c -lm -o exe` — the platform driver picks
-    // the linker and the correct startup files, so the produced binary has a
-    // real `main` entry point and a working C ABI on every supported host.
-    // `-lm` resolves the C math library's `fmod`/`fmodf`, which the Cranelift
-    // backend calls for float remainder (Cranelift has no `frem` instruction)
-    // — harmless on macOS (libm is part of libSystem), required on Linux.
+    // `cc object runtime.c effect.c alloc.c -lm -o exe` — the platform driver
+    // picks the linker and the correct startup files, so the produced binary
+    // has a real `main` entry point and a working C ABI on every supported
+    // host. `-lm` resolves the C math library's `fmod`/`fmodf`, which the
+    // Cranelift backend calls for float remainder (Cranelift has no `frem`
+    // instruction) — harmless on macOS (libm is part of libSystem), required on
+    // Linux.
     let status = Command::new("cc")
         .arg(&object_path)
         .arg(&runtime_c)
         .arg(&effect_c)
+        .arg(&alloc_c)
         .arg("-lm")
         .arg("-o")
         .arg(exe_path)
@@ -448,6 +457,7 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     let _ = std::fs::remove_file(&object_path);
     let _ = std::fs::remove_file(&runtime_c);
     let _ = std::fs::remove_file(&effect_c);
+    let _ = std::fs::remove_file(&alloc_c);
 
     if status.success() {
         Ok(())

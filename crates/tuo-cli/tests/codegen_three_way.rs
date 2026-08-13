@@ -289,16 +289,38 @@ fn strings_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0009 Stage B: the owned `String` and growable `Array[Int]` as native
+/// three-word `{ptr, len, cap}` headers over real heap memory. `concat`,
+/// `push_byte` in a loop, `array push`/`get`/`len`, `pop` (Some/None via
+/// `match`), `from_str` + `slice` + `byte_at`, and the `InvalidByte` trap. All
+/// three engines must agree: the interpreter's byte/element semantics, and both
+/// backends' identical alloc-new+copy+dealloc-old growth (capacity and buffer
+/// identity are unobservable, so the doubling policy is invisible). Every heap
+/// value is dropped at scope end, freeing its buffer exactly once.
+#[test]
+fn owned_heap_values_agree_across_all_three_engines() {
+    for name in [
+        "str_owned_concat.tuo", // concat: alloc + copy, len out
+        "str_builder.tuo",      // push_byte loop: repeated growth
+        "arr_grow.tuo",         // array push loop + get + len
+        "arr_pop.tuo",          // pop unwrapped via match (Some/None)
+        "str_from_slice.tuo",   // from_str + slice (copy-out) + byte_at
+        "str_invalid_byte.tuo", // push_byte 256 traps InvalidByte on all three
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
-    // A program still outside the native subset (a function with an
-    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
-    // lowered since ADR-0006 Stage B) must be *refused* by both backends with
-    // a failure exit and an explanatory message, never silently mis-compiled.
-    // The interpreter remains the reference and can still run it. This asserts
-    // the two backends agree on the *boundary* of what they lower, not just on
-    // results inside it.
-    let path = fixture("unsupported_string.tuo");
+    // A program still outside the native subset (a function with a heap-wrapper
+    // `Box[T]` parameter, which awaits a later ADR — the owned
+    // `String`/`Array[Int]` are lowered since ADR-0009 Stage B, `Str` since
+    // ADR-0006 Stage B) must be *refused* by both backends with a failure exit
+    // and an explanatory message, never silently mis-compiled. The interpreter
+    // remains the reference and can still run it. This asserts the two backends
+    // agree on the *boundary* of what they lower, not just on results inside it.
+    let path = fixture("unsupported_wrapper.tuo");
     for release in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
         command.arg("build");
