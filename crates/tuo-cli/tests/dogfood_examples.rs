@@ -148,8 +148,12 @@ fn cli_stats_vendored_std_io_matches_the_catalog() {
     );
 }
 
-/// data-pipeline: a runnable record-processing pipeline. total_for(2) = 400,
-/// exit = 400 & 0xff = 144.
+/// data-pipeline: a runnable record-processing pipeline. Since ADR-0009 landed
+/// the allocator, `main` answers the query through the **growable-collection
+/// oracle** — it `push`es the filtered subset (a data-dependent size a fixed
+/// `[Int; N]` cannot express) into a heap-backed `Array[Int]`, then folds it —
+/// and its specs pin that path equal to the streaming fold. `sum_collected(2)`
+/// = `total_for(2)` = 400, exit = 400 & 0xff = 144 (unchanged).
 #[test]
 fn data_pipeline_checks_specs_and_runs() {
     let dir = example_dir("data-pipeline");

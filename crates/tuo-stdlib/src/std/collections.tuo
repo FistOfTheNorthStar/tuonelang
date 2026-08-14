@@ -1,18 +1,20 @@
-// std::collections — value collections and the array-operation contract.
+// std::collections — value collections and growable-array algorithms.
 //
-// This module has two honestly separated tiers.
+// This module is entirely executable.
 //
-//   Executable tier — `Pair[A, B]` and the counted-range helpers. These are
-//   flat value types and pure functions; every one runs, and every spec below
-//   executes through the reference interpreter.
+//   `Pair[A, B]` and the counted-range helpers — flat value types and pure
+//   functions over the scalar core.
 //
-//   Contract tier — the `Array[T]` operations at the bottom. `Array[T]` is the
-//   language's growable indexed sequence, but v0 has no array *constructor*
-//   expression, so these functions are type-checked signatures with documented
-//   contracts and no executable specs yet. They are marked `CONTRACT:` so a
-//   reader (human or machine) is never misled into thinking they run today. The
-//   single obvious array API lives here; it will gain specs the moment array
-//   literals land, with no signature change.
+//   `Array[Int]` algorithms — pure folds and searches over the language's
+//   growable indexed sequence. ADR-0009 landed the allocator core, so an
+//   `Array[Int]` can now be *built* (`std::array::empty`/`push`) and *read*
+//   (`std::array::len`/`get`); these algorithms are the obvious higher-level
+//   operations a caller reaches for on top of those builtins. Every one runs,
+//   and every spec below executes through the reference interpreter — the ops
+//   are pure, so a spec may build the array it folds. The array builtins
+//   (`std::array::{empty,push,pop,len,get}`) are the primitive layer; this
+//   module never re-spells them, only composes them into algorithms that add
+//   value.
 
 module std::collections;
 
@@ -120,58 +122,105 @@ pub fn range_contains(take start: Int, take end: Int, take value: Int) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Array[T] operations — the CONTRACT tier.
+// Array[Int] algorithms — pure folds and searches.
 //
-// `Array[T]` is the language's indexed sequence. Each function below has an
-// exact signature and a documented contract, but no executable spec: v0 offers
-// no array-literal expression, so an `Array[T]` value cannot yet be built to
-// feed a spec. These signatures are the single, stable array API; they are not
-// executable today and say so.
+// Each function borrows the array (`in xs`) and derives its length from
+// `std::array::len`, so there is no redundant `count` argument to keep in sync:
+// the array knows its own length now that it is a real growable value. These
+// are the single, stable higher-level array API; they run, and their specs
+// below build real arrays to exercise them.
+//
+// A small `singleton`/`of2`/`of3` set of constructors keeps the specs (and a
+// caller's tests) readable without re-spelling `std::array::push`.
 // ----------------------------------------------------------------------------
 
-/// CONTRACT (not executable in v0): the element at `index`.
-///
-/// Traps if `index >= len`. Once array literals exist this gains a spec with no
-/// change to this signature.
+/// A one-element array holding `a`.
 ///
 /// # Example
 /// ```tuo
-/// // let x = std::collections::get(items, 0);
+/// let xs = std::collections::singleton(7); // [7]
 /// ```
-pub fn get(in items: Array[Int], take index: Usize) -> Int {
-    items[index]
+pub fn singleton(take a: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, a);
+    xs
 }
 
-/// CONTRACT (not executable in v0): the sum of `count` leading elements.
-///
-/// The caller supplies `count` because v0 exposes no length query on an
-/// `Array[T]` value yet; `count` must not exceed the array's length.
+/// A two-element array `[a, b]`.
 ///
 /// # Example
 /// ```tuo
-/// // let total = std::collections::sum(items, n);
+/// let xs = std::collections::of2(3, 8); // [3, 8]
 /// ```
-pub fn sum(in items: Array[Int], take count: Usize) -> Int {
+pub fn of2(take a: Int, take b: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, a);
+    std::array::push(xs, b);
+    xs
+}
+
+/// A three-element array `[a, b, c]`.
+///
+/// # Example
+/// ```tuo
+/// let xs = std::collections::of3(1, 2, 3); // [1, 2, 3]
+/// ```
+pub fn of3(take a: Int, take b: Int, take c: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, a);
+    std::array::push(xs, b);
+    std::array::push(xs, c);
+    xs
+}
+
+/// The sum of every element in `xs`. Zero for the empty array.
+///
+/// # Example
+/// ```tuo
+/// let total = std::collections::sum(std::collections::of3(1, 2, 3)); // 6
+/// ```
+pub fn sum(in xs: Array[Int]) -> Int {
     var total = 0;
-    var i: Usize = 0;
-    while i < count {
-        total = total + items[i];
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
         i = i + 1;
     }
     total
 }
 
-/// CONTRACT (not executable in v0): does any of `count` leading elements equal
-/// `needle`?
+/// The largest element of `xs`, or `None` when `xs` is empty.
 ///
 /// # Example
 /// ```tuo
-/// // let found = std::collections::contains(items, n, 42);
+/// let m = std::collections::max_of(std::collections::of3(3, 9, 4)); // Some { value: 9 }
 /// ```
-pub fn contains(in items: Array[Int], take count: Usize, take needle: Int) -> Bool {
-    var i: Usize = 0;
-    while i < count {
-        if items[i] == needle {
+pub fn max_of(in xs: Array[Int]) -> Option[Int] {
+    if std::array::len(xs) == 0 {
+        return None;
+    }
+    var best = std::array::get(xs, 0);
+    var i = 1;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        if x > best {
+            best = x;
+        }
+        i = i + 1;
+    }
+    Some { value: best }
+}
+
+/// Does any element of `xs` equal `needle`?
+///
+/// # Example
+/// ```tuo
+/// let found = std::collections::contains(std::collections::of3(1, 2, 3), 2); // true
+/// ```
+pub fn contains(in xs: Array[Int], take needle: Int) -> Bool {
+    var i = 0;
+    while i < std::array::len(xs) {
+        if std::array::get(xs, i) == needle {
             return true;
         }
         i = i + 1;
@@ -179,10 +228,43 @@ pub fn contains(in items: Array[Int], take count: Usize, take needle: Int) -> Bo
     false
 }
 
+/// The index of the first element equal to `needle`, or `None` when absent.
+///
+/// # Example
+/// ```tuo
+/// let at = std::collections::index_of(std::collections::of3(7, 8, 9), 8); // Some { value: 1 }
+/// ```
+pub fn index_of(in xs: Array[Int], take needle: Int) -> Option[Int] {
+    var i = 0;
+    while i < std::array::len(xs) {
+        if std::array::get(xs, i) == needle {
+            return Some { value: i };
+        }
+        i = i + 1;
+    }
+    None
+}
+
+/// A **new** array holding `xs`'s elements in reverse order. `xs` is left
+/// untouched (it is only borrowed); the result is freshly allocated.
+///
+/// # Example
+/// ```tuo
+/// let ys = std::collections::reversed(std::collections::of3(1, 2, 3)); // [3, 2, 1]
+/// ```
+pub fn reversed(in xs: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = std::array::len(xs) - 1;
+    while i >= 0 {
+        std::array::push(out, std::array::get(xs, i));
+        i = i - 1;
+    }
+    out
+}
+
 // ----------------------------------------------------------------------------
-// Specs — executable tier only. The contract tier above is intentionally
-// unspecced until array construction exists (never claim an unrun contract
-// passed).
+// Specs — every function above runs. The array algorithms build their input
+// with the constructors, then assert the fold/search result.
 // ----------------------------------------------------------------------------
 
 spec first {
@@ -212,4 +294,50 @@ spec range_contains {
     then range_contains(2, 7, 2);
     then !range_contains(2, 7, 7);
     then !range_contains(2, 7, 1);
+}
+
+spec "array constructors build the expected arrays" {
+    then std::array::len(singleton(7)) == 1;
+    then std::array::get(singleton(7), 0) == 7;
+    then std::array::len(of2(3, 8)) == 2;
+    then std::array::get(of2(3, 8), 1) == 8;
+    then std::array::len(of3(1, 2, 3)) == 3;
+    then std::array::get(of3(1, 2, 3), 2) == 3;
+}
+
+spec sum {
+    then sum(of3(1, 2, 3)) == 6;
+    then sum(of2(10, 20)) == 30;
+    then sum(singleton(5)) == 5;
+    then sum(std::array::empty()) == 0;
+}
+
+spec max_of {
+    // Unwrap the Option inline (a sentinel for None), the module-local idiom
+    // for leaving the Option world without depending on std::core.
+    then match max_of(of3(3, 9, 4)) { Some { value } => value, None => -1 } == 9;
+    then match max_of(of2(8, 2)) { Some { value } => value, None => -1 } == 8;
+    then match max_of(singleton(5)) { Some { value } => value, None => -1 } == 5;
+    then match max_of(std::array::empty()) { Some { value } => value, None => -1 } == -1;
+}
+
+spec contains {
+    then contains(of3(1, 2, 3), 2);
+    then !contains(of3(1, 2, 3), 4);
+    then !contains(std::array::empty(), 0);
+}
+
+spec index_of {
+    then match index_of(of3(7, 8, 9), 8) { Some { value } => value, None => -1 } == 1;
+    then match index_of(of3(7, 8, 9), 7) { Some { value } => value, None => -1 } == 0;
+    then match index_of(of3(7, 8, 9), 5) { Some { value } => value, None => -1 } == -1;
+    then match index_of(std::array::empty(), 0) { Some { value } => value, None => -1 } == -1;
+}
+
+spec reversed {
+    then std::array::get(reversed(of3(1, 2, 3)), 0) == 3;
+    then std::array::get(reversed(of3(1, 2, 3)), 2) == 1;
+    then std::array::len(reversed(of3(1, 2, 3))) == 3;
+    then sum(reversed(of2(4, 5))) == 9;
+    then std::array::len(reversed(std::array::empty())) == 0;
 }

@@ -10,10 +10,10 @@
 //   spec (`R0007` keeps the spec sandbox pure), so each is pinned by a native
 //   CLI test instead of a spec and marked `EFFECT:`.
 //
-//   Contract tier — `read_line`, which needs an owned, growable `String` to
-//   accumulate the bytes `std::rt::read_byte` yields. That value awaits the
-//   allocator ADR (ADR-0006, amendment 1), so it stays an exact signature with
-//   a documented contract and no executable spec, marked `CONTRACT:`.
+//   `read_line` joined the effect tier when ADR-0009 landed the allocator: it
+//   builds an owned, growable `String` from the bytes `std::rt::read_byte`
+//   yields, stopping at a newline or EOF. Effectful, so no spec (`R0007`);
+//   pinned by a native CLI test.
 //
 // One I/O error type, one obvious way to test it — no parallel error hierarchies.
 
@@ -132,27 +132,55 @@ pub fn println(in text: Str) -> Result[Int, IoError] {
     }
 }
 
-/// CONTRACT (not executable in v0): read one line from standard input.
+/// EFFECT (executable and effectful): read one line from standard input.
 ///
-/// Returns the line (without its trailing newline) on success, or an `IoError`
-/// — `Eof` when input is exhausted. The effect primitive it needs
-/// (`std::rt::read_byte`) exists, but accumulating the bytes into a line
-/// requires an owned, growable `String` value, which awaits the allocator ADR
-/// (ADR-0006, amendment 1) — so this stays a contract until that value lands.
+/// Reads bytes from fd 0 with `std::rt::read_byte`, accumulating them into an
+/// owned `String` (ADR-0009's allocator core), and stops at the first newline
+/// (byte 10, which is consumed but **not** included) or at end-of-input. On
+/// success the `Ok` value is the line without its trailing newline — possibly
+/// the empty string (a blank line, or a final line with no newline). When the
+/// stream is already at EOF (the very first read returns a negative host value)
+/// the result is `Err { error: IoError::Eof }`, so a caller can tell "blank
+/// line" from "no more input" apart. A negative host value *after* some bytes
+/// were read ends the line at what was read so far (EOF without a trailing
+/// newline). Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
-/// // let line = std::io::read_line();
+/// // match std::io::read_line() { Ok { value } => …, Err { error } => … }
 /// ```
-pub fn read_line() -> Result[Str, IoError] {
-    // Contract placeholder: the real implementation reads from stdin.
-    Ok { value: "" }
+pub fn read_line() -> Result[String, IoError] {
+    // Read the first byte up front: an immediate negative value is EOF with
+    // nothing read, the one case that reports `Err`. Handling it before the
+    // buffer is built keeps `line` moved on exactly one path (the `Ok`), which
+    // the ownership checker requires — tuonelang inserts no hidden drop flags.
+    let first = std::rt::read_byte(0);
+    if first < 0 {
+        return Err { error: IoError::Eof };
+    }
+    var line = std::string::empty();
+    if first != 10 {
+        std::string::push_byte(line, first);
+        var done = false;
+        while !done {
+            let byte = std::rt::read_byte(0);
+            if byte < 0 {
+                done = true;
+            } else if byte == 10 {
+                done = true;
+            } else {
+                std::string::push_byte(line, byte);
+            }
+        }
+    }
+    Ok { value: line }
 }
 
 // ----------------------------------------------------------------------------
-// Specs — pure executable tier only. The effect tier is pinned by native CLI
-// tests (`R0007` forbids an effectful spec), and the `read_line` contract
-// stays unspecced (never claim an effect that cannot run passed a test).
+// Specs — pure executable tier only. The effect tier (`print`, `println`,
+// `read_line`) is pinned by native CLI tests, since `R0007` forbids an
+// effectful spec (never claim an effect that cannot run passed a test).
 // ----------------------------------------------------------------------------
 
 spec error_code {

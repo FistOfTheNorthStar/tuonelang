@@ -142,15 +142,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   ADR-0004 aggregates (structs, enums, `Option`/`Result`, fixed `[T; N]` arrays
   with checked indexing, bounded `for`), floats (IEEE-754, saturating `as`
   casts, `%` via the C `fmod`), borrow-mode (`in`/`mut`) calls (a pointer
-  to the caller's place, per `specification/abi.md`), and — since ADR-0006 —
+  to the caller's place, per `specification/abi.md`), — since ADR-0006 —
   the borrowed `Str` (a two-word fat pointer; literals as read-only static
   data; equality; the trapping `std::str` byte ops) and the `std::rt` effect
-  primitives (`write`/`read_byte`/`exit`, via the runtime's effect shim), laid
-  out solely by `tdg-runtime`'s `abi` module — and *refuse* — never
-  mis-compile — anything outside it (the owned `String`, the growable
-  `Array[T]`, the `Box`/`Shared`/`Weak` heap wrappers), refusing at
-  storage-classification time with a message naming the type and pointing the
-  user back to the interpreter as the reference), and `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  primitives (`write`/`read_byte`/`exit`, via the runtime's effect shim), and
+  — since ADR-0009 — the **allocator core**: owned `String` and growable
+  `Array[Int]` (the three-word `{ptr, len, cap}` header, allocating and freeing
+  real heap memory through the linked `tuo_rt_alloc`/`tuo_rt_dealloc` shim with
+  drop glue; the `std::string`/`std::array` builtin ops and
+  `std::rt::write_string`), laid out solely by `tdg-runtime`'s `abi` module
+  (ABI v4) — and *refuse* — never mis-compile — anything outside it (the
+  `Box`/`Shared`/`Weak` heap-wrapper **values** and `Array[T]` for non-`Int`
+  element types), refusing at storage-classification time with a message naming
+  the type and pointing the user back to the interpreter as the reference), and
+  `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
@@ -260,16 +265,19 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
   honesty rule the prompt demands is enforced structurally: of the eight required
-  runtime workloads exactly six (**startup, integer-computation, function-calls,
+  runtime workloads exactly seven (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
-  `[Int; 8]` insert/scan with its C peer, and — since ADR-0006's `Str` core
+  `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
-  over a fixed request-log line with its C peer) carry a real program and are
-  `Support::Supported`, while **allocation, networking** are
-  `Support::Unsupported` with the *exact reason* the v0 core cannot express them
-  (the allocator ADR; no socket-open effect) and emit **no number** — the entry
-  becomes measurable the moment the feature lands, with no other change
-  (exactly how `collections` and then `string-processing` flipped). The compiler
+  over a fixed request-log line with its C peer, and — since ADR-0009's
+  allocator core landed — **allocation**, a bounded allocate/grow/free loop over
+  a growable `Array[Int]` and an owned `String` with its `malloc`/`realloc`/`free`
+  C peer, same doubling growth) carry a real program and are `Support::Supported`,
+  while only **networking** is `Support::Unsupported` with the *exact reason* the
+  v0 core cannot express it (no socket-open effect) and emits **no number** — the
+  entry becomes measurable the moment the feature lands, with no other change
+  (exactly how `collections`, `string-processing`, and then `allocation`
+  flipped). The compiler
   lab's cold stages measure the aggregate/loop program
   (`lab::compiler::COLD_AGGREGATE`, acceptance test-pinned) so the ADR-0004
   lowering's compile cost is tracked too. Cross-language
@@ -347,7 +355,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `concurrent-worker` (a worker-pool scheduling model). The three that fit the
   runnable core **run natively** — and since ADR-0004 landed they use it for
   real: `geometry` passes a `Point` struct, `data-pipeline` folds an `[Int; 8]`
-  batch, and `cli-stats` holds an `[Int; 7]` dataset. Since ADR-0006 landed the
+  batch, and `cli-stats` holds an `[Int; 7]` dataset. Since ADR-0009 landed the
+  allocator core, `data-pipeline` also answers its query through a
+  **growable-collection oracle** — it `push`es its filtered subset (a
+  data-dependent size a fixed `[Int; N]` cannot express) onto a heap-backed
+  `Array[Int]` and folds it, spec-pinned equal to the streaming fold with the
+  same exit byte. Since ADR-0006 landed the
   effect boundary, `http-service` **runs natively too**: its request-line
   parsing is pure `std::str` byte scanning (spec-checked) under a thin
   `std::rt::write` response shell, and its demo `main` prints
@@ -377,8 +390,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `collections` workload), `ADR-0006` (the effect boundary + runtime strings —
   since **accepted and landed**, having unblocked its named
   `string-processing` workload; per its amendments, owned-`String`/`concat`
-  moved to the forthcoming allocator ADR and `networking` was explicitly *not*
-  unblocked), `ADR-0007` (the concurrency model), and `ADR-0008` (first-class
+  moved to the allocator ADR and `networking` was explicitly *not* unblocked),
+  `ADR-0009` (the allocator core — owned `String` + growable `Array[Int]`,
+  since **accepted and landed**, having unblocked its named `allocation`
+  workload; `Box`/`Shared`/`Weak` **values** and non-`Int` `Array[T]` stay
+  deferred), `ADR-0007` (the concurrency model), and `ADR-0008` (first-class
   functions), the latter two still `proposed` and each naming the
   performance-lab workload it must unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
   paths and are therefore gitignored, not committed.
@@ -609,15 +625,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   functions only*, and each module separates an **executable tier** (pure
   computation — ordering, `Option`/`Result` combinators, `Duration` arithmetic,
   error classification, the pure state models of a latch/lock — which runs and
-  whose specs run), an **effect tier** (ADR-0006: `std::io::print`/`println`
-  over `std::rt::write` and `std::process::exit` over `std::rt::exit` — real
-  tuonelang implementations that run natively but can carry **no** spec, since
-  `R0007` keeps the spec sandbox pure; each is marked `EFFECT:` and names the
-  native CLI test that pins it), and a
+  whose specs run — including, since ADR-0009, the `std::collections`
+  `Array[Int]` algorithms `sum`/`max_of`/`contains`/`index_of`/`reversed` over
+  the allocator core, whose specs build the arrays they fold), an **effect
+  tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
+  over `std::rt::exit`, and — since ADR-0009 — `std::io::read_line`, which builds
+  an owned `String` from the bytes `std::rt::read_byte` yields — real tuonelang
+  implementations that run natively but can carry **no** spec, since `R0007`
+  keeps the spec sandbox pure; each is marked `EFFECT:` and names the native CLI
+  test that pins it), and a
   **contract tier** (the effectful entry points whose primitive does not exist
-  yet — `read_line` awaits the allocator ADR's owned `String`, `read`/`now`/
-  `lock`/`arg_count` a file/clock/thread/argv primitive — given as exact
-  signatures + documented contracts marked `CONTRACT:`,
+  yet — `read`/`now`/`lock`/`arg_count` a file/clock/thread/argv primitive —
+  given as exact signatures + documented contracts marked `CONTRACT:`,
   with **no** executable spec so nothing claims to run that cannot). The promise
   is enforced, not asserted: `tdg-cli/tests/stdlib.rs` really compiles every
   module (alone and together) with zero errors, runs every shipped spec to

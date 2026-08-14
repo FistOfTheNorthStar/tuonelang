@@ -1,0 +1,55 @@
+// allocation — heap allocation and deallocation throughput over the ADR-0009
+// allocator core (owned `String` + growable `Array[Int]`).
+//
+// Each round allocates two real heap buffers and frees them at scope end:
+//   * a growable `Array[Int]` filled 0..COUNT by repeated `push` (which grows
+//     the backing buffer by doubling — alloc-new + copy + free-old), then
+//     scanned with `len`/`get`; the sum of 0..COUNT is COUNT*(COUNT-1)/2;
+//   * an owned `String` built to COUNT bytes by repeated `push_byte` (the same
+//     growth path over the byte buffer), then measured with `len`.
+// A round's contribution is deterministic — array sum + string length — and the
+// loop runs it ROUNDS times so the workload really exercises allocate/grow/free
+// throughput (a leak would OOM; a double-free would abort). The observable
+// result is one round's contribution (reassigned, not accumulated, so the exit
+// stays a small documented byte): for COUNT = 16 the array sums to 120 and the
+// string is 16 bytes, so `main` returns 136 (exit byte 136).
+
+fn array_sum(take count: Int) -> Int {
+    var xs = std::array::empty();
+    var i = 0;
+    while i < count {
+        std::array::push(xs, i);
+        i = i + 1;
+    }
+    var total = 0;
+    var j = 0;
+    while j < std::array::len(xs) {
+        total = total + std::array::get(xs, j);
+        j = j + 1;
+    }
+    total
+}
+
+fn string_len(take count: Int) -> Int {
+    var s = std::string::empty();
+    var i = 0;
+    while i < count {
+        std::string::push_byte(s, 65);
+        i = i + 1;
+    }
+    std::string::len(s)
+}
+
+fn round(take count: Int) -> Int {
+    array_sum(count) + string_len(count)
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 2000 {
+        result = round(16);
+        r = r + 1;
+    }
+    result
+}

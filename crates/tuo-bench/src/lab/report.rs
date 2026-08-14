@@ -221,7 +221,7 @@ mod tests {
         let report = LabReport::new(Environment::capture());
         assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.runtime_workloads.len(), 8);
-        assert_eq!(report.supported_workload_count(), 6);
+        assert_eq!(report.supported_workload_count(), 7);
     }
 
     #[test]

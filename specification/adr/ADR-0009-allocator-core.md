@@ -1,6 +1,6 @@
 # ADR-0009: The allocator core — owned `String` and growable `Array`
 
-- **Status:** proposed
+- **Status:** accepted (2026-08-13 — all three stages landed; see Resolution)
 - **Date:** 2026-08-11
 - **Context:** ADR-0006's first amendment (2026-08-10) deliberately split the
   string surface in two: the **borrowed `Str`** (a `{ptr, len}` view of an
@@ -175,3 +175,74 @@
   the ADR that lands the first effectful lab workload (sockets or files).
   This ADR is not "accepted" until the `allocation` workload is committed and
   measured.
+
+- **Resolution (2026-08-13):** all three stages landed and every acceptance
+  condition is met by a committed, test-pinned artifact:
+  - *Stage A (spec text + front end + MIR + interpreter, commit `1b7e648`):*
+    the builtins `std::string::{empty, from_str, push_byte, append, concat,
+    len, byte_at, slice}`, `std::array::{empty, push, pop, len, get}`, and
+    `std::rt::write_string` resolve always, as real module symbols
+    (`specification/static-semantics.md`, pinned by
+    `crates/tuo-resolve/tests/resolve.rs` and the type fixtures
+    `tests/types/fixtures/{ok,err}/allocator.tuo`). Heap ops are **pure** —
+    `String == String` is byte equality, ordering stays a type error, and a
+    spec may build strings/arrays; only `write_string` is effectful and an
+    effectful spec is refused with `R0007`. MIR gained `Rvalue::HeapOp` and
+    `Statement::HeapMutate` and generalized `Statement::Effect`'s args
+    (`specification/mir.md`, verifier `M0012`/`M0013`), executed by the
+    reference interpreter (`crates/tuo-mir-interp/tests/conformance.rs`); the
+    new append-only **`TrapCode::InvalidByte`** fires for a `push_byte` argument
+    outside `0..=255`. The drop-placement audit confirmed the existing generic
+    Drop machinery frees each buffer exactly once across scope-end,
+    reassignment, move-out, early-exit, and conditional-move.
+  - *Stage B (native lowering, drop glue, linked allocator, ABI v4, commit
+    `40c6b76`):* both backends lower `String`/`Array[Int]` as the
+    `specification/abi.md` three-word `{ptr, len, cap}` header, every `HeapOp`
+    and `HeapMutate` matching the interpreter instruction for instruction
+    (alloc+memcpy, in-place doubling growth, bounds-checked load, `Option[Int]`
+    pop), and `Statement::Drop` frees a non-empty buffer through
+    `tuo_rt_dealloc`. Pinned by the six heap fixtures agreeing interpreter ==
+    Cranelift == LLVM in `crates/tuo-cli/tests/codegen_differential.rs` and
+    `crates/tuo-cli/tests/codegen_three_way.rs` (the `str_*`/`arr_*` fixtures,
+    the `InvalidByte` trap included), and by `crates/tuo-cli/tests/heap_native.rs`
+    (a `write_string` stdout pin and a 200k-round allocate/free **leak proxy**
+    that completes in bounded memory on both backends — the evidence every
+    buffer is freed exactly once).
+  - *Stage C (stdlib, oracle, lab; this change):* `tdg-stdlib`'s
+    `std::collections` array tier became **real pure-executable code** —
+    `sum`/`max_of`/`contains`/`index_of`/`reversed` (plus `singleton`/`of2`/`of3`
+    constructors) over `std::array::{empty, push, len, get}`, each with a
+    worked example and an executable `spec` (the ops are pure, so the specs build
+    the arrays they fold), pinned by `crates/tuo-cli/tests/stdlib.rs`. The
+    redundant caller-supplied `count` parameter was dropped, since
+    `std::array::len` makes it obsolete — the single obvious API. `std::io::read_line`
+    moved from the `CONTRACT` tier to the **`EFFECT`** tier: it builds an owned
+    `String` from the bytes `std::rt::read_byte` yields, stopping at newline or
+    EOF, and is pinned by a native CLI test that pipes stdin and asserts the
+    round-tripped bytes, byte count, and the EOF/`Err` path on both backends
+    (`crates/tuo-cli/tests/stdlib.rs::stdlib_read_line_really_reads_natively`).
+  - *Oracle:* `examples/data-pipeline` — the ADR's named oracle — now answers its
+    query through a **growable-collection** path: `collect_amounts` `push`es the
+    filtered subset (a data-dependent size a fixed `[Int; N]` cannot express)
+    into a heap-backed `Array[Int]`, and `sum_collected` folds it; specs pin that
+    path **equal** to the streaming fold for every category, and `main` returns
+    the same exit byte (400 → 144), asserted by
+    `crates/tuo-cli/tests/dogfood_examples.rs`.
+  - *Benchmark condition:* the performance lab's **`allocation`** workload is
+    `Support::Supported` with the committed
+    `benchmarks/runtime/programs/tuo/allocation.tuo` (a bounded allocate/grow/free
+    loop over a growable `Array[Int]` and an owned `String`, expected exit 136)
+    and its equivalent-semantics C peer
+    `benchmarks/runtime/programs/c/allocation.c` (`malloc`/`realloc`/`free`, same
+    doubling growth, same exit), measured live by `crates/tuo-bench/tests/lab.rs`
+    and `crates/tuo-cli/tests/lab_command.rs`. The supported count is now
+    **seven of eight**; only **`networking`** stays unsupported (no socket-open
+    effect — ADR-0007 or a successor), publishing a reason, never a number.
+  - *Deliberately out of scope, unchanged (each stays declared-and-refused or a
+    plain type error, never a silent half-feature):* surface `Box`/`Shared`/`Weak`
+    **values** — the wrapper types stay declared, construction stays refused, a
+    later ADR; `Array[T]` **operations** for non-`Int` element types (the type
+    exists, the op surface is monomorphic v0; a mismatched element type is an
+    ordinary `T0001`); `String` **ordering**, formatting/interpolation, and
+    code-point-aware iteration; and `String`→`Str` **borrowing** (Q-0012 —
+    `slice` copies, `write_string` borrows the header, nothing aliases).

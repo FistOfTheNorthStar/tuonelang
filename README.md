@@ -19,15 +19,20 @@ arithmetic, `if`/`else`, direct and recursive function calls, an integer
 `main`, and — since ADR-0004 landed — **structs, enums, `Option`/`Result`,
 fixed-capacity `[T; N]` arrays with checked indexing, and bounded `for`
 iteration**, plus **IEEE-754 floats and borrow-mode (`in`/`mut`) calls**,
-and — since ADR-0006 landed — the **borrowed `Str` string core** (literals,
+since ADR-0006 landed — the **borrowed `Str` string core** (literals,
 equality, `std::str::{len, byte_at, slice}`) and the **effect boundary**
 (`std::rt::{write, read_byte, exit}`, with `std::io::print`/`println` and
 `std::process::exit` implemented over it; specs stay pure by the `R0007`
-gate), all compiled natively by both backends in lock-step with the
-interpreter. The remaining capability gaps are the heap (owned `String`,
-growable collections — the forthcoming allocator ADR), concurrency
-(ADR-0007), and first-class functions (ADR-0008), not yet in the runnable
-core.
+gate); and — since ADR-0009 landed — the **allocator core**: owned `String`
+and growable `Array[Int]` allocating and freeing real heap memory
+(`std::string::{empty, from_str, push_byte, append, concat, len, byte_at,
+slice}`, `std::array::{empty, push, pop, len, get}`, `std::rt::write_string`,
+with `std::io::read_line` and the `std::collections` array algorithms built on
+top). All of it is compiled natively by both backends in lock-step with the
+interpreter. The remaining capability gaps are the heap-wrapper **values**
+`Box`/`Shared`/`Weak` (declared, construction refused — a later ADR) and
+`Array[T]` for non-`Int` element types, concurrency (ADR-0007), and
+first-class functions (ADR-0008), not yet in the runnable core.
 
 - ✅ Front end: lexer → parser (lossless CST) → resolver → type checker →
   ownership checker, with human and machine-versioned diagnostics.

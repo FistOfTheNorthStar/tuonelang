@@ -29,13 +29,15 @@
 //!   combinators, `Duration` arithmetic, error classification, the pure state
 //!   models of a lock or latch), which runs and whose specs run;
 //! * an **effect tier** — real tuonelang implementations over the `std::rt`
-//!   effect primitives (`std::io::print`/`println`, `std::process::exit`).
-//!   These compile and run natively, but `R0007` makes an effectful spec
-//!   impossible, so each is marked `EFFECT:` in its doc and pinned by a named
-//!   native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of a spec; and
+//!   effect primitives (`std::io::print`/`println`/`read_line`,
+//!   `std::process::exit`). These compile and run natively, but `R0007` makes
+//!   an effectful spec impossible, so each is marked `EFFECT:` in its doc and
+//!   pinned by a named native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of
+//!   a spec (`read_line` builds an owned `String` from the bytes
+//!   `std::rt::read_byte` yields — real since ADR-0009 landed the allocator);
+//!   and
 //! * a **contract tier** — the effectful entry points whose primitive does not
-//!   exist yet (`std::io::read_line` awaits the allocator ADR's owned
-//!   `String`; `std::fs::read` a file-open primitive; `std::time::now` a
+//!   exist yet (`std::fs::read` a file-open primitive; `std::time::now` a
 //!   clock; `std::sync::lock` threads; `std::process::arg_count` argv), given
 //!   as exact signatures with documented contracts and **no** executable spec,
 //!   each marked `CONTRACT:` in its doc so no reader — human or machine — is
@@ -66,17 +68,18 @@ pub const CORE: Module = Module {
     source: include_str!("std/core.tuo"),
 };
 
-/// `std::collections` — `Pair`, counted ranges (executable), and the `Array[T]`
-/// operation contract.
+/// `std::collections` — `Pair`, counted ranges, and pure `Array[Int]`
+/// algorithms (`sum`/`max_of`/`contains`/`index_of`/`reversed`) over the
+/// ADR-0009 allocator core. Entirely executable.
 pub const COLLECTIONS: Module = Module {
     path: "std::collections",
     name: "std/collections.tuo",
     source: include_str!("std/collections.tuo"),
 };
 
-/// `std::io` — the I/O error vocabulary (executable), the real
-/// `print`/`println` writes over `std::rt::write` (effect tier), and the
-/// `read_line` contract.
+/// `std::io` — the I/O error vocabulary (executable), and the real
+/// `print`/`println`/`read_line` I/O over the `std::rt` primitives (effect
+/// tier — `read_line` builds an owned `String` from bytes read, ADR-0009).
 pub const IO: Module = Module {
     path: "std::io",
     name: "std/io.tuo",

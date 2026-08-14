@@ -26,8 +26,9 @@
 //! Because these tests compile the exact source `tuo-stdlib` embeds, the
 //! library cannot drift from its promises without turning this suite red.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tuo_compiler::check_sources;
 use tuo_compiler::source::{SourceId, SourceMap};
@@ -311,10 +312,12 @@ fn the_three_tier_rule_holds_for_every_public_function() {
 }
 
 #[test]
-fn the_effect_tier_is_exactly_io_writes_and_process_exit() {
-    // ADR-0006 landed descriptor writes and process exit; the effect tier must
-    // list exactly the functions those primitives can implement — no more (an
-    // over-claim) and no fewer (a stale contract).
+fn the_effect_tier_is_exactly_io_writes_reads_and_process_exit() {
+    // ADR-0006 landed descriptor writes/reads and process exit; ADR-0009 landed
+    // the allocator, which lets `read_line` accumulate the bytes `read_byte`
+    // yields into an owned `String`. The effect tier must list exactly the
+    // functions those primitives can implement — no more (an over-claim) and no
+    // fewer (a stale contract).
     let mut effect_fns = Vec::new();
     for &module in tuo_stdlib::MODULES {
         for public in public_fns(module.source) {
@@ -329,6 +332,7 @@ fn the_effect_tier_is_exactly_io_writes_and_process_exit() {
         vec![
             "std::io::print".to_string(),
             "std::io::println".to_string(),
+            "std::io::read_line".to_string(),
             "std::process::exit".to_string(),
         ]
     );
@@ -471,6 +475,115 @@ fn main() -> Int {
             String::from_utf8_lossy(&output.stdout),
             "",
             "{which}: nothing may land on stdout"
+        );
+    }
+}
+
+/// Write a stdlib module plus a caller program into `dir`, `tuo run` them with
+/// `stdin` piped into the built binary's standard input, and return the output.
+/// This is the read path a user drives; the effect being pinned is that the
+/// program really *reads* what is fed to it.
+fn run_with_module_stdin(
+    dir: &Path,
+    module: tuo_stdlib::Module,
+    caller: &str,
+    stdin: &[u8],
+    release: bool,
+) -> Output {
+    let module_path = dir.join(module.name.replace('/', "_"));
+    std::fs::write(&module_path, module.source).expect("module source is writable");
+    let caller_path = dir.join("caller.tuo");
+    std::fs::write(&caller_path, caller).expect("caller source is writable");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("run");
+    if release {
+        command.arg("--release");
+    }
+    let mut child = command
+        .arg(&module_path)
+        .arg(&caller_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("the tuo binary spawns");
+    child
+        .stdin
+        .take()
+        .expect("stdin is piped")
+        .write_all(stdin)
+        .expect("stdin is writable");
+    child.wait_with_output().expect("the tuo binary completes")
+}
+
+/// `std::io::read_line()` really reads a line from stdin and builds it as an
+/// owned `String` (ADR-0009): the program echoes the line back through
+/// `std::rt::write_string`, so the captured stdout is the exact line (newline
+/// stripped) and the exit status is its byte length. It also proves the EOF
+/// path (`Err { IoError::Eof }` on empty input) and the no-trailing-newline
+/// path. Both backends. This is the native pin `std::io`'s `read_line`
+/// `EFFECT:` doc names.
+#[test]
+fn stdlib_read_line_really_reads_natively() {
+    let caller = "\
+module caller;
+
+import std::io;
+
+fn main() -> Int {
+    match std::io::read_line() {
+        Ok { value } => std::rt::write_string(1, value),
+        Err { error } => 200 + std::io::error_code(error),
+    }
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("read_line_{which}"));
+
+        // A full line: read "hello, heap" (11 bytes), the trailing newline is
+        // consumed but not part of the value; a second line is left unread.
+        let output = run_with_module_stdin(
+            &dir,
+            tuo_stdlib::IO,
+            caller,
+            b"hello, heap\nsecond line\n",
+            release,
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "hello, heap",
+            "{which}: read_line must echo the first line without its newline"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(11),
+            "{which}: the echoed line is 11 bytes, surfaced as the exit status; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // No trailing newline: the final bytes are still a line.
+        let output = run_with_module_stdin(&dir, tuo_stdlib::IO, caller, b"abc", release);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "abc",
+            "{which}: a line without a trailing newline is still read"
+        );
+        assert_eq!(output.status.code(), Some(3), "{which}: 3 bytes read");
+
+        // Empty input: the very first read is EOF, so `Err { Eof }` (code 0),
+        // surfaced as 200 + 0 = 200, and nothing is written.
+        let output = run_with_module_stdin(&dir, tuo_stdlib::IO, caller, b"", release);
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "",
+            "{which}: EOF writes nothing"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(200),
+            "{which}: empty stdin is Err {{ IoError::Eof }} (200 + code 0); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

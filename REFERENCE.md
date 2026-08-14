@@ -7,11 +7,14 @@ compiler actually accepts and executes — nothing aspirational.
 
 > **Two tiers to keep in mind while reading.** The *front end* (`tuo check`)
 > accepts the full v0 language. The *runnable core* — what `tuo spec`, `tuo run`,
-> and `tuo build` execute — is pure integer computation: scalars, structs, enums,
+> and `tuo build` execute — is scalars, structs, enums,
 > `Option`/`Result`, fixed `[T; N]` arrays, `for`/`while`/`match`, calls and
 > recursion, floats, borrow-mode (`in`/`mut`) calls, `Str` values with the
-> `std::str` byte operations, and the `std::rt` host effects
-> (`write`/`read_byte`/`exit` — native only; the spec sandbox stays pure).
+> `std::str` byte operations, the **owned heap types** — an owned `String` and
+> a growable `Array[Int]` that allocate and free real memory (`std::string`/
+> `std::array`; since ADR-0009) — and the `std::rt` host effects
+> (`write`/`read_byte`/`write_string`/`exit` — native only; the spec sandbox
+> stays pure, but heap ops *are* pure, so a spec may build strings and arrays).
 > Concurrency and first-class functions are tracked ADRs (0007/0008) and are
 > not in v0.
 > Anything outside the core is **refused with a clear error, never mis-compiled**.
@@ -140,7 +143,9 @@ let wide: I64 = small as I64;
 | `Point`, `std::io::IoError` | Named / path types |
 | `Option[Int]`, `Result[Int, Str]`, `Pair[A, B]` | Generics use **square brackets**, never `<>` |
 | `[T; N]` | Fixed-capacity inline array, length is part of the type |
-| `Box[T]`, `Shared[T]`, `Weak[T]` | Heap wrappers (declared; heap allocation is not in the runnable core) |
+| `String` | Owned, growable, heap-backed byte buffer (`std::string`; runnable since ADR-0009) |
+| `Array[Int]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009). `Array[T]` exists for any `T`, but the v0 operation surface is `Array[Int]`-monomorphic |
+| `Box[T]`, `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; construction not in the runnable core) |
 | `()` | Unit |
 
 There is **no reference type** (`&T` does not exist). Borrowing happens only
@@ -154,9 +159,11 @@ never hand-written:
 - Copy: all integer/float scalars, `Bool`, `Char`, `()`, `Str`, and `[T; N]`
   when `T` is Copy.
 - **Not** Copy: any struct/enum with a non-Copy field, `Box`/`Shared`/`Weak`,
-  the growable `Array[T]`, and generic `T` inside a generic body.
-- In practice in v0: **structs and enums you define are moved**, scalars and
-  `[Int; N]` are copied.
+  the owned `String`, the growable `Array[T]`, and generic `T` inside a generic
+  body.
+- In practice in v0: **structs, enums you define, `String`, and `Array[Int]` are
+  moved**; scalars and `[Int; N]` are copied. A moved-out owned heap value is
+  freed exactly once (drop glue frees at scope end; a move transfers ownership).
 
 ---
 
@@ -372,9 +379,68 @@ Rules:
 - Arrays of Copy elements are themselves Copy; they pass to and return from
   functions by value and compile natively.
 
-The growable, heap-backed `Array[T]` is *declared* (it appears in stdlib
-contract signatures) but has no constructor and is not in the runnable core —
-it's a later ADR on the allocator seam.
+A fixed `[T; N]` never allocates — it lives inline wherever the value lives.
+When you need a sequence whose size isn't known at compile time, reach for the
+owned, heap-backed `Array[Int]` in the next section.
+
+---
+
+## 11a. Owned `String` and growable `Array[Int]`
+
+Since ADR-0009, tuonelang has two heap-backed, owned, growable types that
+allocate and free real memory — and they run in all three engines (the
+interpreter and both native backends), with the compiler generating the
+`free` at the end of each value's scope. Both are **non-Copy** (they own a
+buffer), so passing one by value moves it.
+
+They are exposed as builtin free functions — there is no literal syntax and no
+`.method` call; you write `std::string::…` / `std::array::…`. Building one needs
+a `var` binding, because the mutators take the buffer by `mut` borrow.
+
+### Owned `String` (`std::string`)
+
+```tuo
+var s = std::string::empty();        // {ptr, len: 0, cap: 0}
+std::string::push_byte(s, 72);       // 'H'  — a byte outside 0..=255 traps (InvalidByte)
+std::string::append(s, "i there");   // append the bytes of a Str
+let n = std::string::len(s);         // 8
+let c = std::string::byte_at(s, 0);  // 72 — checked, traps IndexOutOfBounds
+let joined = std::string::concat("ab", "cd");   // a fresh owned String "abcd"
+let part = std::string::slice(s, 0, 2);         // a fresh owned String (a copy, not a view)
+```
+
+`String == String` is byte-wise content equality (like `Str`); ordering is not
+defined. A `String` is written to a file descriptor with
+`std::rt::write_string(fd, s)` (an `in` borrow — no view type needed).
+
+### Growable `Array[Int]` (`std::array`)
+
+```tuo
+var xs = std::array::empty();
+std::array::push(xs, 10);
+std::array::push(xs, 20);
+let len = std::array::len(xs);            // 2
+let first = std::array::get(xs, 0);       // 10 — checked, traps IndexOutOfBounds
+let last = std::array::pop(xs);           // Option[Int]: Some { value: 20 }
+```
+
+The v0 operation surface is **`Array[Int]`-monomorphic**: the `Array[T]` type
+exists for any `T`, but the builtins operate on `Array[Int]` (a call with a
+different element type is an ordinary `T0001`). Growth uses an amortized
+doubling strategy internally; only length, contents, and `pop`'s `Option` are
+observable, so all three engines agree.
+
+Because these operations are **pure** (allocation is deterministic, not an
+effect), specs may build strings and arrays inside the sandbox — bounded by the
+interpreter's memory budget:
+
+```tuo
+spec build { then std::string::len(std::string::concat("ab", "cd")) == 4; }
+```
+
+Still on the heap roadmap: the `Box`/`Shared`/`Weak` wrapper *values* (declared,
+still refused natively), `Array[T]` operations for non-`Int` elements, and
+`String`→`Str` borrowing.
 
 ---
 
@@ -505,8 +571,10 @@ pub fn ok(in res: Result[Int, Str]) -> Option[Int]
 ### `std::collections`
 
 Executable: `Pair[A, B]` with `pair`, `first`, `second`, `swap`; range helpers
-`range_len`, `range_sum`, `range_contains(start, end, value)`.
-Contract (await growable arrays): `get`, `sum`, `contains` over `Array[Int]`.
+`range_len`, `range_sum`, `range_contains(start, end, value)`; and — real over
+the growable `Array[Int]` since ADR-0009 — `sum`, `max_of` (→ `Option[Int]`),
+`contains`, `index_of` (→ `Option[Int]`), and `reversed` (→ a new `Array[Int]`).
+The array primitives themselves live in the `std::array` builtin module (§11a).
 
 ### `std::test` — all executable (predicates for `then`)
 
@@ -520,7 +588,7 @@ primitive exists) and a contract tier (where it does not):
 
 | Module | Executable today | `EFFECT:` (runs natively, no spec) | `CONTRACT:` (not yet runnable) |
 |--------|------------------|------------------------------------|-------------------------------|
-| `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`) | `read_line` (needs owned `String`) |
+| `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`), `read_line` → `Result[String, IoError]` (reads bytes via `std::rt::read_byte` into an owned `String`) | — |
 | `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | — | `read`, `write`, `exists`, `remove` (no file primitive) |
 | `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`) | `arg_count` (no argv primitive) |
 | `std::sync` | `Once`/`LockState` pure state models | — | `lock`, `unlock`, `spawn` (no threads) |
@@ -562,7 +630,8 @@ status, no unwinding, no destructors. Language traps:
 |------|-------|
 | `IntegerOverflow` | `+ - *` overflow, `-MIN`, `MIN / -1` |
 | `DivisionByZero` | integer `/` or `%` by zero |
-| `IndexOutOfBounds` | array index out of range |
+| `IndexOutOfBounds` | array/string index or slice out of range |
+| `InvalidByte` | `std::string::push_byte` with a byte outside `0..=255` |
 
 Float operations (where they run at all) follow IEEE-754 and never trap.
 
@@ -579,9 +648,10 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Borrow-mode (`in`/`mut`) calls | ✅ | ✅ | ✅ |
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
-| `std::rt::write`/`read_byte`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Stdlib effect tier: `std::io::print`/`println`, `std::process::exit` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Owned `String`, growable `Array[T]`, `Box`/`Shared`/`Weak` heap values | declared | ❌ | ❌ refused |
+| Owned `String`, growable `Array[Int]` (`std::string`/`std::array`, allocate/free) | ✅ | ✅ | ✅ |
+| `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `Box`/`Shared`/`Weak` heap-wrapper values, `Array[T]` ops for non-`Int` `T` | declared | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
 | Filesystem, clock, argv, threads, sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
 

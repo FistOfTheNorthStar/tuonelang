@@ -8,12 +8,13 @@
 //! core** — `Int` arithmetic, comparison, `if`/`else`, function calls, and
 //! recursion — plus, since ADR-0004 Stage 2, the **fixed-capacity array**
 //! `[T; N]` (inline, stack-allocated), which made the collections workload
-//! measurable, and, since ADR-0006, the **borrowed `Str`** (literals,
-//! equality, `std::str::{len, byte_at, slice}`), which makes the
-//! string-processing workload measurable. It still has **no heap** (no owned
-//! `String`, no growable `Array[T]` — the allocator ADR) and **no socket
-//! effect** (ADR-0006 landed descriptor I/O and process exit only), so two of
-//! the eight workloads have no program to measure.
+//! measurable; since ADR-0006, the **borrowed `Str`** (literals, equality,
+//! `std::str::{len, byte_at, slice}`), which makes the string-processing
+//! workload measurable; and, since ADR-0009, the **allocator core** — owned
+//! `String` and growable `Array[Int]` allocating and freeing real heap memory
+//! natively — which makes the allocation workload measurable. It still has
+//! **no socket effect** (ADR-0006 landed descriptor I/O and process exit only),
+//! so one of the eight workloads (networking) has no program to measure.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -106,8 +107,9 @@ impl RuntimeWorkload {
 /// entry moves from [`Support::Unsupported`] to [`Support::Supported`] with a
 /// program, and the lab measures it — no other change required. The
 /// collections entry made exactly that move when ADR-0004 Stage 2 landed the
-/// fixed-capacity array, and the string-processing entry when ADR-0006 landed
-/// the borrowed `Str` core.
+/// fixed-capacity array, the string-processing entry when ADR-0006 landed the
+/// borrowed `Str` core, and the allocation entry when ADR-0009 landed the
+/// allocator core (owned `String` + growable `Array[Int]`).
 #[must_use]
 pub fn workloads() -> Vec<RuntimeWorkload> {
     vec![
@@ -161,16 +163,18 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // observable exit byte = 4000 & 0xff = 160.
             160,
         ),
-        // --- Unsupported: no program exists, and none is faked. ---
-        RuntimeWorkload::unsupported(
+        RuntimeWorkload::supported(
             "allocation",
-            "heap allocation and deallocation throughput",
-            "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native \
-             code: the runtime allocator seam exists in the ABI spec but no allocating \
-             construct is compiled yet (the fixed `[T; N]` is inline and a `Str` is a \
-             borrowed view of static data; both allocate nothing). Awaits the allocator \
-             ADR. No program can exercise allocation.",
+            "heap allocation and deallocation throughput over the ADR-0009 allocator core: \
+             a growable `Array[Int]` and an owned `String`, each built by repeated \
+             push/append (doubling growth) and freed at scope end, over many rounds",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/allocation.tuo"),
+            // 2000 rounds of round(16); each round's contribution (reassigned, not
+            // accumulated) is array_sum(16) = 120 plus string_len(16) = 16, so main
+            // returns 136; observable exit byte = 136.
+            136,
         ),
+        // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "networking",
             "a basic socket round-trip",
@@ -283,8 +287,9 @@ mod tests {
             .map(|w| w.label)
             .collect();
         // Precisely the four scalar-core workloads plus the fixed-array
-        // collections workload (ADR-0004 Stage 2) and the borrowed-`Str`
-        // string-processing workload (ADR-0006), and no more.
+        // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
+        // string-processing workload (ADR-0006), and the allocator-core
+        // allocation workload (ADR-0009), and no more.
         assert_eq!(
             supported,
             vec![
@@ -294,6 +299,7 @@ mod tests {
                 "recursion".to_string(),
                 "collections".to_string(),
                 "string-processing".to_string(),
+                "allocation".to_string(),
             ]
         );
     }
@@ -314,7 +320,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 6, "only the six supported workloads run");
+        assert_eq!(results.len(), 7, "only the seven supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

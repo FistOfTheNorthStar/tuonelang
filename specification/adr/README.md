@@ -57,14 +57,16 @@ the replacement, preserving the decision history.
 | [ADR-0006](ADR-0006-effect-boundary-and-strings.md) | The effect boundary and runtime strings | accepted |
 | [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | proposed |
 | [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | proposed |
-| [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | proposed |
+| [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
 unallocated; ADRs 0004/0006/0007/0008 were opened together by the Prompt 39
-dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md). ADR-0004 and
-ADR-0006 have since been accepted and landed, each having flipped its named
-performance-lab workload; 0007/0008 remain `proposed` pending their normative
+dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md). ADR-0004,
+ADR-0006, and ADR-0009 have since been accepted and landed, each having flipped
+its named performance-lab workload (`collections`, `string-processing`, and
+`allocation` respectively); 0007/0008 remain `proposed` pending their normative
 spec, fixtures, and performance-lab entries. ADR-0009 is the allocator ADR that
-ADR-0006's first amendment promised — it must flip the `allocation` workload
-before it can be accepted.)
+ADR-0006's first amendment promised — it landed the owned `String` and growable
+`Array[Int]` and flipped the `allocation` workload, so seven of the eight
+runtime workloads now measure, leaving only `networking`.)

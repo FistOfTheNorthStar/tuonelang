@@ -1,16 +1,26 @@
 module data_pipeline;
 
 // data-pipeline — a JSON/record-processing application, dogfooded on the v0
-// scalar core.
+// runnable core.
 //
 // A real data processor decodes structured records (say, JSON objects with a
 // `category` and an `amount` field), filters them, transforms them, and
-// aggregates the result. v0 has no strings and no heap (see DOGFOODING.md), so
-// records here are *packed integers* — but the batch is a real fixed-capacity
-// array, folded with a bounded `for` loop, and the pipeline itself is the
-// genuine article: field decoding, a filter predicate, a per-record transform,
-// and two aggregations (a conditional sum and a count), each pinned by an
-// executable `spec`.
+// aggregates the result. Records here are *packed integers* — but the batch is
+// a real fixed-capacity array, folded with a bounded `for` loop, and the
+// pipeline itself is the genuine article: field decoding, a filter predicate, a
+// per-record transform, and two aggregations (a conditional sum and a count),
+// each pinned by an executable `spec`.
+//
+// Growable-collection oracle (ADR-0009). The original fixed-`[Int; 8]` fold
+// answers the query in one pass. But a real filter+collect produces a subset
+// whose *size is data-dependent* — the number of transport records is not known
+// until the batch is scanned — which a fixed-capacity array cannot express.
+// Since ADR-0009 landed the allocator core, the second half of this file does
+// exactly that: it `push`es each matching amount into a growable `Array[Int]`
+// (`std::array`), then folds the materialised subset with `std::array::len`/
+// `get`. The specs prove the growable path yields the **identical** total as
+// the streaming fold — the oracle the ADR names. This is the thing fixed arrays
+// could not do; the two aggregations agreeing is the evidence it is correct.
 //
 // Record encoding (a deliberately real serialization exercise):
 //
@@ -118,9 +128,50 @@ fn average_for(take wanted: Int) -> Int {
     }
 }
 
-/// The query the program answers: total transport (category 2) spend.
+// --- The growable-collection oracle (ADR-0009) -----------------------------
+
+/// Collect the amounts of every record in the wanted category into a **new,
+/// growable** `Array[Int]`. The result's length is data-dependent — it is the
+/// number of matching records, discovered only by scanning the batch — so this
+/// is the filter+collect a fixed-capacity `[Int; N]` cannot express. Each match
+/// is `push`ed onto the heap-backed array (ADR-0009's allocator core).
+fn collect_amounts(take wanted: Int) -> Array[Int] {
+    var out = std::array::empty();
+    for record in records() {
+        if matches(record, wanted) {
+            std::array::push(out, amount(record));
+        }
+    }
+    out
+}
+
+/// The count of matching records, read from the materialised subset's length —
+/// the growable-array analogue of `count_for`.
+fn collected_count(take wanted: Int) -> Int {
+    std::array::len(collect_amounts(wanted))
+}
+
+/// Sum the wanted category's amounts by materialising the filtered subset into
+/// a growable array and folding it with `std::array::len`/`get`. This must
+/// equal `total_for` (the streaming fold) for every category — the oracle that
+/// pins the growable path against the fixed one.
+fn sum_collected(take wanted: Int) -> Int {
+    let items = collect_amounts(wanted);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(items) {
+        total = total + std::array::get(items, i);
+        i = i + 1;
+    }
+    total
+}
+
+/// The query the program answers: total transport (category 2) spend. Computed
+/// through the growable-collection path (`sum_collected`), which the specs pin
+/// equal to the streaming `total_for` — so the exit byte is unchanged (400,
+/// i.e. 400 & 0xff = 144) while the program now exercises real heap allocation.
 fn main() -> Int {
-    total_for(2)
+    sum_collected(2)
 }
 
 // --- Executable specs ------------------------------------------------------
@@ -157,6 +208,27 @@ spec "the pipeline counts a category" {
 spec "averages floor and guard the empty category" {
     then average_for(2) == 133;
     then average_for(9) == 0;
+}
+
+spec "the growable-collection path equals the streaming fold (ADR-0009 oracle)" {
+    // The materialised-subset sum agrees with the streaming fold for every
+    // category — the growable Array[Int] path is correct.
+    then sum_collected(2) == total_for(2);
+    then sum_collected(1) == total_for(1);
+    then sum_collected(3) == total_for(3);
+    then sum_collected(9) == total_for(9);
+    // Concrete totals, so the oracle is not merely self-consistent.
+    then sum_collected(2) == 400;
+    then sum_collected(1) == 225;
+    then sum_collected(9) == 0;
+}
+
+spec "the collected subset has the data-dependent size a fixed array cannot" {
+    // The subset length is discovered by scanning, not fixed at compile time.
+    then collected_count(2) == 3;
+    then collected_count(1) == 2;
+    then collected_count(9) == 0;
+    then collected_count(2) == count_for(2);
 }
 
 spec main {
