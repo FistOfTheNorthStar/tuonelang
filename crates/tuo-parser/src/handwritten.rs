@@ -1317,8 +1317,35 @@ impl Parser<'_> {
                 self.expect(K::CloseBracket, &mut els)?;
                 Ok(node(SyntaxKind::FixedArrayType, els))
             }
+            // `fn` at type position uniquely selects the function type
+            // `fn(mode T, …) -> R` (ADR-0008 Tier 1). Modes are mandatory and
+            // the return arrow+type are always written.
+            K::KwFn => {
+                let mut els = vec![self.bump()];
+                self.expect(K::OpenParen, &mut els)?;
+                self.comma_list(&mut els, false, Self::fn_type_param)?;
+                self.expect(K::CloseParen, &mut els)?;
+                let mut ret = Els::new();
+                self.expect(K::ThinArrow, &mut ret)?;
+                ret.push(self.ty()?);
+                els.push(node(SyntaxKind::ReturnType, ret));
+                Ok(node(SyntaxKind::FnType, els))
+            }
             _ => Err(Fail),
         }
+    }
+
+    /// One function-type parameter: a mode keyword (`in`/`mut`/`take`) then a
+    /// type, with no name (ADR-0008 Tier 1). Unlike a declaration parameter it
+    /// has no `IDENT :`.
+    fn fn_type_param(&mut self) -> R {
+        let mode = match self.peek() {
+            K::KwIn | K::KwMut | K::KwTake => self.bump(),
+            _ => return Err(Fail),
+        };
+        let mut els = vec![mode];
+        els.push(self.ty()?);
+        Ok(node(SyntaxKind::FnTypeParam, els))
     }
 
     fn type_path(&mut self) -> R {

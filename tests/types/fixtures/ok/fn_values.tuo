@@ -1,0 +1,31 @@
+// First-class non-capturing function values (ADR-0008 Tier 1): a bare `fn`
+// name is a value of a function type `fn(mode T, …) -> R`, passable and
+// called indirectly. Modes are part of the type.
+
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+fn inc(take n: Int) -> Int {
+    n + 1
+}
+
+// A higher-order function: its first parameter is a function type. Calling it
+// is an indirect call, type-checked against the function type's parameters.
+fn apply(take f: fn(take Int, take Int) -> Int, take a: Int, take b: Int) -> Int {
+    f(a, b)
+}
+
+fn run_one(take f: fn(take Int) -> Int, take n: Int) -> Int {
+    f(n)
+}
+
+fn main() -> Int {
+    // Bind a function name to a local, then call through it (indirect).
+    var g = add;
+    var total = g(1, 2);
+    // Pass a function value as an argument (higher-order).
+    var applied = apply(add, 4, 5);
+    // A distinct arity/signature function value.
+    run_one(inc, total + applied)
+}

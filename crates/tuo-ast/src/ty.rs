@@ -18,6 +18,8 @@ pub enum TypeRef<'a> {
     Path(PathType<'a>),
     /// A fixed-capacity array type `[T; N]` (ADR-0004 Stage 2).
     FixedArray(FixedArrayType<'a>),
+    /// A function type `fn(mode T, …) -> R` (ADR-0008 Tier 1).
+    Fn(FnType<'a>),
 }
 
 impl<'a> TypeRef<'a> {
@@ -29,6 +31,7 @@ impl<'a> TypeRef<'a> {
             SyntaxKind::WrapperType => WrapperType::cast(ast, node).map(Self::Wrapper),
             SyntaxKind::PathType => PathType::cast(ast, node).map(Self::Path),
             SyntaxKind::FixedArrayType => FixedArrayType::cast(ast, node).map(Self::FixedArray),
+            SyntaxKind::FnType => FnType::cast(ast, node).map(Self::Fn),
             _ => None,
         }
     }
@@ -42,6 +45,7 @@ impl<'a> TypeRef<'a> {
             Self::Wrapper(ty) => ty.span(),
             Self::Path(ty) => ty.span(),
             Self::FixedArray(ty) => ty.span(),
+            Self::Fn(ty) => ty.span(),
         }
     }
 
@@ -53,6 +57,7 @@ impl<'a> TypeRef<'a> {
             Self::Wrapper(ty) => ty.text(),
             Self::Path(ty) => ty.text(),
             Self::FixedArray(ty) => ty.text(),
+            Self::Fn(ty) => ty.text(),
         }
     }
 
@@ -64,6 +69,7 @@ impl<'a> TypeRef<'a> {
             Self::Wrapper(ty) => ty.syntax(),
             Self::Path(ty) => ty.syntax(),
             Self::FixedArray(ty) => ty.syntax(),
+            Self::Fn(ty) => ty.syntax(),
         }
     }
 }
@@ -87,6 +93,55 @@ impl<'a> FixedArrayType<'a> {
     #[must_use]
     pub fn len(self) -> Option<Name<'a>> {
         self.ast.direct_token_name(self.node, TokenKind::IntLiteral)
+    }
+}
+
+/// One parameter of a function type (ADR-0008 Tier 1): its written passing
+/// mode keyword (`in`/`mut`/`take`) and its type.
+#[derive(Clone, Copy, Debug)]
+pub struct FnTypeParam<'a> {
+    /// The mode keyword as written, or `None` if the source omitted it (a
+    /// recovery/error state — modes are mandatory in the type syntax).
+    pub mode: Option<&'a str>,
+    /// The parameter's type.
+    pub ty: TypeRef<'a>,
+}
+
+ast_view! {
+    /// A function type `fn(mode T, …) -> R` — the type of a non-capturing
+    /// function value (ADR-0008 Tier 1). Each parameter carries a mode
+    /// (`in`/`mut`/`take`), and the return type is always written; it lives in
+    /// a nested `ReturnType` node, exactly as a function declaration's does.
+    FnType from FnType
+}
+
+impl<'a> FnType<'a> {
+    /// The parameters, in source order, each a `(mode, type)` pair. Each is a
+    /// `FnTypeParam` node holding the `in`/`mut`/`take` mode token and the
+    /// parameter's type; the return type lives in a separate `ReturnType`
+    /// node and is excluded.
+    pub fn params(self) -> impl Iterator<Item = FnTypeParam<'a>> {
+        let ast = self.ast;
+        crate::context::nodes_of_kind(self.node, SyntaxKind::FnTypeParam).filter_map(move |node| {
+            let ty = child_nodes(node).find_map(|child| TypeRef::cast(ast, child))?;
+            let mode = crate::context::child_tokens(node)
+                .find(|&index| {
+                    matches!(
+                        ast.token_kind(index),
+                        TokenKind::KwIn | TokenKind::KwMut | TokenKind::KwTake
+                    )
+                })
+                .map(|index| ast.token_text(index));
+            Some(FnTypeParam { mode, ty })
+        })
+    }
+
+    /// The return type, inside the `ReturnType` node after the `->`.
+    #[must_use]
+    pub fn ret(self) -> Option<TypeRef<'a>> {
+        let ast = self.ast;
+        node_of_kind(self.node, SyntaxKind::ReturnType)
+            .and_then(|ret| child_nodes(ret).find_map(|node| TypeRef::cast(ast, node)))
     }
 }
 

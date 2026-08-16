@@ -19,12 +19,14 @@ use tuo_ast::{
 };
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 use tuo_lexer::TokenKind;
-use tuo_resolve::{Builtin, Resolution, SymbolId, SymbolKind};
+use tuo_resolve::{Builtin, BuiltinParamMode, Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
 
 use crate::TypeckResult;
 use crate::infer::{InferCtx, VarClass};
-use crate::ty::{FloatKind, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, Ty, WrapperKind};
+use crate::ty::{
+    FloatKind, FnParam, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
+};
 
 /// The type checker's diagnostic codes (the reserved `Txxxx` namespace).
 ///
@@ -43,6 +45,9 @@ use crate::ty::{FloatKind, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, Ty, WrapperKind};
 /// - `T0013` — `break`/`continue` outside a loop.
 /// - `T0014` — invalid fixed-size array length (suffixed, unparsable,
 ///   or over [`MAX_FIXED_ARRAY_LEN`]).
+/// - `T0015` — not first-class: a builtin or generic function used as a
+///   value (ADR-0008 Tier 1). Only ordinary top-level user `fn`s are
+///   first-class function values.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -73,7 +78,33 @@ struct EnumDef {
 struct FnSig {
     type_params: Vec<SymbolId>,
     params: Vec<Ty>,
+    /// Per-parameter passing modes (ADR-0008 Tier 1), parallel to `params` —
+    /// carried so a function's value type (`Ty::Fn`) spells its modes, which
+    /// are part of exact function-type equality and drive an indirect call's
+    /// borrows.
+    modes: Vec<ParamMode>,
     ret: Ty,
+}
+
+impl FnSig {
+    /// This signature as a function type: mode-carrying params + return.
+    fn as_fn_ty(&self) -> FnTy {
+        FnTy {
+            params: self
+                .params
+                .iter()
+                .cloned()
+                .zip(
+                    self.modes
+                        .iter()
+                        .copied()
+                        .chain(std::iter::repeat(ParamMode::In)),
+                )
+                .map(|(ty, mode)| FnParam { mode, ty })
+                .collect(),
+            ret: self.ret.clone(),
+        }
+    }
 }
 
 /// One enclosing loop during body checking: the type `break` values must
@@ -326,21 +357,24 @@ impl<'a> Checker<'a> {
     fn install_builtin_signatures(&mut self) {
         for (builtin, symbol) in self.resolution.builtins() {
             let (params, ret) = builtin_signature(builtin);
-            self.symbol_types.insert(
-                symbol,
-                Ty::Fn(Box::new(FnTy {
-                    params: params.clone(),
-                    ret: ret.clone(),
-                })),
-            );
-            self.fns.insert(
-                symbol,
-                FnSig {
-                    type_params: Vec::new(),
-                    params,
-                    ret,
-                },
-            );
+            let modes = builtin
+                .param_modes()
+                .iter()
+                .map(|mode| match mode {
+                    BuiltinParamMode::Take => ParamMode::Take,
+                    BuiltinParamMode::In => ParamMode::In,
+                    BuiltinParamMode::Mut => ParamMode::Mut,
+                })
+                .collect();
+            let sig = FnSig {
+                type_params: Vec::new(),
+                params,
+                modes,
+                ret,
+            };
+            self.symbol_types
+                .insert(symbol, Ty::Fn(Box::new(sig.as_fn_ty())));
+            self.fns.insert(symbol, sig);
         }
     }
 
@@ -507,13 +541,8 @@ impl<'a> Checker<'a> {
                 Item::Fn(decl) => {
                     if let Some(id) = self.declared_at(decl.name_ref()) {
                         let sig = self.lower_fn_sig(decl);
-                        self.symbol_types.insert(
-                            id,
-                            Ty::Fn(Box::new(FnTy {
-                                params: sig.params.clone(),
-                                ret: sig.ret.clone(),
-                            })),
-                        );
+                        self.symbol_types
+                            .insert(id, Ty::Fn(Box::new(sig.as_fn_ty())));
                         self.fns.insert(id, sig);
                     }
                 }
@@ -573,12 +602,17 @@ impl<'a> Checker<'a> {
             .params()
             .map(|param| param.ty().map_or(Ty::Error, |ty| self.lower_type(ty)))
             .collect();
+        let modes = decl
+            .params()
+            .map(|param| mode_from_text(param.mode()))
+            .collect();
         let ret = decl
             .return_type()
             .map_or(Ty::Unit, |ty| self.lower_type(ty));
         FnSig {
             type_params,
             params,
+            modes,
             ret,
         }
     }
@@ -693,6 +727,19 @@ impl<'a> Checker<'a> {
                     Some(n) => Ty::FixedArray(Box::new(element), n),
                     None => Ty::Error,
                 }
+            }
+            TypeRef::Fn(fn_ty) => {
+                // `fn(mode T, …) -> R` (ADR-0008 Tier 1). Modes are part of
+                // the type; an absent mode (recovery state) defaults to `in`.
+                let params = fn_ty
+                    .params()
+                    .map(|param| FnParam {
+                        mode: mode_from_text(param.mode),
+                        ty: self.lower_type(param.ty),
+                    })
+                    .collect();
+                let ret = fn_ty.ret().map_or(Ty::Unit, |ty| self.lower_type(ty));
+                Ty::Fn(Box::new(FnTy { params, ret }))
             }
         }
     }
@@ -2099,9 +2146,14 @@ impl<'a> Checker<'a> {
                 .cloned()
                 .unwrap_or(Ty::Error),
             SymbolKind::Function => {
+                // A bare `fn` name used in value position becomes a
+                // first-class function value (ADR-0008 Tier 1). Only ordinary
+                // top-level user functions are first-class; a builtin or a
+                // generic function is rejected (`T0015`). The call edge is
+                // recorded conservatively so the effect closure taints the
+                // referrer (the R0007 spec-gate stays sound for fn values).
                 self.record_call_edge(symbol);
-                let (params, ret) = self.instantiate_fn(symbol, given_args, span);
-                Ty::Fn(Box::new(FnTy { params, ret }))
+                self.fn_value_type(symbol, given_args, span)
             }
             SymbolKind::Variant => {
                 let Some(shape) = self.constructor_shape(symbol, given_args, span) else {
@@ -2138,6 +2190,74 @@ impl<'a> Checker<'a> {
                 Ty::Error
             }
         }
+    }
+
+    /// The type of a bare `fn` name used as a first-class value (ADR-0008
+    /// Tier 1). Only an ordinary top-level user function is first-class:
+    ///
+    /// - a **builtin** (`std::rt`/`std::str`/`std::string`/`std::array`)
+    ///   lowers to a dedicated MIR op, not a callable code pointer, so there
+    ///   is no function value to take (`T0015`);
+    /// - a **generic** function is a family of monomorphizations, and a
+    ///   function value is a single monomorphic code pointer (`T0015`);
+    ///   monomorphizing function values is deferred past Tier 1.
+    ///
+    /// Otherwise the value's type is the function's signature-as-function-type,
+    /// modes included.
+    fn fn_value_type(&mut self, symbol: SymbolId, given_args: Option<Vec<Ty>>, span: Span) -> Ty {
+        let name = self.resolution.symbol(symbol).name.clone();
+        if self.resolution.builtin(symbol).is_some() {
+            self.push(
+                Diagnostic::error(
+                    code(15),
+                    format!("builtin function `{name}` is not a first-class value"),
+                    span,
+                )
+                .with_primary_label("only ordinary top-level `fn`s can be used as values")
+                .with_help("call the builtin directly, e.g. `std::str::len(s)`")
+                .with_actual(StructuredValue::Name(name)),
+            );
+            return Ty::Error;
+        }
+        if let Some(sig) = self.fns.get(&symbol) {
+            if !sig.type_params.is_empty() {
+                self.push(
+                    Diagnostic::error(
+                        code(15),
+                        format!("generic function `{name}` is not a first-class value"),
+                        span,
+                    )
+                    .with_primary_label(
+                        "a function value is a single monomorphic code pointer (ADR-0008 Tier 1)",
+                    )
+                    .with_help("call it directly, or wrap it in a non-generic function")
+                    .with_actual(StructuredValue::Name(name)),
+                );
+                // Still consume any turbofish args to type them.
+                if let Some(args) = &given_args {
+                    let _ = args;
+                }
+                return Ty::Error;
+            }
+        }
+        // A non-generic function: `given_args` is either absent or an empty
+        // turbofish (arity is checked by `instantiate_fn` against zero type
+        // params). Build the value type with modes.
+        let (params, ret) = self.instantiate_fn(symbol, given_args, span);
+        let modes = self
+            .fns
+            .get(&symbol)
+            .map(|sig| sig.modes.clone())
+            .unwrap_or_default();
+        let fn_params = params
+            .into_iter()
+            .zip(modes.into_iter().chain(std::iter::repeat(ParamMode::In)))
+            .map(|(ty, mode)| FnParam { mode, ty })
+            .collect();
+        Ty::Fn(Box::new(FnTy {
+            params: fn_params,
+            ret,
+        }))
     }
 
     /// Instantiate a function signature: explicit turbofish arguments pin
@@ -2193,7 +2313,13 @@ impl<'a> Checker<'a> {
         let callee_ty = call.callee().map_or(Ty::Error, |callee| self.expr(callee));
         match self.icx.apply(&callee_ty) {
             Ty::Fn(fn_ty) => {
-                self.check_args(&fn_ty.params, &args, span);
+                // An indirect call through a function-typed value (ADR-0008
+                // Tier 1). Argument types are checked against the function
+                // type's parameters; the per-argument modes are enforced by
+                // the ownership checker, which reads the same `Ty::Fn`.
+                let param_tys: Vec<Ty> =
+                    fn_ty.params.iter().map(|param| param.ty.clone()).collect();
+                self.check_args(&param_tys, &args, span);
                 fn_ty.ret
             }
             Ty::Var(_) if self.icx.literal_class(&callee_ty).is_some() => {
@@ -2289,6 +2415,17 @@ fn substitution(params: &[SymbolId], args: &[Ty]) -> HashMap<SymbolId, Ty> {
     params.iter().copied().zip(args.iter().cloned()).collect()
 }
 
+/// Map a written parameter-mode keyword to a [`ParamMode`]; an absent or
+/// unrecognized mode defaults to `in` (the ownership default). Parsing already
+/// requires a mode on every parameter, so the default is only a fail-safe.
+fn mode_from_text(mode: Option<&str>) -> ParamMode {
+    match mode {
+        Some("mut") => ParamMode::Mut,
+        Some("take") => ParamMode::Take,
+        _ => ParamMode::In,
+    }
+}
+
 /// Replace `Ty::Param`s per `map` (identity for unmapped params).
 fn substitute(ty: &Ty, map: &HashMap<SymbolId, Ty>) -> Ty {
     match ty {
@@ -2301,7 +2438,10 @@ fn substitute(ty: &Ty, map: &HashMap<SymbolId, Ty>) -> Ty {
             params: fn_ty
                 .params
                 .iter()
-                .map(|param| substitute(param, map))
+                .map(|param| FnParam {
+                    mode: param.mode,
+                    ty: substitute(&param.ty, map),
+                })
                 .collect(),
             ret: substitute(&fn_ty.ret, map),
         })),

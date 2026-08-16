@@ -260,6 +260,7 @@ the trait system will own.
 | `T0012` | Expected a value/constructor, found something else. |
 | `T0013` | `break`/`continue` outside a loop. |
 | `T0014` | Invalid fixed-size array length: suffixed, unparsable, or over `MAX_FIXED_ARRAY_LEN` (ADR-0004 Stage 2). |
+| `T0015` | Not first-class: a builtin or generic function used as a value (ADR-0008 Tier 1, §3.8). Only ordinary top-level user `fn`s become function values. |
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
@@ -362,6 +363,67 @@ to `Str` at the type level — type equality is exact, so mixing them is
 `String` and `Array[T]` remain **non-`Copy`** ([`ownership.md`](ownership.md)
 §2): a `take` argument moves them, and a `mut` argument requires a mutable
 place (`O0004` otherwise).
+
+### 3.8 First-class function values (`[EXPERIMENTAL]`, ADR-0008 Tier 1)
+
+v0 gains **non-capturing function values**: a bare `fn` name, used in value
+position, is a value of a **function type**.
+
+**The function type.** `fn(P1, …, Pn) -> R` where each `Pi` is a **mode**
+(`in`/`mut`/`take`) followed by a type, and `-> R` is always written (there is
+no unit default in the *type* syntax — a unit-returning function value has type
+`fn(…) -> ()`). Modes are **mandatory**: the ownership vocabulary is part of a
+function's calling contract, and a function value is a code pointer with a known
+ABI, so it must carry the modes the indirect-call site drives its borrows from.
+
+**Type equality is exact, modes included.** Two function types are the same type
+iff they have equal arity, pairwise-equal parameter types, **pairwise-equal
+modes**, and equal return types. `fn(take Int) -> Int` and `fn(in Int) -> Int`
+are *distinct* types (exactly as `I32` never equals `I64`). A function type is
+**`Copy`** and **non-heap** (a single code pointer); it is not `Drop`.
+
+**Producing a function value.** A path resolving to an **ordinary top-level user
+`fn`**, used in value position (not immediately called), has that function's
+signature-as-function-type. Given `fn add(take a: Int, take b: Int) -> Int`, the
+expression `add` has type `fn(take Int, take Int) -> Int`.
+
+Only ordinary top-level user functions are first-class in Tier 1:
+
+- A **builtin** (`std::rt`/`std::str`/`std::string`/`std::array`) used as a
+  value is `T0015` — builtins lower to dedicated MIR ops, not a callable code
+  pointer, so there is no function value to take.
+- A **generic** function used as a value is `T0015` — a function value is a
+  single monomorphic code pointer; monomorphizing function values is deferred.
+- A **spec** name is not a value (`T0012`, "expected a value"), and method calls
+  are already v0 no-ops — neither needs a new rule.
+
+**Calling a function value.** `f(args)` where `f` is an expression of function
+type (not a direct function name) is an **indirect call**. The checker verifies
+arity (`T0002`) and argument types (`T0001`) against the function type; the
+**ownership checker** applies the per-argument borrow rules driven by the
+function type's modes (the same rules as a direct call — [`ownership.md`](ownership.md);
+`O0004`/`O0005`/`O0006`). Calling a value that is not of function type is
+`T0003`. A direct call of a named function keeps its dedicated fast path
+(sharper diagnostics; generics); only an indirect callee goes through the
+function-type detour.
+
+**Purity (the R0007 spec-gate).** The transitive effect computation of §3.6
+already records a call-graph edge for a **value reference** to a function, not
+only for a direct call — a reference *taints conservatively*. In Tier 1 the only
+way to obtain a function value is a compile-time-known top-level `fn` name, so
+this conservative taint is **complete**: any function that names an effectful
+function as a value (to pass it, store it, or call it indirectly) is itself in
+the effectful closure, and a spec whose execution could reach that value is
+refused by `R0007` before the interpreter runs. An indirect call through a
+known constant `fn`-value has exactly its target's effectfulness; an indirect
+call through a value that flowed through a variable or parameter is treated
+conservatively as possibly effectful — but such a value still originates from a
+named top-level `fn` whose taint was already recorded, so no spec reaches an
+effect through a function value undetected. (Tier 2's captured environments will
+revisit this.)
+
+Tier 1 has **no closures, no capture, and no heap**; capturing closures are a
+later ADR increment.
 
 ---
 

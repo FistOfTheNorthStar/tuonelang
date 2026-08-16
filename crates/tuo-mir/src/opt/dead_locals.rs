@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use tuo_types::TypeckResult;
 
 use super::Pass;
-use crate::mir::{Arg, Function, LocalId, Operand, Place, Rvalue, Statement, Terminator};
+use crate::mir::{Arg, Callee, Function, LocalId, Operand, Place, Rvalue, Statement, Terminator};
 
 /// The dead-local-elimination pass.
 pub(super) struct DeadLocals;
@@ -181,8 +181,11 @@ fn read_locals(function: &Function) -> BTreeSet<u32> {
                     read_place_roots(place, /*is_write=*/ true, &mut note);
                     read_rvalue(rvalue, &mut note);
                 }
-                Statement::Call { dest, args, .. } => {
+                Statement::Call { dest, callee, args } => {
                     read_place_roots(dest, /*is_write=*/ true, &mut note);
+                    if let Callee::Indirect(operand) = callee {
+                        read_operand(operand, &mut note);
+                    }
                     for arg in args {
                         read_arg(arg, &mut note);
                     }
@@ -368,8 +371,11 @@ fn remap_statement(statement: &mut Statement, remap: &[Option<u32>]) {
             remap_place(place, remap);
             remap_rvalue(rvalue, remap);
         }
-        Statement::Call { dest, args, .. } => {
+        Statement::Call { dest, callee, args } => {
             remap_place(dest, remap);
+            if let Callee::Indirect(operand) = callee {
+                remap_operand(operand, remap);
+            }
             for arg in args {
                 match arg {
                     Arg::Value(operand) => remap_operand(operand, remap),

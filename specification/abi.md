@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `4` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `5` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -162,6 +162,40 @@ slot, a struct field), with no header, no indirection, and no allocation.
   storage is inline); a `Copy` element type makes the whole array `Copy` and
   its drop a no-op.
 - The `Array[T]` header layout above is unchanged by this section.
+
+## Function values (Tier 1)
+
+A **function value** (ADR-0008 Tier 1) — a value of a function type
+`fn(mode T, …) -> R` — is a single **code pointer**:
+
+```c
+void (*fp)(...);   // one non-null pointer to the callee's entry
+```
+
+- Size = pointer-width (8 bytes on 64-bit), align = pointer-width. `layout_of`
+  returns `Layout::pointer()`.
+- **`Copy`** (copying the value copies the pointer) and non-heap; its drop is a
+  no-op and it never traps. In Tier 1 a function value always points at a
+  compile-time-known top-level function, so the pointer is a link-time constant,
+  never null.
+- The parameter **modes** are part of the function *type* (used to drive the
+  indirect-call site's borrows), not part of the value's runtime representation:
+  two function values of different types have the same one-word layout.
+
+**The indirect-call convention is identical to the direct one.** An indirect
+call passes its arguments — by value, by `in` borrow, by `mut` borrow — and
+returns its result (including via an `sret` out-pointer for a large aggregate
+return) under **exactly** the same rules as a direct call to a function of the
+same signature; the *only* difference is that the call target is loaded from the
+function value rather than being a fixed symbol. A backend therefore reuses its
+entire direct-call lowering and changes only the callee operand.
+
+Native lowering of the function-value constant and the indirect call **lands
+with ADR-0008 Stage B**; until then both backends refuse the MIR forms
+(`Const::Fn`, an `Indirect` callee) cleanly rather than mis-compiling them, and
+this section is the layout they will grow into. Tier 2 (capturing closures) will
+need a different representation (a code pointer plus an environment) and is a
+separate ADR increment — a Tier-1 function value carries no environment.
 
 ## Box
 
@@ -420,7 +454,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `4`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `5`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -433,5 +467,9 @@ ADR-0006 Stage B effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
 allocator seam (`tuo_rt_alloc`, `tuo_rt_dealloc`) load-bearing — it is now
 linked into every built binary and used by the native `String`/`Array[Int]`
 lowering — the runtime-symbol meaning went from unused to load-bearing; no
-layout changed. The version is asserted by the crate's tests so a silent
-reinterpretation of bytes is impossible.
+layout changed. Version `5` (ADR-0008 Tier 1) gave the **function type**
+(`Ty::Fn`) a layout — a single code pointer (pointer-width, `Copy`) — where it
+previously had none (`layout_of` returned a `LayoutError`); a previously
+unlayoutable type gaining a layout is a layout-affecting change, so the version
+bumps. The version is asserted by the crate's tests so a silent reinterpretation
+of bytes is impossible.

@@ -414,3 +414,88 @@ fn a_spec_reaching_write_string_is_refused_with_r0007() {
         RunOutcome::Ran(report) => panic!("an effectful spec must not run: {report:#?}"),
     }
 }
+
+// ----------------------------------------------------------------------
+// First-class function values (ADR-0008 Tier 1)
+// ----------------------------------------------------------------------
+
+#[test]
+fn a_function_value_passed_and_called_indirectly_runs() {
+    // `apply` takes a `fn(take Int, take Int) -> Int` and calls it
+    // indirectly; passing `add` as a value and running the whole thing in the
+    // deterministic sandbox yields 5. This is the ADR-0008 Tier 1 oracle.
+    let report = run(concat!(
+        "fn add(take a: Int, take b: Int) -> Int { a + b }\n",
+        "fn apply(take f: fn(take Int, take Int) -> Int, take a: Int, take b: Int) -> Int {\n",
+        "    f(a, b)\n",
+        "}\n",
+        "spec \"applies a function value\" { then apply(add, 2, 3) == 5; }\n",
+    ));
+    assert!(report.passed(), "the indirect-call spec passes");
+    assert_eq!(passing_assertions(&report), 1);
+}
+
+#[test]
+fn a_function_value_bound_to_a_local_and_called_runs() {
+    // Binding a `fn` name to a local and calling through it is an indirect
+    // call whose target is a compile-time-known constant.
+    let report = run(concat!(
+        "fn double(take n: Int) -> Int { n + n }\n",
+        "fn via(take n: Int) -> Int {\n",
+        "    var g = double;\n",
+        "    g(n)\n",
+        "}\n",
+        "spec \"calls through a bound fn value\" { then via(21) == 42; }\n",
+    ));
+    assert!(report.passed(), "the bound-fn-value spec passes");
+    assert_eq!(passing_assertions(&report), 1);
+}
+
+#[test]
+fn a_spec_making_a_known_pure_indirect_call_runs() {
+    // The indirect call's target (`inc`) is a compile-time-known constant and
+    // pure, so the R0007 purity gate admits the spec and it runs in the
+    // sandbox. (An opaque effectful indirect call cannot arise in Tier 1: the
+    // only way to make a function value is a named top-level `fn`, whose taint
+    // the effect closure already records.)
+    let report = run(concat!(
+        "fn inc(take n: Int) -> Int { n + 1 }\n",
+        "fn run_it(take f: fn(take Int) -> Int, take n: Int) -> Int { f(n) }\n",
+        "spec \"pure indirect call runs\" { then run_it(inc, 41) == 42; }\n",
+    ));
+    assert!(report.passed(), "a known-pure indirect call runs");
+    assert_eq!(passing_assertions(&report), 1);
+}
+
+#[test]
+fn a_spec_passing_an_effectful_function_as_a_value_is_refused_with_r0007() {
+    // The conservative effect closure taints any function that even names an
+    // effectful function as a value (ADR-0008 Tier 1 / static-semantics §3.8):
+    // a spec that passes an effectful `fn` to an indirect-calling function is
+    // refused by R0007 before the interpreter runs — an opaque effectful
+    // indirect call cannot slip past the purity gate in Tier 1.
+    use tuo_source::SourceMap;
+    let mut map = SourceMap::new();
+    let file = map.intern_file("fnval_effect.tuo");
+    let id = map
+        .add_source(
+            file,
+            concat!(
+                "fn effectful(take fd: Int) -> Int { std::rt::exit(fd) }\n",
+                "fn run_it(take f: fn(take Int) -> Int, take n: Int) -> Int { f(n) }\n",
+                "spec \"effectful fn value\" { then run_it(effectful, 0) == 0; }\n",
+            ),
+        )
+        .expect("source interns");
+    match tuo_spec::run(&map, &[id], &Selection::All, Limits::default()) {
+        RunOutcome::NotChecked(problems) => {
+            assert!(
+                problems
+                    .iter()
+                    .any(|diagnostic| diagnostic.code.to_string() == "R0007"),
+                "an effectful fn value in a spec is refused: {problems:#?}"
+            );
+        }
+        RunOutcome::Ran(report) => panic!("an effectful spec must not run: {report:#?}"),
+    }
+}

@@ -300,7 +300,7 @@ fn a_borrow_mode_call_now_compiles() {
                 },
                 tuo_mir::Statement::Call {
                     dest: Place::local(tuo_mir::LocalId(0)),
-                    callee: SymbolId::from_raw(1),
+                    callee: tuo_mir::Callee::Direct(SymbolId::from_raw(1)),
                     args: vec![Arg::Borrow(Place::local(tuo_mir::LocalId(1)))],
                 },
             ],
@@ -837,4 +837,112 @@ fn a_write_string_effect_now_compiles() {
         )
         .expect("write_string compiles natively since ADR-0009 Stage B");
     assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0008 Tier 1: function values are refused (native lowering is Stage B)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_function_value_constant_is_refused_until_stage_b() {
+    // `_0 = const fn sym1` — materializing a code pointer is ADR-0008 Stage B;
+    // the Cranelift backend must refuse it cleanly, never mis-compile.
+    use tuo_mir::Rvalue;
+    use tuo_types::{FnParam, FnTy, ParamMode};
+    let fn_ty = Ty::Fn(Box::new(FnTy {
+        params: vec![FnParam {
+            mode: ParamMode::Take,
+            ty: Ty::int(),
+        }],
+        ret: Ty::int(),
+    }));
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![LocalDecl {
+            ty: fn_ty,
+            name: None,
+            span: span(),
+        }],
+        blocks: vec![BasicBlock {
+            statements: vec![tuo_mir::Statement::Assign {
+                place: Place::local(tuo_mir::LocalId(0)),
+                rvalue: Rvalue::Use(Operand::Const(Const::Fn(SymbolId::from_raw(1)))),
+            }],
+            terminator: Terminator::Return(Operand::Const(Const::Int(0, tuo_types::IntKind::I64))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let error = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect_err("a function value is refused until ADR-0008 Stage B");
+    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+    assert!(error.to_string().contains("Stage B"), "{error}");
+}
+
+#[test]
+fn an_indirect_call_is_refused_until_stage_b() {
+    // `call (copy _0)()` — an indirect call through a function value is
+    // ADR-0008 Stage B; refuse it cleanly.
+    use tuo_mir::{Callee, Statement};
+    use tuo_types::{FnTy, ParamMode};
+    let _ = ParamMode::Take;
+    let fn_ty = Ty::Fn(Box::new(FnTy {
+        params: Vec::new(),
+        ret: Ty::int(),
+    }));
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: fn_ty,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![Statement::Call {
+                dest: Place::local(tuo_mir::LocalId(1)),
+                callee: Callee::Indirect(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+                args: Vec::new(),
+            }],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(1)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let error = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect_err("an indirect call is refused until ADR-0008 Stage B");
+    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+    assert!(error.to_string().contains("Stage B"), "{error}");
 }

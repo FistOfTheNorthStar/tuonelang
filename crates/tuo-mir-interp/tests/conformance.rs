@@ -1257,3 +1257,67 @@ fn a_reassigned_heap_value_drops_the_old_buffer_first() {
     "#;
     assert_eq!(value(src, "churn", vec![int(1000)]), int(4));
 }
+
+// ---------------------------------------------------------------------------
+// First-class function values (ADR-0008 Tier 1)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_indirect_call_dispatches_like_a_direct_call() {
+    // `apply(add, 2, 3)` calls `add` indirectly through a function value; the
+    // result equals the direct call `add(2, 3)`.
+    let src = "\
+        fn add(take a: Int, take b: Int) -> Int { a + b }\n\
+        fn apply(take f: fn(take Int, take Int) -> Int, take a: Int, take b: Int) -> Int {\n\
+            f(a, b)\n\
+        }\n\
+        fn indirect() -> Int { apply(add, 2, 3) }\n\
+        fn direct() -> Int { add(2, 3) }\n";
+    assert_eq!(value(src, "indirect", vec![]), int(5));
+    assert_eq!(value(src, "direct", vec![]), int(5));
+    assert_eq!(value(src, "indirect", vec![]), value(src, "direct", vec![]));
+}
+
+#[test]
+fn a_function_value_bound_to_a_local_is_callable() {
+    let src = "\
+        fn triple(take n: Int) -> Int { n + n + n }\n\
+        fn go(take n: Int) -> Int { var g = triple; g(n) }\n";
+    assert_eq!(value(src, "go", vec![int(7)]), int(21));
+}
+
+#[test]
+fn a_function_value_is_copy_and_callable_twice() {
+    // Copying a function value (it is `Copy`) leaves the source usable: two
+    // indirect calls through copies of the same value both dispatch.
+    let src = "\
+        fn sq(take n: Int) -> Int { n * n }\n\
+        fn twice(take n: Int) -> Int {\n\
+            var f = sq;\n\
+            var g = f;\n\
+            f(n) + g(n)\n\
+        }\n";
+    assert_eq!(value(src, "twice", vec![int(4)]), int(32));
+}
+
+#[test]
+fn a_function_value_selected_by_a_branch_dispatches_at_runtime() {
+    // The function value flows through a variable whose value a branch picks,
+    // then is called — the interpreter dispatches on the runtime value.
+    let src = "\
+        fn inc(take n: Int) -> Int { n + 1 }\n\
+        fn dec(take n: Int) -> Int { n - 1 }\n\
+        fn pick(take up: Bool, take n: Int) -> Int {\n\
+            var f = inc;\n\
+            if up { f = inc; } else { f = dec; }\n\
+            f(n)\n\
+        }\n";
+    assert_eq!(
+        value(src, "pick", vec![Value::Bool(true), int(10)]),
+        int(11)
+    );
+    assert_eq!(
+        value(src, "pick", vec![Value::Bool(false), int(10)]),
+        int(9)
+    );
+}

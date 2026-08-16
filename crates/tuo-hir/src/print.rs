@@ -259,6 +259,16 @@ impl Printer<'_> {
                 let line = format!("type [_; {len}]");
                 self.nest(&line, |printer| printer.ty(element));
             }
+            TyKind::Fn { params, ret } => {
+                self.nest("type fn", |printer| {
+                    for param in params {
+                        printer.nest(&format!("param {}", param.mode.keyword()), |p| {
+                            p.ty(&param.ty);
+                        });
+                    }
+                    printer.nest("return", |p| p.ty(ret));
+                });
+            }
             TyKind::Err => self.line("type {err}"),
         }
     }

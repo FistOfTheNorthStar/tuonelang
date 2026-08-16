@@ -192,6 +192,21 @@ pub enum Const {
     Char(char),
     /// A `Str` literal: an immutable view of static UTF-8 text.
     Str(String),
+    /// A **function value** (ADR-0008 Tier 1): a compile-time-known code
+    /// pointer naming the top-level function `SymbolId`. Its type is the
+    /// referenced function's signature-as-function-type (`Ty::Fn`). `Copy`,
+    /// non-heap, never traps; produced only by using a bare `fn` name in
+    /// value position.
+    Fn(SymbolId),
+}
+
+/// The target of a [`Statement::Call`] (ADR-0008 Tier 1).
+#[derive(Clone, Debug)]
+pub enum Callee {
+    /// A direct call to a named function symbol.
+    Direct(SymbolId),
+    /// An indirect call through a function-value operand (of function type).
+    Indirect(Operand),
 }
 
 /// One statement. Statements never branch; a statement that traps
@@ -210,13 +225,16 @@ pub enum Statement {
     /// Call `callee` with `args` and store its return value into `dest`.
     /// Arguments are evaluated before the call (each `Arg` names its
     /// passing semantics); the call returns normally or aborts — there is
-    /// no unwinding (Constitution §24). Calls are always direct: v0 has
-    /// no function-typed values in MIR.
+    /// no unwinding (Constitution §24). The callee is a [`Callee`]:
+    /// `Direct` names a function symbol, `Indirect` calls through a
+    /// function-value operand (ADR-0008 Tier 1). The two forms share every
+    /// other mechanism — argument passing, borrows, the destination — only
+    /// the target differs.
     Call {
         /// The destination of the return value.
         dest: Place,
-        /// The called function's symbol.
-        callee: SymbolId,
+        /// The call target: a direct symbol or an indirect function value.
+        callee: Callee,
         /// The arguments, in declaration order.
         args: Vec<Arg>,
     },

@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 use tuo_resolve::Resolution;
 
 use crate::mir::{
-    AggregateKind, Arg, BasicBlock, Const, Function, Operand, PassMode, Place, Program, Projection,
-    Rvalue, Statement, Terminator,
+    AggregateKind, Arg, BasicBlock, Callee, Const, Function, Operand, PassMode, Place, Program,
+    Projection, Rvalue, Statement, Terminator,
 };
 
 /// Render a whole lowered program.
@@ -102,10 +102,14 @@ fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
         }
         Statement::Call { dest, callee, args } => {
             let args: Vec<String> = args.iter().map(render_arg).collect();
+            let target = match callee {
+                Callee::Direct(symbol) => resolution.symbol(*symbol).name.clone(),
+                Callee::Indirect(operand) => render_operand(operand),
+            };
             format!(
                 "{} = call {}({})",
                 render_place(dest),
-                resolution.symbol(*callee).name,
+                target,
                 args.join(", ")
             )
         }
@@ -235,6 +239,9 @@ fn render_const(constant: &Const) -> String {
         Const::Float(value, kind) => format!("{value:?}_{}", kind.name().to_lowercase()),
         Const::Char(value) => format!("{value:?}"),
         Const::Str(value) => format!("{value:?}"),
+        // A function value (ADR-0008 Tier 1): rendered by its symbol id, since
+        // this dev-tool dump threads no resolution through operands.
+        Const::Fn(symbol) => format!("fn {symbol}"),
     }
 }
 

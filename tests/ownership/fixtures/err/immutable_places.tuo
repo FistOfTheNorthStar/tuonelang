@@ -91,3 +91,11 @@ fn case_assign_inside_loop_to_let(in rounds: Int) {
         i = i + 1;
     }
 }
+
+// A `mut` argument through a function VALUE obeys the same rule: the modes
+// live in the function type (ADR-0008 Tier 1), so passing an immutable `let`
+// binding to a `mut` parameter of a `fn(mut Int) -> Int` is O0004.
+fn case_mut_arg_through_fn_value(take f: fn(mut Int) -> Int, in n: Int) -> Int {
+    let m = n;
+    f(m) // ERROR: O0004 `m` is a `let` binding, but the fn value's parameter is `mut`
+}

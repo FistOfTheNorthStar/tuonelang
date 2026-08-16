@@ -9,7 +9,7 @@
 
 use tuo_source::Span;
 
-use crate::ty::{FnTy, InferVar, Ty};
+use crate::ty::{FnParam, FnTy, InferVar, Ty};
 
 /// What a fresh variable is allowed to become.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -79,7 +79,14 @@ impl InferCtx {
             Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(self.apply(&item)), n),
             Ty::Range(item) => Ty::Range(Box::new(self.apply(&item))),
             Ty::Fn(fn_ty) => Ty::Fn(Box::new(FnTy {
-                params: fn_ty.params.iter().map(|param| self.apply(param)).collect(),
+                params: fn_ty
+                    .params
+                    .iter()
+                    .map(|param| FnParam {
+                        mode: param.mode,
+                        ty: self.apply(&param.ty),
+                    })
+                    .collect(),
                 ret: self.apply(&fn_ty.ret),
             })),
             Ty::Option(item) => Ty::Option(Box::new(self.apply(&item))),
@@ -108,7 +115,7 @@ impl InferCtx {
             | Ty::Option(item)
             | Ty::Wrapper(_, item) => self.occurs(var, &item),
             Ty::Fn(fn_ty) => {
-                fn_ty.params.iter().any(|param| self.occurs(var, param))
+                fn_ty.params.iter().any(|param| self.occurs(var, &param.ty))
                     || self.occurs(var, &fn_ty.ret)
             }
             Ty::Result(ok, err) => self.occurs(var, &ok) || self.occurs(var, &err),
@@ -212,9 +219,19 @@ impl InferCtx {
                 self.unify(&a_err, &b_err)
             }
             (Ty::Wrapper(ka, a), Ty::Wrapper(kb, b)) if ka == kb => self.unify(&a, &b),
-            (Ty::Fn(a), Ty::Fn(b)) if a.params.len() == b.params.len() => {
+            (Ty::Fn(a), Ty::Fn(b))
+                if a.params.len() == b.params.len()
+                    && a.params
+                        .iter()
+                        .zip(&b.params)
+                        .all(|(l, r)| l.mode == r.mode) =>
+            {
+                // Modes are part of the function type: `fn(take Int) -> Int`
+                // and `fn(in Int) -> Int` are distinct. Equal modes are the
+                // guard above; here we unify the pairwise param and return
+                // types. A mode mismatch falls through to the `Mismatch` arm.
                 for (left, right) in a.params.iter().zip(&b.params) {
-                    self.unify(left, right)?;
+                    self.unify(&left.ty, &right.ty)?;
                 }
                 self.unify(&a.ret, &b.ret)
             }

@@ -13,6 +13,7 @@
 //! `Result` are ordinary enums here (`Some`/`Ok` = variant 0, `None`/`Err` =
 //! variant 1), matching [`tuo_mir`]'s discriminant convention.
 
+use tuo_resolve::SymbolId;
 use tuo_types::{FloatKind, IntKind};
 
 /// A runtime value: the interpreter's representation of one MIR value.
@@ -59,6 +60,11 @@ pub enum Value {
     },
     /// An array of elements.
     Array(Vec<Value>),
+    /// A **function value** (ADR-0008 Tier 1): a callable naming a top-level
+    /// function by its `SymbolId`. `Copy` (cloning copies the id), rendered by
+    /// the function's symbol. An indirect call resolves this to the function
+    /// body and dispatches exactly like a direct call.
+    Fn(SymbolId),
 }
 
 impl Value {
@@ -119,6 +125,9 @@ impl Value {
                 let inner: Vec<String> = elements.iter().map(Self::render).collect();
                 format!("[{}]", inner.join(", "))
             }
+            // A function value is rendered by its symbol id (the interpreter
+            // has no name table here); it is `Copy` and names a top-level fn.
+            Self::Fn(symbol) => format!("fn {symbol}"),
         }
     }
 }

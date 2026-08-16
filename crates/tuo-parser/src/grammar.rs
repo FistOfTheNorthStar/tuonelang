@@ -180,7 +180,22 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
                 .then(tok(K::IntLiteral))
                 .then(tok(K::CloseBracket)),
         );
-        choice((unit_type, wrapper, fixed_array, path_type))
+        // `fn(mode T, …) -> R` — the function type (ADR-0008 Tier 1). Modes
+        // are mandatory; the return arrow+type are always written and wrapped
+        // in a `ReturnType` node, mirroring a function declaration's.
+        let fn_mode = one_of([t(K::KwIn), t(K::KwMut), t(K::KwTake)]).map(elt);
+        let fn_type_param = node!(SyntaxKind::FnTypeParam, fn_mode.then(ty.clone())).boxed();
+        let fn_return_type =
+            node!(SyntaxKind::ReturnType, tok(K::ThinArrow).then(ty.clone())).boxed();
+        let fn_type = node!(
+            SyntaxKind::FnType,
+            tok(K::KwFn)
+                .then(tok(K::OpenParen))
+                .then(comma_list(fn_type_param))
+                .then(tok(K::CloseParen))
+                .then(fn_return_type),
+        );
+        choice((unit_type, wrapper, fixed_array, fn_type, path_type))
     })
     .boxed();
     let type_args_p = type_args(ty.clone());

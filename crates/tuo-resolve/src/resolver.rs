@@ -1287,6 +1287,17 @@ impl Resolver {
                     self.walk_type(scopes, element);
                 }
             }
+            TypeRef::Fn(fn_ty) => {
+                // `fn(mode T, …) -> R` (ADR-0008 Tier 1): the `fn` keyword and
+                // the modes resolve to nothing; only the embedded parameter
+                // and return types resolve. The type is structural.
+                for param in fn_ty.params() {
+                    self.walk_type(scopes, param.ty);
+                }
+                if let Some(ret) = fn_ty.ret() {
+                    self.walk_type(scopes, ret);
+                }
+            }
         }
     }
 

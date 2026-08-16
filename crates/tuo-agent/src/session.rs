@@ -319,7 +319,7 @@ impl Session {
                 let params: Vec<String> = fn_ty
                     .params
                     .iter()
-                    .map(|p| p.render(sema.resolution))
+                    .map(|p| format!("{} {}", p.mode.keyword(), p.ty.render(sema.resolution)))
                     .collect();
                 let label = format!(
                     "fn {name}({}) -> {}",

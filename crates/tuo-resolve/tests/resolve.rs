@@ -1016,3 +1016,34 @@ fn a_local_named_std_shadows_the_builtin_modules_in_that_scope() {
     );
     assert_clean(&resolution);
 }
+
+#[test]
+fn a_bare_fn_name_in_value_position_resolves_to_its_function() {
+    // ADR-0008 Tier 1: using a function name as a value resolves it to the
+    // function symbol (in the value namespace) — the front end already does
+    // this; the fn-value feature builds on it.
+    let resolution = resolve_one(
+        "fn add(take a: Int, take b: Int) -> Int { a + b }\n\
+         fn main() -> Int { let f = add; f(1, 2) }\n",
+    );
+    assert_clean(&resolution);
+    let add = find(&resolution, "add", SymbolKind::Function);
+    // `add` is referenced twice: as a value (`let f = add`) and... actually
+    // only once as a value here; the call is through `f`. There is exactly one
+    // value reference to `add`.
+    let refs: Vec<_> = resolution.references_to(add).collect();
+    assert_eq!(refs.len(), 1, "one value reference to `add`");
+}
+
+#[test]
+fn a_function_type_annotation_resolves_its_embedded_types() {
+    // `fn(mode T, …) -> R` is structural: the `fn` keyword and modes resolve
+    // to nothing, but the embedded parameter and return types resolve.
+    let resolution = resolve_one(
+        "struct P { x: Int }\n\
+         fn takes(take f: fn(take P) -> P, take p: P) -> P { f(p) }\n\
+         fn id(take p: P) -> P { p }\n\
+         fn main() -> Int { takes(id, P { x: 0 }); 0 }\n",
+    );
+    assert_clean(&resolution);
+}

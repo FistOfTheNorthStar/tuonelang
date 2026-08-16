@@ -130,8 +130,8 @@ use cranelift_object::ObjectModule;
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    Arg, BinOp, CastKind, Const, EffectOp, Function, HeapMutOp, HeapOp, Operand, PassMode, Place,
-    Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
+    Arg, BinOp, Callee, CastKind, Const, EffectOp, Function, HeapMutOp, HeapOp, Operand, PassMode,
+    Place, Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
@@ -662,7 +662,7 @@ impl<'a> Lowering<'a> {
     fn lower_statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match statement {
             Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
-            Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
+            Statement::Call { dest, callee, args } => self.lower_call(dest, callee, args),
             // A host effect (`std::rt`, ADR-0006 Stage B): a direct call to
             // the matching `tuo_runtime::effect` symbol, which the CLI links
             // into every built binary alongside the trap shim.
@@ -724,9 +724,22 @@ impl<'a> Lowering<'a> {
     fn lower_call(
         &mut self,
         dest: &Place,
-        callee: SymbolId,
+        callee: &Callee,
         args: &[Arg],
     ) -> Result<(), CodegenError> {
+        // An indirect call through a function value (ADR-0008 Tier 1) is not
+        // lowered yet — native indirect-call lowering lands with ADR-0008
+        // Stage B. Refuse it cleanly; the interpreter remains the reference.
+        let callee = match callee {
+            Callee::Direct(symbol) => *symbol,
+            Callee::Indirect(_) => {
+                return Err(CodegenError::unsupported(
+                    "an indirect call through a function value does not lower yet (ADR-0008 \
+                     Tier 1 native lowering lands with Stage B); the interpreter remains the \
+                     reference",
+                ));
+            }
+        };
         let Some(&callee_id) = self.ids.get(&callee) else {
             return Err(CodegenError::unsupported(
                 "call to a function outside the lowered program (v0 has no external calls)",
@@ -1087,6 +1100,13 @@ impl<'a> Lowering<'a> {
             Const::Str(_) => Err(CodegenError::backend(
                 "a `Str` constant reached the scalar constant path (it is materialized via \
                  static data by the aggregate machinery)",
+            )),
+            // A function value (ADR-0008 Tier 1) does not lower yet: native
+            // code-pointer materialization lands with ADR-0008 Stage B. Refuse
+            // it cleanly; the interpreter remains the reference.
+            Const::Fn(_) => Err(CodegenError::unsupported(
+                "a function value does not lower yet (ADR-0008 Tier 1 native lowering lands with \
+                 Stage B); the interpreter remains the reference",
             )),
         }
     }

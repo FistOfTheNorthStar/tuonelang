@@ -60,8 +60,8 @@ use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
 use tuo_types::{Ty, TypeckResult};
 
 use crate::mir::{
-    AggregateKind, Arg, BinOp, BlockId, EffectOp, Function, HeapMutOp, HeapOp, LocalId, Operand,
-    Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
+    AggregateKind, Arg, BinOp, BlockId, Callee, EffectOp, Function, HeapMutOp, HeapOp, LocalId,
+    Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
 };
 
 /// MIR diagnostic codes. Once shipped a number is never reused (the code
@@ -99,6 +99,11 @@ mod code {
     /// operand count or types, or a destination that is not the op's
     /// result type) — ADR-0009 Stage A.
     pub(super) const HEAP_MUTATE: u16 = 13;
+    /// A function value or indirect call is malformed: a `Const::Fn(sym)`
+    /// whose `sym` is not a function or whose signature-as-function-type is
+    /// ill-formed, or a `Call` whose `Indirect` callee operand is not of
+    /// function type — ADR-0008 Tier 1.
+    pub(super) const INDIRECT_CALL: u16 = 14;
 }
 
 /// Verify a whole lowered [`Program`], returning one [`Diagnostic`] per
@@ -360,11 +365,15 @@ impl Verifier<'_> {
                 self.check_rvalue(block, rvalue);
                 self.check_assign_types(block, place, rvalue);
             }
-            Statement::Call { dest, args, .. } => {
+            Statement::Call { dest, callee, args } => {
                 self.check_place(block, dest);
+                if let Callee::Indirect(operand) = callee {
+                    self.check_operand(block, operand);
+                }
                 for arg in args {
                     self.check_arg(block, arg);
                 }
+                self.check_call_callee(block, callee);
             }
             Statement::Effect { op, args, dest } => {
                 self.check_place(block, dest);
@@ -945,9 +954,47 @@ impl Verifier<'_> {
         }
     }
 
+    /// Verify a call's callee (ADR-0008 Tier 1, `M0014`). A `Direct` symbol
+    /// must have a function type; an `Indirect` callee operand must be of
+    /// function type. A `Const::Fn(sym)` naming a non-function is caught here
+    /// (its `operand_ty` is not `Ty::Fn`). Missing type information (a poison
+    /// program) is not flagged — `Ty::Error` and `Ty::Never` unify with
+    /// anything, exactly as elsewhere in the verifier.
+    fn check_call_callee(&mut self, _block: usize, callee: &Callee) {
+        let name = self.fn_name().to_owned();
+        match callee {
+            Callee::Direct(symbol) => {
+                if let Some(ty) = self.types.type_of(*symbol)
+                    && !matches!(ty, Ty::Fn(_) | Ty::Error | Ty::Never)
+                {
+                    self.error(
+                        code::INDIRECT_CALL,
+                        format!("fn `{name}`: direct call target is not a function"),
+                    );
+                }
+            }
+            Callee::Indirect(operand) => {
+                if let Some(ty) = self.operand_ty(operand)
+                    && !matches!(ty, Ty::Fn(_) | Ty::Error | Ty::Never)
+                {
+                    self.error(
+                        code::INDIRECT_CALL,
+                        format!(
+                            "fn `{name}`: indirect call through a value that is not a function"
+                        ),
+                    );
+                }
+            }
+        }
+    }
+
     fn operand_ty(&self, operand: &Operand) -> Option<Ty> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.place_ty(place),
+            // A function value's type is the referenced function's
+            // signature-as-function-type (ADR-0008 Tier 1), which lives in
+            // the type table, not the constant itself.
+            Operand::Const(crate::mir::Const::Fn(symbol)) => self.types.type_of(*symbol).cloned(),
             Operand::Const(constant) => Some(const_ty(constant)),
         }
     }
@@ -1188,7 +1235,13 @@ impl Verifier<'_> {
         let mut reads: Vec<(LocalId, ReadKind)> = Vec::new();
         match statement {
             Statement::Assign { rvalue, .. } => collect_rvalue_reads(rvalue, &mut reads),
-            Statement::Call { args, .. } => {
+            Statement::Call { callee, args, .. } => {
+                // The indirect callee operand is read to obtain the code
+                // pointer (ADR-0008 Tier 1). A function value is `Copy`, so
+                // this is a plain read.
+                if let Callee::Indirect(operand) = callee {
+                    collect_operand_read(operand, &mut reads);
+                }
                 for arg in args {
                     collect_arg_reads(arg, &mut reads);
                 }
@@ -1322,7 +1375,13 @@ fn apply_statement(statement: &Statement, init: &mut BTreeSet<u32>) {
                 defined.push(place.local.0);
             }
         }
-        Statement::Call { dest, args, .. } => {
+        Statement::Call { dest, callee, args } => {
+            // The indirect callee operand is consumed if moved (a function
+            // value is `Copy`, so lowering copies it — but honor `Move` for
+            // completeness).
+            if let Callee::Indirect(operand) = callee {
+                collect_consumed_operand(operand, &mut consumed);
+            }
             for arg in args {
                 match arg {
                     Arg::Value(operand) => collect_consumed_operand(operand, &mut consumed),
@@ -1503,6 +1562,10 @@ fn const_ty(constant: &crate::mir::Const) -> Ty {
         Const::Float(_, kind) => Ty::Float(*kind),
         Const::Char(_) => Ty::Char,
         Const::Str(_) => Ty::Str,
+        // A function value's type needs the type table; `operand_ty` handles
+        // it directly. Reaching here (a raw `const_ty` on a `Const::Fn`)
+        // means no type context, so it is poison.
+        Const::Fn(_) => Ty::Error,
     }
 }
 
@@ -1531,8 +1594,8 @@ mod tests {
 
     use super::{debug_assert_verified, is_well_formed, verify};
     use crate::mir::{
-        Arg, BasicBlock, BinOp, BlockId, Const, EffectOp, Function, LocalDecl, LocalId, Operand,
-        PassMode, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
+        Arg, BasicBlock, BinOp, BlockId, Callee, Const, EffectOp, Function, LocalDecl, LocalId,
+        Operand, PassMode, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
     };
 
     fn span() -> Span {
@@ -1836,7 +1899,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Call {
                     dest: Place::local(LocalId(1)),
-                    callee: SymbolId::from_raw(1),
+                    callee: Callee::Direct(SymbolId::from_raw(1)),
                     args: vec![
                         Arg::Borrow(Place::local(LocalId(0))),
                         Arg::Value(Operand::Move(Place::local(LocalId(0)))),
@@ -1847,6 +1910,26 @@ mod tests {
             Ty::Unit,
         );
         assert_eq!(codes(&program), vec![super::code::OWNERSHIP]);
+    }
+
+    #[test]
+    fn an_indirect_call_through_a_non_function_value_is_reported() {
+        // call (copy _0)() where _0 is an `Int` — the indirect callee operand
+        // is not of function type (ADR-0008 Tier 1, M0014).
+        let program = func(
+            vec![PassMode::Value],
+            vec![local(Ty::int()), local(Ty::Unit)],
+            vec![BasicBlock {
+                statements: vec![Statement::Call {
+                    dest: Place::local(LocalId(1)),
+                    callee: Callee::Indirect(Operand::Copy(Place::local(LocalId(0)))),
+                    args: Vec::new(),
+                }],
+                terminator: Terminator::Return(Operand::Const(Const::Unit)),
+            }],
+            Ty::Unit,
+        );
+        assert_eq!(codes(&program), vec![super::code::INDIRECT_CALL]);
     }
 
     #[test]

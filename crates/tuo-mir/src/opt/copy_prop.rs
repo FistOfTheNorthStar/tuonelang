@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use tuo_types::TypeckResult;
 
 use super::Pass;
-use crate::mir::{Arg, Function, Operand, Rvalue, Statement, Terminator};
+use crate::mir::{Arg, Callee, Function, Operand, Rvalue, Statement, Terminator};
 
 /// The simple copy-propagation pass.
 pub(super) struct CopyProp;
@@ -82,8 +82,13 @@ impl Pass for CopyProp {
 fn rewrite_statement_reads(statement: &mut Statement, known: &HashMap<u32, Operand>) -> bool {
     match statement {
         Statement::Assign { rvalue, .. } => rewrite_rvalue(rvalue, known),
-        Statement::Call { args, .. } => {
+        Statement::Call { callee, args, .. } => {
             let mut changed = false;
+            // The indirect callee operand is a read position (ADR-0008 Tier 1):
+            // a copy-propagatable `Const::Fn` or local flows through here.
+            if let Callee::Indirect(operand) = callee {
+                changed |= rewrite_operand(operand, known);
+            }
             for arg in args {
                 if let Arg::Value(operand) = arg {
                     changed |= rewrite_operand(operand, known);
@@ -282,7 +287,9 @@ mod tests {
     use tuo_types::{IntKind, Ty, TypeckResult};
 
     use super::{CopyProp, Pass};
-    use crate::mir::{BasicBlock, Const, LocalId, Operand, Place, Rvalue, Statement, Terminator};
+    use crate::mir::{
+        BasicBlock, Callee, Const, LocalId, Operand, Place, Rvalue, Statement, Terminator,
+    };
     use crate::opt::tests_support::{func, local};
 
     fn int(value: i128) -> Operand {
@@ -396,7 +403,7 @@ mod tests {
                     },
                     Statement::Call {
                         dest: Place::local(LocalId(2)),
-                        callee: tuo_resolve::SymbolId::from_raw(1),
+                        callee: Callee::Direct(tuo_resolve::SymbolId::from_raw(1)),
                         args: vec![crate::mir::Arg::BorrowMut(Place::local(LocalId(1)))],
                     },
                 ],

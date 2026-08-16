@@ -65,6 +65,12 @@
    `fixed_array_type` (D) and `array_literal` (G). No [FROZEN] production's
    surface changed and no token was added, so GRAMMAR-VERSION stays 0.1 per
    this file's own versioning rule.
+
+   2026-08-14: ADR-0008 Tier 1 adds the additive [EXPERIMENTAL] production
+   `fn_type` (D) — the type of a non-capturing function value. It reuses only
+   existing tokens (`fn`, the modes `in`/`mut`/`take`, `->`); no [FROZEN]
+   production's surface changed and no token was added, so GRAMMAR-VERSION
+   stays 0.1 per this file's own versioning rule.
    ========================================================================== *)
 
 
@@ -237,9 +243,19 @@ path_segment   = IDENT ;                                            (* [EXPERIME
 type           = path_type
                | unit_type
                | wrapper_type
-               | fixed_array_type ;                                 (* [EXPERIMENTAL ADR-0004] *)
+               | fixed_array_type                                   (* [EXPERIMENTAL ADR-0004] *)
+               | fn_type ;                                          (* [EXPERIMENTAL ADR-0008 Tier 1] *)
 
 unit_type      = "(", ")" ;                                         (* the unit type () [§10] *)
+
+(* Function type (ADR-0008 Tier 1): the type of a non-capturing function value —
+   a code pointer with a known ABI. Each parameter carries a MODE (in/mut/take),
+   exactly as a fn declaration's params do; modes are MANDATORY (part of the
+   type) and type equality is exact incl. modes. The return arrow+type are
+   always written (no unit default in the type syntax). Disambiguation is
+   one-token: `fn` at type position can only open a fn_type. *)
+fn_type        = "fn", "(", [ param_mode, type, { ",", param_mode, type }, [ "," ] ], ")",
+                 "->", type ;                                       (* [EXPERIMENTAL ADR-0008 Tier 1] *)
 
 (* Fixed-capacity array type: the length is part of the type. The length is an
    INT_LITERAL token — not a general expression — and admits no type suffix

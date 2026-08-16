@@ -16,8 +16,8 @@
 use std::collections::HashMap;
 
 use tuo_mir::{
-    AggregateKind, Arg, BinOp, BlockId, CastKind, Const, Function, HeapMutOp, HeapOp, LocalId,
-    Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
+    AggregateKind, Arg, BinOp, BlockId, Callee, CastKind, Const, Function, HeapMutOp, HeapOp,
+    LocalId, Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_source::Span;
@@ -349,7 +349,7 @@ impl Machine<'_, '_> {
                 Ok(())
             }
             Statement::Call { dest, callee, args } => {
-                self.exec_call(function, locals, dest, *callee, args)
+                self.exec_call(function, locals, dest, callee, args)
             }
             Statement::Effect { op, .. } => {
                 // The interpreter's sandbox performs no I/O, ever. The
@@ -482,18 +482,38 @@ impl Machine<'_, '_> {
         function: &Function,
         locals: &mut Locals,
         dest: &Place,
-        callee: SymbolId,
+        callee: &Callee,
         args: &[Arg],
     ) -> Result<(), RuntimeError> {
+        // Resolve the call target. A `Direct` call names its symbol; an
+        // `Indirect` call (ADR-0008 Tier 1) evaluates the callee operand to a
+        // `Value::Fn(sym)` and dispatches to `sym` — the frame setup, borrow
+        // copy-in/copy-back, and return handling below are then identical.
+        let callee_symbol = match callee {
+            Callee::Direct(symbol) => *symbol,
+            Callee::Indirect(operand) => {
+                let value = self.eval_operand(function, locals, operand)?;
+                let Value::Fn(symbol) = value else {
+                    return Err(self.abort(
+                        TrapKind::Internal(
+                            "indirect call through a value that is not a function".to_owned(),
+                        ),
+                        "verified MIR guarantees an indirect callee is a function value; this is \
+                         a compiler bug"
+                            .to_owned(),
+                        function.span,
+                    ));
+                };
+                symbol
+            }
+        };
         // Look up the callee. `function_of` borrows the program, which
         // outlives every frame, so the reference is safe to hold across the
         // nested `call`.
-        let Some(target) = self.interp.function_of(callee) else {
+        let Some(target) = self.interp.function_of(callee_symbol) else {
             return Err(self.abort(
                 TrapKind::Internal("call to a function outside the lowered program".to_owned()),
-                "the interpreter only executes functions present in the lowered MIR (v0 has \
-                 no indirect or external calls)"
-                    .to_owned(),
+                "the interpreter only executes functions present in the lowered MIR".to_owned(),
                 function.span,
             ));
         };
@@ -741,6 +761,9 @@ impl Machine<'_, '_> {
             Const::Float(v, kind) => Value::Float(normalize_float(*v, *kind), *kind),
             Const::Char(c) => Value::Char(*c),
             Const::Str(s) => Value::Str(s.clone().into_bytes()),
+            // A function value (ADR-0008 Tier 1): a callable naming a
+            // top-level function symbol.
+            Const::Fn(symbol) => Value::Fn(*symbol),
         }
     }
 
@@ -1600,7 +1623,13 @@ fn float_kind_of(ty: &Ty) -> Option<FloatKind> {
 /// scalar, plus the sum of the fields for aggregates.
 fn value_cost(value: &Value) -> u64 {
     match value {
-        Value::Unit | Value::Bool(_) | Value::Int(..) | Value::Float(..) | Value::Char(_) => 1,
+        // A function value is one code pointer — a single scalar.
+        Value::Unit
+        | Value::Bool(_)
+        | Value::Int(..)
+        | Value::Float(..)
+        | Value::Char(_)
+        | Value::Fn(_) => 1,
         Value::Str(s) => 1 + s.len() as u64,
         Value::Aggregate(fields) | Value::Variant { fields, .. } => {
             1 + fields.iter().map(value_cost).sum::<u64>()

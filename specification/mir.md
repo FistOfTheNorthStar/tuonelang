@@ -139,6 +139,7 @@ An **operand** ([`Operand`]) reads a value:
 | `Float(v, kind)` | a float; an `F32` is stored at `f64` precision and rounds to nearest even when materialized. |
 | `Char(c)` | a Unicode scalar value. |
 | `Str(s)` | an immutable view of static UTF-8 text. |
+| `Fn(sym)` (`[EXPERIMENTAL]`, ADR-0008 Tier 1) | a **function value**: a compile-time-known code pointer naming the top-level function `sym`. Its type is `sym`'s signature-as-function-type (`Ty::Fn`). `Copy`, non-heap, never traps. See §4.4. |
 
 ---
 
@@ -153,8 +154,13 @@ statement that traps (arithmetic, §5.3) aborts the program deterministically.
   overwrites a live value.
 - **`Call { dest, callee, args }`** — call `callee` with `args` (§4.1) and store its
   return value into `dest`. Arguments are evaluated before the call; the call
-  returns normally or aborts — **there is no unwinding** (Constitution §24). Calls
-  are always **direct**: v0 has no function-typed values in MIR.
+  returns normally or aborts — **there is no unwinding** (Constitution §24). The
+  callee is a **`Callee`** (`[EXPERIMENTAL]`, ADR-0008 Tier 1, §4.4):
+  `Direct(sym)` names a function symbol (a v0 builtin never reaches here — those
+  lower to `Effect`/`StrOp`/`HeapOp`), and `Indirect(operand)` calls through a
+  function-value operand of function type. The two forms share **every** other
+  mechanism — argument passing, borrows, the destination, the no-unwind rule —
+  only the target differs.
 - **`Drop { place }`** — destroy the value held by `place`, which must be
   initialized; afterwards the place is uninitialized. Drop glue is
   compiler-generated only — there are **no user destructors in v0** (ADR-0003):
@@ -257,6 +263,42 @@ growth is counted against the sandbox's live-value budget (§8.1). Optimization
 passes must never eliminate one (`target`'s mutation is observable, and
 `PushByte` can trap). Native lowering is **ADR-0009 Stage B**; until then both
 backends refuse the statement (they never mis-compile it).
+
+### 4.4 Function values and indirect calls — `[EXPERIMENTAL]`, ADR-0008 Tier 1
+
+A **function value** is `Operand::Const(Const::Fn(sym))` — a compile-time-known
+code pointer naming the top-level function `sym`. It is produced only by using a
+bare `fn` name in value position (`static-semantics.md` §3.8); there is no other
+way to construct one in Tier 1, so **every** function value in MIR names a
+concrete top-level symbol. Its type is `sym`'s signature-as-function-type
+(`Ty::Fn`, modes included); it is `Copy`, non-heap, and never traps or drops.
+
+`Statement::Call`'s callee is a **`Callee`**:
+
+- **`Direct(sym)`** — the ordinary direct call; `sym` is a user function symbol.
+- **`Indirect(operand)`** — call through `operand`, which must be of function
+  type. Argument passing, borrows, the destination place, and the no-unwind rule
+  are **identical** to a direct call; only the target is looked up at run time
+  from the operand's function value.
+
+The **verifier** (§7.1, `M0014`) checks a `Const::Fn(sym)` names a function
+symbol whose signature-as-function-type is well-formed, and checks an
+`Indirect` call's callee operand is of function type. (Deep argument-vs-signature
+type equality is not attempted here, exactly as for a `Direct` call — see §7.)
+
+**Purity.** An indirect call through a known `Const::Fn(sym)` has exactly `sym`'s
+effectfulness; a call through an opaque operand is conservatively possibly
+effectful. This does not weaken the R0007 spec-gate: the type checker already
+taints any function that references an effectful function *as a value*
+(`static-semantics.md` §3.6, §3.8), and in Tier 1 a function value can only
+originate from a named top-level `fn`, so a spec can never reach an effect
+through a function value undetected.
+
+**Optimization.** A `Const::Fn` is a constant like any other: copy-propagatable,
+never folded into anything. An indirect `Call` is **never eliminable** (a call
+may trap or diverge, and its target is opaque to the passes). Native lowering of
+the indirect call is **ADR-0008 Stage B**; until then both backends refuse a
+`Const::Fn` operand and an `Indirect` call cleanly (they never mis-compile one).
 
 ---
 
@@ -499,7 +541,10 @@ Per function, in one pass, the verifier proves:
   kinds and types into an `I64` destination (`M0011`, §4.2); a `HeapOp`
   supplies exactly its op's subject and operands with their fixed types into a
   destination of the op's result type (`M0012`, §5.7); a `HeapMutate`'s
-  target, operands, and destination match its op (`M0013`, §4.3).
+  target, operands, and destination match its op (`M0013`, §4.3); a
+  `Const::Fn(sym)` names a function whose signature-as-function-type is
+  well-formed, and an `Indirect` call's callee operand is of function type
+  (`M0014`, §4.4).
 - **Terminators** — a `Switch`'s arm values are pairwise distinct.
 - **Ownership invariants that must survive lowering** — a borrow argument is never
   paired against a by-value read of the same call; a `Copy`-typed place is never
@@ -528,6 +573,7 @@ Codes are in the `Mir` namespace; once shipped, a number is never reused.
 | `M0011` | An `Effect` statement is malformed: wrong argument count for its op, a mistyped or wrong-kind argument (`Value` where `Borrow` is required, or vice versa), or a non-`I64` destination (§4.2). |
 | `M0012` | A `HeapOp` rvalue is malformed: a missing/extra/mistyped `subject` place, wrong operand count or types for its op, or a destination that is not the op's result type (§5.7). |
 | `M0013` | A `HeapMutate` statement is malformed: a mistyped `target` place, wrong operand count or types for its op, or a destination that is not the op's result type (§4.3). |
+| `M0014` | A function value or indirect call is malformed: a `Const::Fn(sym)` whose `sym` is not a function or whose signature-as-function-type is ill-formed, or a `Call` whose `Indirect` callee operand is not of function type (§4.4). |
 
 ### 7.2 Re-verification after every pass
 

@@ -1,0 +1,4 @@
+T0015@291..304 builtin function `len` is not a first-class value | actual name `len`
+T0015@471..473 generic function `id` is not a first-class value | actual name `id`
+T0001@799..802 mismatched types | expected type `fn(in I64, in I64) -> I64` | actual type `fn(take I64, take I64) -> I64`
+T0003@901..905 expected a function, found `{integer}` | actual type `{integer}`

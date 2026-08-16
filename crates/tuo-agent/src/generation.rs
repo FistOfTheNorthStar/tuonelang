@@ -204,14 +204,20 @@ impl GenerationQueries for Session {
                 .params
                 .iter()
                 .enumerate()
-                .map(|(index, ty)| json!({ "index": index, "type": ty.render(sema.resolution) }))
+                .map(|(index, param)| {
+                    json!({
+                        "index": index,
+                        "mode": param.mode.keyword(),
+                        "type": param.ty.render(sema.resolution),
+                    })
+                })
                 .collect();
             let label = format!(
                 "fn {name}({}) -> {}",
                 fn_ty
                     .params
                     .iter()
-                    .map(|p| p.render(sema.resolution))
+                    .map(|p| format!("{} {}", p.mode.keyword(), p.ty.render(sema.resolution)))
                     .collect::<Vec<_>>()
                     .join(", "),
                 fn_ty.ret.render(sema.resolution)
