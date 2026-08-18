@@ -1,5 +1,4 @@
-![Uploading tuonelang.png…]()
-
+<img width="1402" height="1122" alt="tuonelang" src="https://github.com/user-attachments/assets/586df834-9014-4ef6-937a-d32f4d46a935" />
 
 # tuonelang
 
