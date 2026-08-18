@@ -1,0 +1,21 @@
+// A hand-written fold through a function value (ADR-0008 Tier 1): `fold3`
+// applies its `fn(take Int, take Int) -> Int` argument three times, threading
+// an accumulator. `main` runs it with two different top-level functions, so the
+// same indirect-call site drives two distinct code pointers.
+fn add(take a: Int, take b: Int) -> Int { a + b }
+fn mul(take a: Int, take b: Int) -> Int { a * b }
+
+fn fold3(take f: fn(take Int, take Int) -> Int, take seed: Int) -> Int {
+    var acc = seed;
+    acc = f(acc, 1);
+    acc = f(acc, 2);
+    acc = f(acc, 3);
+    acc
+}
+
+fn main() -> Int {
+    // fold3(add, 10) = ((10+1)+2)+3 = 16
+    // fold3(mul, 2)  = ((2*1)*2)*3  = 12
+    // 16 + 12 = 28
+    fold3(add, 10) + fold3(mul, 2)
+}

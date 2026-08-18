@@ -1,0 +1,18 @@
+// A function value bound to a local and immediately called in a single basic
+// block (ADR-0008 Tier 1). The native build's MIR copy-propagation pass
+// forwards the `Const::Fn` straight into the indirect callee operand
+// (`_2 = call const fn sym(...)`), so the indirect-call path must be able to
+// type a `Const::Fn` *operand* — not only a function-typed local — to build the
+// call signature. (This case is what the randomized differential generator
+// surfaced; both backends and the interpreter must agree.)
+fn add(take a: Int, take b: Int) -> Int { a + b }
+
+fn go(take a: Int, take b: Int) -> Int {
+    let f: fn(take Int, take Int) -> Int = add;
+    f(a, b)
+}
+
+fn main() -> Int {
+    // go(30, 12) = add(30, 12) = 42
+    go(30, 12)
+}

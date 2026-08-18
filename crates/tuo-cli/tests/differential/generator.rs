@@ -125,7 +125,10 @@ pub fn program(seed: u64) -> String {
     writeln!(out, "fn bump(mut a: Int, take b: Int) {{ a = a + b; }}").expect("string write");
 
     // Helpers next, each able to call the ones before it (a DAG → terminates).
-    let mut callable: Vec<(String, u32)> = Vec::new();
+    // Each entry carries the helper's name, arity, and its uniform parameter
+    // mode (`take` or `in`) — the mode is part of the function *type*, so an
+    // indirect call site must spell it exactly (ADR-0008 Tier 1).
+    let mut callable: Vec<(String, u32, &'static str)> = Vec::new();
     for index in 0..bounds.helpers {
         let name = format!("f{index}");
         let arity = bounds.params;
@@ -151,7 +154,7 @@ pub fn program(seed: u64) -> String {
         let body = expr(&mut rng, &mut scope, &callable, bounds.max_depth);
         // `params` already carries the mode on each parameter.
         writeln!(out, "fn {name}({params}) -> Int {{ {body} }}").expect("string write");
-        callable.push((name, arity));
+        callable.push((name, arity, mode));
     }
 
     // `main` takes no parameters and returns Int.
@@ -165,7 +168,12 @@ pub fn program(seed: u64) -> String {
 }
 
 /// Generate an `Int`-typed expression at the given remaining `depth`.
-fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+fn expr(
+    rng: &mut Rng,
+    scope: &mut Scope,
+    callable: &[(String, u32, &'static str)],
+    depth: u32,
+) -> String {
     // At depth 0 only produce a leaf, so the tree stays bounded.
     if depth == 0 {
         return leaf(rng, scope);
@@ -216,12 +224,30 @@ fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32
             if callable.is_empty() {
                 leaf(rng, scope)
             } else {
-                let (name, arity) = &callable[rng.below(callable.len() as u32) as usize];
+                let (name, arity, mode) = &callable[rng.below(callable.len() as u32) as usize];
                 let args = (0..*arity)
                     .map(|_| expr(rng, scope, callable, depth - 1))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("{name}({args})")
+                // Occasionally route the call through a function *value* local
+                // rather than naming the helper directly (ADR-0008 Tier 1): bind
+                // `g = fName` (a code pointer of type `fn(mode Int, …) -> Int`,
+                // its modes spelled exactly) then call `g(args)` — an indirect
+                // call. Same target set, same args, same result the direct call
+                // would produce, so the three-engine agreement now also covers
+                // the indirect path under random programs. One-in-three, and only
+                // when nesting depth remains, keeps most calls direct.
+                if rng.below(3) == 0 {
+                    let id = scope.fresh;
+                    scope.fresh += 1;
+                    let ty_params = (0..*arity)
+                        .map(|_| format!("{mode} Int"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{{ let g{id}: fn({ty_params}) -> Int = {name}; g{id}({args}) }}")
+                } else {
+                    format!("{name}({args})")
+                }
             }
         }
     }
@@ -234,7 +260,12 @@ fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32
 /// bindings introduced here are never pushed into `scope.names` (the array is
 /// not `Int`-typed and the fold accumulator lives only inside its block), so
 /// every emitted reference stays well-typed by construction.
-fn array_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+fn array_form(
+    rng: &mut Rng,
+    scope: &mut Scope,
+    callable: &[(String, u32, &'static str)],
+    depth: u32,
+) -> String {
     let id = scope.fresh;
     scope.fresh += 1;
     match rng.below(4) {
@@ -290,7 +321,12 @@ fn array_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], dept
 /// (truncate toward zero, saturate, NaN → 0), so every emitted form is
 /// well-defined on both engines by construction — including deliberately
 /// overflowing products and `0.0 / 0.0`.
-fn float_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+fn float_form(
+    rng: &mut Rng,
+    scope: &mut Scope,
+    callable: &[(String, u32, &'static str)],
+    depth: u32,
+) -> String {
     let body = float_expr(rng, scope, callable, depth - 1);
     format!("(({body}) as Int)")
 }
@@ -300,7 +336,12 @@ fn float_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], dept
 /// `0.0 - x`, and `Int` subexpressions lifted with `as Float` (so integer
 /// arithmetic — with its trapping semantics, preserved identically on both
 /// engines — nests inside float math).
-fn float_expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+fn float_expr(
+    rng: &mut Rng,
+    scope: &mut Scope,
+    callable: &[(String, u32, &'static str)],
+    depth: u32,
+) -> String {
     if depth == 0 {
         return float_leaf(rng);
     }

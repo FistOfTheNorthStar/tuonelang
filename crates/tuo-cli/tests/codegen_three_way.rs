@@ -311,6 +311,30 @@ fn owned_heap_values_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0008 Tier 1 function values: `Const::Fn` as a pointer-width code pointer
+/// and `Callee::Indirect` as an indirect call whose signature is built from the
+/// callee value's `Ty::Fn` (identical ABI to the direct path). All three engines
+/// must agree: the interpreter dispatches an indirect call exactly like a direct
+/// one, and both backends materialize the function's address and call through
+/// it. The five fixtures cover a function value passed and called (`apply`), a
+/// hand fold applying it repeatedly (`fold3`), a value flowing through a local
+/// and a branch (`select`), an indirect call whose callee returns a struct (the
+/// sret path — `aggregate_ret`), and an indirect call to a `mut`-parameter
+/// function whose write-back is observed by the caller (the borrow path).
+#[test]
+fn function_values_agree_across_all_three_engines() {
+    for name in [
+        "fnval_apply.tuo",           // fn value passed as an arg + called indirectly
+        "fnval_fold.tuo",            // one indirect-call site over two code pointers
+        "fnval_select.tuo",          // fn value through a scalar local + a branch
+        "fnval_aggregate_ret.tuo",   // indirect call, struct return via sret
+        "fnval_borrow_arg.tuo",      // indirect call, `mut` borrow write-back
+        "fnval_const_forwarded.tuo", // opt forwards `const fn` into the callee
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
     // A program still outside the native subset (a function with a heap-wrapper

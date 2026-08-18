@@ -133,7 +133,7 @@ use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
-use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 
@@ -241,9 +241,13 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
 }
 
 /// Whether `ty` is a scalar the backend maps to an LLVM scalar, without needing
-/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int/float).
+/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int/float, plus the
+/// function-value code pointer, ADR-0008 Tier 1).
 fn scalar_type_is_some(ty: &Ty) -> bool {
-    matches!(ty, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
+    matches!(
+        ty,
+        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) | Ty::Fn(_)
+    )
 }
 
 /// The linkage a compiled tuonelang function gets: external, so the entry (and
@@ -312,45 +316,89 @@ fn function_type<'ctx>(
     function: &Function,
     types: &TypeckResult,
 ) -> Result<inkwell::types::FunctionType<'ctx>, CodegenError> {
+    let params = function
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, mode)| (*mode, function.locals[index].ty.clone()));
+    fn_type_from_parts(ctx, &function.ret, params, types, &function.name)
+}
+
+/// Build the LLVM `FunctionType` for a `(ret, [(mode, ty)])` calling contract.
+///
+/// This is the single source of truth for the v0 call ABI, shared by the direct
+/// path ([`function_type`], over a `Function`'s declared params) and the
+/// indirect path (over the callee value's `Ty::Fn` modes+types), so the two can
+/// never drift — ADR-0008 Stage B requires the indirect-call convention to be
+/// byte-identical to the direct one. Applies the two aggregate rules: an
+/// aggregate return is an sret out-pointer prepended at index 0 (return becomes
+/// `void`), and an aggregate/borrow parameter is a `ptr`. `context` names the
+/// owner for a diagnostic on a non-scalar-by-value type.
+fn fn_type_from_parts<'ctx>(
+    ctx: &'ctx Context,
+    ret: &Ty,
+    params: impl Iterator<Item = (PassMode, Ty)>,
+    types: &TypeckResult,
+    context: &str,
+) -> Result<inkwell::types::FunctionType<'ctx>, CodegenError> {
     let ptr_ty = ctx.ptr_type(AddressSpace::default());
-    let mut params: Vec<BasicMetadataTypeEnum<'ctx>> =
-        Vec::with_capacity(function.params.len() + 1);
+    let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
 
     // sret hidden out-pointer is ALWAYS argument index 0 (prepended).
-    let ret_storage = classify_storage(&function.ret, types, &function.name)?;
+    let ret_storage = classify_storage(ret, types, context)?;
     if matches!(ret_storage, Storage::Aggregate(_)) {
-        params.push(ptr_ty.into());
+        param_tys.push(ptr_ty.into());
     }
 
     // Parameters, in declaration order after the (optional) sret pointer.
     // Borrow-mode calling convention (identical in the Cranelift backend's
-    // `function_signature`, per `specification/abi.md` "Passing modes"): an
+    // `signature_from_parts`, per `specification/abi.md` "Passing modes"): an
     // `in`/`mut` parameter arrives as a **pointer to the caller's place** —
     // scalar or aggregate alike — read (and, for `mut`, written) through
     // directly, with no copy-in and no copy-back. A `take` parameter is
     // unchanged: scalar by value, aggregate by pointer to a caller-owned copy,
     // unit occupying no ABI slot (in any mode).
-    for (index, mode) in function.params.iter().enumerate() {
-        let ty = &function.locals[index].ty;
-        let storage = classify_storage(ty, types, &function.name)?;
+    for (mode, ty) in params {
+        let storage = classify_storage(&ty, types, context)?;
         match (mode, storage) {
             (_, Storage::Unit) => {}
             (PassMode::Value, Storage::Scalar) => {
-                params.push(require_scalar(ctx, ty, &function.name)?.into());
+                param_tys.push(require_scalar(ctx, &ty, context)?.into());
             }
             (PassMode::Value, Storage::Aggregate(_))
-            | (PassMode::Borrow | PassMode::BorrowMut, _) => params.push(ptr_ty.into()),
+            | (PassMode::Borrow | PassMode::BorrowMut, _) => param_tys.push(ptr_ty.into()),
         }
     }
 
     // Return: scalar by value; aggregate is void (written through sret); unit is
     // void.
     Ok(match ret_storage {
-        Storage::Scalar => {
-            require_scalar(ctx, &function.ret, &function.name)?.fn_type(&params, false)
-        }
-        Storage::Unit | Storage::Aggregate(_) => ctx.void_type().fn_type(&params, false),
+        Storage::Scalar => require_scalar(ctx, ret, context)?.fn_type(&param_tys, false),
+        Storage::Unit | Storage::Aggregate(_) => ctx.void_type().fn_type(&param_tys, false),
     })
+}
+
+/// The MIR [`PassMode`] a function-type parameter's [`ParamMode`] corresponds
+/// to. A function value's per-argument borrow discipline at an indirect call
+/// site is driven by these modes exactly as a direct call's is by its declared
+/// `PassMode`s (ADR-0008 Tier 1); the two vocabularies map one-to-one.
+fn pass_mode_of(mode: ParamMode) -> PassMode {
+    match mode {
+        ParamMode::Take => PassMode::Value,
+        ParamMode::In => PassMode::Borrow,
+        ParamMode::Mut => PassMode::BorrowMut,
+    }
+}
+
+/// The function-type [`ParamMode`] a MIR [`PassMode`] corresponds to — the
+/// inverse of [`pass_mode_of`]. Used to reconstruct a `Const::Fn`'s `Ty::Fn`
+/// from the referenced function's MIR signature.
+fn param_mode_of(mode: PassMode) -> ParamMode {
+    match mode {
+        PassMode::Value => ParamMode::Take,
+        PassMode::Borrow => ParamMode::In,
+        PassMode::BorrowMut => ParamMode::Mut,
+    }
 }
 
 /// The scalar LLVM type of `ty`, or an unsupported error naming `context`.
@@ -624,28 +672,58 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         callee: &Callee,
         args: &[Arg],
     ) -> Result<(), CodegenError> {
-        // An indirect call through a function value (ADR-0008 Tier 1) is not
-        // lowered yet — native indirect-call lowering lands with ADR-0008
-        // Stage B. Refuse it cleanly; the interpreter remains the reference.
-        let callee = match callee {
-            Callee::Direct(symbol) => *symbol,
-            Callee::Indirect(_) => {
-                return Err(CodegenError::unsupported(
-                    "an indirect call through a function value does not lower yet (ADR-0008 \
-                     Tier 1 native lowering lands with Stage B); the interpreter remains the \
-                     reference",
-                ));
+        // Resolve the call target. A `Direct` call names a function symbol and
+        // calls its `FunctionValue`. An `Indirect` call (ADR-0008 Tier 1) loads
+        // a runtime code-pointer value from the callee operand and calls it
+        // through a `FunctionType` derived from the callee's `Ty::Fn`. Both
+        // share the *entire* argument/sret/borrow marshalling and return
+        // handling below — the only difference is the call instruction.
+        //
+        // The callee's return type drives the sret decision, so resolve it here.
+        // The interpreter evaluates the indirect callee operand before its
+        // arguments; match that ordering by loading the pointer first.
+        enum CallTarget<'ctx> {
+            Direct(FunctionValue<'ctx>),
+            Indirect(PointerValue<'ctx>, inkwell::types::FunctionType<'ctx>),
+        }
+        let (target, callee_ret): (CallTarget<'ctx>, Ty) = match callee {
+            Callee::Direct(symbol) => {
+                let Some(&callee_fn) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "call to a function outside the lowered program (v0 has no external \
+                         calls)",
+                    ));
+                };
+                let callee_mir = self.function_named(*symbol)?;
+                (CallTarget::Direct(callee_fn), callee_mir.ret.clone())
+            }
+            Callee::Indirect(operand) => {
+                // The callee value's `Ty::Fn` carries the whole calling
+                // contract (param modes+types and the return type).
+                let Some(Ty::Fn(fn_ty)) = self.operand_ty(operand) else {
+                    return Err(CodegenError::backend(
+                        "an indirect call's callee operand is not of function type (verified MIR \
+                         guarantees it is)",
+                    ));
+                };
+                let callee_ptr = self.lower_operand(operand)?.into_pointer_value();
+                let fn_type = fn_type_from_parts(
+                    self.ctx,
+                    &fn_ty.ret,
+                    fn_ty
+                        .params
+                        .iter()
+                        .map(|p| (pass_mode_of(p.mode), p.ty.clone())),
+                    self.types,
+                    &self.function.name,
+                )?;
+                (CallTarget::Indirect(callee_ptr, fn_type), fn_ty.ret.clone())
             }
         };
-        let Some(&callee_fn) = self.ids.get(&callee) else {
-            return Err(CodegenError::unsupported(
-                "call to a function outside the lowered program (v0 has no external calls)",
-            ));
-        };
-        let callee_mir = self.function_named(callee)?;
+
         let dest_ty = self.place_type(dest);
         let ret_is_aggregate = matches!(
-            classify_storage(&callee_mir.ret, self.types, &callee_mir.name)?,
+            classify_storage(&callee_ret, self.types, &self.function.name)?,
             Storage::Aggregate(_)
         );
 
@@ -654,7 +732,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         // sret out-pointer, if the callee returns an aggregate.
         let sret = if ret_is_aggregate {
-            let layout = self.layout(&callee_mir.ret)?;
+            let layout = self.layout(&callee_ret)?;
             let (ptr, addr) = self.sret_destination(dest, &dest_ty, layout)?;
             arg_values.push(addr.into());
             Some((ptr, layout))
@@ -691,10 +769,16 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
         }
 
-        let call = self
-            .builder
-            .build_call(callee_fn, &arg_values, "call")
-            .map_err(builder_err("emitting a call"))?;
+        let call = match target {
+            CallTarget::Direct(callee_fn) => self
+                .builder
+                .build_call(callee_fn, &arg_values, "call")
+                .map_err(builder_err("emitting a call"))?,
+            CallTarget::Indirect(callee_ptr, fn_type) => self
+                .builder
+                .build_indirect_call(fn_type, callee_ptr, &arg_values, "call")
+                .map_err(builder_err("emitting an indirect call"))?,
+        };
 
         if let Some((ptr, layout)) = sret {
             // The callee wrote the aggregate result into the sret slot. If dest
@@ -993,13 +1077,20 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 "a `Str` constant reached the scalar constant path (it is materialized via \
                  static data by the aggregate machinery)",
             )),
-            // A function value (ADR-0008 Tier 1) does not lower yet: native
-            // code-pointer materialization lands with ADR-0008 Stage B. Refuse
-            // it cleanly; the interpreter remains the reference.
-            Const::Fn(_) => Err(CodegenError::unsupported(
-                "a function value does not lower yet (ADR-0008 Tier 1 native lowering lands with \
-                 Stage B); the interpreter remains the reference",
-            )),
+            // A function value (ADR-0008 Tier 1) is the address of the named
+            // top-level function — a pointer-width code pointer. The function's
+            // `FunctionValue` *is* a global; its pointer value is the code
+            // address, which flows through all scalar machinery (locals, moves
+            // are copies since it is `Copy`, params, returns) unchanged.
+            Const::Fn(symbol) => {
+                let Some(&callee_fn) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "a function value naming a function outside the lowered program (v0 has \
+                         no external functions)",
+                    ));
+                };
+                Ok(callee_fn.as_global_value().as_pointer_value().into())
+            }
         }
     }
 
@@ -2931,8 +3022,36 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             Operand::Const(Const::Str(_)) => Some(Ty::Str),
+            // A function-value constant (ADR-0008 Tier 1): its type is the
+            // referenced function's signature-as-function-type, reconstructed
+            // from that function's MIR. Copy propagation may forward a
+            // `const fn` straight into an indirect callee position, so the
+            // indirect-call path must be able to type it here.
+            Operand::Const(Const::Fn(symbol)) => self.fn_ty_of(*symbol),
             _ => None,
         }
+    }
+
+    /// The `Ty::Fn` of the top-level function named `symbol`, reconstructed from
+    /// its MIR signature (param modes+types and return type). Used to type a
+    /// `Const::Fn` operand — in particular an indirect callee that copy
+    /// propagation forwarded a `const fn` into. `None` if the function is not in
+    /// the lowered program.
+    fn fn_ty_of(&self, symbol: SymbolId) -> Option<Ty> {
+        let function = self.functions.iter().find(|f| f.symbol == symbol)?;
+        let params = function
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, mode)| tuo_types::FnParam {
+                mode: param_mode_of(*mode),
+                ty: function.locals[index].ty.clone(),
+            })
+            .collect();
+        Some(Ty::Fn(Box::new(tuo_types::FnTy {
+            params,
+            ret: function.ret.clone(),
+        })))
     }
 
     // ----- aggregate helpers -----

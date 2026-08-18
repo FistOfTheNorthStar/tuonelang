@@ -618,15 +618,18 @@ fn a_write_string_effect_now_compiles() {
 }
 
 // ---------------------------------------------------------------------------
-// ADR-0008 Tier 1: function values are refused (native lowering is Stage B)
+// ADR-0008 Tier 1: function values now lower (Stage B — the native side)
 // ---------------------------------------------------------------------------
 
-#[test]
-fn a_function_value_constant_is_refused_until_stage_b() {
-    // `_0 = const fn sym1` — materializing a code pointer is ADR-0008 Stage B;
-    // the LLVM backend must refuse it cleanly, never mis-compile.
-    use tuo_mir::Rvalue;
-    use tuo_types::{FnParam, FnTy, ParamMode};
+/// Build a two-function program: `add1(take n) -> n + 1` and a `main` that
+/// materializes `add1` as a function value in local `_0`, then calls through it
+/// indirectly into `_1`. `main`'s local `_0` has the callee's function type, so
+/// the indirect-call ABI is built from that `Ty::Fn`. Returns the program.
+fn fn_value_program() -> Program {
+    use tuo_mir::{Callee, Rvalue, Statement};
+    use tuo_types::{FnParam, FnTy, IntKind, ParamMode};
+
+    let add1_sym = SymbolId::from_raw(1);
     let fn_ty = Ty::Fn(Box::new(FnTy {
         params: vec![FnParam {
             mode: ParamMode::Take,
@@ -634,53 +637,27 @@ fn a_function_value_constant_is_refused_until_stage_b() {
         }],
         ret: Ty::int(),
     }));
-    let function = Function {
-        symbol: SymbolId::from_raw(0),
-        name: "main".to_owned(),
-        params: Vec::new(),
+
+    // fn add1(take n: Int) -> Int { n + 1 }
+    let add1 = Function {
+        symbol: add1_sym,
+        name: "add1".to_owned(),
+        params: vec![tuo_mir::PassMode::Value],
         locals: vec![LocalDecl {
-            ty: fn_ty,
+            ty: Ty::int(),
             name: None,
             span: span(),
         }],
         blocks: vec![BasicBlock {
-            statements: vec![tuo_mir::Statement::Assign {
-                place: Place::local(tuo_mir::LocalId(0)),
-                rvalue: Rvalue::Use(Operand::Const(Const::Fn(SymbolId::from_raw(1)))),
-            }],
-            terminator: Terminator::Return(Operand::Const(Const::Int(0, tuo_types::IntKind::I64))),
+            statements: Vec::new(),
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
         }],
         ret: Ty::int(),
         span: span(),
     };
-    let program = Program {
-        functions: vec![function],
-        skipped: Vec::new(),
-    };
-    let error = LlvmBackend::new()
-        .compile(
-            &program,
-            &TypeckResult::default(),
-            "main",
-            EntryAbi::IntReturn,
-            &TargetSpec::host(),
-        )
-        .expect_err("a function value is refused until ADR-0008 Stage B");
-    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
-    assert!(error.to_string().contains("Stage B"), "{error}");
-}
 
-#[test]
-fn an_indirect_call_is_refused_until_stage_b() {
-    // `call (copy _0)()` — an indirect call through a function value is
-    // ADR-0008 Stage B; refuse it cleanly.
-    use tuo_mir::{Callee, Statement};
-    use tuo_types::FnTy;
-    let fn_ty = Ty::Fn(Box::new(FnTy {
-        params: Vec::new(),
-        ret: Ty::int(),
-    }));
-    let function = Function {
+    // fn main() -> Int { let f = add1; f(41) }
+    let main = Function {
         symbol: SymbolId::from_raw(0),
         name: "main".to_owned(),
         params: Vec::new(),
@@ -697,21 +674,43 @@ fn an_indirect_call_is_refused_until_stage_b() {
             },
         ],
         blocks: vec![BasicBlock {
-            statements: vec![Statement::Call {
-                dest: Place::local(tuo_mir::LocalId(1)),
-                callee: Callee::Indirect(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
-                args: Vec::new(),
-            }],
+            statements: vec![
+                // _0 = const fn add1   (a code pointer)
+                Statement::Assign {
+                    place: Place::local(tuo_mir::LocalId(0)),
+                    rvalue: Rvalue::Use(Operand::Const(Const::Fn(add1_sym))),
+                },
+                // _1 = (copy _0)(41)   (an indirect call through the value)
+                Statement::Call {
+                    dest: Place::local(tuo_mir::LocalId(1)),
+                    callee: Callee::Indirect(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+                    args: vec![tuo_mir::Arg::Value(Operand::Const(Const::Int(
+                        41,
+                        IntKind::I64,
+                    )))],
+                },
+            ],
             terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(1)))),
         }],
         ret: Ty::int(),
         span: span(),
     };
-    let program = Program {
-        functions: vec![function],
+
+    Program {
+        functions: vec![main, add1],
         skipped: Vec::new(),
-    };
-    let error = LlvmBackend::new()
+    }
+}
+
+/// `_0 = const fn add1` and `_1 = (copy _0)(41)`: a function-value constant is a
+/// pointer-width code pointer and the indirect call reuses the direct-call ABI
+/// (ADR-0008 Stage B). The backend must *accept* the program and emit an object.
+/// (Execution agreement with the interpreter — the exact exit byte — is pinned
+/// by the `fnval_*.tuo` differential fixtures.)
+#[test]
+fn a_function_value_and_an_indirect_call_now_compile() {
+    let program = fn_value_program();
+    let artifact = LlvmBackend::new()
         .compile(
             &program,
             &TypeckResult::default(),
@@ -719,7 +718,6 @@ fn an_indirect_call_is_refused_until_stage_b() {
             EntryAbi::IntReturn,
             &TargetSpec::host(),
         )
-        .expect_err("an indirect call is refused until ADR-0008 Stage B");
-    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
-    assert!(error.to_string().contains("Stage B"), "{error}");
+        .expect("a function value and an indirect call compile since ADR-0008 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
 }

@@ -121,7 +121,7 @@ use std::collections::{HashMap, HashSet};
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::stackslot::{StackSlotData, StackSlotKind};
 use cranelift_codegen::ir::{
-    AbiParam, InstBuilder, MemFlags, Signature, StackSlot, Type, Value as ClifValue, types,
+    AbiParam, InstBuilder, MemFlags, SigRef, Signature, StackSlot, Type, Value as ClifValue, types,
 };
 use cranelift_codegen::isa::{CallConv, TargetFrontendConfig};
 use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Switch, Variable};
@@ -138,7 +138,7 @@ use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
-use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 use crate::{CodegenCtx, FUNCTION_LINKAGE};
@@ -324,15 +324,45 @@ fn function_signature(
     function: &Function,
     types: &TypeckResult,
 ) -> Result<Signature, CodegenError> {
-    let call_conv = module.isa().default_call_conv();
-    let pointer_type = module.isa().pointer_type();
+    let params = function
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, mode)| (*mode, function.locals[index].ty.clone()));
+    signature_from_parts(
+        module.isa().default_call_conv(),
+        module.isa().pointer_type(),
+        &function.ret,
+        params,
+        types,
+        &function.name,
+    )
+}
+
+/// Build the Cranelift signature for a `(ret, [(mode, ty)])` calling contract.
+///
+/// This is the single source of truth for the v0 call ABI, shared by the direct
+/// path ([`function_signature`], over a `Function`'s declared params) and the
+/// indirect path (over the callee value's `Ty::Fn` modes+types), so the two can
+/// never drift — ADR-0008 Stage B requires the indirect-call convention to be
+/// byte-identical to the direct one. Applies the two aggregate rules: an
+/// aggregate return is an sret out-pointer prepended at index 0 (return becomes
+/// void), and an aggregate/borrow parameter is passed by pointer. `context`
+/// names the owner for a diagnostic on a non-scalar-by-value type.
+fn signature_from_parts(
+    call_conv: CallConv,
+    pointer_type: Type,
+    ret: &Ty,
+    params: impl Iterator<Item = (PassMode, Ty)>,
+    types: &TypeckResult,
+    context: &str,
+) -> Result<Signature, CodegenError> {
     let mut signature = Signature::new(call_conv);
 
     // Classify the return: an aggregate return prepends an sret pointer and the
     // function returns void; a scalar return is by value; unit is no value.
-    let ret_storage = classify_storage(&function.ret, types, &function.name)?;
-    let returns_aggregate = matches!(ret_storage, Storage::Aggregate(_));
-    if returns_aggregate {
+    let ret_storage = classify_storage(ret, types, context)?;
+    if matches!(ret_storage, Storage::Aggregate(_)) {
         // sret hidden out-pointer is ALWAYS argument index 0 (prepended).
         signature.params.push(AbiParam::new(pointer_type));
     }
@@ -345,14 +375,13 @@ fn function_signature(
     // directly, with no copy-in and no copy-back. A `take` parameter is
     // unchanged: scalar by value, aggregate by pointer to a caller-owned copy,
     // unit occupying no ABI slot (in any mode).
-    for (index, mode) in function.params.iter().enumerate() {
-        let ty = &function.locals[index].ty;
-        let storage = classify_storage(ty, types, &function.name)?;
+    for (mode, ty) in params {
+        let storage = classify_storage(&ty, types, context)?;
         match (mode, storage) {
             (_, Storage::Unit) => {}
             (PassMode::Value, Storage::Scalar) => signature
                 .params
-                .push(AbiParam::new(require_scalar(ty, &function.name)?)),
+                .push(AbiParam::new(require_scalar(&ty, context)?)),
             (PassMode::Value, Storage::Aggregate(_))
             | (PassMode::Borrow | PassMode::BorrowMut, _) => {
                 signature.params.push(AbiParam::new(pointer_type));
@@ -363,13 +392,35 @@ fn function_signature(
     // Return value: scalar by value; aggregate is void (written through sret);
     // unit is no value.
     match ret_storage {
-        Storage::Scalar => signature.returns.push(AbiParam::new(require_scalar(
-            &function.ret,
-            &function.name,
-        )?)),
+        Storage::Scalar => signature
+            .returns
+            .push(AbiParam::new(require_scalar(ret, context)?)),
         Storage::Unit | Storage::Aggregate(_) => {}
     }
     Ok(signature)
+}
+
+/// The MIR [`PassMode`] a function-type parameter's [`ParamMode`] corresponds
+/// to. A function value's per-argument borrow discipline at an indirect call
+/// site is driven by these modes exactly as a direct call's is by its
+/// declared `PassMode`s (ADR-0008 Tier 1); the two vocabularies map one-to-one.
+fn pass_mode_of(mode: ParamMode) -> PassMode {
+    match mode {
+        ParamMode::Take => PassMode::Value,
+        ParamMode::In => PassMode::Borrow,
+        ParamMode::Mut => PassMode::BorrowMut,
+    }
+}
+
+/// The function-type [`ParamMode`] a MIR [`PassMode`] corresponds to — the
+/// inverse of [`pass_mode_of`]. Used to reconstruct a `Const::Fn`'s
+/// `Ty::Fn` from the referenced function's MIR signature.
+fn param_mode_of(mode: PassMode) -> ParamMode {
+    match mode {
+        PassMode::Value => ParamMode::Take,
+        PassMode::Borrow => ParamMode::In,
+        PassMode::BorrowMut => ParamMode::Mut,
+    }
 }
 
 /// The scalar Cranelift type of `ty`, or an unsupported error naming `context`.
@@ -727,31 +778,63 @@ impl<'a> Lowering<'a> {
         callee: &Callee,
         args: &[Arg],
     ) -> Result<(), CodegenError> {
-        // An indirect call through a function value (ADR-0008 Tier 1) is not
-        // lowered yet — native indirect-call lowering lands with ADR-0008
-        // Stage B. Refuse it cleanly; the interpreter remains the reference.
-        let callee = match callee {
-            Callee::Direct(symbol) => *symbol,
-            Callee::Indirect(_) => {
-                return Err(CodegenError::unsupported(
-                    "an indirect call through a function value does not lower yet (ADR-0008 \
-                     Tier 1 native lowering lands with Stage B); the interpreter remains the \
-                     reference",
-                ));
+        // Resolve the call target. A `Direct` call names a function symbol and
+        // references it as a fixed `FuncRef`. An `Indirect` call (ADR-0008
+        // Tier 1) loads a runtime code-pointer value from the callee operand and
+        // calls through an explicitly-built signature derived from the callee's
+        // `Ty::Fn`. Both share the *entire* argument/sret/borrow marshalling and
+        // return handling below — the only difference is the call instruction.
+        //
+        // The callee's return type drives the sret decision, so resolve it here.
+        // The interpreter evaluates the indirect callee operand before its
+        // arguments; match that ordering by loading the pointer first.
+        enum CallTarget {
+            Direct(FuncId),
+            Indirect(ClifValue, SigRef),
+        }
+        let (target, callee_ret): (CallTarget, Ty) = match callee {
+            Callee::Direct(symbol) => {
+                let Some(&callee_id) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "call to a function outside the lowered program (v0 has no external \
+                         calls)",
+                    ));
+                };
+                let callee_fn = self.function_named(*symbol)?;
+                (CallTarget::Direct(callee_id), callee_fn.ret.clone())
+            }
+            Callee::Indirect(operand) => {
+                // The callee value's `Ty::Fn` carries the whole calling
+                // contract (param modes+types and the return type).
+                let Some(Ty::Fn(fn_ty)) = self.operand_ty(operand) else {
+                    return Err(CodegenError::backend(
+                        "an indirect call's callee operand is not of function type (verified MIR \
+                         guarantees it is)",
+                    ));
+                };
+                let callee_val = self.lower_operand(operand)?;
+                let call_conv = self.module.isa().default_call_conv();
+                let signature = signature_from_parts(
+                    call_conv,
+                    self.pointer_type,
+                    &fn_ty.ret,
+                    fn_ty
+                        .params
+                        .iter()
+                        .map(|p| (pass_mode_of(p.mode), p.ty.clone())),
+                    self.types,
+                    &self.function.name,
+                )?;
+                let sig_ref = self.builder.import_signature(signature);
+                (CallTarget::Indirect(callee_val, sig_ref), fn_ty.ret.clone())
             }
         };
-        let Some(&callee_id) = self.ids.get(&callee) else {
-            return Err(CodegenError::unsupported(
-                "call to a function outside the lowered program (v0 has no external calls)",
-            ));
-        };
-        let callee_fn = self.function_named(callee)?;
 
         // Does the callee return an aggregate? If so, the first native argument
         // is an sret out-pointer to caller-owned destination storage.
         let dest_ty = self.place_type(dest);
         let ret_is_aggregate = matches!(
-            classify_storage(&callee_fn.ret, self.types, &callee_fn.name)?,
+            classify_storage(&callee_ret, self.types, &self.function.name)?,
             Storage::Aggregate(_)
         );
 
@@ -760,7 +843,7 @@ impl<'a> Lowering<'a> {
         // Allocate the sret destination up front (a temporary slot unless dest is
         // a bare aggregate local, in which case its own slot is the destination).
         let sret_slot = if ret_is_aggregate {
-            let layout = self.layout(&callee_fn.ret)?;
+            let layout = self.layout(&callee_ret)?;
             let (slot, addr) = self.sret_destination(dest, &dest_ty, layout)?;
             arg_values.push(addr);
             Some((slot, layout))
@@ -800,10 +883,19 @@ impl<'a> Lowering<'a> {
             }
         }
 
-        let func_ref = self
-            .module
-            .declare_func_in_func(callee_id, self.builder.func);
-        let call = self.builder.ins().call(func_ref, &arg_values);
+        let call = match target {
+            CallTarget::Direct(callee_id) => {
+                let func_ref = self
+                    .module
+                    .declare_func_in_func(callee_id, self.builder.func);
+                self.builder.ins().call(func_ref, &arg_values)
+            }
+            CallTarget::Indirect(callee_val, sig_ref) => {
+                self.builder
+                    .ins()
+                    .call_indirect(sig_ref, callee_val, &arg_values)
+            }
+        };
 
         if let Some((slot, layout)) = sret_slot {
             // The callee wrote the aggregate result into the sret slot. If `dest`
@@ -1101,13 +1193,23 @@ impl<'a> Lowering<'a> {
                 "a `Str` constant reached the scalar constant path (it is materialized via \
                  static data by the aggregate machinery)",
             )),
-            // A function value (ADR-0008 Tier 1) does not lower yet: native
-            // code-pointer materialization lands with ADR-0008 Stage B. Refuse
-            // it cleanly; the interpreter remains the reference.
-            Const::Fn(_) => Err(CodegenError::unsupported(
-                "a function value does not lower yet (ADR-0008 Tier 1 native lowering lands with \
-                 Stage B); the interpreter remains the reference",
-            )),
+            // A function value (ADR-0008 Tier 1) is the address of the named
+            // top-level function — a pointer-width code pointer. Declare the
+            // callee into this function and materialize its address as a scalar
+            // value; it then flows through all scalar machinery (locals, moves
+            // are copies since it is `Copy`, params, returns) unchanged.
+            Const::Fn(symbol) => {
+                let Some(&callee_id) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "a function value naming a function outside the lowered program (v0 has \
+                         no external functions)",
+                    ));
+                };
+                let func_ref = self
+                    .module
+                    .declare_func_in_func(callee_id, self.builder.func);
+                Ok(self.builder.ins().func_addr(self.pointer_type, func_ref))
+            }
         }
     }
 
@@ -2742,8 +2844,36 @@ impl<'a> Lowering<'a> {
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             Operand::Const(Const::Str(_)) => Some(Ty::Str),
+            // A function-value constant (ADR-0008 Tier 1): its type is the
+            // referenced function's signature-as-function-type, reconstructed
+            // from that function's MIR. Copy propagation may forward a
+            // `const fn` straight into an indirect callee position, so the
+            // indirect-call path must be able to type it here.
+            Operand::Const(Const::Fn(symbol)) => self.fn_ty_of(*symbol),
             _ => None,
         }
+    }
+
+    /// The `Ty::Fn` of the top-level function named `symbol`, reconstructed from
+    /// its MIR signature (param modes+types and return type). Used to type a
+    /// `Const::Fn` operand — in particular an indirect callee that copy
+    /// propagation forwarded a `const fn` into. `None` if the function is not in
+    /// the lowered program.
+    fn fn_ty_of(&self, symbol: SymbolId) -> Option<Ty> {
+        let function = self.functions.iter().find(|f| f.symbol == symbol)?;
+        let params = function
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, mode)| tuo_types::FnParam {
+                mode: param_mode_of(*mode),
+                ty: function.locals[index].ty.clone(),
+            })
+            .collect();
+        Some(Ty::Fn(Box::new(tuo_types::FnTy {
+            params,
+            ret: function.ret.clone(),
+        })))
     }
 
     // ----- aggregate helpers -----

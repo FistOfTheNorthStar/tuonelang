@@ -238,6 +238,25 @@ fn owned_heap_values_match_the_interpreter() {
 }
 
 #[test]
+fn function_values_match_the_interpreter() {
+    // ADR-0008 Tier 1: a function value (`Const::Fn`) is a pointer-width code
+    // pointer, and an indirect call (`Callee::Indirect`) reuses the entire
+    // direct-call ABI (scalar/aggregate/borrow args, sret return) — only the
+    // call target differs. The default (Cranelift) backend must agree with the
+    // interpreter, which dispatches an indirect call exactly like a direct one.
+    for name in [
+        "fnval_apply.tuo",
+        "fnval_fold.tuo",
+        "fnval_select.tuo",
+        "fnval_aggregate_ret.tuo",
+        "fnval_borrow_arg.tuo",
+        "fnval_const_forwarded.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
 fn a_push_byte_out_of_range_aborts_both_the_interpreter_and_the_native_binary() {
     // ADR-0009 Stage B: `std::string::push_byte` of a byte outside `0..=255`
     // traps `InvalidByte` in the interpreter (`TrapKind::InvalidByte`); the
