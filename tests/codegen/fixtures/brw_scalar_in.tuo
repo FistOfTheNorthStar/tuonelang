@@ -1,0 +1,5 @@
+fn add_one(in x: Int) -> Int { x + 1 }
+fn main() -> Int {
+    let v = 41;
+    add_one(v)
+}

@@ -10,10 +10,24 @@
 //!     interpreter and **passes**, with **no** skipped specs (a skip would mean
 //!     the library shipped a spec the executable subset cannot run — dishonest);
 //!   * the catalog's machine-queryable surface is coherent (every module is
-//!     reachable by path, the count is what the prompt asked for).
+//!     reachable by path, the count is what the prompt asked for);
+//!   * the **three-tier rule** holds textually for every public function: a
+//!     pure executable function is exercised by a spec; an `EFFECT:` function
+//!     (ADR-0006 — implemented over `std::rt`, effectful, so a spec is
+//!     impossible by `R0007`) has **no** spec but names its native CLI test;
+//!     and a `CONTRACT:` function has **no** spec (nothing claims to run that
+//!     cannot); and
+//!   * the effect tier **really performs its effects**: `std::io::println`
+//!     prints exactly, and `std::process::exit` terminates with the status's
+//!     code, through real native binaries built by the actual `tuo` binary on
+//!     both backends (Cranelift and `--release` LLVM) — the executable pin the
+//!     `EFFECT:` docs point at.
 //!
 //! Because these tests compile the exact source `tuo-stdlib` embeds, the
 //! library cannot drift from its promises without turning this suite red.
+
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
 
 use tuo_compiler::check_sources;
 use tuo_compiler::source::{SourceId, SourceMap};
@@ -114,7 +128,9 @@ fn every_spec_in_the_library_runs_and_passes() {
     // The executable promise: every spec the library ships runs through the
     // interpreter and passes — and nothing is skipped. A skip would mean a spec
     // that the v0 executable subset cannot run slipped in; the library must not
-    // ship one (the contract-tier functions are deliberately unspecced).
+    // ship one (the effect- and contract-tier functions are deliberately
+    // unspecced — an effectful spec would be an `R0007` front-end error, and a
+    // contract has nothing to run).
     let (map, sources) = load_all();
     match tuo_spec::run(&map, &sources, &Selection::All, Limits::default()) {
         RunOutcome::Ran(report) => {
@@ -145,6 +161,179 @@ fn every_spec_in_the_library_runs_and_passes() {
     }
 }
 
+/// The doc tier a public function is marked with in its module source.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Tier {
+    /// Pure computation: runs, and must be exercised by a spec.
+    Pure,
+    /// `EFFECT:` — implemented over `std::rt`, effectful; no spec is possible
+    /// (`R0007`), so the doc must name the native CLI test that pins it.
+    Effect,
+    /// `CONTRACT:` — the needed primitive does not exist yet; no spec.
+    Contract,
+}
+
+/// One public function of a module: its name, tier, and doc-comment text.
+struct PublicFn {
+    name: String,
+    tier: Tier,
+    doc: String,
+}
+
+/// Extract every `pub fn` with its immediately preceding `///` doc block.
+fn public_fns(source: &str) -> Vec<PublicFn> {
+    let mut fns = Vec::new();
+    let mut doc = String::new();
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("///") {
+            doc.push_str(trimmed);
+            doc.push('\n');
+        } else if let Some(rest) = trimmed.strip_prefix("pub fn ") {
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let tier = if doc.contains("EFFECT") {
+                Tier::Effect
+            } else if doc.contains("CONTRACT") {
+                Tier::Contract
+            } else {
+                Tier::Pure
+            };
+            fns.push(PublicFn {
+                name,
+                tier,
+                doc: std::mem::take(&mut doc),
+            });
+        } else if !trimmed.is_empty() {
+            doc.clear();
+        }
+    }
+    fns
+}
+
+/// The concatenated text of every `spec … { … }` block in a module source,
+/// comments stripped (so a prose mention of a function name never counts as a
+/// spec exercising it).
+fn spec_block_text(source: &str) -> String {
+    let mut out = String::new();
+    let mut depth = 0usize;
+    let mut in_spec = false;
+    for line in source.lines() {
+        let trimmed = line.trim_start();
+        let code = trimmed.split("//").next().unwrap_or("");
+        if !in_spec && trimmed.starts_with("spec ") {
+            in_spec = true;
+        }
+        if in_spec {
+            out.push_str(code);
+            out.push('\n');
+            depth += code.matches('{').count();
+            depth = depth.saturating_sub(code.matches('}').count());
+            if depth == 0 && code.contains('}') {
+                in_spec = false;
+            }
+        }
+    }
+    out
+}
+
+/// Is `name` called (as `name(` with a non-identifier character before it)
+/// anywhere in `text`?
+fn is_called_in(name: &str, text: &str) -> bool {
+    let needle = format!("{name}(");
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = text[from..].find(&needle) {
+        let at = from + pos;
+        let preceded_by_ident = at > 0 && {
+            let b = bytes[at - 1];
+            b.is_ascii_alphanumeric() || b == b'_'
+        };
+        if !preceded_by_ident {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
+
+#[test]
+fn the_three_tier_rule_holds_for_every_public_function() {
+    // The library's honesty contract, per function:
+    //   pure executable  => exercised by a spec in its module;
+    //   EFFECT:          => no spec (R0007 makes one impossible) but the doc
+    //                       names the native CLI test that pins it;
+    //   CONTRACT:        => no spec (nothing claims to run that cannot).
+    for &module in tuo_stdlib::MODULES {
+        let fns = public_fns(module.source);
+        assert!(!fns.is_empty(), "{} exports no public fn", module.path);
+        let specs = spec_block_text(module.source);
+        for public in fns {
+            match public.tier {
+                Tier::Pure => {
+                    assert!(
+                        is_called_in(&public.name, &specs),
+                        "{}::{} is pure executable but no spec exercises it",
+                        module.path,
+                        public.name
+                    );
+                }
+                Tier::Effect => {
+                    assert!(
+                        !is_called_in(&public.name, &specs),
+                        "{}::{} is EFFECT-tier but appears in a spec — an \
+                         effectful spec is an R0007 error",
+                        module.path,
+                        public.name
+                    );
+                    assert!(
+                        public.doc.contains("crates/tuo-cli/tests/stdlib.rs"),
+                        "{}::{} is EFFECT-tier but its doc does not name the \
+                         native CLI test that pins it",
+                        module.path,
+                        public.name
+                    );
+                }
+                Tier::Contract => {
+                    assert!(
+                        !is_called_in(&public.name, &specs),
+                        "{}::{} is CONTRACT-tier but appears in a spec — \
+                         nothing may claim to run that cannot",
+                        module.path,
+                        public.name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn the_effect_tier_is_exactly_io_writes_and_process_exit() {
+    // ADR-0006 landed descriptor writes and process exit; the effect tier must
+    // list exactly the functions those primitives can implement — no more (an
+    // over-claim) and no fewer (a stale contract).
+    let mut effect_fns = Vec::new();
+    for &module in tuo_stdlib::MODULES {
+        for public in public_fns(module.source) {
+            if public.tier == Tier::Effect {
+                effect_fns.push(format!("{}::{}", module.path, public.name));
+            }
+        }
+    }
+    effect_fns.sort();
+    assert_eq!(
+        effect_fns,
+        vec![
+            "std::io::print".to_string(),
+            "std::io::println".to_string(),
+            "std::process::exit".to_string(),
+        ]
+    );
+}
+
 #[test]
 fn each_module_runs_its_own_specs_green() {
     // A per-module view of the same guarantee, so a failure names the module.
@@ -173,5 +362,115 @@ fn each_module_runs_its_own_specs_green() {
                 panic!("{} did not check:\n{diagnostics:#?}", module.path);
             }
         }
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The effect tier, really performed: native binaries through the real `tuo`
+// binary, on both backends. These are the tests the `EFFECT:` docs name.
+// ----------------------------------------------------------------------------
+
+/// A unique scratch directory per test, rooted under Cargo's per-crate temp
+/// directory (so parallel tests never collide).
+fn native_workspace(name: &str) -> PathBuf {
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("stdlib_native")
+        .join(name);
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("scratch workspace is creatable");
+    dir
+}
+
+/// Write a stdlib module plus a caller program into `dir` and `tuo run` them
+/// together with the chosen backend, returning the completed process output.
+fn run_with_module(dir: &Path, module: tuo_stdlib::Module, caller: &str, release: bool) -> Output {
+    let module_path = dir.join(module.name.replace('/', "_"));
+    std::fs::write(&module_path, module.source).expect("module source is writable");
+    let caller_path = dir.join("caller.tuo");
+    std::fs::write(&caller_path, caller).expect("caller source is writable");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("run");
+    if release {
+        command.arg("--release");
+    }
+    command
+        .arg(&module_path)
+        .arg(&caller_path)
+        .output()
+        .expect("the tuo binary runs")
+}
+
+/// The backend a `release` flag selects, for failure messages.
+fn backend_name(release: bool) -> &'static str {
+    if release { "llvm" } else { "cranelift" }
+}
+
+/// `std::io::println("hi")` really prints `hi\n` — exactly — and returns
+/// `Ok { value: 3 }`, whose payload `main` surfaces as the exit status. Both
+/// backends. This is the native pin `std::io`'s `EFFECT:` docs name.
+#[test]
+fn stdlib_println_really_prints_natively() {
+    let dir = native_workspace("println");
+    let caller = "\
+module caller;
+
+import std::io;
+
+fn main() -> Int {
+    match std::io::println(\"hi\") {
+        Ok { value } => value,
+        Err { error } => 100 + std::io::error_code(error),
+    }
+}
+";
+    for release in [false, true] {
+        let output = run_with_module(&dir, tuo_stdlib::IO, caller, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "{which}: println(\"hi\") returns Ok {{ value: 3 }} (2 text bytes + \
+             the newline); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "hi\n",
+            "{which}: the printed bytes must land on stdout, exactly"
+        );
+    }
+}
+
+/// `std::process::exit(failure(9))` really terminates the process with status
+/// 9: the trailing `0` in `main` is never reached and nothing is printed. Both
+/// backends. This is the native pin `std::process`'s `EFFECT:` doc names.
+#[test]
+fn stdlib_process_exit_really_exits_natively() {
+    let dir = native_workspace("process_exit");
+    let caller = "\
+module caller;
+
+import std::process;
+
+fn main() -> Int {
+    std::process::exit(std::process::failure(9));
+    0
+}
+";
+    for release in [false, true] {
+        let output = run_with_module(&dir, tuo_stdlib::PROCESS, caller, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(9),
+            "{which}: exit(failure(9)) is the process status, not the 0 main \
+             would return; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "",
+            "{which}: nothing may land on stdout"
+        );
     }
 }

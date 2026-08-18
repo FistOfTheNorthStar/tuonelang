@@ -386,13 +386,20 @@ impl IncrementalSession {
         })
     }
 
-    /// Every function symbol in the current program, in declaration order.
+    /// Every *declared* function symbol in the current program, in
+    /// declaration order. The builtin functions (`std::rt`/`std::str`,
+    /// ADR-0006) are excluded: they have no source declaration and their
+    /// fixed signatures can never change, so registering per-symbol queries
+    /// for them would only add constant re-executions to every
+    /// resolution-level invalidation.
     #[must_use]
     pub fn function_symbols(&self) -> Vec<SymbolId> {
         self.with_snapshot(|snap| {
             snap.resolution
                 .symbols()
-                .filter(|(_, symbol)| symbol.kind == SymbolKind::Function)
+                .filter(|(id, symbol)| {
+                    symbol.kind == SymbolKind::Function && snap.resolution.builtin(*id).is_none()
+                })
                 .map(|(id, _)| id)
                 .collect()
         })

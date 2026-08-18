@@ -1,0 +1,9 @@
+fn main() -> Int {
+    let huge = 1.0e18 * 1.0e18;
+    let hi = huge as Int;
+    let lo = (0.0 - huge) as Int;
+    let nan = (0.0 / 0.0) as Int;
+    let top = (1000.5 as U8) as Int;
+    let bottom = ((0.0 - 5.5) as U8) as Int;
+    (hi % 100) + (0 - (lo % 100)) + nan + (top % 10) + bottom
+}

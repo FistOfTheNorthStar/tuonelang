@@ -34,7 +34,7 @@ mod check;
 mod infer;
 mod ty;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use tuo_ast::Ast;
 use tuo_diagnostics::Diagnostic;
@@ -76,6 +76,7 @@ pub struct TypeckResult {
     pub(crate) expr_types: HashMap<Span, Ty>,
     pub(crate) struct_shapes: HashMap<SymbolId, StructShape>,
     pub(crate) enum_shapes: HashMap<SymbolId, EnumShape>,
+    pub(crate) effectful: BTreeSet<SymbolId>,
 }
 
 impl TypeckResult {
@@ -115,6 +116,28 @@ impl TypeckResult {
     #[must_use]
     pub fn enum_shape(&self, symbol: SymbolId) -> Option<&EnumShape> {
         self.enum_shapes.get(&symbol)
+    }
+
+    /// Is `symbol` an **effectful** function (ADR-0006 Stage A)?
+    ///
+    /// A function is effectful iff its body calls (or references) one of the
+    /// `std::rt` effect builtins, or transitively calls an effectful
+    /// function — a fixed point over the program's call graph, computed
+    /// conservatively (naming an effectful function as a value taints the
+    /// referrer). The effect builtins themselves are in the set; the
+    /// `std::str` builtins and every function whose closure never reaches an
+    /// effect are not. `main` and ordinary functions *may* be effectful;
+    /// only specs are restricted (the `R0007` gate), so this query is how
+    /// the spec runner, CLI, and agent read one purity computation.
+    #[must_use]
+    pub fn is_effectful(&self, symbol: SymbolId) -> bool {
+        self.effectful.contains(&symbol)
+    }
+
+    /// Every effectful function symbol (see [`Self::is_effectful`]), in
+    /// symbol order.
+    pub fn effectful_functions(&self) -> impl Iterator<Item = SymbolId> + '_ {
+        self.effectful.iter().copied()
     }
 }
 

@@ -2,23 +2,32 @@ module http_service;
 
 // http-service — an HTTP service, dogfooded against the limits of v0.
 //
-// Prompt 39 asks for "an HTTP service WHEN networking support exists." It does
-// not exist in v0: there is no effect boundary (no sockets, no syscalls), no
-// String value, and no heap (see DOGFOODING.md and ADR-0006). So this example
-// is split exactly the way `tdg-stdlib` splits its modules:
+// Prompt 39 asks for "an HTTP service WHEN networking support exists." Sockets
+// still do not exist, but ADR-0006 (accepted) landed the borrowed `Str` core
+// and the effect boundary, so this example is now split three ways, exactly
+// like `tdg-stdlib`'s tiers:
 //
-//   * an EXECUTABLE TIER — the pure request-routing and status-code logic,
-//     which is the real decision core of any HTTP server. It is written in the
-//     runnable scalar subset, checks with `tuo check`, runs its specs with
-//     `tuo test`, and `main` executes with `tuo run`; and
+//   * an EXECUTABLE TIER — the pure request-line parsing (`parse_request_line`,
+//     over `std::str` byte scans and slice comparisons) and the routing/status
+//     logic, the real decision core of any HTTP server. It checks with
+//     `tuo check` and runs its specs with `tuo test`;
 //
-//   * a CONTRACT TIER — the effectful shell (bind a socket, read the request
-//     bytes, write the response) given only as documented `CONTRACT:` comments,
-//     because v0 cannot perform any of it. Nothing here pretends to serve real
-//     traffic. Each contract names the exact capability the language must gain,
-//     tracked by ADR-0006, before this example can become a running server.
+//   * an EFFECT TIER — the thin effectful shell (`write_response`) over the
+//     `std::rt::write` effect primitive. It runs natively; being effectful it
+//     can carry no spec (`R0007`), so it is pinned by the dogfood test
+//     (`crates/tuo-cli/tests/dogfood_examples.rs`) asserting the exact bytes
+//     `main` prints; and
 //
-// Encoding, so the pure core has concrete values to route on:
+//   * a CONTRACT TIER — what still cannot run: `serve`, because `std::rt`
+//     exposes no socket effect (no `socket`/`bind`/`listen`/`accept`/
+//     `connect`) — that is ADR-0007-or-successor ground. Nothing here
+//     pretends to serve real traffic.
+//
+// `main` is a small runnable demo: parse a fixed request line, route it, print
+// the response status line, and return the status code. Documented exit byte:
+// route(GET, /health) = 200, so the process exits 200.
+//
+// Encoding, so the routing core has concrete values to route on:
 //
 //   method: 1 = GET, 2 = POST, 3 = PUT, 4 = DELETE   (0 = unknown)
 //   path:   1 = /            2 = /health
@@ -83,8 +92,8 @@ fn route(take method: Int, take path: Int) -> Int {
 }
 
 /// A tiny synthetic request log the pure core can "handle" end to end: four
-/// requests, summed into a single figure so `main` has an integer result. The
-/// value is `sum of statuses mod 256` — proof the routing core executed.
+/// requests, summed into a single figure. The value is `sum of statuses -
+/// 1000` — proof the routing core executed.
 fn handle_sample_traffic() -> Int {
     let a = route(method_get(), path_root());        // 200
     let b = route(method_get(), path_health());      // 200
@@ -96,36 +105,147 @@ fn handle_sample_traffic() -> Int {
 /// An unmodelled method tag (DELETE), used to exercise the 405 path.
 fn method_delete_unknown() -> Int { 4 }
 
-fn main() -> Int {
-    handle_sample_traffic()
+// --- Request-line parsing (pure, over the borrowed Str core) ---------------
+//
+// ADR-0006's acceptance oracle: "GET /health HTTP/1.1" decodes into the
+// integer form `route` consumes, with byte scans and slice comparisons over
+// the borrowed `Str` — no heap, no effect, fully spec-checked.
+
+/// One parsed request line: the integer method/path tags the router consumes,
+/// plus whether the version token is exactly "HTTP/1.1".
+struct Request {
+    method: Int,
+    path: Int,
+    version_ok: Bool,
 }
 
-// --- CONTRACT TIER: the effectful shell v0 cannot run ----------------------
-//
-// The functions below are the parts a real deployment needs and v0 cannot
-// express. They are written as contracts, NOT as code, so nothing claims to run
-// that cannot. Each blocks on a specific language capability tracked in
-// ADR-0006 "Effect boundary and networking for services".
+/// The index of the first space (byte 32) at or after `from`, or -1 if none.
+fn find_space(in line: Str, take from: Int) -> Int {
+    if from >= std::str::len(line) {
+        0 - 1
+    } else if std::str::byte_at(line, from) == 32 {
+        from
+    } else {
+        find_space(line, from + 1)
+    }
+}
+
+/// Does `s` start with `prefix` (byte-wise)?
+fn starts_with(in s: Str, in prefix: Str) -> Bool {
+    let n = std::str::len(prefix);
+    if std::str::len(s) < n {
+        false
+    } else {
+        std::str::slice(s, 0, n) == prefix
+    }
+}
+
+/// Decode a method token into the router's method tag (0 = unknown).
+fn method_tag(in token: Str) -> Int {
+    if token == "GET" {
+        method_get()
+    } else if token == "POST" {
+        method_post()
+    } else if token == "DELETE" {
+        method_delete_unknown()
+    } else {
+        0
+    }
+}
+
+/// Decode a path token into the router's path tag (0 = unmatched). A path
+/// under `/users/` with at least one id byte is the `{id}` route.
+fn path_tag(in token: Str) -> Int {
+    if token == "/" {
+        path_root()
+    } else if token == "/health" {
+        path_health()
+    } else if token == "/users" {
+        path_users()
+    } else if starts_with(token, "/users/") && std::str::len(token) > 7 {
+        path_user_id()
+    } else {
+        0
+    }
+}
+
+/// Parse a raw request line ("GET /health HTTP/1.1") into a typed `Request`.
+/// A malformed line (fewer than three space-separated tokens) parses to the
+/// unknown request (`method` 0, `path` 0), which `route` answers with 404/405
+/// — a real server's behavior for garbage.
+fn parse_request_line(in line: Str) -> Request {
+    let first = find_space(line, 0);
+    if first < 0 {
+        Request { method: 0, path: 0, version_ok: false }
+    } else {
+        let second = find_space(line, first + 1);
+        if second < 0 {
+            Request {
+                method: method_tag(std::str::slice(line, 0, first)),
+                path: 0,
+                version_ok: false,
+            }
+        } else {
+            Request {
+                method: method_tag(std::str::slice(line, 0, first)),
+                path: path_tag(std::str::slice(line, first + 1, second)),
+                version_ok: std::str::slice(line, second + 1, std::str::len(line))
+                    == "HTTP/1.1",
+            }
+        }
+    }
+}
+
+// --- The response shell (EFFECT tier) --------------------------------------
+
+/// The status line for a routed status code — selected from static text,
+/// because v0 has no owned String to format into (that is the allocator
+/// ADR's ground). Pure, so it is spec-checked.
+fn response_line(take status: Int) -> Str {
+    if status == status_ok() {
+        "HTTP/1.1 200 OK"
+    } else if status == status_created() {
+        "HTTP/1.1 201 Created"
+    } else if status == status_not_found() {
+        "HTTP/1.1 404 Not Found"
+    } else {
+        "HTTP/1.1 405 Method Not Allowed"
+    }
+}
+
+/// EFFECT: write the response status line and a newline to stdout via the
+/// `std::rt::write` effect primitive — the thin effectful shell over the pure
+/// core. Returns the bytes written. Effectful, so no spec (`R0007`); pinned
+/// natively by `crates/tuo-cli/tests/dogfood_examples.rs`, which asserts the
+/// exact bytes `main` prints.
+fn write_response(take status: Int) -> Int {
+    let line = std::rt::write(1, response_line(status));
+    let newline = std::rt::write(1, "\n");
+    line + newline
+}
+
+/// Demo: parse a fixed request line, route it, print the response status
+/// line, and exit with the status code's low byte. route(GET, /health) = 200,
+/// so the documented exit byte is 200 and stdout is "HTTP/1.1 200 OK\n".
+fn main() -> Int {
+    let request = parse_request_line("GET /health HTTP/1.1");
+    let status = route(request.method, request.path);
+    write_response(status);
+    status
+}
+
+// --- CONTRACT TIER: what still cannot run ----------------------------------
 //
 // CONTRACT serve(port: Int) -> Result[Int, IoError]
 //   Bind a TCP listener on `port`, accept connections, and for each: read the
-//   request, parse the request line into (method, path), call `route`, and
-//   write the status line + body. BLOCKED ON: an effect boundary (sockets are a
-//   syscall; v0 has no FFI/syscall mechanism) and a runtime String/byte-buffer
-//   type for the request/response payloads.
-//
-// CONTRACT parse_request_line(raw: String) -> Request
-//   Turn the raw bytes "GET /health HTTP/1.1" into a typed request. BLOCKED ON:
-//   a String value and slicing/scanning over it (v0 lowers no String ops), and
-//   a product type to hold the parsed (method, path, version) result in the
-//   runnable core (see ADR-0004). The pure `route` above already consumes the
-//   decoded integer form, so only decoding is missing — not the decision logic.
-//
-// CONTRACT write_response(status: Int, body: String) -> Result[Int, IoError]
-//   Serialize a response and write it to the connection. BLOCKED ON: the same
-//   effect boundary plus String formatting.
+//   request bytes, `parse_request_line`, `route`, `write_response`. BLOCKED
+//   ON: a socket effect primitive — `std::rt` exposes descriptor I/O
+//   (`write`/`read_byte`) and process exit only; there is no `socket`/`bind`/
+//   `listen`/`accept`/`connect`, so no connection can be created (ADR-0006,
+//   amendment 2; tracked by ADR-0007 or a successor effect ADR). Everything
+//   downstream of an accepted, open connection is implemented above.
 
-// --- Executable specs for the routing core ---------------------------------
+// --- Executable specs for the pure core ------------------------------------
 
 spec "known paths exist and unknown ones do not" {
     then path_exists(path_root());
@@ -159,8 +279,72 @@ spec "404 precedes 405: an unknown path never reports a method error" {
     then route(method_post(), 0) == 404;
 }
 
-spec main {
+spec find_space {
+    then find_space("GET /", 0) == 3;
+    then find_space("GET /", 4) == 0 - 1;
+    then find_space("a b c", 2) == 3;
+    then find_space("nospace", 0) == 0 - 1;
+}
+
+spec starts_with {
+    then starts_with("/users/42", "/users/");
+    then !starts_with("/user", "/users/");
+    then !starts_with("/health", "/users/");
+    then starts_with("anything", "");
+}
+
+spec method_tag {
+    then method_tag("GET") == 1;
+    then method_tag("POST") == 2;
+    then method_tag("DELETE") == 4;
+    then method_tag("BREW") == 0;
+}
+
+spec path_tag {
+    then path_tag("/") == 1;
+    then path_tag("/health") == 2;
+    then path_tag("/users") == 3;
+    then path_tag("/users/42") == 4;
+    then path_tag("/users/") == 0;
+    then path_tag("/missing") == 0;
+}
+
+spec parse_request_line {
+    then parse_request_line("GET /health HTTP/1.1").method == 1;
+    then parse_request_line("GET /health HTTP/1.1").path == 2;
+    then parse_request_line("GET /health HTTP/1.1").version_ok;
+    then parse_request_line("POST /users HTTP/1.0").method == 2;
+    then parse_request_line("POST /users HTTP/1.0").path == 3;
+    then !parse_request_line("POST /users HTTP/1.0").version_ok;
+    then parse_request_line("GET /users/42 HTTP/1.1").path == 4;
+    then parse_request_line("garbage").method == 0;
+    then parse_request_line("garbage").path == 0;
+}
+
+spec "a parsed request routes end to end" {
+    // The full pure pipeline: raw line -> Request -> status.
+    then route(
+        parse_request_line("GET /health HTTP/1.1").method,
+        parse_request_line("GET /health HTTP/1.1").path
+    ) == 200;
+    then route(
+        parse_request_line("POST /users HTTP/1.1").method,
+        parse_request_line("POST /users HTTP/1.1").path
+    ) == 201;
+    then route(
+        parse_request_line("GET /missing HTTP/1.1").method,
+        parse_request_line("GET /missing HTTP/1.1").path
+    ) == 404;
+}
+
+spec response_line {
+    then response_line(200) == "HTTP/1.1 200 OK";
+    then response_line(201) == "HTTP/1.1 201 Created";
+    then response_line(404) == "HTTP/1.1 404 Not Found";
+    then response_line(405) == "HTTP/1.1 405 Method Not Allowed";
+}
+
+spec handle_sample_traffic {
     // 200 + 200 + 201 + 405 = 1006; 1006 - 1000 = 6
     then handle_sample_traffic() == 6;
-    then main() == 6;
 }

@@ -18,22 +18,29 @@
 //! `tuo-cli` (which really compile every module and run every spec) rather than
 //! asserted here.
 //!
-//! # Two honest tiers
+//! # Three honest tiers
 //!
-//! v0 has no native effect boundary — no FFI, no syscalls; the interpreter and
-//! both backends implement only the scalar, control-flow core. So the library
-//! is split, per module, into:
+//! ADR-0006 landed a narrow effect boundary — the `std::rt` builtins
+//! `write`/`read_byte`/`exit`, over already-open descriptors — and the spec
+//! sandbox stays pure: a spec whose executed closure reaches an effect is a
+//! front-end error (`R0007`). So the library is split, per function, into:
 //!
 //! * an **executable tier** — pure computation (ordering, `Option`/`Result`
 //!   combinators, `Duration` arithmetic, error classification, the pure state
-//!   models of a lock or latch), which runs and whose specs run; and
-//! * a **contract tier** — the effectful entry points (`std::io::println`,
-//!   `std::fs::read`, `std::time::now`, `std::process::exit`,
-//!   `std::sync::lock`), given as exact signatures with documented contracts and
-//!   **no** executable spec, each marked `CONTRACT:` in its doc so no reader —
-//!   human or machine — is misled into thinking it runs today. When the effect
-//!   boundary lands, a contract gains an implementation and a spec with no change
-//!   to its signature.
+//!   models of a lock or latch), which runs and whose specs run;
+//! * an **effect tier** — real tuonelang implementations over the `std::rt`
+//!   effect primitives (`std::io::print`/`println`, `std::process::exit`).
+//!   These compile and run natively, but `R0007` makes an effectful spec
+//!   impossible, so each is marked `EFFECT:` in its doc and pinned by a named
+//!   native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of a spec; and
+//! * a **contract tier** — the effectful entry points whose primitive does not
+//!   exist yet (`std::io::read_line` awaits the allocator ADR's owned
+//!   `String`; `std::fs::read` a file-open primitive; `std::time::now` a
+//!   clock; `std::sync::lock` threads; `std::process::arg_count` argv), given
+//!   as exact signatures with documented contracts and **no** executable spec,
+//!   each marked `CONTRACT:` in its doc so no reader — human or machine — is
+//!   misled into thinking it runs today. When the missing primitive lands, a
+//!   contract gains an implementation with no change to its signature.
 //!
 //! This mirrors the toolchain's standing rule that the compiler never advertises
 //! behavior it cannot perform.
@@ -67,8 +74,9 @@ pub const COLLECTIONS: Module = Module {
     source: include_str!("std/collections.tuo"),
 };
 
-/// `std::io` — the I/O error vocabulary (executable) and the read/write
-/// contract.
+/// `std::io` — the I/O error vocabulary (executable), the real
+/// `print`/`println` writes over `std::rt::write` (effect tier), and the
+/// `read_line` contract.
 pub const IO: Module = Module {
     path: "std::io",
     name: "std/io.tuo",
@@ -90,8 +98,8 @@ pub const TIME: Module = Module {
     source: include_str!("std/time.tuo"),
 };
 
-/// `std::process` — `ExitStatus` reasoning (executable) and the process-control
-/// contract.
+/// `std::process` — `ExitStatus` reasoning (executable), the real `exit` over
+/// `std::rt::exit` (effect tier), and the `arg_count` contract.
 pub const PROCESS: Module = Module {
     path: "std::process",
     name: "std/process.tuo",

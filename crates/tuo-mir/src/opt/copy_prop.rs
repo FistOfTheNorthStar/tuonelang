@@ -91,6 +91,15 @@ fn rewrite_statement_reads(statement: &mut Statement, known: &HashMap<u32, Opera
             }
             changed
         }
+        // An effect's operands are ordinary reads (ADR-0006); its
+        // destination is a write and is not rewritten.
+        Statement::Effect { args, .. } => {
+            let mut changed = false;
+            for operand in args {
+                changed |= rewrite_operand(operand, known);
+            }
+            changed
+        }
         // A drop consumes its place; forwarding a copy into it would change
         // *what* is dropped, so leave drops alone.
         Statement::Drop { .. } => false,
@@ -121,6 +130,13 @@ fn rewrite_rvalue(rvalue: &mut Rvalue, known: &HashMap<u32, Operand>) -> bool {
             let mut changed = false;
             for field in fields {
                 changed |= rewrite_operand(field, known);
+            }
+            changed
+        }
+        Rvalue::StrOp { args, .. } => {
+            let mut changed = false;
+            for operand in args {
+                changed |= rewrite_operand(operand, known);
             }
             changed
         }
@@ -211,6 +227,8 @@ fn invalidate(statement: &Statement, known: &mut HashMap<u32, Operand>) {
                 }
             }
         }
+        // An effect writes its destination (its operands are plain reads).
+        Statement::Effect { dest, .. } => touched.push(dest.local.0),
         Statement::Drop { place } => touched.push(place.local.0),
     }
     for local in touched {

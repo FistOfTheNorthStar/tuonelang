@@ -157,6 +157,84 @@ fn stage2_fixed_arrays_match_the_interpreter() {
 }
 
 #[test]
+fn floats_match_the_interpreter() {
+    // Native float support: IEEE-754 arithmetic (never trapping), `%` with C
+    // `fmod` semantics (Cranelift calls libm's `fmod`/`fmodf`), Rust-semantics
+    // NaN comparisons (`==` false / `!=` true on NaN), saturating float→int
+    // casts (NaN → 0), genuine f32 arithmetic with f32↔f64 conversion, and a
+    // float field inside an aggregate.
+    for name in [
+        "flt_arith.tuo",
+        "flt_rem.tuo",
+        "flt_compare.tuo",
+        "flt_cast_sat.tuo",
+        "flt_f32.tuo",
+        "flt_struct.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn borrow_mode_calls_match_the_interpreter() {
+    // Borrow-mode (`in`/`mut`) call arguments: the caller passes the address
+    // of its place, the callee reads/writes through the pointer (no copy-in,
+    // no copy-back), and a `mut` write is visible to the caller afterwards —
+    // observably identical to the interpreter's copy-in/copy-back because the
+    // borrow checker forbids aliasing. Covers scalar and aggregate borrows,
+    // a fixed-array `in` borrow folded by `for`, and forwarding an `in`
+    // parameter onward as another `in` argument. (Writing an array *element*
+    // through `mut` is not expressible in v0 — index expressions are not
+    // assignable places — hence the `in` array fixture.)
+    for name in [
+        "brw_scalar_in.tuo",
+        "brw_scalar_mut.tuo",
+        "brw_agg_in.tuo",
+        "brw_agg_mut.tuo",
+        "brw_arr_in.tuo",
+        "brw_forward.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn strings_match_the_interpreter() {
+    // ADR-0006 Stage B: `Str` as a native two-word fat pointer over static
+    // data. Literal length (UTF-8 is bytes: len("héllo") == 6), byte-wise
+    // equality (equal, unequal, and empty-string cases, via memcmp), slice +
+    // byte_at scanning in a loop, `Str` crossing call boundaries (take/in
+    // params and an sret return), and a `Str` field inside a struct.
+    for name in [
+        "str_len.tuo",
+        "str_eq.tuo",
+        "str_slice_scan.tuo",
+        "str_param.tuo",
+        "str_in_struct.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn a_str_byte_at_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
+    // `std::str::byte_at` past the end traps `IndexOutOfBounds` in the
+    // interpreter (`specification/mir.md` §5.6); the native binary must abort
+    // with the runtime's fixed trap status through the same trap path the
+    // array bounds asserts use.
+    let path = fixture("str_trap_oob.tuo");
+    assert!(
+        interpret_main(&path).is_err(),
+        "the reference interpreter should trap on the out-of-bounds byte index"
+    );
+    assert_eq!(
+        run_native(&path),
+        TRAP_EXIT_STATUS,
+        "a native Str out-of-bounds trap must terminate with the runtime's fixed trap status"
+    );
+}
+
+#[test]
 fn a_fixed_array_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
     // The interpreter traps `IndexOutOfBounds`; the native binary must abort
     // with the runtime's fixed trap status (the bounds `Assert` is in the MIR
@@ -192,11 +270,12 @@ fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
 
 #[test]
 fn a_program_outside_the_backend_subset_is_refused_not_miscompiled() {
-    // A program the native backend does not lower yet (an aggregate carrying a
-    // `String`/`Str`, which ADR-0004 Stage 1 does not cover) must be *refused*
-    // with a failure exit, never silently mis-compiled. The interpreter remains
-    // the reference and can still run it (checked elsewhere); here we assert
-    // `tuo build` declines cleanly.
+    // A program the native backend does not lower yet (a function with an
+    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
+    // lowered since ADR-0006 Stage B) must be *refused* with a failure exit,
+    // never silently mis-compiled. The interpreter remains the reference and
+    // can still run it (checked elsewhere); here we assert `tuo build`
+    // declines cleanly.
     let path = fixture("unsupported_string.tuo");
     let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
         .arg("build")

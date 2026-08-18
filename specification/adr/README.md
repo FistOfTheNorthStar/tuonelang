@@ -53,13 +53,15 @@ the replacement, preserving the decision history.
 | [ADR-0001](ADR-parser-strategy.md) | Parser implementation strategy | accepted |
 | [ADR-0002](ADR-0002-spec-semantics.md) | First-class `spec` semantics | accepted |
 | [ADR-0003](ADR-0003-ownership-model.md) | The v0 ownership model | accepted |
-| [ADR-0004](ADR-0004-aggregates-in-the-runnable-core.md) | Aggregates and iteration in the runnable core | proposed |
-| [ADR-0006](ADR-0006-effect-boundary-and-strings.md) | The effect boundary and runtime strings | proposed |
+| [ADR-0004](ADR-0004-aggregates-in-the-runnable-core.md) | Aggregates and iteration in the runnable core | accepted |
+| [ADR-0006](ADR-0006-effect-boundary-and-strings.md) | The effect boundary and runtime strings | accepted |
 | [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | proposed |
 | [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | proposed |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
 unallocated; ADRs 0004/0006/0007/0008 were opened together by the Prompt 39
-dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md) — and are
-`proposed` pending their normative spec, fixtures, and performance-lab entries.)
+dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md). ADR-0004 and
+ADR-0006 have since been accepted and landed, each having flipped its named
+performance-lab workload; 0007/0008 remain `proposed` pending their normative
+spec, fixtures, and performance-lab entries.)

@@ -164,6 +164,10 @@ statement that traps (arithmetic, §5.3) aborts the program deterministically.
   - a struct or enum drops its (active variant's) fields in declaration order;
   - every `Copy` value's drop is a **no-op**.
 
+- **`Effect { op, args, dest }`** (`[EXPERIMENTAL]`, ADR-0006 Stage A) — one
+  host effect (§4.2). This is the **only** MIR construct whose meaning involves
+  the host; everything else in this document is pure computation.
+
 ### 4.1 Call arguments (`Arg`)
 
 Each argument names its passing semantics and must agree with the callee's
@@ -173,6 +177,41 @@ Each argument names its passing semantics and must agree with the callee's
 - **`Borrow(place)`** — lend `place` read-only for the duration of the call.
 - **`BorrowMut(place)`** — lend `place` exclusively for the call; the callee may
   write through it.
+
+### 4.2 Effects (`EffectOp`) — `[EXPERIMENTAL]`, ADR-0006 Stage A
+
+`Statement::Effect { op, args, dest }` performs one host effect and stores its
+`I64` result into `dest`. Calls to the `std::rt` builtins
+(`static-semantics.md` §3.6) lower to it; there is no other way to construct
+one. Operand counts and types are fixed per op and verified (§7.1, `M0011`):
+
+| Op | Operands | Result stored in `dest` |
+|----|----------|-------------------------|
+| `Write` | `fd: I64`, `text: Str` | Bytes written, or a negative value on host error. Never traps. |
+| `ReadByte` | `fd: I64` | The byte read (`0..=255`), `-1` on end of input, or another negative value on host error. Never traps. |
+| `Exit` | `code: I64` | Nothing — the process terminates with `code & 0xff` as its exit status; `dest` is never observably written because control never continues. |
+
+`Exit` is a **statement, not a terminator**, by choice: the surface builtin is
+declared `-> Int`, so the statement form (an effect with an `I64` destination)
+composes in expression position exactly like the other two effects and like any
+call, and lowering stays uniform. A terminator encoding would force lowering to
+fabricate an unreachable continuation block and special-case expression
+position for no observable difference: natively (Stage B) `tuo_rt_exit` does
+not return, so the statements after an `Exit` are simply never executed, and in
+the reference interpreter no effect executes at all (§8). Verified-MIR totality
+is unaffected — the statement types like the others and the dataflow treats
+`dest` as initialized after it.
+
+**The sandbox rule.** The reference interpreter **never performs an effect**.
+The spec-purity gate (`R0007`, `static-semantics.md` §3.6) statically refuses
+any spec whose closure could reach one, so under the spec runner an `Effect`
+statement is unreachable by construction; an interpreter that is nevertheless
+asked to execute one reports it as an **internal error**
+(`TrapKind::Internal`, §8) — the same family as its other impossible-state
+signals — never a silent no-op and never a real effect. Effectful programs run
+**natively** (`tuo run`): since ADR-0006 Stage B both backends lower an
+`Effect` to a direct call to the matching runtime symbol (`tuo_rt_write`/
+`tuo_rt_read_byte`/`tuo_rt_exit`, `abi.md` "Effect symbols").
 
 ---
 
@@ -194,6 +233,18 @@ value of a statically known type.
   **`Len` applies only to the growable `Array[T]`.** A `[T; N]`'s length is a
   compile-time constant; lowering emits `Const N : Usize` and the verifier
   rejects `Len` of a fixed-array place.
+- **`StrOp { op, args }`** (`[EXPERIMENTAL]`, ADR-0006 Stage A) — a pure
+  byte-level string operation on `Str` operands (§5.6). `Len` never traps;
+  `ByteAt` and `Slice` **trap `IndexOutOfBounds`** on an out-of-range argument,
+  as a *statement-level* trap — the same source of abort as trapping integer
+  arithmetic (§5.3), **not** an explicit `Assert`. Array indexing is bounded by
+  an explicit `Assert` because its bound (`Len`/a constant) is already a MIR
+  value lowering compares against; a `Str`'s byte length is a runtime property
+  of the operand itself, so the bound lives in the operation — spelling it as
+  asserts would cost a `StrOp::Len` temp and two compares per use for the same
+  observable behavior (a deterministic `IndexOutOfBounds` abort). The
+  interpreter and the verifier agree on this encoding: the verifier types the
+  operation (§7), the interpreter traps it (§8).
 
 ### 5.2 Unary operations (`UnOp`)
 
@@ -246,6 +297,29 @@ content equality). `Lt`/`Le`/`Gt`/`Ge` are also defined on `Char` by scalar valu
   order; the destination's type is `[element; len]`. Carrying both `element` and
   `len` in the kind keeps verification local and the rendered MIR
   self-describing (ADR-0004 Stage 2).
+
+### 5.6 String operations (`StrOp`) — `[EXPERIMENTAL]`, ADR-0006 Stage A
+
+`Rvalue::StrOp { op, args }` carries one of three pure operations over the
+UTF-8 **byte buffer** of a `Str`. Let `len(s)` be the byte length of `s`.
+Operand counts and types are fixed per op and verified (§7.1, `M0010`):
+
+| Op | Operands | Result | Semantics |
+|----|----------|--------|-----------|
+| `Len` | `s: Str` | `I64` | `len(s)`. Never traps. |
+| `ByteAt` | `s: Str`, `index: I64` | `I64` | The byte value (`0..=255`) at `index`. **Traps `IndexOutOfBounds`** when `index < 0` or `index >= len(s)`. |
+| `Slice` | `s: Str`, `start: I64`, `end: I64` | `Str` | The byte range `[start, end)` of `s`. **Traps `IndexOutOfBounds`** unless `0 <= start <= end <= len(s)`. |
+
+These are **byte** operations: a `Slice` may split a multi-byte code point,
+and the resulting `Str` is then not valid UTF-8 on its own — this is the
+documented v0 contract (ADR-0006 amendments). `Str` equality (`Eq`/`Ne`, §5.3)
+remains byte-wise, `Len` counts bytes, and a sliced value slices bytes, so the
+three operations and equality are mutually consistent on any value they can
+produce. The corresponding surface builtins are `std::str::len`, `byte_at`,
+and `slice` (`static-semantics.md` §3.6); since ADR-0006 Stage B both
+backends lower a `StrOp` natively over the `{ptr, len}` fat pointer
+(`abi.md` "Slices"), with the same deterministic traps, pinned by the
+`str_*.tuo` fixtures in the differential suites.
 
 ---
 
@@ -316,7 +390,10 @@ Per function, in one pass, the verifier proves:
   each of the element type, into a destination of exactly `[element; len]`; and
   **`Len` is growable-`Array`-only** — `Len` of a `[T; N]` place is a verifier
   error, because fixed-array lengths are lowered as constants (a backend may
-  rely on never seeing one).
+  rely on never seeing one). A `StrOp` supplies exactly its op's operands with
+  their fixed types into a destination of the op's result type (`M0010`,
+  §5.6); an `Effect` supplies exactly its op's operands with their fixed types
+  into an `I64` destination (`M0011`, §4.2).
 - **Terminators** — a `Switch`'s arm values are pairwise distinct.
 - **Ownership invariants that must survive lowering** — a borrow argument is never
   paired against a by-value read of the same call; a `Copy`-typed place is never
@@ -341,6 +418,8 @@ Codes are in the `Mir` namespace; once shipped, a number is never reused.
 | `M0007` | A function signature is malformed (params/locals/blocks disagree). |
 | `M0008` | A terminator is malformed (e.g. duplicated switch arm values). |
 | `M0009` | An ownership invariant that must survive lowering is violated. |
+| `M0010` | A `StrOp` rvalue is malformed: wrong operand count for its op, a non-`Str` string operand, or a non-`I64` index operand (§5.6). |
+| `M0011` | An `Effect` statement is malformed: wrong operand count for its op, a mistyped operand, or a non-`I64` destination (§4.2). |
 
 ### 7.2 Re-verification after every pass
 
@@ -358,7 +437,11 @@ function, evaluating each statement and terminator exactly as documented above. 
 is deterministic and total: under the same limits (§8.1), the same program yields
 the same result, the same trap, and the same trace every run; it never panics on
 any input it accepts. It is a **sandbox** — no host filesystem, network, process,
-clock, or randomness — because MIR has no instruction that could reach them.
+clock, or randomness. The one MIR construct that names a host effect,
+`Statement::Effect` (§4.2), is **never performed** by the interpreter: the
+spec-purity gate keeps it out of everything the spec runner executes, and
+actually reaching one is reported as `TrapKind::Internal` — an
+interpreter/compiler bug, never an I/O path.
 
 A run either returns a value or aborts with a structured runtime error carrying a
 `TrapKind`, a source span, and a call-stack backtrace (innermost frame first). An

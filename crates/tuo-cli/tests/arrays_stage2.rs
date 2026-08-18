@@ -5,9 +5,10 @@
 //! never contains a `Len` of a fixed array (the length is a constant), array
 //! programs compile and **run natively on both backends** (Cranelift debug
 //! and LLVM `--release`) to the interpreter's exit byte — including the
-//! deterministic out-of-bounds trap — and everything still outside the
-//! native subset (e.g. borrow-mode parameters) keeps refusing loudly,
-//! pointing back to the interpreter.
+//! deterministic out-of-bounds trap — borrow-mode parameters now run
+//! natively too, and everything still outside the native subset (heap-backed
+//! types such as `Str`) keeps refusing loudly, pointing back to the
+//! interpreter.
 
 use std::fs;
 use std::path::PathBuf;
@@ -216,13 +217,41 @@ fn an_out_of_bounds_index_traps_deterministically_on_both_backends() {
 }
 
 #[test]
-fn native_backends_still_refuse_the_unsupported_loudly() {
-    // Borrow-mode parameters stay outside the native subset: the program
-    // checks clean and runs on the interpreter, and both backends refuse it
-    // loudly instead of mis-compiling it.
+fn borrow_mode_parameters_now_run_natively() {
+    // Borrow-mode parameters joined the native subset: the program checks
+    // clean and both backends compile and run it to the interpreter's value
+    // (the callee reads the caller's place through a pointer). The
+    // loud-refusal contract for what remains outside the subset is pinned
+    // below on a heap-backed type.
     let path = write(
         "borrow.tuo",
         "fn peek(in x: Int) -> Int {\n    x\n}\n\nfn main() -> Int {\n    let v = 7;\n    peek(v)\n}\n",
+    );
+    let check = run(&["check", &path]);
+    assert!(check.status.success(), "the front end accepts: {check:?}");
+    for args in [
+        &["run", path.as_str()][..],
+        &["run", "--release", &path][..],
+    ] {
+        let output = run(args);
+        assert_eq!(
+            output.status.code(),
+            Some(7),
+            "`tuo {}` runs the borrow-mode program to the interpreter's value: {output:?}",
+            args.join(" ")
+        );
+    }
+}
+
+#[test]
+fn native_backends_still_refuse_the_unsupported_loudly() {
+    // Heap-owning types stay outside the native subset (`Str` itself is
+    // lowered since ADR-0006 Stage B): the program checks clean, and both
+    // backends refuse it loudly at classification time — naming the concrete
+    // type — instead of mis-compiling it.
+    let path = write(
+        "heap.tuo",
+        "fn keep(take s: String) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
     );
     let check = run(&["check", &path]);
     assert!(check.status.success(), "the front end accepts: {check:?}");
@@ -233,16 +262,16 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         let build = run(args);
         assert!(
             !build.status.success(),
-            "`tuo {}` must refuse borrow-mode parameters: {build:?}",
+            "`tuo {}` must refuse a heap-backed type: {build:?}",
             args.join(" ")
         );
         let stderr = String::from_utf8(build.stderr).expect("utf-8");
         assert!(
-            stderr.contains("borrow-mode parameter"),
-            "the refusal names the unsupported feature: {stderr}"
+            stderr.contains("`String` value") && stderr.contains("does not lower yet"),
+            "the refusal names the unsupported type: {stderr}"
         );
         assert!(
-            stderr.contains("reference interpreter"),
+            stderr.contains("remains the reference"),
             "the refusal points back to the interpreter: {stderr}"
         );
     }

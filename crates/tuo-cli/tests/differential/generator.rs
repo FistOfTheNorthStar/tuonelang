@@ -6,12 +6,16 @@
 //! subset the Cranelift backend lowers. This generator guarantees both **by
 //! construction** rather than by generate-and-filter — every program it emits
 //! type-checks and stays within integers, arithmetic, comparison, `if`/`else`,
-//! direct calls, and (ADR-0004 Stage 2) fixed-capacity `[Int; N]` arrays:
-//! literal and repeat construction, constant in-bounds indexing, and `for`
-//! folds — including a wide flat literal and the zero-length repeat form. It
-//! never emits a float, a string, a growable `Array[T]`, or anything else the
-//! backend refuses, so a divergence is always a real correctness finding and
-//! never a rejected program.
+//! direct calls (with `take` and borrow-mode `in` parameters, plus a dedicated
+//! `mut`-parameter mutator whose write-back the caller observes), float
+//! subexpressions folded back to `Int` through the saturating `as Int` cast
+//! (float arithmetic never traps, and the cast is total — NaN → 0), and
+//! (ADR-0004 Stage 2) fixed-capacity `[Int; N]` arrays: literal and repeat
+//! construction, constant in-bounds indexing, and `for` folds — including a
+//! wide flat literal and the zero-length repeat form. It never emits a string,
+//! a growable `Array[T]`, or anything else the backend refuses, so a
+//! divergence is always a real correctness finding and never a rejected
+//! program.
 //!
 //! # Determinism
 //!
@@ -115,7 +119,12 @@ pub fn program(seed: u64) -> String {
     let bounds = Bounds::small(&mut rng);
 
     let mut out = String::new();
-    // Helpers first, each able to call the ones before it (a DAG → terminates).
+    // A fixed `mut`-parameter mutator: callers bind a `var`, pass it as the
+    // `mut` argument, and read the written-back value — pinning the borrow
+    // write-back path on every program that uses the form (see `expr`).
+    writeln!(out, "fn bump(mut a: Int, take b: Int) {{ a = a + b; }}").expect("string write");
+
+    // Helpers next, each able to call the ones before it (a DAG → terminates).
     let mut callable: Vec<(String, u32)> = Vec::new();
     for index in 0..bounds.helpers {
         let name = format!("f{index}");
@@ -124,14 +133,23 @@ pub fn program(seed: u64) -> String {
             names: (0..arity).map(|p| format!("p{p}")).collect(),
             fresh: 0,
         };
+        // A borrow-mode `in` parameter reads exactly like a `take` one, so the
+        // body grammar is unchanged; the call sites exercise the by-pointer
+        // borrow ABI (the MIR lowering materializes a place for any argument
+        // expression). The mode is uniform per helper — mixing `take` and `in`
+        // in one signature could move and borrow the *same* caller variable in
+        // one call (an ownership error), which would break the generator's
+        // accepted-by-construction guarantee; all-`in` borrows of one variable
+        // are fine (any number of `in` may coexist).
+        let mode = if rng.below(3) == 0 { "in" } else { "take" };
         let params = scope
             .names
             .iter()
-            .map(|n| format!("take {n}: Int"))
+            .map(|n| format!("{mode} {n}: Int"))
             .collect::<Vec<_>>()
             .join(", ");
         let body = expr(&mut rng, &mut scope, &callable, bounds.max_depth);
-        // `params` already carries the `take` on each parameter.
+        // `params` already carries the mode on each parameter.
         writeln!(out, "fn {name}({params}) -> Int {{ {body} }}").expect("string write");
         callable.push((name, arity));
     }
@@ -152,11 +170,21 @@ fn expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32
     if depth == 0 {
         return leaf(rng, scope);
     }
-    match rng.below(7) {
+    match rng.below(9) {
         // Leaf: literal or an in-scope name.
         0 => leaf(rng, scope),
         // A fixed-array form (construct + index or construct + fold).
         6 => array_form(rng, scope, callable, depth),
+        // A float subexpression folded back to `Int` by the saturating cast.
+        7 => float_form(rng, scope, callable, depth),
+        // A `mut`-borrow round trip through the fixed `bump` mutator.
+        8 => {
+            let id = scope.fresh;
+            scope.fresh += 1;
+            let seed_value = expr(rng, scope, callable, depth - 1);
+            let step = expr(rng, scope, callable, depth - 1);
+            format!("{{ var m{id} = {seed_value}; bump(m{id}, {step}); m{id} }}")
+        }
         // Binary arithmetic (may trap; both engines must trap together).
         1 | 2 => {
             let op = ["+", "-", "*", "/", "%"][rng.below(5) as usize];
@@ -253,6 +281,58 @@ fn array_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], dept
                 .join(", ");
             format!("{{ let a{id}: [Int; {n}] = [{elements}]; a{id}[{k}] }}")
         }
+    }
+}
+
+/// An `Int`-typed float form: a `Float` (f64) subexpression folded back to
+/// `Int` through the saturating `as Int` cast. Float arithmetic never traps
+/// (IEEE 754: `x / 0.0` is an infinity or NaN) and the cast is total
+/// (truncate toward zero, saturate, NaN → 0), so every emitted form is
+/// well-defined on both engines by construction — including deliberately
+/// overflowing products and `0.0 / 0.0`.
+fn float_form(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+    let body = float_expr(rng, scope, callable, depth - 1);
+    format!("(({body}) as Int)")
+}
+
+/// A `Float`-typed expression at the given remaining `depth`: literals,
+/// arithmetic (including `%`, which lowers to `fmod`/`frem`), negation via
+/// `0.0 - x`, and `Int` subexpressions lifted with `as Float` (so integer
+/// arithmetic — with its trapping semantics, preserved identically on both
+/// engines — nests inside float math).
+fn float_expr(rng: &mut Rng, scope: &mut Scope, callable: &[(String, u32)], depth: u32) -> String {
+    if depth == 0 {
+        return float_leaf(rng);
+    }
+    match rng.below(5) {
+        0 => float_leaf(rng),
+        1 | 2 => {
+            let op = ["+", "-", "*", "/", "%"][rng.below(5) as usize];
+            let l = float_expr(rng, scope, callable, depth - 1);
+            let r = float_expr(rng, scope, callable, depth - 1);
+            format!("({l} {op} {r})")
+        }
+        3 => {
+            let inner = expr(rng, scope, callable, depth - 1);
+            format!("(({inner}) as Float)")
+        }
+        _ => {
+            let inner = float_expr(rng, scope, callable, depth - 1);
+            format!("(0.0 - {inner})")
+        }
+    }
+}
+
+/// A `Float` literal leaf, biased toward edge cases (zero, values with exact
+/// binary fractions, and a magnitude big enough to saturate `as Int`).
+fn float_leaf(rng: &mut Rng) -> String {
+    match rng.below(6) {
+        0 => "0.0".to_owned(),
+        1 => "1.5".to_owned(),
+        2 => "0.5".to_owned(),
+        3 => "1.0e19".to_owned(),
+        4 => format!("{}.25", rng.below(1000)),
+        _ => format!("{}.0", rng.below(64)),
     }
 }
 

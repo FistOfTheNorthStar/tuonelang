@@ -1,0 +1,8 @@
+struct Counter { n: Int, step: Int }
+fn tick(mut c: Counter) { c.n = c.n + c.step; }
+fn main() -> Int {
+    var c = Counter { n: 5, step: 4 };
+    tick(c);
+    tick(c);
+    c.n
+}

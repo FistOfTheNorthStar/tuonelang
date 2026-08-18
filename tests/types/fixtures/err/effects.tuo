@@ -1,0 +1,35 @@
+// The ADR-0006 effect rules: mistyped/misarity builtin calls are ordinary
+// type errors, and a spec whose closure reaches an effectful function —
+// directly, transitively, or via `std::rt::exit` — is `R0007`.
+
+fn emit(take fd: Int) -> Int {
+    std::rt::write(fd, "x")
+}
+
+fn indirect() -> Int {
+    emit(1)
+}
+
+fn quit() -> Int {
+    std::rt::exit(3)
+}
+
+fn wrong_types() -> Int {
+    std::rt::write("nope", 1)
+}
+
+fn wrong_arity(in s: Str) -> Int {
+    std::str::byte_at(s)
+}
+
+spec emit {
+    then emit(1) == 1;
+}
+
+spec "transitive" {
+    then indirect() == 1;
+}
+
+spec "via exit" {
+    then quit() == 3;
+}

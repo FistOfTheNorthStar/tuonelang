@@ -1,32 +1,44 @@
-//! The scalar ABI: how v0's register-held types map to LLVM integer types.
+//! The scalar ABI: how v0's register-held types map to LLVM scalar types.
 //!
 //! This mirrors the Cranelift backend's `abi` module exactly, so the two
 //! backends and the interpreter share one memory model for the scalar core.
-//! Every supported value is an LLVM integer of the type's exact width, held in
-//! a virtual register; the mapping is total on that subset and returns `None`
-//! for everything else (aggregates, arrays, strings, floats), which the caller
-//! turns into a [`CodegenError::unsupported`](tuo_codegen::CodegenError). The
-//! interpreter is the reference for the rejected cases.
+//! Every supported value is an LLVM integer of the type's exact width — or an
+//! IEEE-754 `float`/`double` — held in a virtual register; the mapping is
+//! total on that subset and returns `None` for everything else (aggregates,
+//! arrays, strings), which the caller turns into a
+//! [`CodegenError::unsupported`](tuo_codegen::CodegenError). The interpreter
+//! is the reference for the rejected cases.
 
 use inkwell::context::Context;
-use inkwell::types::IntType;
-use tuo_types::{IntKind, Ty};
+use inkwell::types::{BasicTypeEnum, FloatType, IntType};
+use tuo_types::{FloatKind, IntKind, Ty};
 
-/// The LLVM integer type a supported scalar `ty` lowers to, or `None` if `ty`
+/// The LLVM scalar type a supported scalar `ty` lowers to, or `None` if `ty`
 /// is outside the backend's v0 subset.
 ///
 /// `Bool` is an `i8` (0 or 1, matching the Cranelift backend and the runtime
-/// ABI), `Char` a 32-bit integer (a Unicode scalar value), and each integer
+/// ABI), `Char` a 32-bit integer (a Unicode scalar value), each integer
 /// kind its exact width (`Isize`/`Usize` are 64-bit, matching the interpreter's
-/// target-independent choice). `Unit` has no register representation — a
-/// function returning `()` is handled specially by the lowering, not here.
+/// target-independent choice), and each float kind its IEEE-754 type
+/// (`float`/`double`). `Unit` has no register representation — a function
+/// returning `()` is handled specially by the lowering, not here.
 #[must_use]
-pub(crate) fn scalar_type<'ctx>(ctx: &'ctx Context, ty: &Ty) -> Option<IntType<'ctx>> {
+pub(crate) fn scalar_type<'ctx>(ctx: &'ctx Context, ty: &Ty) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
-        Ty::Bool => Some(ctx.i8_type()),
-        Ty::Char => Some(ctx.i32_type()),
-        Ty::Int(kind) => Some(int_type(ctx, *kind)),
+        Ty::Bool => Some(ctx.i8_type().into()),
+        Ty::Char => Some(ctx.i32_type().into()),
+        Ty::Int(kind) => Some(int_type(ctx, *kind).into()),
+        Ty::Float(kind) => Some(float_type(ctx, *kind).into()),
         _ => None,
+    }
+}
+
+/// The LLVM floating-point type of a [`FloatKind`].
+#[must_use]
+pub(crate) fn float_type(ctx: &Context, kind: FloatKind) -> FloatType<'_> {
+    match kind {
+        FloatKind::F32 => ctx.f32_type(),
+        FloatKind::F64 => ctx.f64_type(),
     }
 }
 
@@ -80,20 +92,28 @@ pub(crate) fn entry_returns_int(ty: &Ty) -> Option<IntKind> {
 mod tests {
     use super::{int_width_bits, is_signed, scalar_type};
     use inkwell::context::Context;
-    use tuo_types::{IntKind, Ty};
+    use tuo_types::{FloatKind, IntKind, Ty};
 
     #[test]
     fn scalar_types_map_to_their_register_widths() {
         let ctx = Context::create();
-        assert_eq!(scalar_type(&ctx, &Ty::Bool), Some(ctx.i8_type()));
-        assert_eq!(scalar_type(&ctx, &Ty::Char), Some(ctx.i32_type()));
+        assert_eq!(scalar_type(&ctx, &Ty::Bool), Some(ctx.i8_type().into()));
+        assert_eq!(scalar_type(&ctx, &Ty::Char), Some(ctx.i32_type().into()));
         assert_eq!(
             scalar_type(&ctx, &Ty::Int(IntKind::I32)),
-            Some(ctx.i32_type())
+            Some(ctx.i32_type().into())
         );
         assert_eq!(
             scalar_type(&ctx, &Ty::Int(IntKind::Usize)),
-            Some(ctx.i64_type())
+            Some(ctx.i64_type().into())
+        );
+        assert_eq!(
+            scalar_type(&ctx, &Ty::Float(FloatKind::F32)),
+            Some(ctx.f32_type().into())
+        );
+        assert_eq!(
+            scalar_type(&ctx, &Ty::Float(FloatKind::F64)),
+            Some(ctx.f64_type().into())
         );
         // Outside the subset → no register mapping (caller reports unsupported).
         assert_eq!(scalar_type(&ctx, &Ty::String), None);

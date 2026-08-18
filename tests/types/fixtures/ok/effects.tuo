@@ -1,0 +1,44 @@
+// The ADR-0006 Stage A effect boundary and `Str` builtins.
+//
+// The `std::rt` effect builtins and `std::str` string builtins resolve with
+// no stdlib loaded and type-check as ordinary calls. Effectful code is
+// accepted anywhere except a spec's closure: `main` and helpers may perform
+// effects freely, and a spec may use the *pure* `std::str` operations.
+
+fn shout(take fd: Int) -> Int {
+    std::rt::write(fd, "hello")
+}
+
+fn relay(take fd: Int) -> Int {
+    let byte = std::rt::read_byte(fd);
+    if byte < 0 {
+        std::rt::exit(1);
+    }
+    byte
+}
+
+fn main() -> Int {
+    let written = shout(1);
+    if written < 0 {
+        return std::rt::exit(2);
+    }
+    relay(0)
+}
+
+fn head_byte(in s: Str) -> Int {
+    if std::str::len(s) == 0 {
+        -1
+    } else {
+        std::str::byte_at(s, 0)
+    }
+}
+
+fn middle(in s: Str) -> Str {
+    std::str::slice(s, 1, 3)
+}
+
+spec head_byte {
+    then head_byte("abc") == 97;
+    then std::str::len("hello") == 5;
+    then middle("abcd") == "bc";
+}

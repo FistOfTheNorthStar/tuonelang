@@ -7,9 +7,13 @@
 //! networking. tuonelang v0 compiles and runs the **scalar, control-flow
 //! core** — `Int` arithmetic, comparison, `if`/`else`, function calls, and
 //! recursion — plus, since ADR-0004 Stage 2, the **fixed-capacity array**
-//! `[T; N]` (inline, stack-allocated), which makes the collections workload
-//! measurable. It still has **no heap, no string values, and no effect
-//! boundary**, so three of the eight workloads have no program to measure.
+//! `[T; N]` (inline, stack-allocated), which made the collections workload
+//! measurable, and, since ADR-0006, the **borrowed `Str`** (literals,
+//! equality, `std::str::{len, byte_at, slice}`), which makes the
+//! string-processing workload measurable. It still has **no heap** (no owned
+//! `String`, no growable `Array[T]` — the allocator ADR) and **no socket
+//! effect** (ADR-0006 landed descriptor I/O and process exit only), so two of
+//! the eight workloads have no program to measure.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -98,11 +102,12 @@ impl RuntimeWorkload {
 /// exact reason it cannot run yet).
 ///
 /// This is the single source of truth for what the runtime lab can and cannot
-/// measure. When a feature lands (a heap, strings, an effect boundary), the
-/// corresponding entry moves from [`Support::Unsupported`] to
-/// [`Support::Supported`] with a program, and the lab measures it — no other
-/// change required. The collections entry made exactly that move when
-/// ADR-0004 Stage 2 landed the fixed-capacity array.
+/// measure. When a feature lands (a heap, a socket effect), the corresponding
+/// entry moves from [`Support::Unsupported`] to [`Support::Supported`] with a
+/// program, and the lab measures it — no other change required. The
+/// collections entry made exactly that move when ADR-0004 Stage 2 landed the
+/// fixed-capacity array, and the string-processing entry when ADR-0006 landed
+/// the borrowed `Str` core.
 #[must_use]
 pub fn workloads() -> Vec<RuntimeWorkload> {
     vec![
@@ -146,28 +151,34 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // 200 rounds × (scan 31 + probes 10) = 8200; exit byte 8200 & 0xff = 8.
             8,
         ),
+        RuntimeWorkload::supported(
+            "string-processing",
+            "byte-level tokenizing, scanning, and slice comparison over the borrowed \
+             `Str` (ADR-0006): space/slash/digit counts and method/version slice checks \
+             over a fixed request-log line",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/string-processing.tuo"),
+            // 200 rounds × (4 spaces + 3 slashes + 11 digits + GET + HTTP/1.1) = 4000;
+            // observable exit byte = 4000 & 0xff = 160.
+            160,
+        ),
         // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "allocation",
             "heap allocation and deallocation throughput",
             "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native \
              code: the runtime allocator seam exists in the ABI spec but no allocating \
-             construct is compiled yet (the fixed `[T; N]` is inline and allocates \
-             nothing). No program can exercise allocation.",
-        ),
-        RuntimeWorkload::unsupported(
-            "string-processing",
-            "building and scanning string data",
-            "v0 has no runtime String value: string literals exist in the grammar but \
-             no String operations are lowered to native code. No program can exercise \
-             string processing.",
+             construct is compiled yet (the fixed `[T; N]` is inline and a `Str` is a \
+             borrowed view of static data; both allocate nothing). Awaits the allocator \
+             ADR. No program can exercise allocation.",
         ),
         RuntimeWorkload::unsupported(
             "networking",
             "a basic socket round-trip",
-            "v0 has no effect boundary (no FFI/syscalls); std::io/std::process are \
-             contract-tier only. No program can perform I/O, so networking cannot be \
-             measured.",
+            "ADR-0006's effect seam covers already-open descriptors only \
+             (std::rt::write/read_byte) plus process exit; no socket-open effect \
+             primitive exists (no socket/bind/listen/accept/connect), so no program \
+             can create a connection (ADR-0006, amendment 2). Awaits ADR-0007 or a \
+             successor effect ADR.",
         ),
     ]
 }
@@ -272,7 +283,8 @@ mod tests {
             .map(|w| w.label)
             .collect();
         // Precisely the four scalar-core workloads plus the fixed-array
-        // collections workload (ADR-0004 Stage 2), and no more.
+        // collections workload (ADR-0004 Stage 2) and the borrowed-`Str`
+        // string-processing workload (ADR-0006), and no more.
         assert_eq!(
             supported,
             vec![
@@ -281,6 +293,7 @@ mod tests {
                 "function-calls".to_string(),
                 "recursion".to_string(),
                 "collections".to_string(),
+                "string-processing".to_string(),
             ]
         );
     }
@@ -301,7 +314,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 5, "only the five supported workloads run");
+        assert_eq!(results.len(), 6, "only the six supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

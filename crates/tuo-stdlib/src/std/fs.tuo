@@ -4,9 +4,11 @@
 //   over it, plus pure path helpers that are just string reasoning.
 //
 //   Contract tier — the operations that actually touch the disk (`read`,
-//   `write`, `exists`, `remove`). Touching the disk is an effect; the v0 core
-//   performs no effects, so these are exact signatures with documented
-//   contracts and no executable spec, marked `CONTRACT:`.
+//   `write`, `exists`, `remove`). ADR-0006's effect seam covers only
+//   already-open descriptors (`std::rt::write`/`read_byte`) and process exit;
+//   `std::rt` exposes no file-open/stat/remove primitive, so these stay exact
+//   signatures with documented contracts and no executable spec, marked
+//   `CONTRACT:`.
 //
 // One file-error type; one obvious open/read/write shape.
 
@@ -95,8 +97,8 @@ pub fn is_empty_path(in path: Str) -> Bool {
 // Disk operations — the CONTRACT tier.
 //
 // Each returns `Result[T, FsError]`. The bodies are type-satisfying
-// placeholders; the real effect lands with the native boundary and these
-// signatures will not change.
+// placeholders; the real implementations land when `std::rt` gains a
+// file-open effect primitive, and these signatures will not change.
 // ----------------------------------------------------------------------------
 
 /// CONTRACT (not executable in v0): read the whole file at `path` as a string.

@@ -109,6 +109,15 @@ fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
                 args.join(", ")
             )
         }
+        Statement::Effect { op, args, dest } => {
+            let args: Vec<String> = args.iter().map(render_operand).collect();
+            format!(
+                "{} = effect {}({})",
+                render_place(dest),
+                op.name(),
+                args.join(", ")
+            )
+        }
         Statement::Drop { place } => format!("drop {}", render_place(place)),
     }
 }
@@ -180,6 +189,10 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
         }
         Rvalue::Discriminant(place) => format!("discriminant({})", render_place(place)),
         Rvalue::Len(place) => format!("len({})", render_place(place)),
+        Rvalue::StrOp { op, args } => {
+            let args: Vec<String> = args.iter().map(render_operand).collect();
+            format!("str_{}({})", op.name(), args.join(", "))
+        }
     }
 }
 

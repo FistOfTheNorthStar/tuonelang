@@ -75,8 +75,9 @@ fn remove_dead_stores(function: &mut Function) -> bool {
                     && !rvalue_can_trap(rvalue);
                 !dead
             }
-            // Calls and drops have effects beyond their destination.
-            Statement::Call { .. } | Statement::Drop { .. } => true,
+            // Calls, effects, and drops have effects beyond their
+            // destination (an `Effect` performs host I/O — ADR-0006).
+            Statement::Call { .. } | Statement::Effect { .. } | Statement::Drop { .. } => true,
         });
         changed |= block.statements.len() != before;
     }
@@ -145,6 +146,10 @@ fn rvalue_can_trap(rvalue: &Rvalue) -> bool {
         // Integer `Neg` traps on the minimum; bool `Not` cannot. Without the
         // operand type here we conservatively treat `Neg` as trapping.
         Rvalue::Unary { op, .. } => matches!(op, UnOp::Neg),
+        // `ByteAt`/`Slice` trap on an out-of-range argument (ADR-0006);
+        // conservatively treat every string op as trapping so the abort
+        // survives even when its result is unread.
+        Rvalue::StrOp { .. } => true,
         // Casts never trap; `Use`/`Aggregate`/`Discriminant`/`Len` are pure.
         Rvalue::Use(_)
         | Rvalue::Cast { .. }
@@ -176,6 +181,12 @@ fn read_locals(function: &Function) -> BTreeSet<u32> {
                         read_arg(arg, &mut note);
                     }
                 }
+                Statement::Effect { args, dest, .. } => {
+                    read_place_roots(dest, /*is_write=*/ true, &mut note);
+                    for operand in args {
+                        read_operand(operand, &mut note);
+                    }
+                }
                 Statement::Drop { place } => read_place_roots(place, false, &mut note),
             }
         }
@@ -197,7 +208,7 @@ fn referenced_locals(function: &Function) -> BTreeSet<u32> {
                 Statement::Assign { place, .. } => {
                     referenced.insert(place.local.0);
                 }
-                Statement::Call { dest, .. } => {
+                Statement::Call { dest, .. } | Statement::Effect { dest, .. } => {
                     referenced.insert(dest.local.0);
                 }
                 Statement::Drop { .. } => {}
@@ -219,6 +230,11 @@ fn read_rvalue(rvalue: &Rvalue, note: &mut impl FnMut(LocalId)) {
         Rvalue::Aggregate { fields, .. } => {
             for field in fields {
                 read_operand(field, note);
+            }
+        }
+        Rvalue::StrOp { args, .. } => {
+            for operand in args {
+                read_operand(operand, note);
             }
         }
         Rvalue::Discriminant(place) | Rvalue::Len(place) => read_place_roots(place, false, note),
@@ -301,6 +317,11 @@ fn remap_rvalue(rvalue: &mut Rvalue, remap: &[Option<u32>]) {
                 remap_operand(field, remap);
             }
         }
+        Rvalue::StrOp { args, .. } => {
+            for operand in args {
+                remap_operand(operand, remap);
+            }
+        }
         Rvalue::Discriminant(place) | Rvalue::Len(place) => remap_place(place, remap),
     }
 }
@@ -318,6 +339,12 @@ fn remap_statement(statement: &mut Statement, remap: &[Option<u32>]) {
                     Arg::Value(operand) => remap_operand(operand, remap),
                     Arg::Borrow(place) | Arg::BorrowMut(place) => remap_place(place, remap),
                 }
+            }
+        }
+        Statement::Effect { args, dest, .. } => {
+            remap_place(dest, remap);
+            for operand in args {
+                remap_operand(operand, remap);
             }
         }
         Statement::Drop { place } => remap_place(place, remap),

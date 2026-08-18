@@ -221,6 +221,45 @@ fn stage2_fixed_arrays_agree_across_all_three_engines() {
     }
 }
 
+/// Native float support: IEEE-754 arithmetic (never trapping), `%` with C
+/// `fmod` semantics (Cranelift calls libm's `fmod`/`fmodf`, LLVM emits
+/// `frem`), Rust-semantics NaN comparisons, saturating float→int casts
+/// (NaN → 0, via `fcvt_to_*_sat` and the `llvm.fpto*i.sat` intrinsics),
+/// genuine f32 arithmetic, and floats inside aggregates. All three engines
+/// must agree bit for bit on the observable exit.
+#[test]
+fn floats_agree_across_all_three_engines() {
+    for name in [
+        "flt_arith.tuo",    // f64 + - * / and unary negation
+        "flt_rem.tuo",      // f64 and f32 remainder (fmod/fmodf vs frem)
+        "flt_compare.tuo",  // all six comparisons, including NaN cases
+        "flt_cast_sat.tuo", // float→int saturation high/low, NaN → 0
+        "flt_f32.tuo",      // F32 arithmetic + F32↔F64 casts
+        "flt_struct.tuo",   // a Float field in a struct, passed `take`
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// Borrow-mode (`in`/`mut`) call arguments: both backends pass the address of
+/// the caller's place and the callee works through the pointer directly (no
+/// copy-in, no copy-back) — observably identical to the interpreter's
+/// copy-in/copy-back because the borrow checker forbids aliasing and the
+/// borrow lasts only for the call.
+#[test]
+fn borrow_mode_calls_agree_across_all_three_engines() {
+    for name in [
+        "brw_scalar_in.tuo",  // scalar read through `in`
+        "brw_scalar_mut.tuo", // scalar write-back observed through `mut`
+        "brw_agg_in.tuo",     // struct fields read through `in` (twice — no move)
+        "brw_agg_mut.tuo",    // struct field written through `mut`
+        "brw_arr_in.tuo",     // `[Int; 4]` borrowed `in`, folded by `for`
+        "brw_forward.tuo",    // an `in` parameter forwarded as an `in` argument
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// An out-of-bounds index traps identically on all three engines: the
 /// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
 /// runtime's fixed trap status (the bounds `Assert` is lowered before the
@@ -230,14 +269,35 @@ fn a_fixed_array_out_of_bounds_trap_agrees_across_all_three_engines() {
     assert_three_way_agreement("arr_trap_oob.tuo");
 }
 
+/// ADR-0006 Stage B strings: the `Str` fat pointer over static data, the
+/// `std::str` byte operations, byte-wise equality via `memcmp`, and `Str`
+/// crossing every call boundary shape. Both backends must agree with the
+/// interpreter's byte semantics (UTF-8 is bytes: `len("héllo") == 6`) — and
+/// with each other — including the deterministic `IndexOutOfBounds` trap on
+/// an out-of-range `byte_at`.
+#[test]
+fn strings_agree_across_all_three_engines() {
+    for name in [
+        "str_len.tuo",        // multi-byte literal length (bytes, not chars)
+        "str_eq.tuo",         // equal / unequal / empty-string comparisons
+        "str_slice_scan.tuo", // slice + byte_at folded over a while loop
+        "str_param.tuo",      // Str take/in params and an sret Str return
+        "str_in_struct.tuo",  // a Str field inside a struct, passed take
+        "str_trap_oob.tuo",   // byte_at out of bounds traps on all three
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
-    // A program still outside the native subset (an aggregate carrying a
-    // `String`/`Str`, which Stage 1 does not lower) must be *refused* by both
-    // backends with a failure exit and an explanatory message, never silently
-    // mis-compiled. The interpreter remains the reference and can still run it.
-    // This asserts the two backends agree on the *boundary* of what they lower,
-    // not just on results inside it.
+    // A program still outside the native subset (a function with an
+    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
+    // lowered since ADR-0006 Stage B) must be *refused* by both backends with
+    // a failure exit and an explanatory message, never silently mis-compiled.
+    // The interpreter remains the reference and can still run it. This asserts
+    // the two backends agree on the *boundary* of what they lower, not just on
+    // results inside it.
     let path = fixture("unsupported_string.tuo");
     for release in [false, true] {
         let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));

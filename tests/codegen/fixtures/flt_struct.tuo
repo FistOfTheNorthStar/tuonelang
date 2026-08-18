@@ -1,0 +1,7 @@
+struct Sample { w: Float, id: Int }
+fn weight(take s: Sample) -> Float { s.w }
+fn main() -> Int {
+    let s = Sample { w: 12.5, id: 3 };
+    let w = weight(s);
+    (w * 2.0) as Int
+}

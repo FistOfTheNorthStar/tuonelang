@@ -11,7 +11,7 @@
 //! dispatch), `Self` types, and interface bounds — those arrive with the
 //! trait system, not the core type system.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use tuo_ast::{
     ArrayLiteralExpr, ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, Item,
@@ -19,7 +19,7 @@ use tuo_ast::{
 };
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 use tuo_lexer::TokenKind;
-use tuo_resolve::{Resolution, SymbolId, SymbolKind};
+use tuo_resolve::{Builtin, Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
 
 use crate::TypeckResult;
@@ -45,6 +45,16 @@ use crate::ty::{FloatKind, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, Ty, WrapperKind};
 ///   or over [`MAX_FIXED_ARRAY_LEN`]).
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
+}
+
+/// The spec-purity diagnostic (ADR-0006 Stage A): `R0007`, a spec whose
+/// executed closure reaches an effectful function. It lives in the `Rxxxx`
+/// namespace because it belongs to the spec-semantics rule family `R0006`
+/// opened (what a `spec` may name or reach), even though the effect
+/// discipline it depends on is computed here in the type-checking stage —
+/// see `specification/static-semantics.md` §2.3 and §3.6.
+fn spec_purity_code() -> DiagnosticCode {
+    DiagnosticCode::new(Namespace::Resolution, 7)
 }
 
 #[derive(Clone)]
@@ -87,6 +97,11 @@ pub(crate) struct Checker<'a> {
     diagnostics: Vec<Diagnostic>,
     symbol_types: HashMap<SymbolId, Ty>,
     expr_types: HashMap<Span, Ty>,
+    /// Call-graph edges for the purity computation (ADR-0006): enclosing
+    /// function → every function it calls *or references as a value*
+    /// (conservative — a reference taints like a call). `BTreeMap`/`BTreeSet`
+    /// keep the fixed point and the spec gate deterministic.
+    call_edges: BTreeMap<SymbolId, BTreeSet<SymbolId>>,
     // Per-body state.
     icx: InferCtx,
     /// Types of the current body's expressions, recorded raw (inference
@@ -96,6 +111,10 @@ pub(crate) struct Checker<'a> {
     ret: Ty,
     frames: Vec<Frame>,
     fallback: Span,
+    /// The module-level function whose body is being checked (`None` in
+    /// consts, specs, and impl bodies) — the source node of recorded
+    /// [`Checker::call_edges`].
+    current_fn: Option<SymbolId>,
 }
 
 /// Type-check every body in `files`, using `resolution`'s stable symbols.
@@ -131,7 +150,10 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         ret: Ty::Unit,
         frames: Vec::new(),
         fallback,
+        current_fn: None,
+        call_edges: BTreeMap::new(),
     };
+    checker.install_builtin_signatures();
     for ast in files {
         checker.collect_headers(*ast);
     }
@@ -141,6 +163,8 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     for ast in files {
         checker.check_file(*ast);
     }
+    let effectful = checker.compute_effectful();
+    checker.check_spec_purity(&effectful);
     let struct_shapes = checker
         .structs
         .iter()
@@ -173,6 +197,31 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         expr_types: checker.expr_types,
         struct_shapes,
         enum_shapes,
+        effectful,
+    }
+}
+
+/// The fixed signature `(params, ret)` of a builtin function
+/// (`specification/static-semantics.md` §3.6). `Int` is `I64`.
+fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
+    match builtin {
+        Builtin::RtWrite => (vec![Ty::int(), Ty::Str], Ty::int()),
+        Builtin::RtReadByte | Builtin::RtExit => (vec![Ty::int()], Ty::int()),
+        Builtin::StrLen => (vec![Ty::Str], Ty::int()),
+        Builtin::StrByteAt => (vec![Ty::Str, Ty::int()], Ty::int()),
+        Builtin::StrSlice => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::Str),
+    }
+}
+
+/// The fully qualified display name of a module-level symbol
+/// (`std::rt::write`; a root-module symbol is just its name).
+fn qualified_name(resolution: &Resolution, symbol: SymbolId) -> String {
+    let data = resolution.symbol(symbol);
+    let path = &resolution.module(data.module).path;
+    if path.is_empty() {
+        data.name.clone()
+    } else {
+        format!("{}::{}", path.join("::"), data.name)
     }
 }
 
@@ -247,6 +296,142 @@ impl<'a> Checker<'a> {
 
     fn fresh(&mut self, span: Span) -> Ty {
         self.icx.fresh(VarClass::General, span)
+    }
+
+    // ------------------------------------------------------------------
+    // Builtin functions and the effect system (ADR-0006 Stage A)
+    // ------------------------------------------------------------------
+
+    /// Seed the fixed signatures of the six builtin functions the resolver
+    /// installed (`std::rt`/`std::str`, `specification/static-semantics.md`
+    /// §3.6), so calls to them are checked exactly like calls to declared
+    /// functions (arity `T0002`, argument types `T0001`).
+    fn install_builtin_signatures(&mut self) {
+        for (builtin, symbol) in self.resolution.builtins() {
+            let (params, ret) = builtin_signature(builtin);
+            self.symbol_types.insert(
+                symbol,
+                Ty::Fn(Box::new(FnTy {
+                    params: params.clone(),
+                    ret: ret.clone(),
+                })),
+            );
+            self.fns.insert(
+                symbol,
+                FnSig {
+                    type_params: Vec::new(),
+                    params,
+                    ret,
+                },
+            );
+        }
+    }
+
+    /// Record a call-graph edge from the enclosing function to `callee`,
+    /// for the transitive purity computation. Called for direct calls and
+    /// for value references to a function alike — a reference taints
+    /// conservatively, which can never wrongly accept a spec.
+    fn record_call_edge(&mut self, callee: SymbolId) {
+        if let Some(caller) = self.current_fn {
+            self.call_edges.entry(caller).or_default().insert(callee);
+        }
+    }
+
+    /// Compute the set of **effectful** functions: the `std::rt` effect
+    /// builtins plus every function that transitively reaches one through
+    /// [`Self::call_edges`] — a fixed point over the call graph (cycles
+    /// converge: a recursive cluster is effectful iff some member reaches
+    /// an effect).
+    fn compute_effectful(&self) -> BTreeSet<SymbolId> {
+        let mut effectful: BTreeSet<SymbolId> = self
+            .resolution
+            .builtins()
+            .filter(|(builtin, _)| builtin.is_effect())
+            .map(|(_, symbol)| symbol)
+            .collect();
+        loop {
+            let mut changed = false;
+            for (&caller, callees) in &self.call_edges {
+                if !effectful.contains(&caller)
+                    && callees.iter().any(|callee| effectful.contains(callee))
+                {
+                    effectful.insert(caller);
+                    changed = true;
+                }
+            }
+            if !changed {
+                return effectful;
+            }
+        }
+    }
+
+    /// The spec-purity gate (`R0007`, ADR-0006): a spec whose executed
+    /// closure — its resolved dependencies transitively closed over the
+    /// call graph — includes an effectful function is a front-end error,
+    /// so `tuo check`/`spec`/`verify` refuse it before the interpreter is
+    /// ever involved. `main` and ordinary functions may be effectful; only
+    /// specs are restricted.
+    fn check_spec_purity(&mut self, effectful: &BTreeSet<SymbolId>) {
+        let mut specs: Vec<(Span, SymbolId)> = self.resolution.spec_symbols().collect();
+        specs.sort_by_key(|(span, _)| (span.source(), span.range().start()));
+        for (block_span, spec) in specs {
+            let Some(reached) = self.first_effectful_reached(spec, effectful) else {
+                continue;
+            };
+            let spec_name = self.resolution.symbol(spec).name.clone();
+            let target = qualified_name(self.resolution, reached);
+            let span = self
+                .resolution
+                .symbol(spec)
+                .declaration
+                .unwrap_or(block_span);
+            let mut diagnostic = Diagnostic::error(
+                spec_purity_code(),
+                format!(
+                    "spec `{spec_name}` reaches the effectful function `{target}`; specs \
+                     execute only the pure core in the deterministic sandbox"
+                ),
+                span,
+            )
+            .with_primary_label("this spec's executed closure performs an effect")
+            .with_help(
+                "effects (`std::rt::write`/`read_byte`/`exit`) may run in `main` and \
+                 ordinary functions, never in a spec",
+            )
+            .with_actual(StructuredValue::Name(target));
+            if let Some(declaration) = self.resolution.symbol(reached).declaration {
+                diagnostic = diagnostic
+                    .with_secondary_label(declaration, "effectful function declared here");
+            }
+            self.push(diagnostic);
+        }
+    }
+
+    /// Breadth-first search from `spec`'s resolved dependencies through the
+    /// call graph for the first effectful function, in deterministic
+    /// (first-use, then symbol-order) order.
+    fn first_effectful_reached(
+        &self,
+        spec: SymbolId,
+        effectful: &BTreeSet<SymbolId>,
+    ) -> Option<SymbolId> {
+        let mut queue: Vec<SymbolId> = self.resolution.dependencies_of(spec).to_vec();
+        let mut seen: BTreeSet<SymbolId> = queue.iter().copied().collect();
+        let mut cursor = 0;
+        while let Some(&symbol) = queue.get(cursor) {
+            cursor += 1;
+            if effectful.contains(&symbol) {
+                return Some(symbol);
+            }
+            if let Some(callees) = self.call_edges.get(&symbol) {
+                for &callee in callees {
+                    if seen.insert(callee) {
+                        queue.push(callee);
+                    }
+                }
+            }
+        }
+        None
     }
 
     // ------------------------------------------------------------------
@@ -667,6 +852,7 @@ impl<'a> Checker<'a> {
         self.ret = ret;
         self.frames = Vec::new();
         self.fallback = fallback;
+        self.current_fn = None;
     }
 
     /// Default remaining literal variables, report unsolved ones, and
@@ -711,6 +897,13 @@ impl<'a> Checker<'a> {
                 .map_or(Ty::Unit, |ty| self.lower_type(ty)),
         };
         self.begin_body(ret.clone(), fallback);
+        // The purity call graph records edges out of module-level functions
+        // only (impl bodies have no module-callable symbol until the trait
+        // system lands; consts and specs are handled through the resolver's
+        // spec dependencies).
+        self.current_fn = self
+            .declared_at(decl.name_ref())
+            .filter(|symbol| self.resolution.symbol(*symbol).kind == SymbolKind::Function);
         for (index, param) in decl.params().enumerate() {
             let ty = if param.is_receiver() {
                 self_ty.clone().unwrap_or(Ty::Error)
@@ -1889,6 +2082,7 @@ impl<'a> Checker<'a> {
                 .cloned()
                 .unwrap_or(Ty::Error),
             SymbolKind::Function => {
+                self.record_call_edge(symbol);
                 let (params, ret) = self.instantiate_fn(symbol, given_args, span);
                 Ty::Fn(Box::new(FnTy { params, ret }))
             }
@@ -1969,6 +2163,7 @@ impl<'a> Checker<'a> {
         if let Some(Expr::Path(path)) = call.callee() {
             if let Some(symbol) = self.symbol_at(path.segment_names().last()) {
                 if self.resolution.symbol(symbol).kind == SymbolKind::Function {
+                    self.record_call_edge(symbol);
                     let given_args: Option<Vec<Ty>> = path
                         .turbofish()
                         .map(|list| list.types().map(|ty| self.lower_type(ty)).collect());

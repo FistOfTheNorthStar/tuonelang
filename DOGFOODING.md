@@ -25,35 +25,42 @@ so they cannot rot.
 
 ## The five projects
 
-Prompt 39 asks for five kinds of program. tuonelang v0 runs only the **scalar,
-control-flow core** — `Int` arithmetic, comparison, `if`/`else`, function calls,
-and recursion — with no strings, no heap, no collections, no I/O, and no
-concurrency. Three of the five kinds fit inside that core and are **fully
-runnable**; two (an HTTP service and a concurrent worker) cannot run in v0, and
-the prompt itself hedges the HTTP service with *"when networking support
-exists."* For those two, the honest dogfooding move is to build the **pure
-decision core** that v0 *can* run (routing/status logic; scheduling arithmetic)
-and mark the effectful shell as a documented **contract tier**, mirroring exactly
-how `tdg-stdlib` separates its executable tier from its `CONTRACT:` tier. Nothing
-pretends to do what the language cannot.
+Prompt 39 asks for five kinds of program. At the time of the exercise,
+tuonelang v0 ran only the **scalar, control-flow core** — `Int` arithmetic,
+comparison, `if`/`else`, function calls, and recursion — with no strings, no
+heap, no collections, no I/O, and no concurrency. Three of the five kinds fit
+inside that core and were **fully runnable**; two (an HTTP service and a
+concurrent worker) could not run in v0, and the prompt itself hedges the HTTP
+service with *"when networking support exists."* For those two, the honest
+dogfooding move was to build the **pure decision core** that v0 *can* run
+(routing/status logic; scheduling arithmetic) and mark the effectful shell as a
+documented **contract tier**, mirroring exactly how `tdg-stdlib` separates its
+executable tier from its `CONTRACT:` tier. Nothing pretends to do what the
+language cannot. (The ADRs this exercise opened have since moved the boundary:
+ADR-0004 landed aggregates, and ADR-0006 landed `Str` and the effect boundary —
+the table below reflects the examples as they stand today, with cli-stats
+printing its report and http-service parsing and printing a request/response
+line.)
 
 | # | Project | Directory | v0 status | `main` exit | Specs |
 |---|---------|-----------|-----------|:-----------:|:-----:|
-| 1 | Command-line application | [`examples/cli-stats/`](examples/cli-stats/) | **runs natively** | 18 | 8 |
+| 1 | Command-line application | [`examples/cli-stats/`](examples/cli-stats/) | **runs natively**, prints its report | 18 | 12 |
 | 2 | JSON/data-processing | [`examples/data-pipeline/`](examples/data-pipeline/) | **runs natively** | 144 | 6 |
 | 3 | Medium multi-package project | [`examples/workspace/`](examples/workspace/) | **builds natively** (3-package graph) | 26 | 14 |
-| 4 | HTTP service *(when networking exists)* | [`examples/http-service/`](examples/http-service/) | routing core runs; I/O is contract-tier | 6 | 5 |
+| 4 | HTTP service *(when networking exists)* | [`examples/http-service/`](examples/http-service/) | **runs natively**: parses + prints; sockets are contract-tier | 200 | 12 |
 | 5 | Concurrent worker | [`examples/concurrent-worker/`](examples/concurrent-worker/) | scheduling core runs; execution is contract-tier | 15 | 8 |
 
 **1 — cli-stats.** A descriptive-statistics tool: sum, min/max, range, floored
 mean, a scaled dispersion measure, and a bounded integer square root, over a
 fixed seven-observation dataset. Real reductions, all recursive or folded, all
-spec-pinned. Reproduce:
+spec-pinned. Since ADR-0006 it prints its four-line report (`count 7` … `report 18`)
+through `std::io::println`, consuming the stdlib's `std::io` module as input
+(`src/std_io.tuo`, pinned verbatim against the catalog). Reproduce:
 
 ```console
-$ tuo check examples/cli-stats/src/main.tuo      # exit 0
-$ tuo test  --manifest examples/cli-stats        # 8 passed, 0 failed
-$ tuo run   examples/cli-stats/src/main.tuo ; echo $?   # 18
+$ tuo check examples/cli-stats/src/main.tuo examples/cli-stats/src/std_io.tuo  # exit 0
+$ tuo test  --manifest examples/cli-stats        # 12 passed, 0 failed
+$ tuo run   examples/cli-stats/src/main.tuo examples/cli-stats/src/std_io.tuo ; echo $?   # report + 18
 ```
 
 **2 — data-pipeline.** The essence of a JSON/record processor: records are
@@ -77,8 +84,12 @@ $ tuo build --manifest examples/workspace/app -o /tmp/app && /tmp/app ; echo $? 
 
 **4 — http-service.** The routing/status core of a web service: a `(method, path)
 → status` decision with correct precedence (404 before 405, 201 on create). This
-is the real decision logic of any server, and it runs. Sockets, request-line
-parsing, and response writing are `CONTRACT:` comments only — see finding D-3.
+is the real decision logic of any server, and it runs. At the time of the
+exercise, sockets, request-line parsing, and response writing were `CONTRACT:`
+comments only — see finding D-3. Since ADR-0006 landed, request-line parsing
+(pure `std::str` byte scans, spec-checked) and response writing (a thin
+`std::rt::write` shell) are runnable code with a byte-asserted stdout; only
+`serve` (socket setup) remains contract-tier, pending a socket effect.
 
 **5 — concurrent-worker.** The scheduling model of a worker pool: round-robin
 partition of eight uneven tasks across three workers, per-worker load, the
@@ -217,26 +228,34 @@ Dogfooding re-derived several stdlib functions by hand because the shipped
   type to be generic over** (D-1/D-2). The data-pipeline's fused
   `filter+map+reduce` had to be written as a bespoke recursion.
 - The effectful entry points a CLI/HTTP/worker actually needs — `println`,
-  `read_line`, `now`, `exit`, `lock` — are all **contract-tier** (documented
-  signatures, no runnable body) because there is no effect boundary (→ **D-3 /
-  ADR-0006**). This is honest today but is the single biggest blocker to any of
-  these five programs becoming a *deployable* application.
+  `read_line`, `now`, `exit`, `lock` — were all **contract-tier** (documented
+  signatures, no runnable body) because there was no effect boundary (→ **D-3 /
+  ADR-0006**), the single biggest blocker to any of these five programs
+  becoming a *deployable* application. ADR-0006 has since landed: `println`,
+  `print`, and `exit` are now real, natively-running implementations over the
+  `std::rt` effect primitives (the stdlib's `EFFECT:` tier), while
+  `read_line`/`now`/`lock` remain contract-tier, each naming the primitive it
+  still awaits (owned `String`; a clock; threads).
 
 ### 6. Runtime performance
 
 The [performance laboratory](benchmarks/) (Prompt 38) is the system of record
-here, and it already measures exactly the four workloads the scalar core can
-express — startup, integer-computation, function-calls, recursion — against an
-equivalent-semantics C peer, recording hardware/OS/toolchain/commands and
-**never** publishing an unsupported "blazing fast" claim. The dogfooding examples
-are consistent with it: each compiles, links, and runs to a fixed exit byte via
-the real Cranelift+`cc` path
+here. At the time of the exercise it measured exactly the four workloads the
+scalar core could express — startup, integer-computation, function-calls,
+recursion — against an equivalent-semantics C peer, recording
+hardware/OS/toolchain/commands and **never** publishing an unsupported
+"blazing fast" claim. The dogfooding examples are consistent with it: each
+compiles, links, and runs to a fixed exit byte via the real Cranelift+`cc` path
 ([`c_comparison_agrees_where_the_toolchain_exists`](crates/tuo-cli/tests/lab_command.rs)).
-The four workloads the lab records as **unsupported** (allocation, collections,
-string-processing, networking) are the *same* four gaps this dogfooding exercise
-hit from the application side — independent confirmation that the honest
-boundary is drawn in the right place. No new runtime figure is invented here; the
-lab remains the one measurement of record.
+The four workloads the lab then recorded as **unsupported** (allocation,
+collections, string-processing, networking) were the *same* four gaps this
+dogfooding exercise hit from the application side — independent confirmation
+that the honest boundary was drawn in the right place. Two have since flipped
+exactly as their ADRs required: `collections` when ADR-0004 landed fixed
+arrays, and `string-processing` when ADR-0006 landed the borrowed `Str` core;
+`allocation` (the allocator ADR) and `networking` (no socket effect) still
+publish reasons, not numbers. No new runtime figure is invented here; the lab
+remains the one measurement of record.
 
 ---
 
@@ -249,7 +268,7 @@ benchmark-consideration section, per the prompt. None was patched ad hoc.
 |----|-------------------------|-------------|
 | **D-1** | No product type (struct/tuple) in the runnable core — *geometry points, every dataset* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — geometry now passes a real `Point` |
 | **D-2** | No arrays/collections + no iteration in the runnable core — *every fold* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — the folds now run over `[T; N]` arrays |
-| **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) *(proposed)* |
+| **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) **(accepted, landed)** — cli-stats now `println`s its report and http-service parses/prints its request/response line, stdout byte-asserted by the dogfood tests |
 | **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) *(proposed)* |
 | **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) *(proposed)* |
 | **D-5a** | `T0001` span points at the return annotation, not the offending body expression | backlog (diagnostics bug, no ADR) |

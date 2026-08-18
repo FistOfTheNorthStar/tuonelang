@@ -4,8 +4,9 @@ module concurrent_worker;
 // v0.
 //
 // v0 has no concurrency: no threads, no tasks, no channels, no shared mutable
-// state across workers, and no effect boundary (see DOGFOODING.md and
-// ADR-0007). What a worker pool actually *decides*, though — how work is
+// state across workers — ADR-0006's effect boundary covers descriptor I/O and
+// process exit only, with no spawn/join/channel primitive (see DOGFOODING.md
+// and ADR-0007). What a worker pool actually *decides*, though — how work is
 // partitioned across N workers, how long a batch takes given per-task costs,
 // and whether the partition is balanced — is pure arithmetic over the schedule.
 // So, exactly as the http-service example does, this splits into:

@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use tuo_diagnostics::Diagnostic;
 use tuo_source::Span;
 
+use crate::builtin::Builtin;
 use crate::ids::{ModuleId, SymbolId};
 use crate::symbol::{Reference, SpecTarget, Symbol};
 
@@ -33,6 +34,7 @@ pub struct Resolution {
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) variants: HashMap<SymbolId, Vec<SymbolId>>,
     pub(crate) prelude: Vec<(String, SymbolId)>,
+    pub(crate) builtins: Vec<(Builtin, SymbolId)>,
 }
 
 impl Resolution {
@@ -193,5 +195,32 @@ impl Resolution {
             .iter()
             .find(|(entry, _)| entry == name)
             .map(|(_, id)| *id)
+    }
+
+    /// The [`Builtin`] behind `id`, if `id` is one of the six builtin
+    /// functions the language installs in `std::rt` / `std::str`
+    /// (ADR-0006). Downstream stages use this to give calls to a builtin
+    /// their fixed signature (type checking) and their dedicated MIR form
+    /// (lowering).
+    #[must_use]
+    pub fn builtin(&self, id: SymbolId) -> Option<Builtin> {
+        self.builtins
+            .iter()
+            .find(|(_, symbol)| *symbol == id)
+            .map(|(builtin, _)| *builtin)
+    }
+
+    /// The symbol of a builtin function.
+    #[must_use]
+    pub fn builtin_symbol(&self, builtin: Builtin) -> Option<SymbolId> {
+        self.builtins
+            .iter()
+            .find(|(entry, _)| *entry == builtin)
+            .map(|(_, id)| *id)
+    }
+
+    /// Every builtin function with its symbol, in installation order.
+    pub fn builtins(&self) -> impl Iterator<Item = (Builtin, SymbolId)> + '_ {
+        self.builtins.iter().copied()
     }
 }

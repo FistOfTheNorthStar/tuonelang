@@ -1,0 +1,17 @@
+fn first(take s: Str) -> Int {
+    std::str::byte_at(s, 0)
+}
+
+fn peek(in s: Str) -> Int {
+    std::str::len(s)
+}
+
+fn tail(take s: Str) -> Str {
+    std::str::slice(s, 1, std::str::len(s))
+}
+
+fn main() -> Int {
+    let s = "abcd";
+    let t = tail(s);
+    first(t) + peek("xy")
+}

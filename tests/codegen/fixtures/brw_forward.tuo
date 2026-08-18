@@ -1,0 +1,6 @@
+fn base(in x: Int) -> Int { x * 2 }
+fn relay(in x: Int) -> Int { base(x) + 1 }
+fn main() -> Int {
+    let v = 10;
+    relay(v) + base(v)
+}

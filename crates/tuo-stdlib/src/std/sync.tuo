@@ -1,9 +1,10 @@
 // std::sync — synchronization primitives.
 //
 // Synchronization is inherently about *effects* — threads observing and
-// changing shared state — and v0 has no threads and no native effect boundary.
-// So this module is mostly contract, and it says so plainly rather than
-// pretending to synchronize anything.
+// changing shared state — and v0 has no threads: ADR-0006's effect seam covers
+// only descriptor I/O and process exit, and no thread or lock primitive exists
+// (that is ADR-0007's ground). So this module is mostly contract, and it says
+// so plainly rather than pretending to synchronize anything.
 //
 //   Executable tier — the pure *state models*: whether a one-shot latch has
 //   fired, whether a lock is held. Reasoning about the state is computation and
@@ -96,8 +97,9 @@ pub fn is_held(in s: LockState) -> Bool {
 
 /// CONTRACT (not executable in v0): acquire the lock, returning the held state.
 ///
-/// The real operation blocks until the lock is available; v0 has no threads and
-/// no effect boundary, so this is a contract and does not run.
+/// The real operation blocks until the lock is available; v0 has no threads
+/// and `std::rt` exposes no lock primitive, so this is a contract and does not
+/// run.
 ///
 /// # Example
 /// ```tuo
@@ -122,7 +124,8 @@ pub fn unlock(in state: LockState) -> LockState {
 /// CONTRACT (not executable in v0): run `task_id` on a new thread, returning a
 /// handle id.
 ///
-/// Threads are an effect the v0 core cannot create, so this is a contract.
+/// Threads need a spawn effect primitive `std::rt` does not expose (ADR-0007's
+/// ground), so this is a contract.
 ///
 /// # Example
 /// ```tuo

@@ -8,9 +8,9 @@
 //   it runs, and its specs run.
 //
 //   Contract tier — reading the clock (`now`, `elapsed`). Observing real time
-//   is an *effect*, and v0 has no native effect boundary (no FFI, no syscall
-//   surface): the interpreter and both backends deliberately implement only the
-//   scalar, control-flow core. So the clock entry points below are exact
+//   is an *effect*, and ADR-0006's effect seam covers only descriptor I/O
+//   (`std::rt::write`/`read_byte`) and process exit — `std::rt` exposes no
+//   time-source primitive. So the clock entry points below are exact
 //   signatures with documented contracts and **no** executable spec — they are
 //   marked `CONTRACT:` and cannot run today. The reference interpreter remains
 //   the source of truth for everything that does run.
@@ -113,8 +113,9 @@ pub fn lt(in a: Duration, in b: Duration) -> Bool {
 // Instant — a monotonic timestamp. Contract tier.
 //
 // An `Instant` is an opaque point on the monotonic clock. It is a value type,
-// so it type-checks, but *reading* the clock is an effect the v0 core cannot
-// perform, so `now` and `elapsed` are contracts, not executable code.
+// so it type-checks, but *reading* the clock needs a time-source effect
+// primitive `std::rt` does not expose, so `now` and `elapsed` are contracts,
+// not executable code.
 // ----------------------------------------------------------------------------
 
 /// A point on the monotonic clock, as nanoseconds since an unspecified epoch.
@@ -124,12 +125,12 @@ pub struct Instant {
 
 /// CONTRACT (not executable in v0): the current monotonic instant.
 ///
-/// Reading the clock is an effect; v0 exposes no native time source, so this
-/// signature is the stable contract and does not run yet. Every caller obtains
-/// an `Instant` here and measures spans with `elapsed`.
+/// Reading the clock is an effect; `std::rt` exposes no time-source
+/// primitive, so this signature is the stable contract and does not run yet.
+/// Every caller obtains an `Instant` here and measures spans with `elapsed`.
 pub fn now() -> Instant {
-    // Contract placeholder. When the effect boundary lands this returns the
-    // real monotonic clock; the signature will not change.
+    // Contract placeholder. When a clock effect primitive lands this returns
+    // the real monotonic clock; the signature will not change.
     Instant { nanos: 0 }
 }
 

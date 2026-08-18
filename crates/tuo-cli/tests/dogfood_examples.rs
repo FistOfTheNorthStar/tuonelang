@@ -13,9 +13,18 @@
 //!   ownership, specs included);
 //! * `tuo test --manifest <pkg>` runs its specs green with **no** failures (the
 //!   package is real, its manifest resolves, and every `spec` passes); and
-//! * for the three single-file programs whose logic lives in the runnable
-//!   scalar core, `tuo run` compiles-links-runs it to the exact exit byte the
-//!   example documents — proving "it runs natively" is a fact, not a claim.
+//! * for the programs whose logic lives in the runnable core, `tuo run`
+//!   compiles-links-runs them to the exact exit byte each example documents —
+//!   proving "it runs natively" is a fact, not a claim. Since ADR-0006 landed
+//!   the effect boundary, two examples also pin their **observable stdout**
+//!   byte-for-byte: `cli-stats` prints its report through `std::io::println`
+//!   (the ADR's "a CLI example gains a real println whose output is observed
+//!   by a test" oracle) and `http-service` prints its response status line
+//!   through its `std::rt::write` shell.
+//!
+//! `cli-stats` consumes the standard library as input: its `src/std_io.tuo` is
+//! a verbatim copy of `tuo-stdlib`'s `std::io` module, and this suite pins the
+//! copy byte-for-byte against the catalog so the two can never drift.
 //!
 //! The multi-package `workspace/app` binary is validated via
 //! `tuo build --manifest … -o …` then executed, because `tuo run` is file-based
@@ -53,10 +62,13 @@ fn expect_ok(output: &Output, what: &str) {
     );
 }
 
-/// `tuo check <src>` must accept the program.
-fn assert_checks(src: &Path) {
-    let out = tuo(&["check", &src.display().to_string()]);
-    expect_ok(&out, &format!("tuo check {}", src.display()));
+/// `tuo check <srcs…>` must accept the program (all files form one program).
+fn assert_checks(srcs: &[&Path]) {
+    let mut args = vec!["check".to_string()];
+    args.extend(srcs.iter().map(|s| s.display().to_string()));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = tuo(&arg_refs);
+    expect_ok(&out, &format!("tuo check {args:?}"));
 }
 
 /// `tuo test --manifest <pkg>` must run every spec green. We assert on success
@@ -84,29 +96,56 @@ fn assert_specs_green(pkg: &Path) {
     );
 }
 
-/// `tuo run <src>` must compile, link, run, and exit with `expected` (the
-/// documented observable exit byte).
-fn assert_runs_to(src: &Path, expected: i32) {
-    let out = tuo(&["run", &src.display().to_string()]);
+/// `tuo run <srcs…>` must compile, link, run, and exit with `expected` (the
+/// documented observable exit byte). Returns the output so callers can also
+/// assert the program's observable stdout.
+fn assert_runs_to(srcs: &[&Path], expected: i32) -> Output {
+    let mut args = vec!["run".to_string()];
+    args.extend(srcs.iter().map(|s| s.display().to_string()));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = tuo(&arg_refs);
     let code = out.status.code();
     assert_eq!(
         code,
         Some(expected),
-        "tuo run {} exited {:?}, expected {expected}\nstderr:\n{}",
-        src.display(),
-        code,
+        "tuo run {args:?} exited {code:?}, expected {expected}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr),
+    );
+    out
+}
+
+/// cli-stats: a runnable command-line statistics tool. Since ADR-0006 it
+/// prints its report through `std::io::println` (consuming the stdlib module
+/// as input); stdout is the exact four-line report and exit = 18.
+#[test]
+fn cli_stats_checks_specs_runs_and_prints_its_report() {
+    let dir = example_dir("cli-stats");
+    let main = dir.join("src/main.tuo");
+    let std_io = dir.join("src/std_io.tuo");
+    assert_checks(&[&main, &std_io]);
+    assert_specs_green(&dir);
+    let out = assert_runs_to(&[&main, &std_io], 18);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "count 7\nmean 12\nsd 6\nreport 18\n",
+        "cli-stats must print its documented report, byte for byte"
     );
 }
 
-/// cli-stats: a runnable command-line statistics tool. Exit = 18.
+/// cli-stats consumes the standard library as input: its vendored
+/// `src/std_io.tuo` must equal the `tuo-stdlib` catalog's `std::io` module
+/// byte-for-byte, so the example can never drift from the shipped library.
 #[test]
-fn cli_stats_checks_specs_and_runs() {
-    let dir = example_dir("cli-stats");
-    let main = dir.join("src/main.tuo");
-    assert_checks(&main);
-    assert_specs_green(&dir);
-    assert_runs_to(&main, 18);
+fn cli_stats_vendored_std_io_matches_the_catalog() {
+    let vendored = example_dir("cli-stats").join("src/std_io.tuo");
+    let on_disk = std::fs::read_to_string(&vendored)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+    assert_eq!(
+        on_disk,
+        tuo_stdlib::IO.source,
+        "examples/cli-stats/src/std_io.tuo drifted from tuo-stdlib's std/io.tuo; \
+         re-copy the catalog module"
+    );
 }
 
 /// data-pipeline: a runnable record-processing pipeline. total_for(2) = 400,
@@ -115,20 +154,27 @@ fn cli_stats_checks_specs_and_runs() {
 fn data_pipeline_checks_specs_and_runs() {
     let dir = example_dir("data-pipeline");
     let main = dir.join("src/main.tuo");
-    assert_checks(&main);
+    assert_checks(&[&main]);
     assert_specs_green(&dir);
-    assert_runs_to(&main, 144);
+    assert_runs_to(&[&main], 144);
 }
 
-/// http-service: the routing/status core runs (the effectful shell is
-/// contract-tier). Sample traffic sums to exit 6.
+/// http-service: the pure parsing/routing core is spec-checked, and since
+/// ADR-0006 the demo `main` runs natively — it parses "GET /health HTTP/1.1",
+/// prints the response status line through its `std::rt::write` shell, and
+/// exits with the routed status code (200).
 #[test]
-fn http_service_routing_core_checks_specs_and_runs() {
+fn http_service_parses_routes_prints_and_runs() {
     let dir = example_dir("http-service");
     let main = dir.join("src/main.tuo");
-    assert_checks(&main);
+    assert_checks(&[&main]);
     assert_specs_green(&dir);
-    assert_runs_to(&main, 6);
+    let out = assert_runs_to(&[&main], 200);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "HTTP/1.1 200 OK\n",
+        "http-service must print its documented response line, byte for byte"
+    );
 }
 
 /// concurrent-worker: the scheduling model runs (execution is contract-tier).
@@ -137,9 +183,9 @@ fn http_service_routing_core_checks_specs_and_runs() {
 fn concurrent_worker_scheduling_core_checks_specs_and_runs() {
     let dir = example_dir("concurrent-worker");
     let main = dir.join("src/main.tuo");
-    assert_checks(&main);
+    assert_checks(&[&main]);
     assert_specs_green(&dir);
-    assert_runs_to(&main, 15);
+    assert_runs_to(&[&main], 15);
 }
 
 /// The medium multi-package workspace: `app → geometry → numeric`. Every

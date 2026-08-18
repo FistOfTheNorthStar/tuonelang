@@ -1,0 +1,13 @@
+fn flag(take b: Bool) -> Int {
+    if b { 1 } else { 0 }
+}
+
+fn main() -> Int {
+    let a = "abc";
+    let same = flag(a == "abc");
+    let differ = flag(a == "abd") * 2;
+    let unequal = flag(a != "abx") * 4;
+    let empty = flag("" == "") * 8;
+    let mixed = flag(a == "") * 16;
+    same + differ + unequal + empty + mixed
+}

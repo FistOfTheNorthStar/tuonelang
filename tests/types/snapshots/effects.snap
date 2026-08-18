@@ -1,0 +1,6 @@
+T0001@405..411 mismatched types | expected type `I64` | actual type `Str`
+T0001@413..414 mismatched types | expected type `I64` | actual type `Str`
+T0002@458..478 this call takes 2 arguments but 1 was supplied | expected count 2 | actual count 1
+R0007@487..491 spec `emit` reaches the effectful function `emit`; specs execute only the pure core in the deterministic sandbox | actual name `emit`
+R0007@520..567 spec `"transitive"` reaches the effectful function `indirect`; specs execute only the pure core in the deterministic sandbox | actual name `indirect`
+R0007@569..610 spec `"via exit"` reaches the effectful function `quit`; specs execute only the pure core in the deterministic sandbox | actual name `quit`
