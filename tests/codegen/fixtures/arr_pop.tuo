@@ -1,0 +1,27 @@
+// ADR-0009 Stage B: push then pop an Array[Int]; unwrap the Option via match.
+// Push 41, 42; pop returns Some { value: 42 }; the remaining element 0 is 41,
+// so 42 + 41 = 83. A second pop after the array is emptied returns None.
+fn drain() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 41);
+    std::array::push(xs, 42);
+    let last = std::array::pop(xs);
+    let first = std::array::get(xs, 0);
+    match last {
+        Some { value } => value + first,
+        None => 0,
+    }
+}
+
+fn pop_empty() -> Int {
+    var xs = std::array::empty();
+    let nothing = std::array::pop(xs);
+    match nothing {
+        Some { value } => value,
+        None => 100,
+    }
+}
+
+fn main() -> Int {
+    drain() - pop_empty()
+}

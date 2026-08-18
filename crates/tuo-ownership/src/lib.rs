@@ -100,3 +100,46 @@ pub fn check(files: &[Ast<'_>], resolution: &Resolution, types: &TypeckResult) -
         diagnostics: check::run(files, resolution, types),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use tuo_types::{IntKind, Ty, TypeckResult};
+
+    use super::is_copy;
+
+    /// The owned, growable heap values are **never** `Copy` (ADR-0009):
+    /// `String`, `Array[T]`, and an aggregate transitively containing one.
+    /// The borrowed/inline peers stay `Copy`. This pins the definition MIR
+    /// lowering relies on to decide moves and drop glue.
+    #[test]
+    fn heap_values_are_not_copy_but_their_peers_are() {
+        let types = TypeckResult::default();
+        let int = || Ty::int();
+
+        // Non-Copy heap values.
+        assert!(!is_copy(&types, &Ty::String), "owned String is not Copy");
+        assert!(
+            !is_copy(&types, &Ty::Array(Box::new(int()))),
+            "growable Array[Int] is not Copy"
+        );
+        // Non-Copy transitively: an aggregate/Option/Result carrying a heap
+        // value.
+        assert!(
+            !is_copy(&types, &Ty::Tuple(vec![int(), Ty::String])),
+            "a tuple containing a String is not Copy"
+        );
+        assert!(
+            !is_copy(&types, &Ty::Option(Box::new(Ty::Array(Box::new(int()))))),
+            "Option[Array[Int]] is not Copy"
+        );
+
+        // Copy peers: the borrowed `Str`, scalars, and the inline fixed array
+        // of a Copy element.
+        assert!(is_copy(&types, &Ty::Str), "borrowed Str is Copy");
+        assert!(is_copy(&types, &Ty::Int(IntKind::I64)));
+        assert!(
+            is_copy(&types, &Ty::FixedArray(Box::new(int()), 8)),
+            "[Int; 8] owns no heap and is Copy"
+        );
+    }
+}

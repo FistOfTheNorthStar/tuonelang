@@ -1,0 +1,13 @@
+// ADR-0008 Tier 1: a function value is a copy-propagatable constant, and an
+// indirect call is never eliminated. Binding `add` to `g` and calling through
+// it lets copy propagation forward the `Const::Fn` into the call, while the
+// call itself survives (a call may diverge or trap; its target is opaque to
+// the passes).
+fn add(take a: I64, take b: I64) -> I64 {
+    a + b
+}
+
+fn main() -> I64 {
+    let g: fn(take I64, take I64) -> I64 = add;
+    g(2, 3)
+}

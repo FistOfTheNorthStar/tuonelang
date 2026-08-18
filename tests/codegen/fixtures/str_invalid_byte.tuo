@@ -1,0 +1,8 @@
+// ADR-0009 Stage B: push_byte with a byte outside 0..=255 traps `InvalidByte`
+// (interpreter `TrapKind::InvalidByte`, native `TrapCode::InvalidByte = 4`),
+// aborting with the runtime's fixed trap status — never a silent mask.
+fn main() -> Int {
+    var s = std::string::empty();
+    std::string::push_byte(s, 256);
+    std::string::len(s)
+}

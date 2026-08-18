@@ -1,0 +1,15 @@
+// A function value passed as an argument and called indirectly (ADR-0008
+// Tier 1). `apply` receives a `fn(take Int, take Int) -> Int` value and calls
+// it through the indirect path; `main` applies two different top-level
+// functions through the one higher-order function.
+fn add(take a: Int, take b: Int) -> Int { a + b }
+fn mul(take a: Int, take b: Int) -> Int { a * b }
+
+fn apply(take f: fn(take Int, take Int) -> Int, take a: Int, take b: Int) -> Int {
+    f(a, b)
+}
+
+fn main() -> Int {
+    // apply(add, 20, 3) = 23 ; apply(mul, 6, 7) = 42 ; 23 + 42 = 65
+    apply(add, 20, 3) + apply(mul, 6, 7)
+}

@@ -1,0 +1,21 @@
+// A function value chosen by an `if` into a `var`, then called (ADR-0008
+// Tier 1). This proves a function value flows through an ordinary scalar local
+// and a branch — not only as a call parameter — before the indirect call reads
+// it back.
+fn add(take a: Int, take b: Int) -> Int { a + b }
+fn mul(take a: Int, take b: Int) -> Int { a * b }
+
+fn pick(take use_mul: Bool, take a: Int, take b: Int) -> Int {
+    var f = add;
+    if use_mul {
+        f = mul;
+    }
+    f(a, b)
+}
+
+fn main() -> Int {
+    // pick(false, 8, 5) = add(8, 5) = 13
+    // pick(true,  8, 5) = mul(8, 5) = 40
+    // 13 + 40 = 53
+    pick(false, 8, 5) + pick(true, 8, 5)
+}

@@ -218,9 +218,9 @@ artifact that decides it, and its current status with a one-line justification.
 - **Status:** **MET.** As of this gate there are **zero** open interpreter/backend
   semantic divergences: the differential suites are green, so the backends agree
   with the reference interpreter on every fixture and every generated program. The
-  only remaining open items are the dogfooding ADRs (ADR-0007/0008 and the
-  forthcoming allocator ADR; ADR-0004 and ADR-0006 are now **accepted and
-  landed**), which are *capability gaps*, not divergences — they are enumerated
+  only remaining open item is the dogfooding ADR ADR-0007 (concurrency);
+  ADR-0004, ADR-0006, ADR-0009, and ADR-0008 (Tier 1) are now **accepted and
+  landed**. These are *capability gaps*, not divergences — they are enumerated
   below and none is a silent deferral.
 
 ---
@@ -281,9 +281,9 @@ for a divergence. Each has an ADR from the Prompt 39 dogfooding exercise
 |-----|-----|-------------------------|
 | Aggregates + iteration in the runnable core | ADR-0004 (**accepted, landed**) | done — the perf-lab `collections` workload is `Supported` with its committed program and C peer |
 | Effect boundary + runtime strings | ADR-0006 (**accepted, landed**) | done — the perf-lab `string-processing` workload is `Supported` with its committed program and C peer; per its amendments, `networking` is *not* unblocked (no socket effect) and owned `String`/`concat` moved to the allocator ADR |
-| Heap allocation (owned `String`, growable collections) | allocator ADR (forthcoming, per ADR-0006 amendment 1) | unblocks `allocation` |
+| Heap allocation (owned `String`, growable collections) | ADR-0009 (**accepted, landed**) | done — the perf-lab `allocation` workload is `Supported` with its committed program and `malloc`/`realloc`/`free` C peer |
+| First-class functions (Tier 1, non-capturing) | ADR-0008 (**Tier 1 accepted, landed**; Tier 2 closures deferred) | done — the perf-lab `indirect-calls` workload is `Supported` (a `fn`-value loop vs a C function-pointer loop); the generic higher-order stdlib combinators ship |
 | Concurrency model | ADR-0007 (proposed) | new parallel-speedup benchmark category |
-| First-class functions | ADR-0008 (proposed) | extends `function-calls` with indirect calls |
 
 Whether any of these becomes an 0.1 requirement is a scope decision recorded in the
 respective ADR, not something this gate silently assumes.

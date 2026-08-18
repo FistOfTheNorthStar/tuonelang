@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 use tuo_resolve::Resolution;
 
 use crate::mir::{
-    AggregateKind, Arg, BasicBlock, Const, Function, Operand, PassMode, Place, Program, Projection,
-    Rvalue, Statement, Terminator,
+    AggregateKind, Arg, BasicBlock, Callee, Const, Function, Operand, PassMode, Place, Program,
+    Projection, Rvalue, Statement, Terminator,
 };
 
 /// Render a whole lowered program.
@@ -102,20 +102,39 @@ fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
         }
         Statement::Call { dest, callee, args } => {
             let args: Vec<String> = args.iter().map(render_arg).collect();
+            let target = match callee {
+                Callee::Direct(symbol) => resolution.symbol(*symbol).name.clone(),
+                Callee::Indirect(operand) => render_operand(operand),
+            };
             format!(
                 "{} = call {}({})",
                 render_place(dest),
-                resolution.symbol(*callee).name,
+                target,
                 args.join(", ")
             )
         }
         Statement::Effect { op, args, dest } => {
-            let args: Vec<String> = args.iter().map(render_operand).collect();
+            let args: Vec<String> = args.iter().map(render_arg).collect();
             format!(
                 "{} = effect {}({})",
                 render_place(dest),
                 op.name(),
                 args.join(", ")
+            )
+        }
+        Statement::HeapMutate {
+            op,
+            target,
+            args,
+            dest,
+        } => {
+            let mut parts = vec![format!("borrow mut {}", render_place(target))];
+            parts.extend(args.iter().map(render_operand));
+            format!(
+                "{} = heap_mut {}({})",
+                render_place(dest),
+                op.name(),
+                parts.join(", ")
             )
         }
         Statement::Drop { place } => format!("drop {}", render_place(place)),
@@ -193,6 +212,14 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
             let args: Vec<String> = args.iter().map(render_operand).collect();
             format!("str_{}({})", op.name(), args.join(", "))
         }
+        Rvalue::HeapOp { op, subject, args } => {
+            let mut parts = Vec::new();
+            if let Some(place) = subject {
+                parts.push(format!("borrow {}", render_place(place)));
+            }
+            parts.extend(args.iter().map(render_operand));
+            format!("heap_{}({})", op.name(), parts.join(", "))
+        }
     }
 }
 
@@ -212,6 +239,9 @@ fn render_const(constant: &Const) -> String {
         Const::Float(value, kind) => format!("{value:?}_{}", kind.name().to_lowercase()),
         Const::Char(value) => format!("{value:?}"),
         Const::Str(value) => format!("{value:?}"),
+        // A function value (ADR-0008 Tier 1): rendered by its symbol id, since
+        // this dev-tool dump threads no resolution through operands.
+        Const::Fn(symbol) => format!("fn {symbol}"),
     }
 }
 

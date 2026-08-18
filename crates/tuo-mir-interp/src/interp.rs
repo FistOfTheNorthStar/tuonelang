@@ -16,8 +16,8 @@
 use std::collections::HashMap;
 
 use tuo_mir::{
-    AggregateKind, Arg, BinOp, BlockId, CastKind, Const, Function, LocalId, Operand, Place,
-    Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
+    AggregateKind, Arg, BinOp, BlockId, Callee, CastKind, Const, Function, HeapMutOp, HeapOp,
+    LocalId, Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_source::Span;
@@ -349,7 +349,7 @@ impl Machine<'_, '_> {
                 Ok(())
             }
             Statement::Call { dest, callee, args } => {
-                self.exec_call(function, locals, dest, *callee, args)
+                self.exec_call(function, locals, dest, callee, args)
             }
             Statement::Effect { op, .. } => {
                 // The interpreter's sandbox performs no I/O, ever. The
@@ -369,17 +369,112 @@ impl Machine<'_, '_> {
                     function.span,
                 ))
             }
+            Statement::HeapMutate {
+                op,
+                target,
+                args,
+                dest,
+            } => self.exec_heap_mutate(function, locals, *op, target, args, dest),
             Statement::Drop { place } => {
                 // Drop ends the value's initialization. v0 has no user
                 // destructors (ADR-0003) and every runtime value the
                 // interpreter models owns no host resource, so the observable
-                // effect is exactly de-initialization: read the place out and
-                // discard it, freeing its budget.
-                let value = self.read_place_moving(function, locals, place)?;
-                self.release_value(&value);
+                // effect is exactly de-initialization: read the place out
+                // (which releases its budget as it leaves the slot) and
+                // discard it.
+                let _value = self.read_place_moving(function, locals, place)?;
                 Ok(())
             }
         }
+    }
+
+    /// Execute one in-place heap mutation (ADR-0009 Stage A), exactly per
+    /// `specification/mir.md` §4.3: read the target through its `mut`
+    /// borrow, apply the op (trapping *before* any state or budget
+    /// changes), write the grown value back, and store the op's result.
+    /// The live-value budget is kept exact across growth: the old value's
+    /// cost is released and the updated value's cost is charged, so
+    /// byte-buffer and element growth is counted (§8.1).
+    fn exec_heap_mutate(
+        &mut self,
+        function: &Function,
+        locals: &mut Locals,
+        op: HeapMutOp,
+        target: &Place,
+        args: &[Operand],
+        dest: &Place,
+    ) -> Result<(), RuntimeError> {
+        let mut operands = Vec::with_capacity(args.len());
+        for arg in args {
+            operands.push(self.eval_operand(function, locals, arg)?);
+        }
+        let current = self.read_place_copying(function, locals, target)?;
+        let old_cost = value_cost(&current);
+        let (updated, result) = match (op, current) {
+            (HeapMutOp::PushByte, Value::Str(mut bytes)) => {
+                let byte = match operands.first() {
+                    Some(Value::Int(value, _)) => *value,
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(function, "push_byte of a non-integer", &value));
+                    }
+                };
+                if !(0..=255).contains(&byte) {
+                    return Err(self.abort(
+                        TrapKind::InvalidByte,
+                        format!("byte value {byte} is outside 0..=255"),
+                        function.span,
+                    ));
+                }
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "guarded to 0..=255 by the range check above"
+                )]
+                bytes.push(byte as u8);
+                (Value::Str(bytes), Value::Unit)
+            }
+            (HeapMutOp::Append, Value::Str(mut bytes)) => {
+                let suffix = match operands.first() {
+                    Some(Value::Str(suffix)) => suffix.clone(),
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(function, "append of a non-Str", &value));
+                    }
+                };
+                bytes.extend_from_slice(&suffix);
+                (Value::Str(bytes), Value::Unit)
+            }
+            (HeapMutOp::Push, Value::Array(mut elements)) => {
+                let element = operands.first().cloned().unwrap_or(Value::Unit);
+                elements.push(element);
+                (Value::Array(elements), Value::Unit)
+            }
+            (HeapMutOp::Pop, Value::Array(mut elements)) => {
+                let result = match elements.pop() {
+                    Some(element) => Value::Variant {
+                        variant: 0,
+                        fields: vec![element],
+                    },
+                    None => Value::Variant {
+                        variant: 1,
+                        fields: Vec::new(),
+                    },
+                };
+                (Value::Array(elements), result)
+            }
+            (_, other) => {
+                return Err(self.type_bug(function, "heap mutation of a mistyped target", &other));
+            }
+        };
+        // Budget: replace the old value's cost with the updated one's, then
+        // write back without re-charging (growth is thereby counted exactly
+        // once, for projected targets too).
+        self.live_values = self.live_values.saturating_sub(old_cost);
+        self.account_value(&updated, function.span)?;
+        self.write_place_raw(function, locals, target, updated)?;
+        self.write_place(function, locals, dest, result)?;
+        Ok(())
     }
 
     fn exec_call(
@@ -387,18 +482,38 @@ impl Machine<'_, '_> {
         function: &Function,
         locals: &mut Locals,
         dest: &Place,
-        callee: SymbolId,
+        callee: &Callee,
         args: &[Arg],
     ) -> Result<(), RuntimeError> {
+        // Resolve the call target. A `Direct` call names its symbol; an
+        // `Indirect` call (ADR-0008 Tier 1) evaluates the callee operand to a
+        // `Value::Fn(sym)` and dispatches to `sym` — the frame setup, borrow
+        // copy-in/copy-back, and return handling below are then identical.
+        let callee_symbol = match callee {
+            Callee::Direct(symbol) => *symbol,
+            Callee::Indirect(operand) => {
+                let value = self.eval_operand(function, locals, operand)?;
+                let Value::Fn(symbol) = value else {
+                    return Err(self.abort(
+                        TrapKind::Internal(
+                            "indirect call through a value that is not a function".to_owned(),
+                        ),
+                        "verified MIR guarantees an indirect callee is a function value; this is \
+                         a compiler bug"
+                            .to_owned(),
+                        function.span,
+                    ));
+                };
+                symbol
+            }
+        };
         // Look up the callee. `function_of` borrows the program, which
         // outlives every frame, so the reference is safe to hold across the
         // nested `call`.
-        let Some(target) = self.interp.function_of(callee) else {
+        let Some(target) = self.interp.function_of(callee_symbol) else {
             return Err(self.abort(
                 TrapKind::Internal("call to a function outside the lowered program".to_owned()),
-                "the interpreter only executes functions present in the lowered MIR (v0 has \
-                 no indirect or external calls)"
-                    .to_owned(),
+                "the interpreter only executes functions present in the lowered MIR".to_owned(),
                 function.span,
             ));
         };
@@ -594,6 +709,17 @@ impl Machine<'_, '_> {
                 }
                 self.eval_str_op(function, *op, &values)
             }
+            Rvalue::HeapOp { op, subject, args } => {
+                let subject = match subject {
+                    Some(place) => Some(self.read_place_copying(function, locals, place)?),
+                    None => None,
+                };
+                let mut values = Vec::with_capacity(args.len());
+                for arg in args {
+                    values.push(self.eval_operand(function, locals, arg)?);
+                }
+                self.eval_heap_op(function, *op, subject.as_ref(), &values)
+            }
             Rvalue::Len(place) => {
                 let value = self.read_place_copying(function, locals, place)?;
                 let len = match &value {
@@ -635,6 +761,9 @@ impl Machine<'_, '_> {
             Const::Float(v, kind) => Value::Float(normalize_float(*v, *kind), *kind),
             Const::Char(c) => Value::Char(*c),
             Const::Str(s) => Value::Str(s.clone().into_bytes()),
+            // A function value (ADR-0008 Tier 1): a callable naming a
+            // top-level function symbol.
+            Const::Fn(symbol) => Value::Fn(*symbol),
         }
     }
 
@@ -886,6 +1015,131 @@ impl Machine<'_, '_> {
         }
     }
 
+    /// Evaluate one pure, value-producing heap operation (ADR-0009 Stage
+    /// A), exactly per `specification/mir.md` §5.7: the constructors and
+    /// length ops never trap; `StringByteAt`/`StringSlice`/`ArrayGet` trap
+    /// `IndexOutOfBounds` on the documented bounds. String operations are
+    /// byte-level (a slice may split a multi-byte code point).
+    fn eval_heap_op(
+        &mut self,
+        function: &Function,
+        op: HeapOp,
+        subject: Option<&Value>,
+        values: &[Value],
+    ) -> RunResult {
+        let str_at = |position: usize, this: &mut Self| -> Result<Vec<u8>, RuntimeError> {
+            match values.get(position) {
+                Some(Value::Str(bytes)) => Ok(bytes.clone()),
+                other => {
+                    let value = other.cloned().unwrap_or(Value::Unit);
+                    Err(this.type_bug(function, "heap op operand is not a Str", &value))
+                }
+            }
+        };
+        let int_at = |position: usize, this: &mut Self| -> Result<i128, RuntimeError> {
+            match values.get(position) {
+                Some(Value::Int(value, _)) => Ok(*value),
+                other => {
+                    let value = other.cloned().unwrap_or(Value::Unit);
+                    Err(this.type_bug(function, "heap op operand is not an integer", &value))
+                }
+            }
+        };
+        match op {
+            HeapOp::StringEmpty => Ok(Value::Str(Vec::new())),
+            HeapOp::StringFromStr => Ok(Value::Str(str_at(0, self)?)),
+            HeapOp::StringConcat => {
+                let mut bytes = str_at(0, self)?;
+                bytes.extend_from_slice(&str_at(1, self)?);
+                Ok(Value::Str(bytes))
+            }
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice => {
+                let bytes = match subject {
+                    Some(Value::Str(bytes)) => bytes,
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(
+                            function,
+                            "heap op subject is not a String",
+                            &value,
+                        ));
+                    }
+                };
+                let len = bytes.len() as i128;
+                match op {
+                    HeapOp::StringLen => Ok(Value::Int(len, IntKind::I64)),
+                    HeapOp::StringByteAt => {
+                        let index = int_at(0, self)?;
+                        if index < 0 || index >= len {
+                            return Err(self.abort(
+                                TrapKind::IndexOutOfBounds,
+                                format!(
+                                    "byte index {index} out of bounds for a String of length {len}"
+                                ),
+                                function.span,
+                            ));
+                        }
+                        #[expect(
+                            clippy::cast_sign_loss,
+                            reason = "guarded to be within 0..len by the bounds check above"
+                        )]
+                        Ok(Value::Int(i128::from(bytes[index as usize]), IntKind::I64))
+                    }
+                    _ => {
+                        let start = int_at(0, self)?;
+                        let end = int_at(1, self)?;
+                        if start < 0 || start > end || end > len {
+                            return Err(self.abort(
+                                TrapKind::IndexOutOfBounds,
+                                format!(
+                                    "byte range {start}..{end} out of bounds for a String of \
+                                     length {len}"
+                                ),
+                                function.span,
+                            ));
+                        }
+                        #[expect(
+                            clippy::cast_sign_loss,
+                            reason = "guarded to be within 0..=len by the bounds check above"
+                        )]
+                        Ok(Value::Str(bytes[start as usize..end as usize].to_vec()))
+                    }
+                }
+            }
+            HeapOp::ArrayEmpty => Ok(Value::Array(Vec::new())),
+            HeapOp::ArrayLen | HeapOp::ArrayGet => {
+                let elements = match subject {
+                    Some(Value::Array(elements)) => elements,
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(
+                            function,
+                            "heap op subject is not an Array",
+                            &value,
+                        ));
+                    }
+                };
+                let len = elements.len() as i128;
+                if matches!(op, HeapOp::ArrayLen) {
+                    return Ok(Value::Int(len, IntKind::I64));
+                }
+                let index = int_at(0, self)?;
+                if index < 0 || index >= len {
+                    return Err(self.abort(
+                        TrapKind::IndexOutOfBounds,
+                        format!("index {index} out of bounds for an array of length {len}"),
+                        function.span,
+                    ));
+                }
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "guarded to be within 0..len by the bounds check above"
+                )]
+                Ok(elements[index as usize].clone())
+            }
+        }
+    }
+
     // ----- places -----
 
     /// Read a place by copying (leaves the source initialized). Used for
@@ -922,17 +1176,32 @@ impl Machine<'_, '_> {
         place: &Place,
     ) -> RunResult {
         if place.projection.is_empty() {
-            return locals.take(place.local).ok_or_else(|| {
+            let value = locals.take(place.local).ok_or_else(|| {
                 self.abort(
                     TrapKind::Internal(format!("move of uninitialized local _{}", place.local.0)),
                     "the verifier guarantees no moves of uninitialized locals".to_owned(),
                     function.span,
                 )
-            });
+            })?;
+            // A move transfers the value out of this slot: release its budget
+            // here, since the consumer re-accounts it (a `write_place` into a
+            // destination, an argument to a call/effect, a return). This keeps
+            // `live_values` an exact running sum of the costs of live slots
+            // across a move, so a reassign-in-a-loop of a heap value stays
+            // bounded rather than over-counting. A value read by move but then
+            // dropped, returned, or otherwise not re-stored is released here
+            // and simply never re-charged, which is correct: it is no longer
+            // live.
+            self.release_value(&value);
+            return Ok(value);
         }
         // Projected move: read the sub-value out, then blank *that field path*
-        // to a husk, leaving sibling fields of the root intact.
+        // to a husk, leaving sibling fields of the root intact. The extracted
+        // sub-value's cost leaves the root here (releasing it) and is
+        // re-accounted by the consumer; the `Unit` husk is charged by the
+        // write-back.
         let value = self.read_place_copying(function, locals, place)?;
+        self.release_value(&value);
         self.write_place(function, locals, place, Value::Unit)?;
         Ok(value)
     }
@@ -1008,7 +1277,8 @@ impl Machine<'_, '_> {
     }
 
     /// Write `value` into `place`, following its projection into the existing
-    /// aggregate/array/variant at the root local.
+    /// aggregate/array/variant at the root local, charging the live-value
+    /// budget for a whole-local write.
     fn write_place(
         &mut self,
         function: &Function,
@@ -1018,6 +1288,24 @@ impl Machine<'_, '_> {
     ) -> Result<(), RuntimeError> {
         if place.projection.is_empty() {
             self.account_value(&value, function.span)?;
+            locals.set(place.local, value);
+            return Ok(());
+        }
+        self.write_place_raw(function, locals, place, value)
+    }
+
+    /// [`Self::write_place`] without the budget charge: the caller has
+    /// already accounted for the value (a `HeapMutate` writes back a value
+    /// whose growth it charged explicitly, so charging here again would
+    /// double-count).
+    fn write_place_raw(
+        &mut self,
+        function: &Function,
+        locals: &mut Locals,
+        place: &Place,
+        value: Value,
+    ) -> Result<(), RuntimeError> {
+        if place.projection.is_empty() {
             locals.set(place.local, value);
             return Ok(());
         }
@@ -1335,7 +1623,13 @@ fn float_kind_of(ty: &Ty) -> Option<FloatKind> {
 /// scalar, plus the sum of the fields for aggregates.
 fn value_cost(value: &Value) -> u64 {
     match value {
-        Value::Unit | Value::Bool(_) | Value::Int(..) | Value::Float(..) | Value::Char(_) => 1,
+        // A function value is one code pointer — a single scalar.
+        Value::Unit
+        | Value::Bool(_)
+        | Value::Int(..)
+        | Value::Float(..)
+        | Value::Char(_)
+        | Value::Fn(_) => 1,
         Value::Str(s) => 1 + s.len() as u64,
         Value::Aggregate(fields) | Value::Variant { fields, .. } => {
             1 + fields.iter().map(value_cost).sum::<u64>()
@@ -1366,6 +1660,9 @@ fn render_statement(statement: &Statement) -> String {
         Statement::Call { dest, .. } => format!("call -> _{}", dest.local.0),
         Statement::Effect { op, dest, .. } => {
             format!("effect {} -> _{}", op.name(), dest.local.0)
+        }
+        Statement::HeapMutate { op, target, .. } => {
+            format!("heap_mut {} _{}", op.name(), target.local.0)
         }
         Statement::Drop { place } => format!("drop _{}", place.local.0),
     }

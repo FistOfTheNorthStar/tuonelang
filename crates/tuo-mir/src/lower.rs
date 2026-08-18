@@ -38,9 +38,9 @@ use tuo_source::Span;
 use tuo_types::{FnTy, IntKind, Ty, TypeckResult};
 
 use crate::mir::{
-    AggregateKind, Arg, BasicBlock, BinOp, BlockId, CastKind, Const, EffectOp, Function, LocalDecl,
-    LocalId, Operand, PassMode, Place, Program, Projection, Rvalue, Skipped, Statement, StrOp,
-    Terminator, Trap, UnOp,
+    AggregateKind, Arg, BasicBlock, BinOp, BlockId, Callee, CastKind, Const, EffectOp, Function,
+    HeapMutOp, HeapOp, LocalDecl, LocalId, Operand, PassMode, Place, Program, Projection, Rvalue,
+    Skipped, Statement, StrOp, Terminator, Trap, UnOp,
 };
 
 /// Lower every function body of a front-end-clean snapshot.
@@ -1327,7 +1327,13 @@ impl FnLower<'_> {
                 )?;
                 Ok(Some(Value::Place(place)))
             }
-            SymbolKind::Function => Err("function-typed values are not lowered in v0".to_owned()),
+            SymbolKind::Function => {
+                // A bare `fn` name used as a value: a compile-time-known code
+                // pointer (ADR-0008 Tier 1). The type checker has already
+                // rejected builtins and generics (`T0015`), so any function
+                // symbol reaching here is a first-class value.
+                Ok(Some(Value::Operand(Operand::Const(Const::Fn(*symbol)))))
+            }
             _ => Err("unsupported name in value position".to_owned()),
         }
     }
@@ -1588,27 +1594,71 @@ impl FnLower<'_> {
     }
 
     fn call(&mut self, expr: &Expr, callee: &Expr, args: &[Expr]) -> Lowered {
-        let ExprKind::Path {
+        // A direct call: the callee is a bare path resolving to a user
+        // function symbol. Anything else is an indirect call through a
+        // function value (ADR-0008 Tier 1).
+        if let ExprKind::Path {
             res: Res::Symbol(symbol),
             ..
         } = &callee.kind
-        else {
-            return Err("calls through function-typed values are not lowered in v0".to_owned());
+        {
+            if self.cx.resolution.symbol(*symbol).kind == SymbolKind::Function {
+                // A builtin function (ADR-0006) has no body to call: the call
+                // lowers to its dedicated MIR form instead.
+                if let Some(builtin) = self.cx.resolution.builtin(*symbol) {
+                    return self.builtin_call(expr, builtin, args);
+                }
+                let modes = self
+                    .cx
+                    .modes
+                    .get(symbol)
+                    .cloned()
+                    .ok_or_else(|| "callee has no lowered signature".to_owned())?;
+                let Some(lowered_args) = self.lower_call_args(args, &modes)? else {
+                    return Ok(None);
+                };
+                return self.emit_call(expr, Callee::Direct(*symbol), lowered_args);
+            }
+        }
+        // Indirect call: the callee expression's checked type is a `Ty::Fn`
+        // whose modes drive the argument passing (ADR-0008 Tier 1).
+        let modes = self.indirect_call_modes(callee)?;
+        let Some(callee_value) = self.expr(callee)? else {
+            return Ok(None);
         };
-        if self.cx.resolution.symbol(*symbol).kind != SymbolKind::Function {
-            return Err("calls through function-typed values are not lowered in v0".to_owned());
-        }
-        // A builtin function (ADR-0006) has no body to call: the call
-        // lowers to its dedicated MIR form instead.
-        if let Some(builtin) = self.cx.resolution.builtin(*symbol) {
-            return self.builtin_call(expr, builtin, args);
-        }
-        let modes = self
-            .cx
-            .modes
-            .get(symbol)
-            .cloned()
-            .ok_or_else(|| "callee has no lowered signature".to_owned())?;
+        let callee_ty = self.expr_ty(callee)?;
+        let callee_operand = self.use_value(callee_value, &callee_ty);
+        let Some(lowered_args) = self.lower_call_args(args, &modes)? else {
+            return Ok(None);
+        };
+        self.emit_call(expr, Callee::Indirect(callee_operand), lowered_args)
+    }
+
+    /// The per-argument [`PassMode`]s for an indirect call, read from the
+    /// callee's checked function type (ADR-0008 Tier 1).
+    fn indirect_call_modes(&self, callee: &Expr) -> Result<Vec<PassMode>, String> {
+        let ty = self.expr_ty(callee)?;
+        let Ty::Fn(fn_ty) = ty else {
+            return Err("indirect call through a non-function value".to_owned());
+        };
+        Ok(fn_ty
+            .params
+            .iter()
+            .map(|param| match param.mode {
+                tuo_types::ParamMode::Take => PassMode::Value,
+                tuo_types::ParamMode::In => PassMode::Borrow,
+                tuo_types::ParamMode::Mut => PassMode::BorrowMut,
+            })
+            .collect())
+    }
+
+    /// Lower a call's arguments under the given per-argument modes, shared by
+    /// direct and indirect calls. Returns `None` when an argument diverges.
+    fn lower_call_args(
+        &mut self,
+        args: &[Expr],
+        modes: &[PassMode],
+    ) -> Result<Option<Vec<Arg>>, String> {
         let mut lowered_args = Vec::new();
         for (position, (arg, mode)) in args.iter().zip(modes.iter()).enumerate() {
             let arg_ty = self.expr_ty(arg)?;
@@ -1635,37 +1685,91 @@ impl FnLower<'_> {
                 }
             }
         }
+        Ok(Some(lowered_args))
+    }
+
+    /// Emit a [`Statement::Call`] with the given callee and lowered args,
+    /// storing the return value in a fresh temporary.
+    fn emit_call(&mut self, expr: &Expr, callee: Callee, args: Vec<Arg>) -> Lowered {
         let ret_ty = self.expr_ty(expr)?;
         let dest = self.temp(ret_ty, expr.span);
         let dest_place = Place::local(dest);
         self.push(Statement::Call {
             dest: dest_place.clone(),
-            callee: *symbol,
-            args: lowered_args,
+            callee,
+            args,
         });
         self.uninit.remove(&dest);
         Ok(Some(Value::Place(dest_place)))
     }
 
-    /// Lower a call to one of the six builtin functions (ADR-0006 Stage A)
-    /// into its dedicated MIR form: `std::str` builtins become a pure
-    /// [`Rvalue::StrOp`] assignment, `std::rt` builtins become a
-    /// [`Statement::Effect`]. Every builtin parameter type (`Int`, `Str`)
-    /// is `Copy`, so each argument is read as an ordinary operand; the
-    /// freeze mirrors [`Self::call`]'s evaluation-order guard against a
-    /// later argument writing a place an earlier operand read.
+    /// Lower a call to one of the builtin functions (ADR-0006/ADR-0009
+    /// Stage A) into its dedicated MIR form: `std::str` builtins become a
+    /// pure [`Rvalue::StrOp`] assignment, `std::rt` builtins become a
+    /// [`Statement::Effect`], the non-mutating `std::string`/`std::array`
+    /// builtins become a pure [`Rvalue::HeapOp`] assignment, and the
+    /// in-place mutators become a [`Statement::HeapMutate`].
+    ///
+    /// Each argument lowers by its declared [`BuiltinParamMode`], mirroring
+    /// [`Self::call`]'s per-mode discipline: a `take` argument (and a
+    /// `Copy`-typed `in` argument — `Int`, `Str`) is an ordinary operand
+    /// with the evaluation-order freeze; a non-`Copy` `in` argument (an
+    /// owned `String`/`Array` lent read-only) is a borrow-read **place**;
+    /// and a `mut` argument is a mutable place, exactly like a
+    /// [`PassMode::BorrowMut`] call argument.
     fn builtin_call(&mut self, expr: &Expr, builtin: Builtin, args: &[Expr]) -> Lowered {
-        let mut operands = Vec::with_capacity(args.len());
-        for (position, arg) in args.iter().enumerate() {
-            let arg_ty = self.expr_ty(arg)?;
-            let Some(value) = self.expr(arg)? else {
-                return Ok(None);
-            };
-            let operand = self.use_value(value, &arg_ty);
-            let later: Vec<&Expr> = args[position + 1..].iter().collect();
-            let operand = self.freeze_before(operand, arg.span, &later)?;
-            operands.push(operand);
+        enum LoweredArg {
+            Operand(Operand),
+            Borrow(Place),
+            Mut(Place),
         }
+        let modes = builtin.param_modes();
+        let mut lowered: Vec<LoweredArg> = Vec::with_capacity(args.len());
+        for (position, arg) in args.iter().enumerate() {
+            let mode = modes
+                .get(position)
+                .copied()
+                .unwrap_or(tuo_resolve::BuiltinParamMode::Take);
+            let arg_ty = self.expr_ty(arg)?;
+            match mode {
+                tuo_resolve::BuiltinParamMode::In if !self.is_copy(&arg_ty) => {
+                    let Some(value) = self.expr(arg)? else {
+                        return Ok(None);
+                    };
+                    let place = self.place_of(value, &arg_ty, arg.span)?;
+                    lowered.push(LoweredArg::Borrow(place));
+                }
+                tuo_resolve::BuiltinParamMode::Take | tuo_resolve::BuiltinParamMode::In => {
+                    let Some(value) = self.expr(arg)? else {
+                        return Ok(None);
+                    };
+                    let operand = self.use_value(value, &arg_ty);
+                    let later: Vec<&Expr> = args[position + 1..].iter().collect();
+                    let operand = self.freeze_before(operand, arg.span, &later)?;
+                    lowered.push(LoweredArg::Operand(operand));
+                }
+                tuo_resolve::BuiltinParamMode::Mut => {
+                    let place = self.lower_place(arg)?;
+                    lowered.push(LoweredArg::Mut(place));
+                }
+            }
+        }
+        // Split the lowered arguments into the shapes the MIR forms carry.
+        let operands: Vec<Operand> = lowered
+            .iter()
+            .filter_map(|arg| match arg {
+                LoweredArg::Operand(operand) => Some(operand.clone()),
+                LoweredArg::Borrow(_) | LoweredArg::Mut(_) => None,
+            })
+            .collect();
+        let first_borrow = lowered.iter().find_map(|arg| match arg {
+            LoweredArg::Borrow(place) => Some(place.clone()),
+            _ => None,
+        });
+        let first_mut = lowered.iter().find_map(|arg| match arg {
+            LoweredArg::Mut(place) => Some(place.clone()),
+            _ => None,
+        });
         let ret_ty = self.expr_ty(expr)?;
         let dest = self.temp(ret_ty, expr.span);
         let dest_place = Place::local(dest);
@@ -1681,14 +1785,69 @@ impl FnLower<'_> {
                     rvalue: Rvalue::StrOp { op, args: operands },
                 }
             }
-            Builtin::RtWrite | Builtin::RtReadByte | Builtin::RtExit => {
+            Builtin::RtWrite | Builtin::RtReadByte | Builtin::RtExit | Builtin::RtWriteString => {
                 let op = match builtin {
                     Builtin::RtWrite => EffectOp::Write,
                     Builtin::RtReadByte => EffectOp::ReadByte,
-                    _ => EffectOp::Exit,
+                    Builtin::RtExit => EffectOp::Exit,
+                    _ => EffectOp::WriteString,
                 };
+                // Effect arguments are call-style: operands pass by value,
+                // and `write_string`'s `String` is a read-only borrow.
+                let mut effect_args: Vec<Arg> = operands.into_iter().map(Arg::Value).collect();
+                if let Some(place) = first_borrow {
+                    effect_args.push(Arg::Borrow(place));
+                }
                 Statement::Effect {
                     op,
+                    args: effect_args,
+                    dest: dest_place.clone(),
+                }
+            }
+            Builtin::StringEmpty
+            | Builtin::StringFromStr
+            | Builtin::StringConcat
+            | Builtin::StringLen
+            | Builtin::StringByteAt
+            | Builtin::StringSlice
+            | Builtin::ArrayEmpty
+            | Builtin::ArrayLen
+            | Builtin::ArrayGet => {
+                let op = match builtin {
+                    Builtin::StringEmpty => HeapOp::StringEmpty,
+                    Builtin::StringFromStr => HeapOp::StringFromStr,
+                    Builtin::StringConcat => HeapOp::StringConcat,
+                    Builtin::StringLen => HeapOp::StringLen,
+                    Builtin::StringByteAt => HeapOp::StringByteAt,
+                    Builtin::StringSlice => HeapOp::StringSlice,
+                    Builtin::ArrayEmpty => HeapOp::ArrayEmpty,
+                    Builtin::ArrayLen => HeapOp::ArrayLen,
+                    _ => HeapOp::ArrayGet,
+                };
+                Statement::Assign {
+                    place: dest_place.clone(),
+                    rvalue: Rvalue::HeapOp {
+                        op,
+                        subject: first_borrow,
+                        args: operands,
+                    },
+                }
+            }
+            Builtin::StringPushByte
+            | Builtin::StringAppend
+            | Builtin::ArrayPush
+            | Builtin::ArrayPop => {
+                let op = match builtin {
+                    Builtin::StringPushByte => HeapMutOp::PushByte,
+                    Builtin::StringAppend => HeapMutOp::Append,
+                    Builtin::ArrayPush => HeapMutOp::Push,
+                    _ => HeapMutOp::Pop,
+                };
+                let target = first_mut
+                    .ok_or_else(|| "a heap mutator call has no `mut` place argument".to_owned())?;
+                Statement::HeapMutate {
+                    op,
+                    target,
                     args: operands,
                     dest: dest_place.clone(),
                 }
@@ -3000,7 +3159,9 @@ fn contains_error(ty: &Ty) -> bool {
         | Ty::Wrapper(_, item) => contains_error(item),
         Ty::Result(ok, err) => contains_error(ok) || contains_error(err),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_error),
-        Ty::Fn(fn_ty) => fn_ty.params.iter().any(contains_error) || contains_error(&fn_ty.ret),
+        Ty::Fn(fn_ty) => {
+            fn_ty.params.iter().any(|param| contains_error(&param.ty)) || contains_error(&fn_ty.ret)
+        }
     }
 }
 
@@ -3047,7 +3208,10 @@ fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
             params: fn_ty
                 .params
                 .iter()
-                .map(|item| instantiate(item, params, args))
+                .map(|param| tuo_types::FnParam {
+                    mode: param.mode,
+                    ty: instantiate(&param.ty, params, args),
+                })
                 .collect(),
             ret: instantiate(&fn_ty.ret, params, args),
         })),

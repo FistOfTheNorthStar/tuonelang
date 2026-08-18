@@ -27,9 +27,15 @@ pub enum TrapKind {
     IntegerOverflow,
     /// Integer division or remainder by zero.
     DivisionByZero,
-    /// An array index was out of bounds (a failed bounds-check assert, or an
-    /// out-of-range `Index` projection).
+    /// An array, `Str`, or `String` index was out of bounds (a failed
+    /// bounds-check assert, an out-of-range `Index` projection, or an
+    /// out-of-range `StrOp`/`HeapOp` argument).
     IndexOutOfBounds,
+    /// A byte-valued argument was outside `0..=255`
+    /// (`HeapMutate::PushByte`, ADR-0009). Appended to the taxonomy
+    /// together with the native `TrapCode::InvalidByte` — the taxonomy is
+    /// append-only.
+    InvalidByte,
     /// Control reached a point the front end proved unreachable — a
     /// [`tuo_mir::Trap::Unreachable`] or a failed exhaustiveness assumption.
     Unreachable,
@@ -54,6 +60,7 @@ impl TrapKind {
             Self::IntegerOverflow => "integer_overflow",
             Self::DivisionByZero => "division_by_zero",
             Self::IndexOutOfBounds => "index_out_of_bounds",
+            Self::InvalidByte => "invalid_byte",
             Self::Unreachable => "unreachable",
             Self::OutOfFuel => "out_of_fuel",
             Self::RecursionLimit => "recursion_limit",
@@ -71,6 +78,7 @@ impl TrapKind {
             Self::IntegerOverflow
                 | Self::DivisionByZero
                 | Self::IndexOutOfBounds
+                | Self::InvalidByte
                 | Self::Unreachable
         )
     }

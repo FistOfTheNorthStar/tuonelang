@@ -86,6 +86,12 @@ pub enum SyntaxKind {
     /// `[ type ; INT ]` — the fixed-capacity array type `[T; N]`
     /// (D, `[EXPERIMENTAL]` ADR-0004).
     FixedArrayType,
+    /// `fn ( [param_mode type {, param_mode type}] ) -> type` — the type of a
+    /// non-capturing function value (D, `[EXPERIMENTAL]` ADR-0008 Tier 1).
+    FnType,
+    /// `param_mode type` — one parameter of a `FnType` (mode + type, no name)
+    /// (D, `[EXPERIMENTAL]` ADR-0008 Tier 1).
+    FnTypeParam,
     /// `[type, type]` applied to a type or path (D).
     TypeArguments,
 

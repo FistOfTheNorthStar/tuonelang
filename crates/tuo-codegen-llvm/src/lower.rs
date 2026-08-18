@@ -36,14 +36,38 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is heap-**owning** (`String`, the growable `Array[T]`,
-//! `Box`/`Shared`/`Weak`) still makes the whole function unsupported (they
-//! await the allocator ADR). Aggregate lowering follows ADR-0004 and is
+//! A local whose type is a heap **wrapper** (`Box`/`Shared`/`Weak`) still makes
+//! the whole function unsupported (they await a later ADR). The owned `String`
+//! and the growable `Array[Int]`, by contrast, are lowered since ADR-0009 Stage
+//! B: their three-word `{ptr, len, cap}` header is an ordinary aggregate held in
+//! an alloca (moved by memcpy of the header, passed by-pointer, returned by
+//! sret), and the buffer it points at is real heap memory acquired through
+//! `tuo_rt_alloc` and freed by the `Drop` glue — see the "Heap values" section
+//! below. Aggregate lowering follows ADR-0004 and is
 //! byte-for-byte identical to the Cranelift backend: scalar leaves,
 //! by-pointer/sret call ABI, every size/offset from the runtime ABI. Fixed
 //! arrays are laid out inline — element `i` at `i × stride(T)` — and indexed
 //! by unchecked address arithmetic, because MIR asserts the bounds
 //! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use.
+//!
+//! # Heap values (ADR-0009 Stage B)
+//!
+//! Mirrors the Cranelift backend's heap-value lowering decision for decision (and
+//! therefore the reference interpreter's `eval_heap_op`/`exec_heap_mutate`): an
+//! owned `String` and a growable `Array[Int]` are three-word `{ptr, len, cap}`
+//! headers whose header lives in an alloca and whose buffer is separate heap
+//! memory. **Empty** writes `{ptr = ZERO_SIZE_SENTINEL, len = 0, cap = 0}` (never
+//! dereferenced, never freed); **constructors** (`from_str`, `concat`, `slice`)
+//! and **growth** (`push`/`append`/`push_byte`) call `tuo_rt_alloc` and copy;
+//! growth is *alloc-new + copy + dealloc-old* here (the C shim stays
+//! acquire/release only), doubling capacity, freeing the old buffer only when the
+//! old `cap != 0`; **reads** (`len`/`byte_at`/`get`) load the length/element,
+//! bounds-checking `byte_at`/`get` through the shared `guard()` `IndexOutOfBounds`
+//! path; `push_byte` traps `InvalidByte` before touching memory; and **`Drop`** of
+//! a `String`/`Array[Int]` frees the buffer with `tuo_rt_dealloc(ptr, cap ×
+//! stride, align)`, guarded on `cap != 0`. Only length, contents, and `pop`'s
+//! `Option` are observable, so any doubling policy agrees with the interpreter; a
+//! move de-initializes the moved-from place, so a buffer is freed exactly once.
 //!
 //! # Strings and effects (ADR-0006 Stage B)
 //!
@@ -101,15 +125,15 @@ use inkwell::values::{
 
 use tuo_codegen::CodegenError;
 use tuo_mir::{
-    BinOp, CastKind, Const, EffectOp, Function, Operand, PassMode, Place, Program, Projection,
-    Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
+    Arg, BinOp, Callee, CastKind, Const, EffectOp, Function, HeapMutOp, HeapOp, Operand, PassMode,
+    Place, Program, Projection, Rvalue, Statement, StrOp, Terminator, Trap, UnOp,
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
-use tuo_runtime::{TRAP_SYMBOL, TrapCode, effect};
-use tuo_types::{FloatKind, IntKind, Ty, TypeckResult};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
+use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 
@@ -117,6 +141,13 @@ use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 /// word past the data pointer (`{u8 *ptr, usize len}`, `specification/abi.md`
 /// "Slices").
 const STR_LEN_OFFSET: u64 = POINTER_SIZE;
+
+/// The byte offset of the `len` word inside a `String`/`Array` header
+/// (`{ptr, len, cap}`, `specification/abi.md`; the `ptr` word is at offset 0,
+/// loaded/stored through the header base directly).
+const HDR_LEN_OFFSET: u64 = POINTER_SIZE;
+/// The byte offset of the `cap` word inside a `String`/`Array` header.
+const HDR_CAP_OFFSET: u64 = 2 * POINTER_SIZE;
 
 /// How a MIR local is stored by the backend, decided once up front from its
 /// declared type. Parallels the Cranelift backend's `LocalKind` so the two make
@@ -192,37 +223,31 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
 /// yet, or `None` if `ty` is not one. Mirrors the Cranelift backend's
 /// `heap_type_refusal` word for word (bar the backend name), so the two
 /// backends refuse the same boundary with the same explanation. `Str` is no
-/// longer here: ADR-0006 Stage B lowers it as an ordinary two-word aggregate.
+/// longer here (ADR-0006 Stage B lowers it as a two-word aggregate), and since
+/// ADR-0009 Stage B neither are the owned `String` and the growable
+/// `Array[Int]` — they are three-word `{ptr, len, cap}` aggregates backed by
+/// real heap memory. Only the memory wrappers (`Box`/`Shared`/`Weak`) remain
+/// refused, awaiting a later ADR.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
-    let (what, road_back) = match ty {
-        Ty::String => (
-            "a `String` value",
-            "the owned `String` awaits the allocator ADR",
-        ),
-        Ty::Array(_) => (
-            "the growable `Array[T]`",
-            "it awaits the allocator ADR (the fixed `[T; N]` is lowered)",
-        ),
-        Ty::Wrapper(kind, _) => {
-            return Some(format!(
-                "`{context}` uses a `{}[T]` heap wrapper, which the LLVM backend does not \
-                 lower yet (heap wrappers await the allocator ADR); the interpreter \
-                 (`tuo spec`/`tuo verify`) remains the reference",
-                kind.name()
-            ));
-        }
-        _ => return None,
-    };
-    Some(format!(
-        "`{context}` uses {what}, which the LLVM backend does not lower yet ({road_back}); \
-         the interpreter (`tuo spec`/`tuo verify`) remains the reference"
-    ))
+    match ty {
+        Ty::Wrapper(kind, _) => Some(format!(
+            "`{context}` uses a `{}[T]` heap wrapper, which the LLVM backend does not \
+             lower yet (heap wrappers await a later ADR); the interpreter \
+             (`tuo spec`/`tuo verify`) remains the reference",
+            kind.name()
+        )),
+        _ => None,
+    }
 }
 
 /// Whether `ty` is a scalar the backend maps to an LLVM scalar, without needing
-/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int/float).
+/// a `Context`. Mirrors `scalar_type`'s domain (bool/char/int/float, plus the
+/// function-value code pointer, ADR-0008 Tier 1).
 fn scalar_type_is_some(ty: &Ty) -> bool {
-    matches!(ty, Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_))
+    matches!(
+        ty,
+        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) | Ty::Fn(_)
+    )
 }
 
 /// The linkage a compiled tuonelang function gets: external, so the entry (and
@@ -291,45 +316,89 @@ fn function_type<'ctx>(
     function: &Function,
     types: &TypeckResult,
 ) -> Result<inkwell::types::FunctionType<'ctx>, CodegenError> {
+    let params = function
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, mode)| (*mode, function.locals[index].ty.clone()));
+    fn_type_from_parts(ctx, &function.ret, params, types, &function.name)
+}
+
+/// Build the LLVM `FunctionType` for a `(ret, [(mode, ty)])` calling contract.
+///
+/// This is the single source of truth for the v0 call ABI, shared by the direct
+/// path ([`function_type`], over a `Function`'s declared params) and the
+/// indirect path (over the callee value's `Ty::Fn` modes+types), so the two can
+/// never drift — ADR-0008 Stage B requires the indirect-call convention to be
+/// byte-identical to the direct one. Applies the two aggregate rules: an
+/// aggregate return is an sret out-pointer prepended at index 0 (return becomes
+/// `void`), and an aggregate/borrow parameter is a `ptr`. `context` names the
+/// owner for a diagnostic on a non-scalar-by-value type.
+fn fn_type_from_parts<'ctx>(
+    ctx: &'ctx Context,
+    ret: &Ty,
+    params: impl Iterator<Item = (PassMode, Ty)>,
+    types: &TypeckResult,
+    context: &str,
+) -> Result<inkwell::types::FunctionType<'ctx>, CodegenError> {
     let ptr_ty = ctx.ptr_type(AddressSpace::default());
-    let mut params: Vec<BasicMetadataTypeEnum<'ctx>> =
-        Vec::with_capacity(function.params.len() + 1);
+    let mut param_tys: Vec<BasicMetadataTypeEnum<'ctx>> = Vec::new();
 
     // sret hidden out-pointer is ALWAYS argument index 0 (prepended).
-    let ret_storage = classify_storage(&function.ret, types, &function.name)?;
+    let ret_storage = classify_storage(ret, types, context)?;
     if matches!(ret_storage, Storage::Aggregate(_)) {
-        params.push(ptr_ty.into());
+        param_tys.push(ptr_ty.into());
     }
 
     // Parameters, in declaration order after the (optional) sret pointer.
     // Borrow-mode calling convention (identical in the Cranelift backend's
-    // `function_signature`, per `specification/abi.md` "Passing modes"): an
+    // `signature_from_parts`, per `specification/abi.md` "Passing modes"): an
     // `in`/`mut` parameter arrives as a **pointer to the caller's place** —
     // scalar or aggregate alike — read (and, for `mut`, written) through
     // directly, with no copy-in and no copy-back. A `take` parameter is
     // unchanged: scalar by value, aggregate by pointer to a caller-owned copy,
     // unit occupying no ABI slot (in any mode).
-    for (index, mode) in function.params.iter().enumerate() {
-        let ty = &function.locals[index].ty;
-        let storage = classify_storage(ty, types, &function.name)?;
+    for (mode, ty) in params {
+        let storage = classify_storage(&ty, types, context)?;
         match (mode, storage) {
             (_, Storage::Unit) => {}
             (PassMode::Value, Storage::Scalar) => {
-                params.push(require_scalar(ctx, ty, &function.name)?.into());
+                param_tys.push(require_scalar(ctx, &ty, context)?.into());
             }
             (PassMode::Value, Storage::Aggregate(_))
-            | (PassMode::Borrow | PassMode::BorrowMut, _) => params.push(ptr_ty.into()),
+            | (PassMode::Borrow | PassMode::BorrowMut, _) => param_tys.push(ptr_ty.into()),
         }
     }
 
     // Return: scalar by value; aggregate is void (written through sret); unit is
     // void.
     Ok(match ret_storage {
-        Storage::Scalar => {
-            require_scalar(ctx, &function.ret, &function.name)?.fn_type(&params, false)
-        }
-        Storage::Unit | Storage::Aggregate(_) => ctx.void_type().fn_type(&params, false),
+        Storage::Scalar => require_scalar(ctx, ret, context)?.fn_type(&param_tys, false),
+        Storage::Unit | Storage::Aggregate(_) => ctx.void_type().fn_type(&param_tys, false),
     })
+}
+
+/// The MIR [`PassMode`] a function-type parameter's [`ParamMode`] corresponds
+/// to. A function value's per-argument borrow discipline at an indirect call
+/// site is driven by these modes exactly as a direct call's is by its declared
+/// `PassMode`s (ADR-0008 Tier 1); the two vocabularies map one-to-one.
+fn pass_mode_of(mode: ParamMode) -> PassMode {
+    match mode {
+        ParamMode::Take => PassMode::Value,
+        ParamMode::In => PassMode::Borrow,
+        ParamMode::Mut => PassMode::BorrowMut,
+    }
+}
+
+/// The function-type [`ParamMode`] a MIR [`PassMode`] corresponds to — the
+/// inverse of [`pass_mode_of`]. Used to reconstruct a `Const::Fn`'s `Ty::Fn`
+/// from the referenced function's MIR signature.
+fn param_mode_of(mode: PassMode) -> ParamMode {
+    match mode {
+        PassMode::Value => ParamMode::Take,
+        PassMode::Borrow => ParamMode::In,
+        PassMode::BorrowMut => ParamMode::Mut,
+    }
 }
 
 /// The scalar LLVM type of `ty`, or an unsupported error naming `context`.
@@ -544,17 +613,21 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_statement(&mut self, statement: &Statement) -> Result<(), CodegenError> {
         match statement {
             Statement::Assign { place, rvalue } => self.lower_assign(place, rvalue),
-            Statement::Call { dest, callee, args } => self.lower_call(dest, *callee, args),
+            Statement::Call { dest, callee, args } => self.lower_call(dest, callee, args),
             // A host effect (`std::rt`, ADR-0006 Stage B): a direct call to
             // the matching `tuo_runtime::effect` symbol, which the CLI links
             // into every built binary alongside the trap shim.
             Statement::Effect { op, args, dest } => self.lower_effect(*op, args, dest),
-            Statement::Drop { .. } => {
-                // v0 supported values own no host resource; a Stage-1 aggregate
-                // owns no heap (scalar fields only), so its drop is a no-op too,
-                // exactly like a scalar's. Nothing to emit.
-                Ok(())
-            }
+            // An in-place heap mutation (ADR-0009 Stage B): mutate the owned
+            // `String`/`Array[Int]` at `target` through its header, growing the
+            // buffer when needed, and store the op's result into `dest`.
+            Statement::HeapMutate {
+                op,
+                target,
+                args,
+                dest,
+            } => self.lower_heap_mutate(*op, target, args, dest),
+            Statement::Drop { place } => self.lower_drop(place),
         }
     }
 
@@ -570,6 +643,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 op: StrOp::Slice,
                 args,
             } => self.lower_str_slice(place, args),
+            // A heap op that *produces* an owned `String`/`Array[Int]` (a
+            // three-word header) is materialized in place into the
+            // destination's header storage (ADR-0009 Stage B); the scalar-valued
+            // reads take the scalar rvalue path below.
+            Rvalue::HeapOp { op, subject, args } if heap_op_produces_aggregate(*op) => {
+                self.lower_heap_op_aggregate(place, *op, subject.as_ref(), args)
+            }
             // A unit-valued copy/move (a unit local, or a zero-sized aggregate
             // such as `[T; 0]`) carries no bytes: nothing to emit.
             Rvalue::Use(operand) if self.operand_is_unit(operand) => Ok(()),
@@ -589,18 +669,61 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_call(
         &mut self,
         dest: &Place,
-        callee: SymbolId,
-        args: &[tuo_mir::Arg],
+        callee: &Callee,
+        args: &[Arg],
     ) -> Result<(), CodegenError> {
-        let Some(&callee_fn) = self.ids.get(&callee) else {
-            return Err(CodegenError::unsupported(
-                "call to a function outside the lowered program (v0 has no external calls)",
-            ));
+        // Resolve the call target. A `Direct` call names a function symbol and
+        // calls its `FunctionValue`. An `Indirect` call (ADR-0008 Tier 1) loads
+        // a runtime code-pointer value from the callee operand and calls it
+        // through a `FunctionType` derived from the callee's `Ty::Fn`. Both
+        // share the *entire* argument/sret/borrow marshalling and return
+        // handling below — the only difference is the call instruction.
+        //
+        // The callee's return type drives the sret decision, so resolve it here.
+        // The interpreter evaluates the indirect callee operand before its
+        // arguments; match that ordering by loading the pointer first.
+        enum CallTarget<'ctx> {
+            Direct(FunctionValue<'ctx>),
+            Indirect(PointerValue<'ctx>, inkwell::types::FunctionType<'ctx>),
+        }
+        let (target, callee_ret): (CallTarget<'ctx>, Ty) = match callee {
+            Callee::Direct(symbol) => {
+                let Some(&callee_fn) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "call to a function outside the lowered program (v0 has no external \
+                         calls)",
+                    ));
+                };
+                let callee_mir = self.function_named(*symbol)?;
+                (CallTarget::Direct(callee_fn), callee_mir.ret.clone())
+            }
+            Callee::Indirect(operand) => {
+                // The callee value's `Ty::Fn` carries the whole calling
+                // contract (param modes+types and the return type).
+                let Some(Ty::Fn(fn_ty)) = self.operand_ty(operand) else {
+                    return Err(CodegenError::backend(
+                        "an indirect call's callee operand is not of function type (verified MIR \
+                         guarantees it is)",
+                    ));
+                };
+                let callee_ptr = self.lower_operand(operand)?.into_pointer_value();
+                let fn_type = fn_type_from_parts(
+                    self.ctx,
+                    &fn_ty.ret,
+                    fn_ty
+                        .params
+                        .iter()
+                        .map(|p| (pass_mode_of(p.mode), p.ty.clone())),
+                    self.types,
+                    &self.function.name,
+                )?;
+                (CallTarget::Indirect(callee_ptr, fn_type), fn_ty.ret.clone())
+            }
         };
-        let callee_mir = self.function_named(callee)?;
+
         let dest_ty = self.place_type(dest);
         let ret_is_aggregate = matches!(
-            classify_storage(&callee_mir.ret, self.types, &callee_mir.name)?,
+            classify_storage(&callee_ret, self.types, &self.function.name)?,
             Storage::Aggregate(_)
         );
 
@@ -609,7 +732,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         // sret out-pointer, if the callee returns an aggregate.
         let sret = if ret_is_aggregate {
-            let layout = self.layout(&callee_mir.ret)?;
+            let layout = self.layout(&callee_ret)?;
             let (ptr, addr) = self.sret_destination(dest, &dest_ty, layout)?;
             arg_values.push(addr.into());
             Some((ptr, layout))
@@ -619,7 +742,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         for arg in args {
             match arg {
-                tuo_mir::Arg::Value(operand) => {
+                Arg::Value(operand) => {
                     if self.operand_is_unit(operand) {
                         // A unit argument carries no native value.
                     } else if self.operand_is_aggregate(operand) {
@@ -629,7 +752,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         arg_values.push(self.lower_operand(operand)?.into());
                     }
                 }
-                tuo_mir::Arg::Borrow(place) | tuo_mir::Arg::BorrowMut(place) => {
+                Arg::Borrow(place) | Arg::BorrowMut(place) => {
                     // Borrow-mode argument: pass the ADDRESS of the caller's
                     // place (the callee reads/writes through it directly; no
                     // copy-in, no copy-back). A unit-typed borrow occupies no
@@ -646,10 +769,16 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
         }
 
-        let call = self
-            .builder
-            .build_call(callee_fn, &arg_values, "call")
-            .map_err(builder_err("emitting a call"))?;
+        let call = match target {
+            CallTarget::Direct(callee_fn) => self
+                .builder
+                .build_call(callee_fn, &arg_values, "call")
+                .map_err(builder_err("emitting a call"))?,
+            CallTarget::Indirect(callee_ptr, fn_type) => self
+                .builder
+                .build_indirect_call(fn_type, callee_ptr, &arg_values, "call")
+                .map_err(builder_err("emitting an indirect call"))?,
+        };
 
         if let Some((ptr, layout)) = sret {
             // The callee wrote the aggregate result into the sret slot. If dest
@@ -887,6 +1016,19 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                      `lower_assign`)",
                 )),
             },
+            // The scalar-valued ADR-0009 heap reads (`string_len`,
+            // `string_byte_at`, `array_len`, `array_get`). The aggregate-
+            // producing heap ops are materialized by `lower_assign` and never
+            // reach here.
+            Rvalue::HeapOp { op, subject, args } => {
+                if heap_op_produces_aggregate(*op) {
+                    return Err(CodegenError::backend(
+                        "an aggregate-producing heap op reached the scalar rvalue path (it is \
+                         materialized by `lower_assign`)",
+                    ));
+                }
+                self.lower_heap_op_scalar(*op, subject.as_ref(), args)
+            }
             // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
             // length is lowered as a constant and the MIR verifier rejects
             // `Len` of a fixed-array place), so refusing it entirely stays
@@ -935,6 +1077,20 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 "a `Str` constant reached the scalar constant path (it is materialized via \
                  static data by the aggregate machinery)",
             )),
+            // A function value (ADR-0008 Tier 1) is the address of the named
+            // top-level function — a pointer-width code pointer. The function's
+            // `FunctionValue` *is* a global; its pointer value is the code
+            // address, which flows through all scalar machinery (locals, moves
+            // are copies since it is `Copy`, params, returns) unchanged.
+            Const::Fn(symbol) => {
+                let Some(&callee_fn) = self.ids.get(symbol) else {
+                    return Err(CodegenError::unsupported(
+                        "a function value naming a function outside the lowered program (v0 has \
+                         no external functions)",
+                    ));
+                };
+                Ok(callee_fn.as_global_value().as_pointer_value().into())
+            }
         }
     }
 
@@ -1976,16 +2132,26 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     fn lower_effect(
         &mut self,
         op: EffectOp,
-        args: &[Operand],
+        args: &[Arg],
         dest: &Place,
     ) -> Result<(), CodegenError> {
+        // Every ADR-0006 effect argument is a by-value operand; the borrow
+        // form only appears with `WriteString`, which is refused below.
+        let value_arg = |arg: &Arg| -> Result<Operand, CodegenError> {
+            match arg {
+                Arg::Value(operand) => Ok(operand.clone()),
+                Arg::Borrow(_) | Arg::BorrowMut(_) => Err(CodegenError::backend(
+                    "an ADR-0006 effect argument must be a by-value operand",
+                )),
+            }
+        };
         match op {
             EffectOp::Write => {
                 let [fd, text] = args else {
-                    return Err(CodegenError::backend("write expects exactly 2 operands"));
+                    return Err(CodegenError::backend("write expects exactly 2 arguments"));
                 };
-                let fd = self.lower_operand(fd)?;
-                let (ptr, len) = self.str_operand_parts(text)?;
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let (ptr, len) = self.str_operand_parts(&value_arg(text)?)?;
                 let call = self
                     .builder
                     .build_call(
@@ -1999,9 +2165,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
             EffectOp::ReadByte => {
                 let [fd] = args else {
-                    return Err(CodegenError::backend("read_byte expects exactly 1 operand"));
+                    return Err(CodegenError::backend(
+                        "read_byte expects exactly 1 argument",
+                    ));
                 };
-                let fd = self.lower_operand(fd)?;
+                let fd = self.lower_operand(&value_arg(fd)?)?;
                 let call = self
                     .builder
                     .build_call(self.effect_function(op), &[fd.into()], "rt_read_byte")
@@ -2009,11 +2177,49 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 let result = call.try_as_basic_value().unwrap_basic();
                 self.write_place(dest, result)
             }
+            // `write_string(fd, in s: String)` (ADR-0009 Stage B): load the
+            // `{ptr, len}` from the borrowed `String` header and call the same
+            // `tuo_rt_write` symbol `write` uses.
+            EffectOp::WriteString => {
+                let [fd, s] = args else {
+                    return Err(CodegenError::backend(
+                        "write_string expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let header = match s {
+                    Arg::Borrow(place) => self.borrow_address(place)?,
+                    Arg::Value(_) | Arg::BorrowMut(_) => {
+                        return Err(CodegenError::backend(
+                            "write_string's String argument must be an `in` borrow",
+                        ));
+                    }
+                };
+                let ptr = self
+                    .builder
+                    .build_load(self.ptr_ty, header, "ws_ptr")
+                    .map_err(builder_err("loading the String data pointer"))?;
+                let len_addr = self.byte_gep(header, HDR_LEN_OFFSET)?;
+                let len = self
+                    .builder
+                    .build_load(self.ctx.i64_type(), len_addr, "ws_len")
+                    .map_err(builder_err("loading the String length"))?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(EffectOp::Write),
+                        &[fd.into(), ptr.into(), len.into()],
+                        "rt_write_string",
+                    )
+                    .map_err(builder_err("calling write_string"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
             EffectOp::Exit => {
                 let [code] = args else {
-                    return Err(CodegenError::backend("exit expects exactly 1 operand"));
+                    return Err(CodegenError::backend("exit expects exactly 1 argument"));
                 };
-                let code = self.lower_operand(code)?;
+                let code = self.lower_operand(&value_arg(code)?)?;
                 self.builder
                     .build_call(self.effect_function(op), &[code.into()], "")
                     .map_err(builder_err("calling the exit effect"))?;
@@ -2047,6 +2253,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 effect::EXIT_SYMBOL,
                 self.ctx.void_type().fn_type(&[i64_ty.into()], false),
             ),
+            // `write_string` writes bytes through the same `tuo_rt_write`
+            // symbol as `write` (its lowering passes `EffectOp::Write` here);
+            // this arm maps to the write symbol so it is never a landmine.
+            EffectOp::WriteString => (
+                effect::WRITE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), self.ptr_ty.into(), i64_ty.into()], false),
+            ),
         };
         if let Some(existing) = self.module.get_function(name) {
             return existing;
@@ -2073,6 +2286,651 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         );
         self.module
             .add_function("memcmp", fn_type, Some(Linkage::External))
+    }
+
+    // ----- heap values (ADR-0009 Stage B) -----
+
+    /// Declare (once per module, on demand) and return `tuo_rt_alloc(size,
+    /// align) -> ptr`, mirroring how the trap/effect symbols are imported. The
+    /// CLI links the allocator C shim into every built binary.
+    fn alloc_function(&self) -> FunctionValue<'ctx> {
+        if let Some(existing) = self.module.get_function(alloc::ALLOC_SYMBOL) {
+            return existing;
+        }
+        let i64_ty = self.ctx.i64_type();
+        let fn_type = self.ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        self.module
+            .add_function(alloc::ALLOC_SYMBOL, fn_type, Some(Linkage::External))
+    }
+
+    /// Declare (once per module, on demand) and return `tuo_rt_dealloc(ptr,
+    /// size, align)`.
+    fn dealloc_function(&self) -> FunctionValue<'ctx> {
+        if let Some(existing) = self.module.get_function(alloc::DEALLOC_SYMBOL) {
+            return existing;
+        }
+        let i64_ty = self.ctx.i64_type();
+        let fn_type = self
+            .ctx
+            .void_type()
+            .fn_type(&[self.ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+        self.module
+            .add_function(alloc::DEALLOC_SYMBOL, fn_type, Some(Linkage::External))
+    }
+
+    /// Call `tuo_rt_alloc(bytes, align)` and return the buffer pointer (never
+    /// null — the runtime traps on OOM).
+    fn rt_alloc(
+        &self,
+        bytes: IntValue<'ctx>,
+        align: u64,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let align = self.ctx.i64_type().const_int(align, false);
+        let call = self
+            .builder
+            .build_call(
+                self.alloc_function(),
+                &[bytes.into(), align.into()],
+                "rt_alloc",
+            )
+            .map_err(builder_err("calling the runtime alloc"))?;
+        Ok(call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value())
+    }
+
+    /// Call `tuo_rt_dealloc(ptr, bytes, align)`.
+    fn rt_dealloc(
+        &self,
+        ptr: PointerValue<'ctx>,
+        bytes: IntValue<'ctx>,
+        align: u64,
+    ) -> Result<(), CodegenError> {
+        let align = self.ctx.i64_type().const_int(align, false);
+        self.builder
+            .build_call(
+                self.dealloc_function(),
+                &[ptr.into(), bytes.into(), align.into()],
+                "",
+            )
+            .map_err(builder_err("calling the runtime dealloc"))?;
+        Ok(())
+    }
+
+    /// The fixed non-null sentinel pointer for an empty (zero-capacity) heap
+    /// value, matching `alloc::ZERO_SIZE_SENTINEL`.
+    fn zero_size_sentinel(&self) -> Result<PointerValue<'ctx>, CodegenError> {
+        let sentinel = self
+            .ctx
+            .i64_type()
+            .const_int(alloc::ZERO_SIZE_SENTINEL as u64, false);
+        self.builder
+            .build_int_to_ptr(sentinel, self.ptr_ty, "sentinel")
+            .map_err(builder_err("materializing the zero-size sentinel"))
+    }
+
+    /// A whole-header address for `place`: a bare `String`/`Array` local's
+    /// alloca, a projected header, or a borrowed header parameter.
+    fn header_address(&mut self, place: &Place) -> Result<PointerValue<'ctx>, CodegenError> {
+        self.aggregate_dest_address(place)
+    }
+
+    /// Load the `{ptr, len, cap}` words of a header at `base`.
+    fn load_header(
+        &mut self,
+        base: PointerValue<'ctx>,
+    ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>, IntValue<'ctx>), CodegenError> {
+        let ptr = self
+            .builder
+            .build_load(self.ptr_ty, base, "hdr_ptr")
+            .map_err(builder_err("loading the header pointer"))?
+            .into_pointer_value();
+        let len_addr = self.byte_gep(base, HDR_LEN_OFFSET)?;
+        let len = self
+            .builder
+            .build_load(self.ctx.i64_type(), len_addr, "hdr_len")
+            .map_err(builder_err("loading the header length"))?
+            .into_int_value();
+        let cap_addr = self.byte_gep(base, HDR_CAP_OFFSET)?;
+        let cap = self
+            .builder
+            .build_load(self.ctx.i64_type(), cap_addr, "hdr_cap")
+            .map_err(builder_err("loading the header capacity"))?
+            .into_int_value();
+        Ok((ptr, len, cap))
+    }
+
+    /// Store the `{ptr, len, cap}` words of a header at `base`.
+    fn store_header(
+        &mut self,
+        base: PointerValue<'ctx>,
+        ptr: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        cap: IntValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        self.builder
+            .build_store(base, ptr)
+            .map_err(builder_err("storing the header pointer"))?;
+        let len_addr = self.byte_gep(base, HDR_LEN_OFFSET)?;
+        self.builder
+            .build_store(len_addr, len)
+            .map_err(builder_err("storing the header length"))?;
+        let cap_addr = self.byte_gep(base, HDR_CAP_OFFSET)?;
+        self.builder
+            .build_store(cap_addr, cap)
+            .map_err(builder_err("storing the header capacity"))?;
+        Ok(())
+    }
+
+    /// The element stride of a heap value's buffer: `1` for a `String`,
+    /// `stride(Int)` for an `Array[Int]`.
+    fn heap_stride(&self, place: &Place) -> Result<u64, CodegenError> {
+        match self.place_type(place) {
+            Ty::String => Ok(1),
+            Ty::Array(element) => Ok(self.layout(&element)?.stride()),
+            other => Err(CodegenError::backend(format!(
+                "a heap operation targeted a non-heap type: {other:?}"
+            ))),
+        }
+    }
+
+    /// The dealloc alignment of a heap value's buffer.
+    fn heap_align(&self, place: &Place) -> Result<u64, CodegenError> {
+        match self.place_type(place) {
+            Ty::String => Ok(1),
+            Ty::Array(element) => Ok(self.layout(&element)?.align),
+            other => Err(CodegenError::backend(format!(
+                "a heap operation targeted a non-heap type: {other:?}"
+            ))),
+        }
+    }
+
+    /// A runtime `memcpy` of `count` bytes from `src` to `dest` (non-
+    /// overlapping; `count` is a runtime value). Buffers are byte-aligned.
+    fn heap_memcpy(
+        &self,
+        dest: PointerValue<'ctx>,
+        src: PointerValue<'ctx>,
+        count: IntValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        self.builder
+            .build_memcpy(dest, 1, src, 1, count)
+            .map_err(builder_err("copying heap bytes"))?;
+        Ok(())
+    }
+
+    /// Materialize an aggregate-producing heap op into `dest`'s three-word
+    /// header storage, matching the interpreter's `eval_heap_op`.
+    fn lower_heap_op_aggregate(
+        &mut self,
+        dest: &Place,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<(), CodegenError> {
+        match op {
+            HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
+                let base = self.aggregate_dest_address(dest)?;
+                let sentinel = self.zero_size_sentinel()?;
+                let zero = self.ctx.i64_type().const_zero();
+                self.store_header(base, sentinel, zero, zero)
+            }
+            HeapOp::StringFromStr => {
+                let s = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("string_from_str is missing its Str"))?;
+                let (src_ptr, len) = self.str_operand_parts(s)?;
+                self.build_owned_from_bytes(dest, src_ptr, len)
+            }
+            HeapOp::StringConcat => {
+                let [a, b] = args else {
+                    return Err(CodegenError::backend(
+                        "string_concat expects 2 Str operands",
+                    ));
+                };
+                let (ptr_a, len_a) = self.str_operand_parts(a)?;
+                let (ptr_b, len_b) = self.str_operand_parts(b)?;
+                let total = self
+                    .builder
+                    .build_int_add(len_a, len_b, "concat_len")
+                    .map_err(builder_err("computing the concat length"))?;
+                let buf = self.rt_alloc(total, 1)?;
+                self.heap_memcpy(buf, ptr_a, len_a)?;
+                let dest_b = self.dynamic_byte_gep(buf, len_a, 1)?;
+                self.heap_memcpy(dest_b, ptr_b, len_b)?;
+                let base = self.aggregate_dest_address(dest)?;
+                self.store_header(base, buf, total, total)
+            }
+            HeapOp::StringSlice => {
+                let subject = subject.ok_or_else(|| {
+                    CodegenError::backend("string_slice is missing its String subject")
+                })?;
+                let [a, b] = args else {
+                    return Err(CodegenError::backend(
+                        "string_slice expects 2 index operands",
+                    ));
+                };
+                let header = self.header_address(subject)?;
+                let (src_ptr, len, _cap) = self.load_header(header)?;
+                let start = self.lower_operand(a)?.into_int_value();
+                let end = self.lower_operand(b)?.into_int_value();
+                let bad_order = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, start, end, "slice_bad_order")
+                    .map_err(builder_err("comparing the slice bounds"))?;
+                self.guard(bad_order, TrapCode::IndexOutOfBounds)?;
+                let bad_end = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, end, len, "slice_bad_end")
+                    .map_err(builder_err("comparing the slice end"))?;
+                self.guard(bad_end, TrapCode::IndexOutOfBounds)?;
+                let count = self
+                    .builder
+                    .build_int_sub(end, start, "slice_len")
+                    .map_err(builder_err("computing the slice length"))?;
+                let range_ptr = self.dynamic_byte_gep(src_ptr, start, 1)?;
+                self.build_owned_from_bytes(dest, range_ptr, count)
+            }
+            _ => Err(CodegenError::backend(
+                "a non-aggregate heap op reached `lower_heap_op_aggregate`",
+            )),
+        }
+    }
+
+    /// Build an owned `String` in `dest` from `count` bytes at `src`: alloc
+    /// `count` bytes (align 1), copy them in, header `{buf, count, count}`.
+    fn build_owned_from_bytes(
+        &mut self,
+        dest: &Place,
+        src: PointerValue<'ctx>,
+        count: IntValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let buf = self.rt_alloc(count, 1)?;
+        self.heap_memcpy(buf, src, count)?;
+        let base = self.aggregate_dest_address(dest)?;
+        self.store_header(base, buf, count, count)
+    }
+
+    /// Lower a scalar-valued heap read (`string_len`, `string_byte_at`,
+    /// `array_len`, `array_get`) to an `i64`, matching the interpreter.
+    fn lower_heap_op_scalar(
+        &mut self,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let subject = subject
+            .ok_or_else(|| CodegenError::backend("a heap read is missing its subject place"))?;
+        let header = self.header_address(subject)?;
+        let (ptr, len, _cap) = self.load_header(header)?;
+        match op {
+            HeapOp::StringLen | HeapOp::ArrayLen => Ok(len.into()),
+            HeapOp::StringByteAt => {
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, index, len, "byte_oob")
+                    .map_err(builder_err("bounds-checking a String byte index"))?;
+                self.guard(oob, TrapCode::IndexOutOfBounds)?;
+                let addr = self.dynamic_byte_gep(ptr, index, 1)?;
+                let byte = self
+                    .builder
+                    .build_load(self.ctx.i8_type(), addr, "byte")
+                    .map_err(builder_err("loading a String byte"))?
+                    .into_int_value();
+                Ok(self
+                    .builder
+                    .build_int_z_extend(byte, self.ctx.i64_type(), "byte_i64")
+                    .map_err(builder_err("widening a String byte"))?
+                    .into())
+            }
+            HeapOp::ArrayGet => {
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, index, len, "get_oob")
+                    .map_err(builder_err("bounds-checking an array index"))?;
+                self.guard(oob, TrapCode::IndexOutOfBounds)?;
+                let stride = self.heap_stride(subject)?;
+                let addr = self.dynamic_byte_gep(ptr, index, stride)?;
+                Ok(self
+                    .builder
+                    .build_load(self.ctx.i64_type(), addr, "elem")
+                    .map_err(builder_err("loading an array element"))?)
+            }
+            _ => Err(CodegenError::backend(
+                "an aggregate-producing heap op reached `lower_heap_op_scalar`",
+            )),
+        }
+    }
+
+    /// The single integer index operand of a `byte_at`/`get`/`push`/`push_byte`.
+    fn heap_index_arg(&mut self, args: &[Operand]) -> Result<IntValue<'ctx>, CodegenError> {
+        let index = args
+            .first()
+            .ok_or_else(|| CodegenError::backend("a heap index op is missing its operand"))?;
+        Ok(self.lower_operand(index)?.into_int_value())
+    }
+
+    /// Lower `Statement::HeapMutate`, matching the interpreter's
+    /// `exec_heap_mutate`. `push_byte` traps `InvalidByte` before any state
+    /// change; growth is alloc-new + copy + dealloc-old.
+    fn lower_heap_mutate(
+        &mut self,
+        op: HeapMutOp,
+        target: &Place,
+        args: &[Operand],
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        let stride = self.heap_stride(target)?;
+        let align = self.heap_align(target)?;
+        match op {
+            HeapMutOp::PushByte => {
+                let byte = self.heap_index_arg(args)?;
+                let limit = self.ctx.i64_type().const_int(255, false);
+                let too_big = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, byte, limit, "byte_range")
+                    .map_err(builder_err("range-checking a pushed byte"))?;
+                self.guard(too_big, TrapCode::InvalidByte)?;
+                let one = self.ctx.i64_type().const_int(1, false);
+                let buf = self.ensure_capacity(target, one, stride, align)?;
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header)?;
+                let addr = self.dynamic_byte_gep(buf, len, 1)?;
+                let byte8 = self
+                    .builder
+                    .build_int_truncate(byte, self.ctx.i8_type(), "byte8")
+                    .map_err(builder_err("truncating a pushed byte"))?;
+                self.builder
+                    .build_store(addr, byte8)
+                    .map_err(builder_err("storing a pushed byte"))?;
+                self.bump_len(header, len, one)?;
+                Ok(())
+            }
+            HeapMutOp::Append => {
+                let t = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("append is missing its Str"))?;
+                let (t_ptr, t_len) = self.str_operand_parts(t)?;
+                let buf = self.ensure_capacity(target, t_len, stride, align)?;
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header)?;
+                let dest_addr = self.dynamic_byte_gep(buf, len, 1)?;
+                self.heap_memcpy(dest_addr, t_ptr, t_len)?;
+                self.bump_len(header, len, t_len)?;
+                Ok(())
+            }
+            HeapMutOp::Push => {
+                let v = self.heap_index_arg(args)?;
+                let one = self.ctx.i64_type().const_int(1, false);
+                let buf = self.ensure_capacity(target, one, stride, align)?;
+                let header = self.header_address(target)?;
+                let (_ptr, len, _cap) = self.load_header(header)?;
+                let addr = self.dynamic_byte_gep(buf, len, stride)?;
+                self.builder
+                    .build_store(addr, v)
+                    .map_err(builder_err("storing a pushed element"))?;
+                self.bump_len(header, len, one)?;
+                Ok(())
+            }
+            HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+        }
+    }
+
+    /// Store `len + delta` into the header's `len` word.
+    fn bump_len(
+        &mut self,
+        header: PointerValue<'ctx>,
+        len: IntValue<'ctx>,
+        delta: IntValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let new_len = self
+            .builder
+            .build_int_add(len, delta, "new_len")
+            .map_err(builder_err("incrementing the header length"))?;
+        let len_addr = self.byte_gep(header, HDR_LEN_OFFSET)?;
+        self.builder
+            .build_store(len_addr, new_len)
+            .map_err(builder_err("storing the new length"))?;
+        Ok(())
+    }
+
+    /// Ensure `target`'s buffer has room for `extra` more elements: if `len +
+    /// extra > cap`, allocate `max(needed, cap*2, 1)` capacity, copy the live
+    /// `len × stride` bytes, free the old buffer (only when the old `cap != 0`),
+    /// and update the header's `ptr`/`cap`. Returns the (possibly new) buffer
+    /// pointer, `len` unchanged. Mirrors the Cranelift backend's
+    /// `ensure_capacity`.
+    fn ensure_capacity(
+        &mut self,
+        target: &Place,
+        extra: IntValue<'ctx>,
+        stride: u64,
+        align: u64,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let header = self.header_address(target)?;
+        let (ptr, len, cap) = self.load_header(header)?;
+        let i64_ty = self.ctx.i64_type();
+        let needed = self
+            .builder
+            .build_int_add(len, extra, "needed")
+            .map_err(builder_err("computing the needed capacity"))?;
+        let fits = self
+            .builder
+            .build_int_compare(IntPredicate::ULE, needed, cap, "fits")
+            .map_err(builder_err("comparing needed to capacity"))?;
+
+        let start_block = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| CodegenError::backend("ensure_capacity outside a block"))?;
+        let grow_block = self.ctx.append_basic_block(self.value, "grow");
+        let done_block = self.ctx.append_basic_block(self.value, "grow_done");
+        self.builder
+            .build_conditional_branch(fits, done_block, grow_block)
+            .map_err(builder_err("branching on capacity"))?;
+
+        // Grow: new_cap = max(needed, cap*2, 1).
+        self.builder.position_at_end(grow_block);
+        let two = i64_ty.const_int(2, false);
+        let doubled = self
+            .builder
+            .build_int_mul(cap, two, "doubled")
+            .map_err(builder_err("doubling the capacity"))?;
+        let need_ge_double = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, needed, doubled, "need_ge_double")
+            .map_err(builder_err("comparing needed to doubled"))?;
+        let max1 = self
+            .builder
+            .build_select(need_ge_double, needed, doubled, "cap_max")
+            .map_err(builder_err("selecting the grown capacity"))?
+            .into_int_value();
+        let one = i64_ty.const_int(1, false);
+        let ge_one = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, max1, one, "ge_one")
+            .map_err(builder_err("comparing the grown capacity to one"))?;
+        let new_cap = self
+            .builder
+            .build_select(ge_one, max1, one, "new_cap")
+            .map_err(builder_err("flooring the grown capacity at one"))?
+            .into_int_value();
+        let stride_c = i64_ty.const_int(stride, false);
+        let new_bytes = self
+            .builder
+            .build_int_mul(new_cap, stride_c, "new_bytes")
+            .map_err(builder_err("computing the new byte size"))?;
+        let new_buf = self.rt_alloc(new_bytes, align)?;
+        let live_bytes = self
+            .builder
+            .build_int_mul(len, stride_c, "live_bytes")
+            .map_err(builder_err("computing the live byte count"))?;
+        self.heap_memcpy(new_buf, ptr, live_bytes)?;
+        // Free the old buffer only when the old cap != 0.
+        let old_has_buf = self
+            .builder
+            .build_int_compare(IntPredicate::NE, cap, i64_ty.const_zero(), "old_has_buf")
+            .map_err(builder_err("checking the old capacity"))?;
+        let free_block = self.ctx.append_basic_block(self.value, "grow_free");
+        let after_free = self.ctx.append_basic_block(self.value, "grow_after_free");
+        self.builder
+            .build_conditional_branch(old_has_buf, free_block, after_free)
+            .map_err(builder_err("branching on the old capacity"))?;
+        self.builder.position_at_end(free_block);
+        let old_bytes = self
+            .builder
+            .build_int_mul(cap, stride_c, "old_bytes")
+            .map_err(builder_err("computing the old byte size"))?;
+        self.rt_dealloc(ptr, old_bytes, align)?;
+        self.builder
+            .build_unconditional_branch(after_free)
+            .map_err(builder_err("joining after the free"))?;
+        self.builder.position_at_end(after_free);
+        // Write the new ptr/cap into the header (len unchanged).
+        self.builder
+            .build_store(header, new_buf)
+            .map_err(builder_err("storing the grown buffer pointer"))?;
+        let cap_addr = self.byte_gep(header, HDR_CAP_OFFSET)?;
+        self.builder
+            .build_store(cap_addr, new_cap)
+            .map_err(builder_err("storing the grown capacity"))?;
+        self.builder
+            .build_unconditional_branch(done_block)
+            .map_err(builder_err("joining the grow path"))?;
+        let grow_exit = after_free;
+
+        // Merge the kept and grown buffer pointers.
+        self.builder.position_at_end(done_block);
+        let phi = self
+            .builder
+            .build_phi(self.ptr_ty, "buf")
+            .map_err(builder_err("merging the buffer pointer"))?;
+        phi.add_incoming(&[(&ptr, start_block), (&new_buf, grow_exit)]);
+        Ok(phi.as_basic_value().into_pointer_value())
+    }
+
+    /// Lower `pop(target: mut Array[Int]) -> Option[Int]`: `None` (variant 1)
+    /// when empty, else `len -= 1`, load the last element, `Some { value }`
+    /// (variant 0). Never traps; the buffer is not shrunk.
+    fn lower_array_pop(
+        &mut self,
+        target: &Place,
+        stride: u64,
+        dest: &Place,
+    ) -> Result<(), CodegenError> {
+        let header = self.header_address(target)?;
+        let (ptr, len, _cap) = self.load_header(header)?;
+        let dest_ty = self.place_type(dest);
+        let dest_base = self.aggregate_dest_address(dest)?;
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                len,
+                self.ctx.i64_type().const_zero(),
+                "empty",
+            )
+            .map_err(builder_err("checking whether the array is empty"))?;
+
+        let none_block = self.ctx.append_basic_block(self.value, "pop_none");
+        let some_block = self.ctx.append_basic_block(self.value, "pop_some");
+        let join = self.ctx.append_basic_block(self.value, "pop_join");
+        self.builder
+            .build_conditional_branch(is_empty, none_block, some_block)
+            .map_err(builder_err("branching on emptiness"))?;
+
+        // None = variant 1, empty payload.
+        self.builder.position_at_end(none_block);
+        let none_tag = self.ctx.i32_type().const_int(1, false);
+        self.builder
+            .build_store(dest_base, none_tag)
+            .map_err(builder_err("storing the None tag"))?;
+        self.builder
+            .build_unconditional_branch(join)
+            .map_err(builder_err("joining the None arm"))?;
+
+        // Some = variant 0: len -= 1, load, store tag + payload.
+        self.builder.position_at_end(some_block);
+        let one = self.ctx.i64_type().const_int(1, false);
+        let new_len = self
+            .builder
+            .build_int_sub(len, one, "pop_len")
+            .map_err(builder_err("decrementing the length"))?;
+        let len_addr = self.byte_gep(header, HDR_LEN_OFFSET)?;
+        self.builder
+            .build_store(len_addr, new_len)
+            .map_err(builder_err("storing the decremented length"))?;
+        let elem_addr = self.dynamic_byte_gep(ptr, new_len, stride)?;
+        let value = self
+            .builder
+            .build_load(self.ctx.i64_type(), elem_addr, "popped")
+            .map_err(builder_err("loading the popped element"))?;
+        let some_tag = self.ctx.i32_type().const_zero();
+        self.builder
+            .build_store(dest_base, some_tag)
+            .map_err(builder_err("storing the Some tag"))?;
+        let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
+            .map_err(|error| self.layout_error(error))?;
+        let payload_offset = *payload_offsets
+            .first()
+            .ok_or_else(|| CodegenError::backend("Option[Int] Some payload has no field"))?;
+        let payload_addr = self.byte_gep(dest_base, payload_offset)?;
+        self.builder
+            .build_store(payload_addr, value)
+            .map_err(builder_err("storing the Some payload"))?;
+        self.builder
+            .build_unconditional_branch(join)
+            .map_err(builder_err("joining the Some arm"))?;
+
+        self.builder.position_at_end(join);
+        Ok(())
+    }
+
+    /// Lower `Statement::Drop` (ADR-0009 Stage B). A `String`/`Array[Int]` place
+    /// frees its buffer with `tuo_rt_dealloc(ptr, cap × stride, align)`, guarded
+    /// on `cap != 0`. Every other value owns no heap: a no-op. The moved-from
+    /// place is de-initialized by MIR, so a buffer is freed exactly once.
+    fn lower_drop(&mut self, place: &Place) -> Result<(), CodegenError> {
+        let ty = self.place_type(place);
+        let (stride, align) = match &ty {
+            Ty::String => (1u64, 1u64),
+            Ty::Array(element) => {
+                // Array[Int] only: the element is a scalar with no inner drop.
+                (self.layout(element)?.stride(), self.layout(element)?.align)
+            }
+            _ => return Ok(()),
+        };
+        let base = self.header_address(place)?;
+        let (ptr, _len, cap) = self.load_header(base)?;
+        let has_buffer = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                cap,
+                self.ctx.i64_type().const_zero(),
+                "has_buf",
+            )
+            .map_err(builder_err("checking the drop capacity"))?;
+        let free_block = self.ctx.append_basic_block(self.value, "drop_free");
+        let after = self.ctx.append_basic_block(self.value, "drop_after");
+        self.builder
+            .build_conditional_branch(has_buffer, free_block, after)
+            .map_err(builder_err("branching on the drop capacity"))?;
+        self.builder.position_at_end(free_block);
+        let stride_c = self.ctx.i64_type().const_int(stride, false);
+        let bytes = self
+            .builder
+            .build_int_mul(cap, stride_c, "drop_bytes")
+            .map_err(builder_err("computing the drop byte size"))?;
+        self.rt_dealloc(ptr, bytes, align)?;
+        self.builder
+            .build_unconditional_branch(after)
+            .map_err(builder_err("joining after the drop free"))?;
+        self.builder.position_at_end(after);
+        Ok(())
     }
 
     // ----- traps -----
@@ -2164,8 +3022,36 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Operand::Const(Const::Bool(_)) => Some(Ty::Bool),
             Operand::Const(Const::Char(_)) => Some(Ty::Char),
             Operand::Const(Const::Str(_)) => Some(Ty::Str),
+            // A function-value constant (ADR-0008 Tier 1): its type is the
+            // referenced function's signature-as-function-type, reconstructed
+            // from that function's MIR. Copy propagation may forward a
+            // `const fn` straight into an indirect callee position, so the
+            // indirect-call path must be able to type it here.
+            Operand::Const(Const::Fn(symbol)) => self.fn_ty_of(*symbol),
             _ => None,
         }
+    }
+
+    /// The `Ty::Fn` of the top-level function named `symbol`, reconstructed from
+    /// its MIR signature (param modes+types and return type). Used to type a
+    /// `Const::Fn` operand — in particular an indirect callee that copy
+    /// propagation forwarded a `const fn` into. `None` if the function is not in
+    /// the lowered program.
+    fn fn_ty_of(&self, symbol: SymbolId) -> Option<Ty> {
+        let function = self.functions.iter().find(|f| f.symbol == symbol)?;
+        let params = function
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, mode)| tuo_types::FnParam {
+                mode: param_mode_of(*mode),
+                ty: function.locals[index].ty.clone(),
+            })
+            .collect();
+        Some(Ty::Fn(Box::new(tuo_types::FnTy {
+            params,
+            ret: function.ret.clone(),
+        })))
     }
 
     // ----- aggregate helpers -----
@@ -2473,6 +3359,21 @@ fn trap_code_of(trap: Trap) -> TrapCode {
         Trap::IndexOutOfBounds => TrapCode::IndexOutOfBounds,
         Trap::Unreachable => TrapCode::Unreachable,
     }
+}
+
+/// Whether a `Rvalue::HeapOp` produces an owned `String`/`Array[Int]` value (a
+/// three-word header, materialized by `lower_heap_op_aggregate`) rather than a
+/// scalar `i64` (the reads, taken by `lower_heap_op_scalar`). Matches the
+/// Cranelift backend and the interpreter's split in `eval_heap_op`.
+fn heap_op_produces_aggregate(op: HeapOp) -> bool {
+    matches!(
+        op,
+        HeapOp::StringEmpty
+            | HeapOp::StringFromStr
+            | HeapOp::StringConcat
+            | HeapOp::StringSlice
+            | HeapOp::ArrayEmpty
+    )
 }
 
 /// The exported symbol name of a MIR function, from its stable symbol id.

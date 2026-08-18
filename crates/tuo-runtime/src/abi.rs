@@ -19,17 +19,18 @@
 //!
 //! # Scope (v0)
 //!
-//! Layouts are computed for the concrete, non-generic value types. Types that
-//! carry no runtime value (`Never`, `Fn`, `Range`), that still need generic
-//! substitution, or that are compiler-internal placeholders (`Var`, `Param`,
-//! `Error`) yield a [`LayoutError`] rather than a guessed layout — the caller
-//! reports "unsupported", mirroring the backend's own refusal to lower them.
+//! Layouts are computed for the concrete, non-generic value types. A function
+//! value (`Fn`, ADR-0008 Tier 1) is a single code pointer. Types that carry no
+//! runtime value (`Never`, `Range`), that still need generic substitution, or
+//! that are compiler-internal placeholders (`Var`, `Param`, `Error`) yield a
+//! [`LayoutError`] rather than a guessed layout — the caller reports
+//! "unsupported", mirroring the backend's own refusal to lower them.
 
 use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 
 /// The version of the runtime ABI these layouts implement.
 ///
-/// `3` — unstable. Any change to a layout, offset, discriminant numbering,
+/// `5` — unstable. Any change to a layout, offset, discriminant numbering,
 /// calling-convention rule, or runtime-symbol meaning **must** increment this
 /// in the same commit that updates the tests pinning the affected layout.
 /// Additive, non-layout-affecting clarifications do not bump it.
@@ -46,7 +47,19 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `3` — adds the effect runtime symbols (`tuo_rt_write`, `tuo_rt_read_byte`,
 /// `tuo_rt_exit`; see [`crate::effect`]); no layout changed. (ADR-0006
 /// Stage B.)
-pub const ABI_VERSION: u32 = 3;
+///
+/// `4` — the allocation seam is now linked and used (ADR-0009 Stage B): the
+/// `tuo_rt_alloc`/`tuo_rt_dealloc` symbols (see [`crate::alloc`]) went from
+/// specified-but-unlinked to load-bearing — the backends lower the
+/// `String`/`Array[Int]` heap operations through them and the CLI links the
+/// allocator C source into every built binary. No layout changed; the
+/// bump reflects the runtime-symbol meaning going from unused to load-bearing.
+///
+/// `5` — the function type (`Ty::Fn`) gains a layout (ADR-0008 Tier 1): a
+/// single code pointer (pointer-width, `Copy`), where it previously had none
+/// (`layout_of` returned a [`LayoutError`]). A previously unlayoutable type
+/// gaining a layout is a layout-affecting change, so the version bumps.
+pub const ABI_VERSION: u32 = 5;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -200,6 +213,12 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
             Ok(Layout::pointer())
         }
 
+        // A function value (ADR-0008 Tier 1): a single code pointer,
+        // pointer-width and `Copy` — the same one-word layout regardless of
+        // the signature (the modes and parameter types are a compile-time
+        // concern, not part of the runtime representation).
+        Ty::Fn(_) => Ok(Layout::pointer()),
+
         Ty::Tuple(fields) => aggregate_layout(fields.iter().cloned(), types),
 
         // The inline fixed-size array `[T; N]` (ADR-0004 Stage 2): no
@@ -254,9 +273,6 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
         Ty::Never => Err(LayoutError::new("`Never` has no runtime layout")),
         Ty::Range(_) => Err(LayoutError::new(
             "`Range` is iteration-internal and has no v0 value layout",
-        )),
-        Ty::Fn(_) => Err(LayoutError::new(
-            "function types are not first-class values in v0",
         )),
         Ty::Param(_) => Err(LayoutError::new(
             "a generic parameter has no layout until monomorphized",
@@ -433,19 +449,20 @@ fn enum_layout(
 
 #[cfg(test)]
 mod tests {
-    use super::{ABI_VERSION, Layout, align_up, layout_of};
-    use tuo_types::{IntKind, Ty, TypeckResult, WrapperKind};
+    use super::{ABI_VERSION, Layout, POINTER_SIZE, align_up, layout_of};
+    use tuo_types::{FnParam, FnTy, IntKind, ParamMode, Ty, TypeckResult, WrapperKind};
 
     fn wrap(kind: WrapperKind, inner: Ty) -> Ty {
         Ty::Wrapper(kind, Box::new(inner))
     }
 
     #[test]
-    fn the_abi_is_version_three() {
+    fn the_abi_is_version_five() {
         // A deliberate tripwire: bump this in the same commit that changes a
-        // layout (or, as with the ADR-0006 effect symbols, the runtime
-        // surface), never silently.
-        assert_eq!(ABI_VERSION, 3);
+        // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
+        // allocator seam, the runtime surface), never silently. Version 5
+        // gave `Ty::Fn` a pointer layout (ADR-0008 Tier 1).
+        assert_eq!(ABI_VERSION, 5);
     }
 
     #[test]
@@ -495,6 +512,34 @@ mod tests {
                 "{kind:?} is one word"
             );
         }
+    }
+
+    #[test]
+    fn a_function_value_is_a_single_code_pointer() {
+        // ADR-0008 Tier 1: `Ty::Fn` is one pointer-width word, independent of
+        // the signature's arity, parameter types, or modes.
+        let t = &TypeckResult::default();
+        let nullary = Ty::Fn(Box::new(FnTy {
+            params: Vec::new(),
+            ret: Ty::Unit,
+        }));
+        assert_eq!(layout_of(&nullary, t).unwrap(), Layout::pointer());
+        assert_eq!(layout_of(&nullary, t).unwrap().size, POINTER_SIZE);
+        // A different signature (arity, types, modes) has the same layout.
+        let binary = Ty::Fn(Box::new(FnTy {
+            params: vec![
+                FnParam {
+                    mode: ParamMode::Take,
+                    ty: Ty::int(),
+                },
+                FnParam {
+                    mode: ParamMode::In,
+                    ty: Ty::Str,
+                },
+            ],
+            ret: Ty::int(),
+        }));
+        assert_eq!(layout_of(&binary, t).unwrap(), Layout::pointer());
     }
 
     #[test]

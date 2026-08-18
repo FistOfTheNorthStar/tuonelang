@@ -41,7 +41,9 @@ use tuo_diagnostics::Diagnostic;
 use tuo_resolve::{Resolution, SymbolId};
 use tuo_source::Span;
 
-pub use ty::{FloatKind, FnTy, InferVar, IntKind, MAX_FIXED_ARRAY_LEN, Ty, WrapperKind};
+pub use ty::{
+    FloatKind, FnParam, FnTy, InferVar, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
+};
 
 /// The declaration-context shape of one user struct: its type parameters
 /// (in declaration order) and its fields with their declared types.

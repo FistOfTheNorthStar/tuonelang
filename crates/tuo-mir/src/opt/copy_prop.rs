@@ -35,7 +35,7 @@ use std::collections::HashMap;
 use tuo_types::TypeckResult;
 
 use super::Pass;
-use crate::mir::{Arg, Function, Operand, Rvalue, Statement, Terminator};
+use crate::mir::{Arg, Callee, Function, Operand, Rvalue, Statement, Terminator};
 
 /// The simple copy-propagation pass.
 pub(super) struct CopyProp;
@@ -82,7 +82,23 @@ impl Pass for CopyProp {
 fn rewrite_statement_reads(statement: &mut Statement, known: &HashMap<u32, Operand>) -> bool {
     match statement {
         Statement::Assign { rvalue, .. } => rewrite_rvalue(rvalue, known),
-        Statement::Call { args, .. } => {
+        Statement::Call { callee, args, .. } => {
+            let mut changed = false;
+            // The indirect callee operand is a read position (ADR-0008 Tier 1):
+            // a copy-propagatable `Const::Fn` or local flows through here.
+            if let Callee::Indirect(operand) = callee {
+                changed |= rewrite_operand(operand, known);
+            }
+            for arg in args {
+                if let Arg::Value(operand) = arg {
+                    changed |= rewrite_operand(operand, known);
+                }
+            }
+            changed
+        }
+        // An effect's by-value arguments are ordinary reads (ADR-0006); a
+        // borrow argument and the destination are places, not rewritten.
+        Statement::Effect { args, .. } => {
             let mut changed = false;
             for arg in args {
                 if let Arg::Value(operand) = arg {
@@ -91,9 +107,9 @@ fn rewrite_statement_reads(statement: &mut Statement, known: &HashMap<u32, Opera
             }
             changed
         }
-        // An effect's operands are ordinary reads (ADR-0006); its
-        // destination is a write and is not rewritten.
-        Statement::Effect { args, .. } => {
+        // A heap mutation's operands are ordinary reads (ADR-0009); the
+        // mutated target and the destination are places, not rewritten.
+        Statement::HeapMutate { args, .. } => {
             let mut changed = false;
             for operand in args {
                 changed |= rewrite_operand(operand, known);
@@ -134,6 +150,15 @@ fn rewrite_rvalue(rvalue: &mut Rvalue, known: &HashMap<u32, Operand>) -> bool {
             changed
         }
         Rvalue::StrOp { args, .. } => {
+            let mut changed = false;
+            for operand in args {
+                changed |= rewrite_operand(operand, known);
+            }
+            changed
+        }
+        // A heap op's subject is a place (a borrow-read), never rewritten;
+        // its operands are ordinary reads (ADR-0009).
+        Rvalue::HeapOp { args, .. } => {
             let mut changed = false;
             for operand in args {
                 changed |= rewrite_operand(operand, known);
@@ -227,8 +252,23 @@ fn invalidate(statement: &Statement, known: &mut HashMap<u32, Operand>) {
                 }
             }
         }
-        // An effect writes its destination (its operands are plain reads).
-        Statement::Effect { dest, .. } => touched.push(dest.local.0),
+        // An effect writes its destination; a borrow argument's place is
+        // read through the borrow, so any fact about it goes stale too.
+        Statement::Effect { dest, args, .. } => {
+            touched.push(dest.local.0);
+            for arg in args {
+                match arg {
+                    Arg::Borrow(place) | Arg::BorrowMut(place) => touched.push(place.local.0),
+                    Arg::Value(_) => {}
+                }
+            }
+        }
+        // A heap mutation writes its destination and mutates its target in
+        // place, so facts about either are stale.
+        Statement::HeapMutate { target, dest, .. } => {
+            touched.push(target.local.0);
+            touched.push(dest.local.0);
+        }
         Statement::Drop { place } => touched.push(place.local.0),
     }
     for local in touched {
@@ -247,7 +287,9 @@ mod tests {
     use tuo_types::{IntKind, Ty, TypeckResult};
 
     use super::{CopyProp, Pass};
-    use crate::mir::{BasicBlock, Const, LocalId, Operand, Place, Rvalue, Statement, Terminator};
+    use crate::mir::{
+        BasicBlock, Callee, Const, LocalId, Operand, Place, Rvalue, Statement, Terminator,
+    };
     use crate::opt::tests_support::{func, local};
 
     fn int(value: i128) -> Operand {
@@ -361,7 +403,7 @@ mod tests {
                     },
                     Statement::Call {
                         dest: Place::local(LocalId(2)),
-                        callee: tuo_resolve::SymbolId::from_raw(1),
+                        callee: Callee::Direct(tuo_resolve::SymbolId::from_raw(1)),
                         args: vec![crate::mir::Arg::BorrowMut(Place::local(LocalId(1)))],
                     },
                 ],

@@ -2,18 +2,23 @@
 //! and, just as importantly, an honest account of what the v0 language cannot
 //! yet run at all.
 //!
-//! The prompt lists eight runtime workloads: startup, integer computation,
+//! The prompt lists eight base runtime workloads: startup, integer computation,
 //! allocation, collections, string processing, function calls, recursion, and
-//! networking. tuonelang v0 compiles and runs the **scalar, control-flow
-//! core** — `Int` arithmetic, comparison, `if`/`else`, function calls, and
-//! recursion — plus, since ADR-0004 Stage 2, the **fixed-capacity array**
-//! `[T; N]` (inline, stack-allocated), which made the collections workload
-//! measurable, and, since ADR-0006, the **borrowed `Str`** (literals,
-//! equality, `std::str::{len, byte_at, slice}`), which makes the
-//! string-processing workload measurable. It still has **no heap** (no owned
-//! `String`, no growable `Array[T]` — the allocator ADR) and **no socket
-//! effect** (ADR-0006 landed descriptor I/O and process exit only), so two of
-//! the eight workloads have no program to measure.
+//! networking; ADR-0008 Tier 1 adds a ninth, **indirect-calls**, the
+//! function-value sibling of function-calls. tuonelang v0 compiles and runs the
+//! **scalar, control-flow core** — `Int` arithmetic, comparison, `if`/`else`,
+//! function calls, and recursion — plus, since ADR-0004 Stage 2, the
+//! **fixed-capacity array** `[T; N]` (inline, stack-allocated), which made the
+//! collections workload measurable; since ADR-0006, the **borrowed `Str`**
+//! (literals, equality, `std::str::{len, byte_at, slice}`), which makes the
+//! string-processing workload measurable; since ADR-0009, the **allocator
+//! core** — owned `String` and growable `Array[Int]` allocating and freeing real
+//! heap memory natively — which makes the allocation workload measurable; and,
+//! since ADR-0008 Tier 1, **first-class (non-capturing) function values** — a
+//! bare `fn` name as a `Copy` code pointer, called indirectly with the identical
+//! direct-call ABI — which makes the indirect-calls workload measurable. It
+//! still has **no socket effect** (ADR-0006 landed descriptor I/O and process
+//! exit only), so exactly one workload (networking) has no program to measure.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -106,8 +111,11 @@ impl RuntimeWorkload {
 /// entry moves from [`Support::Unsupported`] to [`Support::Supported`] with a
 /// program, and the lab measures it — no other change required. The
 /// collections entry made exactly that move when ADR-0004 Stage 2 landed the
-/// fixed-capacity array, and the string-processing entry when ADR-0006 landed
-/// the borrowed `Str` core.
+/// fixed-capacity array, the string-processing entry when ADR-0006 landed the
+/// borrowed `Str` core, and the allocation entry when ADR-0009 landed the
+/// allocator core (owned `String` + growable `Array[Int]`); the indirect-calls
+/// entry was *added* supported when ADR-0008 Tier 1 landed first-class function
+/// values.
 #[must_use]
 pub fn workloads() -> Vec<RuntimeWorkload> {
     vec![
@@ -137,6 +145,16 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             30,
         ),
         RuntimeWorkload::supported(
+            "indirect-calls",
+            "a hot loop calling through a first-class function value (ADR-0008 \
+             Tier 1) — the indirect-call sibling of function-calls, measured \
+             against a C peer calling through a function pointer",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/indirect-calls.tuo"),
+            // 2_000_000 indirect calls, each adding 1: acc = 2_000_000; observable
+            // exit byte = 2_000_000 & 0xff = 128.
+            128,
+        ),
+        RuntimeWorkload::supported(
             "recursion",
             "deep-ish recursion (naive Fibonacci, fib(20))",
             include_str!("../../../../benchmarks/runtime/programs/tuo/recursion.tuo"),
@@ -161,16 +179,18 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // observable exit byte = 4000 & 0xff = 160.
             160,
         ),
-        // --- Unsupported: no program exists, and none is faked. ---
-        RuntimeWorkload::unsupported(
+        RuntimeWorkload::supported(
             "allocation",
-            "heap allocation and deallocation throughput",
-            "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native \
-             code: the runtime allocator seam exists in the ABI spec but no allocating \
-             construct is compiled yet (the fixed `[T; N]` is inline and a `Str` is a \
-             borrowed view of static data; both allocate nothing). Awaits the allocator \
-             ADR. No program can exercise allocation.",
+            "heap allocation and deallocation throughput over the ADR-0009 allocator core: \
+             a growable `Array[Int]` and an owned `String`, each built by repeated \
+             push/append (doubling growth) and freed at scope end, over many rounds",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/allocation.tuo"),
+            // 2000 rounds of round(16); each round's contribution (reassigned, not
+            // accumulated) is array_sum(16) = 120 plus string_len(16) = 16, so main
+            // returns 136; observable exit byte = 136.
+            136,
         ),
+        // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "networking",
             "a basic socket round-trip",
@@ -255,6 +275,7 @@ mod tests {
             "collections",
             "string-processing",
             "function-calls",
+            "indirect-calls",
             "recursion",
             "networking",
         ] {
@@ -283,17 +304,21 @@ mod tests {
             .map(|w| w.label)
             .collect();
         // Precisely the four scalar-core workloads plus the fixed-array
-        // collections workload (ADR-0004 Stage 2) and the borrowed-`Str`
-        // string-processing workload (ADR-0006), and no more.
+        // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
+        // string-processing workload (ADR-0006), the allocator-core allocation
+        // workload (ADR-0009), and the function-value indirect-calls workload
+        // (ADR-0008 Tier 1), and no more.
         assert_eq!(
             supported,
             vec![
                 "startup".to_string(),
                 "integer-computation".to_string(),
                 "function-calls".to_string(),
+                "indirect-calls".to_string(),
                 "recursion".to_string(),
                 "collections".to_string(),
                 "string-processing".to_string(),
+                "allocation".to_string(),
             ]
         );
     }
@@ -314,7 +339,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 6, "only the six supported workloads run");
+        assert_eq!(results.len(), 8, "only the eight supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

@@ -1,0 +1,29 @@
+// ADR-0009 error rules: mistyped/misarity allocator-builtin calls are ordinary
+// type errors (T0001/T0002), the monomorphic `Array[Int]` surface rejects a
+// mismatched element type as a plain type error, and a spec whose closure
+// reaches the effectful `std::rt::write_string` is `R0007`.
+
+fn wrong_arity(in s: String) -> Int {
+    std::string::byte_at(s)
+}
+
+fn wrong_types() -> String {
+    std::string::concat(1, 2)
+}
+
+fn wrong_element() -> Int {
+    // `std::array::push` is `Array[Int]`-monomorphic: pushing a `Str` onto an
+    // `Array[Int]` is an ordinary type error.
+    var xs = std::array::empty();
+    std::array::push(xs, 5);
+    std::array::push(xs, "nope");
+    std::array::len(xs)
+}
+
+fn emit(take fd: Int, in s: String) -> Int {
+    std::rt::write_string(fd, s)
+}
+
+spec "via write_string" {
+    then emit(1, std::string::empty()) == 0;
+}

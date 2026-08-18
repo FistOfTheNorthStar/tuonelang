@@ -217,6 +217,64 @@ fn strings_match_the_interpreter() {
 }
 
 #[test]
+fn owned_heap_values_match_the_interpreter() {
+    // ADR-0009 Stage B: the owned `String` and growable `Array[Int]` as native
+    // three-word `{ptr, len, cap}` headers over real heap memory. `concat`
+    // (alloc + copy), `push_byte` in a loop (repeated grow), `array push`/`get`/
+    // `len` (repeated grow + read), `pop` unwrapped via `match` (Some/None), and
+    // `from_str` + `slice` + `byte_at` (copy-out). Each `String`/`Array` local
+    // is dropped at scope end, freeing its buffer through `tuo_rt_dealloc`; the
+    // default backend must agree with the reference interpreter's byte/element
+    // semantics.
+    for name in [
+        "str_owned_concat.tuo",
+        "str_builder.tuo",
+        "arr_grow.tuo",
+        "arr_pop.tuo",
+        "str_from_slice.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn function_values_match_the_interpreter() {
+    // ADR-0008 Tier 1: a function value (`Const::Fn`) is a pointer-width code
+    // pointer, and an indirect call (`Callee::Indirect`) reuses the entire
+    // direct-call ABI (scalar/aggregate/borrow args, sret return) — only the
+    // call target differs. The default (Cranelift) backend must agree with the
+    // interpreter, which dispatches an indirect call exactly like a direct one.
+    for name in [
+        "fnval_apply.tuo",
+        "fnval_fold.tuo",
+        "fnval_select.tuo",
+        "fnval_aggregate_ret.tuo",
+        "fnval_borrow_arg.tuo",
+        "fnval_const_forwarded.tuo",
+    ] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
+fn a_push_byte_out_of_range_aborts_both_the_interpreter_and_the_native_binary() {
+    // ADR-0009 Stage B: `std::string::push_byte` of a byte outside `0..=255`
+    // traps `InvalidByte` in the interpreter (`TrapKind::InvalidByte`); the
+    // native binary must abort with the runtime's fixed trap status through the
+    // same guard path (`TrapCode::InvalidByte = 4`) — never a silent mask.
+    let path = fixture("str_invalid_byte.tuo");
+    assert!(
+        interpret_main(&path).is_err(),
+        "the reference interpreter should trap on the out-of-range byte value"
+    );
+    assert_eq!(
+        run_native(&path),
+        TRAP_EXIT_STATUS,
+        "a native InvalidByte trap must terminate with the runtime's fixed trap status"
+    );
+}
+
+#[test]
 fn a_str_byte_at_out_of_bounds_aborts_both_the_interpreter_and_the_native_binary() {
     // `std::str::byte_at` past the end traps `IndexOutOfBounds` in the
     // interpreter (`specification/mir.md` §5.6); the native binary must abort
@@ -270,13 +328,13 @@ fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
 
 #[test]
 fn a_program_outside_the_backend_subset_is_refused_not_miscompiled() {
-    // A program the native backend does not lower yet (a function with an
-    // owned-`String` local, which awaits the allocator ADR — `Str` itself is
-    // lowered since ADR-0006 Stage B) must be *refused* with a failure exit,
-    // never silently mis-compiled. The interpreter remains the reference and
-    // can still run it (checked elsewhere); here we assert `tuo build`
-    // declines cleanly.
-    let path = fixture("unsupported_string.tuo");
+    // A program the native backend does not lower yet (a function with a
+    // heap-wrapper `Box[T]` parameter, which awaits a later ADR — the owned
+    // `String`/`Array[Int]` are lowered since ADR-0009 Stage B, `Str` since
+    // ADR-0006 Stage B) must be *refused* with a failure exit, never silently
+    // mis-compiled. The interpreter remains the reference; here we assert `tuo
+    // build` declines cleanly.
+    let path = fixture("unsupported_wrapper.tuo");
     let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
         .arg("build")
         .arg("-o")

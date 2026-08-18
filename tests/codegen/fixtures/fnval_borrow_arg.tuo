@@ -1,0 +1,19 @@
+// An indirect call to a function taking a `mut` (borrow) parameter (ADR-0008
+// Tier 1), proving the borrow ABI works on the indirect path: the argument is
+// passed by address and the callee's write-back is observed by the caller,
+// exactly as at a direct call. `bump` is called through a `fn(mut Int) -> ()`
+// value, mutating the caller's `var`.
+fn bump(mut x: Int) { x = x + 10; }
+
+fn apply_mut(take f: fn(mut Int) -> (), mut v: Int) {
+    f(v);
+    f(v);
+}
+
+fn main() -> Int {
+    var n = 22;
+    // apply_mut calls bump twice through the fn value; each adds 10.
+    // 22 + 10 + 10 = 42
+    apply_mut(bump, n);
+    n
+}

@@ -173,9 +173,11 @@ pub(crate) fn run(
     for ast in files {
         cx.collect_modes(*ast);
     }
-    // The builtin functions (ADR-0006) have no declaration to collect modes
-    // from; seed their fixed `take`/`in` signatures so calls to them get the
-    // same per-argument-list checking as calls to declared functions.
+    // The builtin functions (ADR-0006, ADR-0009) have no declaration to
+    // collect modes from; seed their fixed `take`/`in`/`mut` signatures so
+    // calls to them get the same per-argument-list checking as calls to
+    // declared functions — in particular, passing a `let`-bound `String` to
+    // `std::string::push_byte`'s `mut` parameter is an ordinary `O0004`.
     for (builtin, symbol) in resolution.builtins() {
         let modes = builtin
             .param_modes()
@@ -183,6 +185,7 @@ pub(crate) fn run(
             .map(|mode| match mode {
                 tuo_resolve::BuiltinParamMode::Take => Mode::Take,
                 tuo_resolve::BuiltinParamMode::In => Mode::In,
+                tuo_resolve::BuiltinParamMode::Mut => Mode::Mut,
             })
             .collect();
         cx.fn_modes.insert(symbol, modes);
@@ -1060,6 +1063,29 @@ impl<'a> Body<'a> {
         self.heal(place);
     }
 
+    /// The per-argument modes of an **indirect** call — one whose callee is a
+    /// function value rather than a named function (ADR-0008 Tier 1). The
+    /// callee expression's checked type is a `Ty::Fn` carrying the modes; the
+    /// borrow discipline is then applied exactly as for a direct call. Returns
+    /// `None` when the callee is not (yet) known to be a function type.
+    fn indirect_call_modes(&self, call: CallExpr<'_>) -> Option<Vec<Mode>> {
+        let callee = call.callee()?;
+        let span = callee.span()?;
+        let ty = self.cx.types.expr_ty(span)?;
+        let Ty::Fn(fn_ty) = ty else { return None };
+        Some(
+            fn_ty
+                .params
+                .iter()
+                .map(|param| match param.mode {
+                    tuo_types::ParamMode::In => Mode::In,
+                    tuo_types::ParamMode::Mut => Mode::Mut,
+                    tuo_types::ParamMode::Take => Mode::Take,
+                })
+                .collect(),
+        )
+    }
+
     fn call(&mut self, call: CallExpr<'_>) {
         let callee_symbol = call.callee().and_then(|callee| match callee {
             Expr::Path(path) => {
@@ -1074,11 +1100,14 @@ impl<'a> Body<'a> {
                 self.read_place(&place, span);
             }
         }
-        let modes = callee_symbol.and_then(|symbol| self.cx.fn_modes.get(&symbol));
-        let Some(modes) = modes.cloned() else {
-            // Unknown callee signature (function-typed value, unresolved
-            // name): arguments are treated as `in` borrows. Deliberate and
-            // documented: v0 function *types* do not carry modes yet.
+        let modes = callee_symbol
+            .and_then(|symbol| self.cx.fn_modes.get(&symbol).cloned())
+            .or_else(|| self.indirect_call_modes(call));
+        let Some(modes) = modes else {
+            // Genuinely unknown callee signature (a poison/`Error` callee):
+            // arguments are treated as `in` borrows so at least their reads
+            // are audited. An indirect call through a well-typed function
+            // value takes the `indirect_call_modes` path above.
             for arg in call.args() {
                 if let Some(place) = self.place_of(arg) {
                     let span = self.at(arg.span());

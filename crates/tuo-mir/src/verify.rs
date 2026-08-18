@@ -60,8 +60,8 @@ use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
 use tuo_types::{Ty, TypeckResult};
 
 use crate::mir::{
-    AggregateKind, Arg, BinOp, BlockId, EffectOp, Function, LocalId, Operand, Place, Program,
-    Projection, Rvalue, Statement, StrOp, Terminator,
+    AggregateKind, Arg, BinOp, BlockId, Callee, EffectOp, Function, HeapMutOp, HeapOp, LocalId,
+    Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
 };
 
 /// MIR diagnostic codes. Once shipped a number is never reused (the code
@@ -88,9 +88,22 @@ mod code {
     /// A `StrOp` rvalue is malformed (wrong operand count or operand
     /// types for its op) — ADR-0006 Stage A.
     pub(super) const STR_OP: u16 = 10;
-    /// An `Effect` statement is malformed (wrong operand count, operand
-    /// types, or destination type) — ADR-0006 Stage A.
+    /// An `Effect` statement is malformed (wrong argument count, argument
+    /// kinds or types, or destination type) — ADR-0006/ADR-0009 Stage A.
     pub(super) const EFFECT: u16 = 11;
+    /// A `HeapOp` rvalue is malformed (missing/extra/mistyped subject,
+    /// wrong operand count or types, or a destination that is not the
+    /// op's result type) — ADR-0009 Stage A.
+    pub(super) const HEAP_OP: u16 = 12;
+    /// A `HeapMutate` statement is malformed (mistyped target, wrong
+    /// operand count or types, or a destination that is not the op's
+    /// result type) — ADR-0009 Stage A.
+    pub(super) const HEAP_MUTATE: u16 = 13;
+    /// A function value or indirect call is malformed: a `Const::Fn(sym)`
+    /// whose `sym` is not a function or whose signature-as-function-type is
+    /// ill-formed, or a `Call` whose `Indirect` callee operand is not of
+    /// function type — ADR-0008 Tier 1.
+    pub(super) const INDIRECT_CALL: u16 = 14;
 }
 
 /// Verify a whole lowered [`Program`], returning one [`Diagnostic`] per
@@ -352,33 +365,52 @@ impl Verifier<'_> {
                 self.check_rvalue(block, rvalue);
                 self.check_assign_types(block, place, rvalue);
             }
-            Statement::Call { dest, args, .. } => {
+            Statement::Call { dest, callee, args } => {
                 self.check_place(block, dest);
+                if let Callee::Indirect(operand) = callee {
+                    self.check_operand(block, operand);
+                }
                 for arg in args {
                     self.check_arg(block, arg);
                 }
+                self.check_call_callee(block, callee);
             }
             Statement::Effect { op, args, dest } => {
                 self.check_place(block, dest);
                 for arg in args {
-                    self.check_operand(block, arg);
+                    self.check_arg(block, arg);
                 }
                 self.check_effect_types(block, *op, args, dest);
+            }
+            Statement::HeapMutate {
+                op,
+                target,
+                args,
+                dest,
+            } => {
+                self.check_place(block, target);
+                self.check_place(block, dest);
+                for arg in args {
+                    self.check_operand(block, arg);
+                }
+                self.check_heap_mutate_types(block, *op, target, args, dest);
             }
             Statement::Drop { place } => self.check_place(block, place),
         }
     }
 
-    /// Type-check an `Effect` statement: exactly the op's operand count,
-    /// each operand of its fixed type, and an `I64` destination
-    /// (`specification/mir.md` §4.2).
-    fn check_effect_types(&mut self, block: usize, op: EffectOp, args: &[Operand], dest: &Place) {
+    /// Type-check an `Effect` statement: exactly the op's argument count,
+    /// each argument of its fixed kind and type, and an `I64` destination
+    /// (`specification/mir.md` §4.2). `WriteString`'s `String` must be an
+    /// `Arg::Borrow` place; every other effect argument must be an
+    /// `Arg::Value` operand.
+    fn check_effect_types(&mut self, block: usize, op: EffectOp, args: &[Arg], dest: &Place) {
         let name = self.fn_name().to_owned();
         if args.len() != op.arg_count() {
             self.error(
                 code::EFFECT,
                 format!(
-                    "fn `{name}`: bb{block} performs effect `{}` with {} operand(s) (expected {})",
+                    "fn `{name}`: bb{block} performs effect `{}` with {} argument(s) (expected {})",
                     op.name(),
                     args.len(),
                     op.arg_count()
@@ -386,18 +418,41 @@ impl Verifier<'_> {
             );
             return;
         }
-        let expected: Vec<Ty> = match op {
-            EffectOp::Write => vec![Ty::int(), Ty::Str],
-            EffectOp::ReadByte | EffectOp::Exit => vec![Ty::int()],
+        // Per-argument expected (kind, type): `true` means a by-value
+        // operand, `false` a read-only borrow place.
+        let expected: Vec<(bool, Ty)> = match op {
+            EffectOp::Write => vec![(true, Ty::int()), (true, Ty::Str)],
+            EffectOp::ReadByte | EffectOp::Exit => vec![(true, Ty::int())],
+            EffectOp::WriteString => vec![(true, Ty::int()), (false, Ty::String)],
         };
-        for (position, (arg, want)) in args.iter().zip(&expected).enumerate() {
-            if let Some(ty) = self.operand_ty(arg)
-                && !types_agree(&ty, want)
+        for (position, (arg, (want_value, want_ty))) in args.iter().zip(&expected).enumerate() {
+            let ty = match (arg, want_value) {
+                (Arg::Value(operand), true) => self.operand_ty(operand),
+                (Arg::Borrow(place), false) => self.place_ty(place),
+                _ => {
+                    self.error(
+                        code::EFFECT,
+                        format!(
+                            "fn `{name}`: bb{block} passes a wrong-kind argument {position} to \
+                             effect `{}` (expected {})",
+                            op.name(),
+                            if *want_value {
+                                "a by-value operand"
+                            } else {
+                                "a read-only borrow place"
+                            }
+                        ),
+                    );
+                    continue;
+                }
+            };
+            if let Some(ty) = ty
+                && !types_agree(&ty, want_ty)
             {
                 self.error(
                     code::EFFECT,
                     format!(
-                        "fn `{name}`: bb{block} passes a mistyped operand {position} to effect                          `{}`",
+                        "fn `{name}`: bb{block} passes a mistyped argument {position} to effect                          `{}`",
                         op.name()
                     ),
                 );
@@ -410,6 +465,88 @@ impl Verifier<'_> {
                 code::EFFECT,
                 format!(
                     "fn `{name}`: bb{block} stores effect `{}` into a non-`I64` destination",
+                    op.name()
+                ),
+            );
+        }
+    }
+
+    /// Type-check a `HeapMutate` statement: the target place is the op's
+    /// mutated heap type, exactly the op's operand count with its fixed
+    /// types, and a destination of the op's result type
+    /// (`specification/mir.md` §4.3).
+    fn check_heap_mutate_types(
+        &mut self,
+        block: usize,
+        op: HeapMutOp,
+        target: &Place,
+        args: &[Operand],
+        dest: &Place,
+    ) {
+        let name = self.fn_name().to_owned();
+        let int_array = Ty::Array(Box::new(Ty::int()));
+        let (target_ty, operand_tys, result): (Ty, Vec<Ty>, Ty) = match op {
+            HeapMutOp::PushByte => (Ty::String, vec![Ty::int()], Ty::Unit),
+            HeapMutOp::Append => (Ty::String, vec![Ty::Str], Ty::Unit),
+            HeapMutOp::Push => (int_array.clone(), vec![Ty::int()], Ty::Unit),
+            HeapMutOp::Pop => (
+                int_array.clone(),
+                Vec::new(),
+                Ty::Option(Box::new(Ty::int())),
+            ),
+        };
+        if let Some(ty) = self.place_ty(target)
+            && !types_agree(&ty, &target_ty)
+        {
+            self.error(
+                code::HEAP_MUTATE,
+                format!(
+                    "fn `{name}`: bb{block} applies heap mutation `{}` to a target that is not \
+                     `{}`",
+                    op.name(),
+                    if matches!(target_ty, Ty::String) {
+                        "String"
+                    } else {
+                        "Array[I64]"
+                    }
+                ),
+            );
+        }
+        if args.len() != op.arg_count() {
+            self.error(
+                code::HEAP_MUTATE,
+                format!(
+                    "fn `{name}`: bb{block} applies heap mutation `{}` to {} operand(s) \
+                     (expected {})",
+                    op.name(),
+                    args.len(),
+                    op.arg_count()
+                ),
+            );
+            return;
+        }
+        for (position, (arg, want)) in args.iter().zip(&operand_tys).enumerate() {
+            if let Some(ty) = self.operand_ty(arg)
+                && !types_agree(&ty, want)
+            {
+                self.error(
+                    code::HEAP_MUTATE,
+                    format!(
+                        "fn `{name}`: bb{block} passes a mistyped operand {position} to heap \
+                         mutation `{}`",
+                        op.name()
+                    ),
+                );
+            }
+        }
+        if let Some(ty) = self.place_ty(dest)
+            && !types_agree(&ty, &result)
+        {
+            self.error(
+                code::HEAP_MUTATE,
+                format!(
+                    "fn `{name}`: bb{block} stores heap mutation `{}` into a destination that is \
+                     not its result type",
                     op.name()
                 ),
             );
@@ -508,6 +645,14 @@ impl Verifier<'_> {
             Rvalue::Discriminant(place) => self.check_discriminant(block, place),
             Rvalue::Len(place) => self.check_len(block, place),
             Rvalue::StrOp { args, .. } => {
+                for arg in args {
+                    self.check_operand(block, arg);
+                }
+            }
+            Rvalue::HeapOp { subject, args, .. } => {
+                if let Some(place) = subject {
+                    self.check_place(block, place);
+                }
                 for arg in args {
                     self.check_operand(block, arg);
                 }
@@ -685,12 +830,171 @@ impl Verifier<'_> {
                 );
             }
         }
+        // A heap operation (ADR-0009 Stage A): the op's subject place is
+        // present exactly when the op reads an existing heap value (and has
+        // its fixed type), exactly the op's operand count with its fixed
+        // types, and a destination of the op's result type
+        // (`specification/mir.md` §5.7).
+        if let Rvalue::HeapOp { op, subject, args } = rvalue {
+            self.check_heap_op_types(block, *op, subject.as_ref(), args, place);
+        }
         let _ = place;
+    }
+
+    /// Type-check a `HeapOp` rvalue (`M0012`, §5.7).
+    fn check_heap_op_types(
+        &mut self,
+        block: usize,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+        dest: &Place,
+    ) {
+        let name = self.fn_name().to_owned();
+        let int_array = Ty::Array(Box::new(Ty::int()));
+        let subject_ty: Option<Ty> = match op {
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice => Some(Ty::String),
+            HeapOp::ArrayLen | HeapOp::ArrayGet => Some(int_array.clone()),
+            HeapOp::StringEmpty
+            | HeapOp::StringFromStr
+            | HeapOp::StringConcat
+            | HeapOp::ArrayEmpty => None,
+        };
+        let operand_tys: Vec<Ty> = match op {
+            HeapOp::StringEmpty | HeapOp::StringLen | HeapOp::ArrayEmpty | HeapOp::ArrayLen => {
+                Vec::new()
+            }
+            HeapOp::StringFromStr => vec![Ty::Str],
+            HeapOp::StringConcat => vec![Ty::Str, Ty::Str],
+            HeapOp::StringByteAt | HeapOp::ArrayGet => vec![Ty::int()],
+            HeapOp::StringSlice => vec![Ty::int(), Ty::int()],
+        };
+        let result: Ty = match op {
+            HeapOp::StringEmpty
+            | HeapOp::StringFromStr
+            | HeapOp::StringConcat
+            | HeapOp::StringSlice => Ty::String,
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen | HeapOp::ArrayGet => {
+                Ty::int()
+            }
+            HeapOp::ArrayEmpty => int_array,
+        };
+        match (subject, &subject_ty) {
+            (None, None) => {}
+            (Some(place), Some(want)) => {
+                if let Some(ty) = self.place_ty(place)
+                    && !types_agree(&ty, want)
+                {
+                    self.error(
+                        code::HEAP_OP,
+                        format!(
+                            "fn `{name}`: bb{block} applies heap op `{}` to a mistyped subject",
+                            op.name()
+                        ),
+                    );
+                }
+            }
+            (Some(_), None) => {
+                self.error(
+                    code::HEAP_OP,
+                    format!(
+                        "fn `{name}`: bb{block} passes a subject place to heap op `{}`, which \
+                         takes none",
+                        op.name()
+                    ),
+                );
+            }
+            (None, Some(_)) => {
+                self.error(
+                    code::HEAP_OP,
+                    format!(
+                        "fn `{name}`: bb{block} applies heap op `{}` without its subject place",
+                        op.name()
+                    ),
+                );
+            }
+        }
+        if args.len() != op.arg_count() {
+            self.error(
+                code::HEAP_OP,
+                format!(
+                    "fn `{name}`: bb{block} applies heap op `{}` to {} operand(s) (expected {})",
+                    op.name(),
+                    args.len(),
+                    op.arg_count()
+                ),
+            );
+            return;
+        }
+        for (position, (arg, want)) in args.iter().zip(&operand_tys).enumerate() {
+            if let Some(ty) = self.operand_ty(arg)
+                && !types_agree(&ty, want)
+            {
+                self.error(
+                    code::HEAP_OP,
+                    format!(
+                        "fn `{name}`: bb{block} passes a mistyped operand {position} to heap op \
+                         `{}`",
+                        op.name()
+                    ),
+                );
+            }
+        }
+        if let Some(ty) = self.place_ty(dest)
+            && !types_agree(&ty, &result)
+        {
+            self.error(
+                code::HEAP_OP,
+                format!(
+                    "fn `{name}`: bb{block} assigns heap op `{}` to a destination that is not \
+                     its result type",
+                    op.name()
+                ),
+            );
+        }
+    }
+
+    /// Verify a call's callee (ADR-0008 Tier 1, `M0014`). A `Direct` symbol
+    /// must have a function type; an `Indirect` callee operand must be of
+    /// function type. A `Const::Fn(sym)` naming a non-function is caught here
+    /// (its `operand_ty` is not `Ty::Fn`). Missing type information (a poison
+    /// program) is not flagged — `Ty::Error` and `Ty::Never` unify with
+    /// anything, exactly as elsewhere in the verifier.
+    fn check_call_callee(&mut self, _block: usize, callee: &Callee) {
+        let name = self.fn_name().to_owned();
+        match callee {
+            Callee::Direct(symbol) => {
+                if let Some(ty) = self.types.type_of(*symbol)
+                    && !matches!(ty, Ty::Fn(_) | Ty::Error | Ty::Never)
+                {
+                    self.error(
+                        code::INDIRECT_CALL,
+                        format!("fn `{name}`: direct call target is not a function"),
+                    );
+                }
+            }
+            Callee::Indirect(operand) => {
+                if let Some(ty) = self.operand_ty(operand)
+                    && !matches!(ty, Ty::Fn(_) | Ty::Error | Ty::Never)
+                {
+                    self.error(
+                        code::INDIRECT_CALL,
+                        format!(
+                            "fn `{name}`: indirect call through a value that is not a function"
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     fn operand_ty(&self, operand: &Operand) -> Option<Ty> {
         match operand {
             Operand::Copy(place) | Operand::Move(place) => self.place_ty(place),
+            // A function value's type is the referenced function's
+            // signature-as-function-type (ADR-0008 Tier 1), which lives in
+            // the type table, not the constant itself.
+            Operand::Const(crate::mir::Const::Fn(symbol)) => self.types.type_of(*symbol).cloned(),
             Operand::Const(constant) => Some(const_ty(constant)),
         }
     }
@@ -763,9 +1067,26 @@ impl Verifier<'_> {
                             }
                         }
                     }
-                    Statement::Effect { dest, .. } => {
+                    Statement::Effect { dest, args, .. } => {
                         if dest.projection.is_empty() {
                             ever.insert(dest.local.0);
+                        }
+                        for arg in args {
+                            if let Arg::BorrowMut(place) = arg
+                                && place.projection.is_empty()
+                            {
+                                ever.insert(place.local.0);
+                            }
+                        }
+                    }
+                    // A `HeapMutate` writes its destination and writes
+                    // *through* its target (a `mut` borrow).
+                    Statement::HeapMutate { target, dest, .. } => {
+                        if dest.projection.is_empty() {
+                            ever.insert(dest.local.0);
+                        }
+                        if target.projection.is_empty() {
+                            ever.insert(target.local.0);
                         }
                     }
                     Statement::Assign { .. } | Statement::Drop { .. } => {}
@@ -914,13 +1235,27 @@ impl Verifier<'_> {
         let mut reads: Vec<(LocalId, ReadKind)> = Vec::new();
         match statement {
             Statement::Assign { rvalue, .. } => collect_rvalue_reads(rvalue, &mut reads),
-            Statement::Call { args, .. } => {
+            Statement::Call { callee, args, .. } => {
+                // The indirect callee operand is read to obtain the code
+                // pointer (ADR-0008 Tier 1). A function value is `Copy`, so
+                // this is a plain read.
+                if let Callee::Indirect(operand) = callee {
+                    collect_operand_read(operand, &mut reads);
+                }
                 for arg in args {
                     collect_arg_reads(arg, &mut reads);
                 }
                 self.check_call_ownership(block, args);
             }
             Statement::Effect { args, .. } => {
+                for arg in args {
+                    collect_arg_reads(arg, &mut reads);
+                }
+            }
+            Statement::HeapMutate { target, args, .. } => {
+                // The target is read (and re-written) through a `mut`
+                // borrow: it must be initialized here.
+                reads.push((target.local, ReadKind::Borrow));
                 for arg in args {
                     collect_operand_read(arg, &mut reads);
                 }
@@ -1040,7 +1375,13 @@ fn apply_statement(statement: &Statement, init: &mut BTreeSet<u32>) {
                 defined.push(place.local.0);
             }
         }
-        Statement::Call { dest, args, .. } => {
+        Statement::Call { dest, callee, args } => {
+            // The indirect callee operand is consumed if moved (a function
+            // value is `Copy`, so lowering copies it — but honor `Move` for
+            // completeness).
+            if let Callee::Indirect(operand) = callee {
+                collect_consumed_operand(operand, &mut consumed);
+            }
             for arg in args {
                 match arg {
                     Arg::Value(operand) => collect_consumed_operand(operand, &mut consumed),
@@ -1056,7 +1397,28 @@ fn apply_statement(statement: &Statement, init: &mut BTreeSet<u32>) {
         }
         Statement::Effect { args, dest, .. } => {
             for arg in args {
+                match arg {
+                    Arg::Value(operand) => collect_consumed_operand(operand, &mut consumed),
+                    Arg::BorrowMut(place) if place.projection.is_empty() => {
+                        defined.push(place.local.0);
+                    }
+                    Arg::Borrow(_) | Arg::BorrowMut(_) => {}
+                }
+            }
+            if dest.projection.is_empty() {
+                defined.push(dest.local.0);
+            }
+        }
+        Statement::HeapMutate {
+            target, args, dest, ..
+        } => {
+            for arg in args {
                 collect_consumed_operand(arg, &mut consumed);
+            }
+            // The target is a `mut` borrow: read, mutated in place, and
+            // still initialized after — exactly a `BorrowMut` argument.
+            if target.projection.is_empty() {
+                defined.push(target.local.0);
             }
             if dest.projection.is_empty() {
                 defined.push(dest.local.0);
@@ -1114,6 +1476,13 @@ fn collect_rvalue_move_roots(rvalue: &Rvalue, out: &mut Vec<u32>) {
                 push(arg, out);
             }
         }
+        // A `HeapOp`'s subject is a borrow-read (never consumed); only its
+        // operand moves consume.
+        Rvalue::HeapOp { args, .. } => {
+            for arg in args {
+                push(arg, out);
+            }
+        }
         Rvalue::Discriminant(_) | Rvalue::Len(_) => {}
     }
 }
@@ -1160,6 +1529,14 @@ fn collect_rvalue_reads(rvalue: &Rvalue, out: &mut Vec<(LocalId, ReadKind)>) {
                 collect_operand_read(arg, out);
             }
         }
+        Rvalue::HeapOp { subject, args, .. } => {
+            if let Some(place) = subject {
+                out.push((place.local, ReadKind::Borrow));
+            }
+            for arg in args {
+                collect_operand_read(arg, out);
+            }
+        }
         Rvalue::Discriminant(place) | Rvalue::Len(place) => {
             out.push((place.local, ReadKind::Borrow));
         }
@@ -1185,6 +1562,10 @@ fn const_ty(constant: &crate::mir::Const) -> Ty {
         Const::Float(_, kind) => Ty::Float(*kind),
         Const::Char(_) => Ty::Char,
         Const::Str(_) => Ty::Str,
+        // A function value's type needs the type table; `operand_ty` handles
+        // it directly. Reaching here (a raw `const_ty` on a `Const::Fn`)
+        // means no type context, so it is poison.
+        Const::Fn(_) => Ty::Error,
     }
 }
 
@@ -1213,8 +1594,8 @@ mod tests {
 
     use super::{debug_assert_verified, is_well_formed, verify};
     use crate::mir::{
-        Arg, BasicBlock, BinOp, BlockId, Const, EffectOp, Function, LocalDecl, LocalId, Operand,
-        PassMode, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
+        Arg, BasicBlock, BinOp, BlockId, Callee, Const, EffectOp, Function, LocalDecl, LocalId,
+        Operand, PassMode, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
     };
 
     fn span() -> Span {
@@ -1518,7 +1899,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Call {
                     dest: Place::local(LocalId(1)),
-                    callee: SymbolId::from_raw(1),
+                    callee: Callee::Direct(SymbolId::from_raw(1)),
                     args: vec![
                         Arg::Borrow(Place::local(LocalId(0))),
                         Arg::Value(Operand::Move(Place::local(LocalId(0)))),
@@ -1529,6 +1910,26 @@ mod tests {
             Ty::Unit,
         );
         assert_eq!(codes(&program), vec![super::code::OWNERSHIP]);
+    }
+
+    #[test]
+    fn an_indirect_call_through_a_non_function_value_is_reported() {
+        // call (copy _0)() where _0 is an `Int` — the indirect callee operand
+        // is not of function type (ADR-0008 Tier 1, M0014).
+        let program = func(
+            vec![PassMode::Value],
+            vec![local(Ty::int()), local(Ty::Unit)],
+            vec![BasicBlock {
+                statements: vec![Statement::Call {
+                    dest: Place::local(LocalId(1)),
+                    callee: Callee::Indirect(Operand::Copy(Place::local(LocalId(0)))),
+                    args: Vec::new(),
+                }],
+                terminator: Terminator::Return(Operand::Const(Const::Unit)),
+            }],
+            Ty::Unit,
+        );
+        assert_eq!(codes(&program), vec![super::code::INDIRECT_CALL]);
     }
 
     #[test]
@@ -1792,7 +2193,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Effect {
                     op: EffectOp::ReadByte,
-                    args: vec![int(0)],
+                    args: vec![Arg::Value(int(0))],
                     dest: Place::local(LocalId(0)),
                 }],
                 terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
@@ -1810,7 +2211,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Effect {
                     op: EffectOp::Write,
-                    args: vec![int(1)],
+                    args: vec![Arg::Value(int(1))],
                     dest: Place::local(LocalId(0)),
                 }],
                 terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
@@ -1829,7 +2230,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Effect {
                     op: EffectOp::Write,
-                    args: vec![str_const("nope"), str_const("x")],
+                    args: vec![Arg::Value(str_const("nope")), Arg::Value(str_const("x"))],
                     dest: Place::local(LocalId(0)),
                 }],
                 terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
@@ -1848,7 +2249,7 @@ mod tests {
                 statements: vec![
                     Statement::Effect {
                         op: EffectOp::Exit,
-                        args: vec![int(0)],
+                        args: vec![Arg::Value(int(0))],
                         dest: Place::local(LocalId(0)),
                     },
                     Statement::Assign {
@@ -1872,7 +2273,7 @@ mod tests {
             vec![BasicBlock {
                 statements: vec![Statement::Effect {
                     op: EffectOp::ReadByte,
-                    args: vec![Operand::Copy(Place::local(LocalId(1)))],
+                    args: vec![Arg::Value(Operand::Copy(Place::local(LocalId(1))))],
                     dest: Place::local(LocalId(0)),
                 }],
                 terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
@@ -1880,6 +2281,274 @@ mod tests {
             Ty::int(),
         );
         assert_eq!(codes(&program), vec![super::code::USE_UNINIT]);
+    }
+
+    // ----- ADR-0009 Stage A: HeapOp rvalues, HeapMutate, WriteString -----
+
+    use crate::mir::{HeapMutOp, HeapOp};
+
+    fn int_array() -> Ty {
+        Ty::Array(Box::new(Ty::int()))
+    }
+
+    #[test]
+    fn well_formed_heap_ops_verify_clean() {
+        // Constructors and Str-only ops: no subject.
+        for (op, args, ret) in [
+            (HeapOp::StringEmpty, vec![], Ty::String),
+            (HeapOp::StringFromStr, vec![str_const("ab")], Ty::String),
+            (
+                HeapOp::StringConcat,
+                vec![str_const("a"), str_const("b")],
+                Ty::String,
+            ),
+            (HeapOp::ArrayEmpty, vec![], int_array()),
+        ] {
+            let program = one_assign(
+                Rvalue::HeapOp {
+                    op,
+                    subject: None,
+                    args,
+                },
+                ret,
+            );
+            assert!(
+                is_well_formed(&program, &TypeckResult::default()),
+                "{op:?} should verify"
+            );
+        }
+        // Subject-reading ops: `_0: String/Array` is the (parameter) subject.
+        for (op, subject_ty, args, ret) in [
+            (HeapOp::StringLen, Ty::String, vec![], Ty::int()),
+            (HeapOp::StringByteAt, Ty::String, vec![int(0)], Ty::int()),
+            (
+                HeapOp::StringSlice,
+                Ty::String,
+                vec![int(0), int(1)],
+                Ty::String,
+            ),
+            (HeapOp::ArrayLen, int_array(), vec![], Ty::int()),
+            (HeapOp::ArrayGet, int_array(), vec![int(0)], Ty::int()),
+        ] {
+            let program = func(
+                vec![PassMode::Borrow],
+                vec![local(subject_ty), local(ret.clone())],
+                vec![BasicBlock {
+                    statements: vec![Statement::Assign {
+                        place: Place::local(LocalId(1)),
+                        rvalue: Rvalue::HeapOp {
+                            op,
+                            subject: Some(Place::local(LocalId(0))),
+                            args,
+                        },
+                    }],
+                    terminator: Terminator::Return(int(0)),
+                }],
+                Ty::int(),
+            );
+            assert!(
+                is_well_formed(&program, &TypeckResult::default()),
+                "{op:?} should verify"
+            );
+        }
+    }
+
+    #[test]
+    fn a_heap_op_missing_its_subject_is_reported() {
+        let program = one_assign(
+            Rvalue::HeapOp {
+                op: HeapOp::StringLen,
+                subject: None,
+                args: vec![],
+            },
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::HEAP_OP]);
+    }
+
+    #[test]
+    fn a_heap_op_with_a_mistyped_subject_is_reported() {
+        // string_len of an Array subject.
+        let program = func(
+            vec![PassMode::Borrow],
+            vec![local(int_array()), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::StringLen,
+                        subject: Some(Place::local(LocalId(0))),
+                        args: vec![],
+                    },
+                }],
+                terminator: Terminator::Return(int(0)),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::HEAP_OP]);
+    }
+
+    #[test]
+    fn a_heap_op_with_the_wrong_operand_count_is_reported() {
+        let program = one_assign(
+            Rvalue::HeapOp {
+                op: HeapOp::StringConcat,
+                subject: None,
+                args: vec![str_const("a")],
+            },
+            Ty::String,
+        );
+        assert_eq!(codes(&program), vec![super::code::HEAP_OP]);
+    }
+
+    #[test]
+    fn a_heap_op_with_the_wrong_destination_type_is_reported() {
+        // string_concat yields a `String`; an `I64` destination is malformed.
+        let program = one_assign(
+            Rvalue::HeapOp {
+                op: HeapOp::StringConcat,
+                subject: None,
+                args: vec![str_const("a"), str_const("b")],
+            },
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::HEAP_OP]);
+    }
+
+    /// `_0: mut <target_ty>` param; `_1 = heap_mut <op>(mut _0, args…)`.
+    fn one_mutate(op: HeapMutOp, target_ty: Ty, args: Vec<Operand>, dest_ty: Ty) -> Program {
+        func(
+            vec![PassMode::BorrowMut],
+            vec![local(target_ty), local(dest_ty)],
+            vec![BasicBlock {
+                statements: vec![Statement::HeapMutate {
+                    op,
+                    target: Place::local(LocalId(0)),
+                    args,
+                    dest: Place::local(LocalId(1)),
+                }],
+                terminator: Terminator::Return(int(0)),
+            }],
+            Ty::int(),
+        )
+    }
+
+    #[test]
+    fn well_formed_heap_mutations_verify_clean() {
+        for (op, target_ty, args, dest_ty) in [
+            (HeapMutOp::PushByte, Ty::String, vec![int(65)], Ty::Unit),
+            (
+                HeapMutOp::Append,
+                Ty::String,
+                vec![str_const("x")],
+                Ty::Unit,
+            ),
+            (HeapMutOp::Push, int_array(), vec![int(1)], Ty::Unit),
+            (
+                HeapMutOp::Pop,
+                int_array(),
+                vec![],
+                Ty::Option(Box::new(Ty::int())),
+            ),
+        ] {
+            let program = one_mutate(op, target_ty, args, dest_ty);
+            assert!(
+                is_well_formed(&program, &TypeckResult::default()),
+                "{op:?} should verify"
+            );
+        }
+    }
+
+    #[test]
+    fn a_heap_mutation_with_a_mistyped_target_is_reported() {
+        // push_byte into an Array target.
+        let program = one_mutate(HeapMutOp::PushByte, int_array(), vec![int(65)], Ty::Unit);
+        assert_eq!(codes(&program), vec![super::code::HEAP_MUTATE]);
+    }
+
+    #[test]
+    fn a_heap_mutation_with_the_wrong_operand_count_is_reported() {
+        let program = one_mutate(HeapMutOp::Push, int_array(), vec![], Ty::Unit);
+        assert_eq!(codes(&program), vec![super::code::HEAP_MUTATE]);
+    }
+
+    #[test]
+    fn a_heap_mutation_with_the_wrong_destination_type_is_reported() {
+        // pop yields Option[I64]; a Unit destination is malformed.
+        let program = one_mutate(HeapMutOp::Pop, int_array(), vec![], Ty::Unit);
+        assert_eq!(codes(&program), vec![super::code::HEAP_MUTATE]);
+    }
+
+    #[test]
+    fn a_heap_mutation_keeps_its_target_initialized() {
+        // The target of a mutation is readable afterwards (a `mut` borrow):
+        // heap_mut push(mut _0, 1); _1 = heap_array_len(borrow _0).
+        let program = func(
+            vec![PassMode::BorrowMut],
+            vec![local(int_array()), local(Ty::Unit), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![
+                    Statement::HeapMutate {
+                        op: HeapMutOp::Push,
+                        target: Place::local(LocalId(0)),
+                        args: vec![int(1)],
+                        dest: Place::local(LocalId(1)),
+                    },
+                    Statement::Assign {
+                        place: Place::local(LocalId(2)),
+                        rvalue: Rvalue::HeapOp {
+                            op: HeapOp::ArrayLen,
+                            subject: Some(Place::local(LocalId(0))),
+                            args: vec![],
+                        },
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(2)))),
+            }],
+            Ty::int(),
+        );
+        assert!(is_well_formed(&program, &TypeckResult::default()));
+    }
+
+    #[test]
+    fn a_well_formed_write_string_effect_verifies() {
+        // _0: in String param; _1 = effect write_string(const 1, borrow _0).
+        let program = func(
+            vec![PassMode::Borrow],
+            vec![local(Ty::String), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::WriteString,
+                    args: vec![Arg::Value(int(1)), Arg::Borrow(Place::local(LocalId(0)))],
+                    dest: Place::local(LocalId(1)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(1)))),
+            }],
+            Ty::int(),
+        );
+        assert!(is_well_formed(&program, &TypeckResult::default()));
+    }
+
+    #[test]
+    fn a_write_string_with_a_by_value_string_is_reported() {
+        // The `String` argument must be a borrow place, not a value operand.
+        let program = func(
+            vec![PassMode::Value],
+            vec![local(Ty::String), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Effect {
+                    op: EffectOp::WriteString,
+                    args: vec![
+                        Arg::Value(int(1)),
+                        Arg::Value(Operand::Move(Place::local(LocalId(0)))),
+                    ],
+                    dest: Place::local(LocalId(1)),
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(1)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::EFFECT]);
     }
 
     #[test]

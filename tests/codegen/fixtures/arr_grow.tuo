@@ -1,0 +1,12 @@
+// ADR-0009 Stage B: a growable Array[Int] filled in a loop (repeated growth),
+// then read back. Push i*2 for i in 0..10, so element 6 is 12; add the length
+// (10) → exit 22.
+fn main() -> Int {
+    var xs = std::array::empty();
+    var i = 0;
+    while i < 10 {
+        std::array::push(xs, i * 2);
+        i = i + 1;
+    }
+    std::array::get(xs, 6) + std::array::len(xs)
+}

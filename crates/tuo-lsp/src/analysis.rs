@@ -325,7 +325,11 @@ impl Analysis {
                 .params
                 .iter()
                 .map(|param| ParameterInformation {
-                    label: param.render(sema.resolution),
+                    label: format!(
+                        "{} {}",
+                        param.mode.keyword(),
+                        param.ty.render(sema.resolution)
+                    ),
                 })
                 .collect();
             let rendered = params

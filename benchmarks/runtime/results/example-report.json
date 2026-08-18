@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym17)",
-        "fn_body(sym18)",
-        "fn_body(sym19)",
+        "fn_body(sym33)",
+        "fn_body(sym34)",
+        "fn_body(sym35)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym17)",
-        "fn_body(sym18)",
-        "fn_body(sym19)",
+        "fn_body(sym33)",
+        "fn_body(sym34)",
+        "fn_body(sym35)",
         "interface(file#0)",
-        "mir_of(sym17)",
+        "mir_of(sym33)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym17)",
-        "type_of(sym18)",
-        "type_of(sym19)"
+        "type_of(sym33)",
+        "type_of(sym34)",
+        "type_of(sym35)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym17)",
-        "fn_body(sym18)",
-        "fn_body(sym19)",
+        "fn_body(sym33)",
+        "fn_body(sym34)",
+        "fn_body(sym35)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:20"
+        "spec:36"
       ],
       "reexecuted_count": 1
     }
@@ -112,6 +112,15 @@
       }
     },
     {
+      "label": "indirect-calls",
+      "description": "a hot loop calling through a first-class function value (ADR-0008 Tier 1) — the indirect-call sibling of function-calls, measured against a C peer calling through a function pointer",
+      "support": {
+        "support": "supported",
+        "source": "// indirect-calls — a hot loop calling through a first-class function VALUE\n// (ADR-0008 Tier 1), the indirect-call sibling of the `function-calls`\n// workload (which measures only direct calls). `step` is a\n// `fn(take Int, take Int) -> Int` value: `main` passes the top-level `add` by\n// name (the only way to obtain a function value in Tier 1), and `fold` invokes\n// it through the indirect-call path once per iteration. The equivalent C peer\n// (`benchmarks/runtime/programs/c/indirect-calls.c`) runs the identical loop\n// calling through a function pointer, so the comparison isolates the indirect\n// dispatch itself: same arithmetic, same iteration count, same exit.\nfn add(take a: Int, take b: Int) -> Int {\n    a + b\n}\n\n// Fold `step` over `reps` iterations, adding 1 each time. Every `step(acc, 1)`\n// is an indirect call through the function value — the operation being measured.\nfn fold(take reps: Int, take step: fn(take Int, take Int) -> Int) -> Int {\n    var acc = 0;\n    var i = 0;\n    while i < reps {\n        acc = step(acc, 1);\n        i = i + 1;\n    }\n    acc\n}\n\nfn main() -> Int {\n    // 2_000_000 indirect calls through `add`, each contributing 1, so\n    // acc = 2_000_000. Observable exit byte = 2_000_000 & 0xff = 128.\n    fold(2000000, add)\n}\n",
+        "expected_exit": 128
+      }
+    },
+    {
       "label": "recursion",
       "description": "deep-ish recursion (naive Fibonacci, fib(20))",
       "support": {
@@ -140,10 +149,11 @@
     },
     {
       "label": "allocation",
-      "description": "heap allocation and deallocation throughput",
+      "description": "heap allocation and deallocation throughput over the ADR-0009 allocator core: a growable `Array[Int]` and an owned `String`, each built by repeated push/append (doubling growth) and freed at scope end, over many rounds",
       "support": {
-        "support": "unsupported",
-        "reason": "v0 has no heap-allocating types (Box/Shared/String/Array) lowered to native code: the runtime allocator seam exists in the ABI spec but no allocating construct is compiled yet (the fixed `[T; N]` is inline and a `Str` is a borrowed view of static data; both allocate nothing). Awaits the allocator ADR. No program can exercise allocation."
+        "support": "supported",
+        "source": "// allocation — heap allocation and deallocation throughput over the ADR-0009\n// allocator core (owned `String` + growable `Array[Int]`).\n//\n// Each round allocates two real heap buffers and frees them at scope end:\n//   * a growable `Array[Int]` filled 0..COUNT by repeated `push` (which grows\n//     the backing buffer by doubling — alloc-new + copy + free-old), then\n//     scanned with `len`/`get`; the sum of 0..COUNT is COUNT*(COUNT-1)/2;\n//   * an owned `String` built to COUNT bytes by repeated `push_byte` (the same\n//     growth path over the byte buffer), then measured with `len`.\n// A round's contribution is deterministic — array sum + string length — and the\n// loop runs it ROUNDS times so the workload really exercises allocate/grow/free\n// throughput (a leak would OOM; a double-free would abort). The observable\n// result is one round's contribution (reassigned, not accumulated, so the exit\n// stays a small documented byte): for COUNT = 16 the array sums to 120 and the\n// string is 16 bytes, so `main` returns 136 (exit byte 136).\n\nfn array_sum(take count: Int) -> Int {\n    var xs = std::array::empty();\n    var i = 0;\n    while i < count {\n        std::array::push(xs, i);\n        i = i + 1;\n    }\n    var total = 0;\n    var j = 0;\n    while j < std::array::len(xs) {\n        total = total + std::array::get(xs, j);\n        j = j + 1;\n    }\n    total\n}\n\nfn string_len(take count: Int) -> Int {\n    var s = std::string::empty();\n    var i = 0;\n    while i < count {\n        std::string::push_byte(s, 65);\n        i = i + 1;\n    }\n    std::string::len(s)\n}\n\nfn round(take count: Int) -> Int {\n    array_sum(count) + string_len(count)\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 2000 {\n        result = round(16);\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 136
       }
     },
     {
@@ -197,6 +207,19 @@
     },
     {
       "workload": {
+        "label": "indirect-calls",
+        "peer": "c",
+        "peer_source": "// indirect-calls — the equivalent-semantics C peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function pointer** rather than tuonelang's function value:\n// the same arithmetic (`acc += add(acc, 1)`-style step), the same 2,000,000\n// iterations, and the same observable exit (2_000_000 & 0xff = 128). This is the\n// indirect-call sibling of function-calls.c, which calls f/g directly.\nstatic int add(int a, int b) { return a + b; }\n\nstatic int fold(int reps, int (*step)(int, int)) {\n    int acc = 0;\n    for (int i = 0; i < reps; i++) {\n        acc = step(acc, 1);\n    }\n    return acc;\n}\n\nint main(void) {\n    // 2_000_000 indirect calls through the `add` function pointer; acc = 2_000_000,\n    // exit byte 2_000_000 & 0xff = 128.\n    return fold(2000000, add);\n}\n",
+        "expected_exit": 128
+      },
+      "tuonelang_exit": 128,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
         "label": "recursion",
         "peer": "c",
         "peer_source": "static int fib(int n) {\n    return n < 2 ? n : fib(n - 1) + fib(n - 2);\n}\nint main(void) { return fib(20); }\n",
@@ -229,6 +252,19 @@
         "expected_exit": 160
       },
       "tuonelang_exit": 160,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "allocation",
+        "peer": "c",
+        "peer_source": "// allocation — the equivalent-semantics C peer for the tuonelang allocation\n// workload. Same computation the same way: a growable long-long vector filled\n// 0..count by push (doubling growth via realloc), summed; and a growable byte\n// buffer filled to `count` bytes the same way, measured by length. Each round's\n// buffers are freed at scope end; the round is repeated so the workload really\n// exercises malloc/realloc/free throughput. The observable result is one\n// round's contribution (reassigned, not accumulated), matching the tuonelang\n// program: for count = 16 the vector sums to 120 and the buffer is 16 bytes, so\n// main returns 136.\n\n#include <stdlib.h>\n#include <string.h>\n\nstatic long long array_sum(int count) {\n    long long *xs = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            xs = (long long *)realloc(xs, (size_t)cap * sizeof(long long));\n        }\n        xs[len++] = i;\n    }\n    long long total = 0;\n    for (long long j = 0; j < len; j++) {\n        total += xs[j];\n    }\n    free(xs);\n    return total;\n}\n\nstatic long long string_len(int count) {\n    unsigned char *s = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            s = (unsigned char *)realloc(s, (size_t)cap);\n        }\n        s[len++] = 65;\n    }\n    free(s);\n    return len;\n}\n\nstatic long long round_once(int count) {\n    return array_sum(count) + string_len(count);\n}\n\nint main(void) {\n    long long result = 0;\n    for (int r = 0; r < 2000; r++) {\n        result = round_once(16);\n    }\n    return (int)result;\n}\n",
+        "expected_exit": 136
+      },
+      "tuonelang_exit": 136,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

@@ -11,10 +11,11 @@
 //!    recursion, the same byte scans. For the v0 core the natural peer is **C**:
 //!    a language that, like tuonelang, compiles ahead-of-time to native code,
 //!    traps on nothing here, and has a matching `int`/byte model for these
-//!    programs. A workload whose tuonelang side is
-//!    [`Unsupported`](super::runtime::Support::Unsupported) (allocation,
-//!    networking) has **no comparison** — you cannot compare a feature that
-//!    does not exist.
+//!    programs — including the allocation workload, whose peer uses
+//!    `malloc`/`realloc`/`free` with the same doubling growth. A workload whose
+//!    tuonelang side is
+//!    [`Unsupported`](super::runtime::Support::Unsupported) (networking) has
+//!    **no comparison** — you cannot compare a feature that does not exist.
 //!
 //! 2. **No claim without both numbers.** A [`Comparison`] can only reach a
 //!    [`Verdict::Measured`] when *both* sides actually compiled and ran under the
@@ -105,11 +106,15 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "function-calls" => {
             include_str!("../../../../benchmarks/runtime/programs/c/function-calls.c")
         }
+        "indirect-calls" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/indirect-calls.c")
+        }
         "recursion" => include_str!("../../../../benchmarks/runtime/programs/c/recursion.c"),
         "collections" => include_str!("../../../../benchmarks/runtime/programs/c/collections.c"),
         "string-processing" => {
             include_str!("../../../../benchmarks/runtime/programs/c/string-processing.c")
         }
+        "allocation" => include_str!("../../../../benchmarks/runtime/programs/c/allocation.c"),
         _ => return None,
     })
 }

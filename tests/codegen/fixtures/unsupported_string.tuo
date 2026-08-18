@@ -1,2 +1,0 @@
-fn keep(take s: String) -> Int { 0 }
-fn main() -> Int { 7 }

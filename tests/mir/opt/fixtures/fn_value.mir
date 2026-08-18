@@ -1,0 +1,15 @@
+fn add(_0: take I64, _1: take I64) -> I64 {
+    let _2: I64;
+bb0:
+    _2 = add(copy _0, copy _1)
+    return copy _2
+}
+
+fn main() -> I64 {
+    let _0: fn(take I64, take I64) -> I64; // g
+    let _1: I64;
+bb0:
+    _0 = const fn sym33
+    _1 = call copy _0(const 2_i64, const 3_i64)
+    return copy _1
+}

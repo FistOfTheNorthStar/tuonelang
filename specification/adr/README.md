@@ -56,12 +56,20 @@ the replacement, preserving the decision history.
 | [ADR-0004](ADR-0004-aggregates-in-the-runnable-core.md) | Aggregates and iteration in the runnable core | accepted |
 | [ADR-0006](ADR-0006-effect-boundary-and-strings.md) | The effect boundary and runtime strings | accepted |
 | [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | proposed |
-| [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | proposed |
+| [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | accepted (Tier 1; Tier 2 closures deferred) |
+| [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
 unallocated; ADRs 0004/0006/0007/0008 were opened together by the Prompt 39
-dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md). ADR-0004 and
-ADR-0006 have since been accepted and landed, each having flipped its named
-performance-lab workload; 0007/0008 remain `proposed` pending their normative
-spec, fixtures, and performance-lab entries.)
+dogfooding exercise — see [`DOGFOODING.md`](../../DOGFOODING.md). ADR-0004,
+ADR-0006, ADR-0009, and ADR-0008 (Tier 1) have since been accepted and landed,
+each having added or flipped a performance-lab workload (`collections`,
+`string-processing`, `allocation`, and the new `indirect-calls`, respectively);
+only **ADR-0007** remains `proposed`, pending its normative spec, fixtures, and
+performance-lab entry (`networking`). ADR-0008 landed **Tier 1** — non-capturing
+first-class function values and the generic higher-order stdlib combinators —
+with **Tier 2 capturing closures explicitly deferred** to a future ADR
+increment. ADR-0009 is the allocator ADR that ADR-0006's first amendment
+promised — it landed the owned `String` and growable `Array[Int]`. Of the nine
+runtime workloads, eight now measure, leaving only `networking`.)

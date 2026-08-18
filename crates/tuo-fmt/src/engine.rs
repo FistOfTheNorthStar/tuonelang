@@ -282,10 +282,14 @@ fn auto_sep(prev: Option<TokenKind>, next: TokenKind) -> &'static str {
     }
     // Call/index/generic openers glue to a completed operand on the left
     // (and `impl[T]`), but keep a space after other keywords and operators.
+    // `KwFn` glues to `(` for the function-type `fn(…) -> R` (ADR-0008
+    // Tier 1); a `fn` *declaration* glues via its `Ident` name, so this only
+    // affects the nameless function type.
     if matches!(next, OpenParen | OpenBracket) {
         return if matches!(
             prev,
             Ident
+                | KwFn
                 | KwImpl
                 | KwSelfValue
                 | KwSelfType

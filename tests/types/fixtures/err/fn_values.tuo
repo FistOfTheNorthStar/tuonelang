@@ -1,0 +1,40 @@
+// Errors around first-class function values (ADR-0008 Tier 1).
+
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+fn id[T](take x: T) -> T {
+    x
+}
+
+// A builtin is not first-class: it lowers to a dedicated MIR op, not a code
+// pointer (T0015).
+fn use_builtin() -> Int {
+    var f = std::str::len;
+    0
+}
+
+// A generic function is not first-class in Tier 1: a function value is a single
+// monomorphic code pointer (T0015).
+fn use_generic() -> Int {
+    var f = id;
+    0
+}
+
+// A mode mismatch through a function type is an ordinary type error: the modes
+// are part of the type (T0001). `add` is `fn(take Int, take Int) -> Int`, which
+// is not `fn(in Int, in Int) -> Int`.
+fn takes_in(take f: fn(in Int, in Int) -> Int) -> Int {
+    f(1, 2)
+}
+
+fn pass_wrong_modes() -> Int {
+    takes_in(add)
+}
+
+// Calling a non-function value (T0003).
+fn call_a_non_function() -> Int {
+    var n = 5;
+    n(1)
+}

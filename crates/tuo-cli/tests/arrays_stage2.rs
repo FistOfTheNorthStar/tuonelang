@@ -245,13 +245,14 @@ fn borrow_mode_parameters_now_run_natively() {
 
 #[test]
 fn native_backends_still_refuse_the_unsupported_loudly() {
-    // Heap-owning types stay outside the native subset (`Str` itself is
-    // lowered since ADR-0006 Stage B): the program checks clean, and both
-    // backends refuse it loudly at classification time — naming the concrete
-    // type — instead of mis-compiling it.
+    // The heap *wrappers* (`Box`/`Shared`/`Weak`) stay outside the native
+    // subset (`Str` is lowered since ADR-0006 Stage B, and the owned `String`
+    // and growable `Array[Int]` since ADR-0009 Stage B): the program checks
+    // clean, and both backends refuse it loudly at classification time —
+    // naming the concrete type — instead of mis-compiling it.
     let path = write(
         "heap.tuo",
-        "fn keep(take s: String) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
+        "fn keep(take b: Box[Int]) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
     );
     let check = run(&["check", &path]);
     assert!(check.status.success(), "the front end accepts: {check:?}");
@@ -262,12 +263,12 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         let build = run(args);
         assert!(
             !build.status.success(),
-            "`tuo {}` must refuse a heap-backed type: {build:?}",
+            "`tuo {}` must refuse a heap-wrapper type: {build:?}",
             args.join(" ")
         );
         let stderr = String::from_utf8(build.stderr).expect("utf-8");
         assert!(
-            stderr.contains("`String` value") && stderr.contains("does not lower yet"),
+            stderr.contains("`Box[T]` heap wrapper") && stderr.contains("does not lower yet"),
             "the refusal names the unsupported type: {stderr}"
         );
         assert!(

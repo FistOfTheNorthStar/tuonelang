@@ -153,7 +153,10 @@ fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
             params: fn_ty
                 .params
                 .iter()
-                .map(|item| instantiate(item, params, args))
+                .map(|param| tuo_types::FnParam {
+                    mode: param.mode,
+                    ty: instantiate(&param.ty, params, args),
+                })
                 .collect(),
             ret: instantiate(&fn_ty.ret, params, args),
         })),

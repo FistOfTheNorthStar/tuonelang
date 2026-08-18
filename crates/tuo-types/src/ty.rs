@@ -119,11 +119,55 @@ impl WrapperKind {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct InferVar(pub(crate) u32);
 
-/// A function signature as a type: parameter types and the return type.
+/// The passing mode of a function-type parameter (ADR-0008 Tier 1).
+///
+/// Modes are part of a function *type* — the ownership vocabulary is part of a
+/// function's calling contract, and a function value is a code pointer whose
+/// indirect-call site drives its per-argument borrows from these modes. Type
+/// equality is exact, modes included: `fn(take Int) -> Int` is a different type
+/// from `fn(in Int) -> Int`.
+///
+/// This is the type-layer twin of `tuo_hir::ParamMode`; the two cannot be
+/// unified because `tuo-types` sits below `tuo-hir` in the pipeline.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum ParamMode {
+    /// `in` — read-only borrow for the call (the declaration default).
+    In,
+    /// `mut` — exclusive mutable borrow for the call.
+    Mut,
+    /// `take` — ownership transfer.
+    Take,
+}
+
+impl ParamMode {
+    /// The surface-syntax keyword.
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::Mut => "mut",
+            Self::Take => "take",
+        }
+    }
+}
+
+/// One parameter of a function type: its passing mode and its type
+/// (ADR-0008 Tier 1). Modes are mandatory in the function-type syntax and
+/// participate in exact type equality.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FnParam {
+    /// The parameter's passing mode.
+    pub mode: ParamMode,
+    /// The parameter's type.
+    pub ty: Ty,
+}
+
+/// A function signature as a type: parameter (mode + type) list and the return
+/// type.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct FnTy {
-    /// Parameter types, in declaration order.
-    pub params: Vec<Ty>,
+    /// Parameters (mode + type), in declaration order.
+    pub params: Vec<FnParam>,
     /// The return type.
     pub ret: Ty,
 }
@@ -237,7 +281,9 @@ impl Ty {
                 let params: Vec<String> = fn_ty
                     .params
                     .iter()
-                    .map(|ty| ty.render(resolution))
+                    .map(|param| {
+                        format!("{} {}", param.mode.keyword(), param.ty.render(resolution))
+                    })
                     .collect();
                 format!(
                     "fn({}) -> {}",

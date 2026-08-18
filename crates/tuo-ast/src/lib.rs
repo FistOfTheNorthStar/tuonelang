@@ -52,4 +52,7 @@ pub use item::{
 pub use pat::{BindingPat, FieldPat, GroupPat, LiteralPat, OrPat, PathPat, Pattern, WildcardPat};
 pub use render::render;
 pub use stmt::{BindingStmt, Block, EmptyStmt, ExprStmt, Statement};
-pub use ty::{FixedArrayType, PathType, TypeArgs, TypePath, TypeRef, UnitType, WrapperType};
+pub use ty::{
+    FixedArrayType, FnType, FnTypeParam, PathType, TypeArgs, TypePath, TypeRef, UnitType,
+    WrapperType,
+};

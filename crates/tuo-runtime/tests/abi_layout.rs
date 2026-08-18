@@ -127,3 +127,21 @@ fn every_wrapper_is_exactly_one_pointer() {
         assert_eq!(abi(&ty).align, POINTER_SIZE);
     }
 }
+
+#[test]
+fn a_function_value_is_exactly_one_code_pointer() {
+    // ADR-0008 Tier 1: a function value has the layout of a C function
+    // pointer — one pointer-width word, regardless of the signature.
+    use tuo_types::{FnParam, FnTy, ParamMode};
+    let ty = Ty::Fn(Box::new(FnTy {
+        params: vec![FnParam {
+            mode: ParamMode::Take,
+            ty: Ty::int(),
+        }],
+        ret: Ty::int(),
+    }));
+    // A C function pointer's `#[repr(C)]` ground truth.
+    assert_eq!(abi(&ty), repr_c::<extern "C" fn(i64) -> i64>());
+    assert_eq!(abi(&ty).size, POINTER_SIZE);
+    assert_eq!(abi(&ty).align, POINTER_SIZE);
+}

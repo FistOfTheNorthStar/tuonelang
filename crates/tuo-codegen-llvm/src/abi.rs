@@ -9,6 +9,7 @@
 //! [`CodegenError::unsupported`](tuo_codegen::CodegenError). The interpreter
 //! is the reference for the rejected cases.
 
+use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, FloatType, IntType};
 use tuo_types::{FloatKind, IntKind, Ty};
@@ -20,8 +21,10 @@ use tuo_types::{FloatKind, IntKind, Ty};
 /// ABI), `Char` a 32-bit integer (a Unicode scalar value), each integer
 /// kind its exact width (`Isize`/`Usize` are 64-bit, matching the interpreter's
 /// target-independent choice), and each float kind its IEEE-754 type
-/// (`float`/`double`). `Unit` has no register representation — a function
-/// returning `()` is handled specially by the lowering, not here.
+/// (`float`/`double`). A function value (ADR-0008 Tier 1) is a single
+/// pointer-width code pointer, mapped to the opaque `ptr` type
+/// (`layout_of(Ty::Fn) = pointer()`). `Unit` has no register representation —
+/// a function returning `()` is handled specially by the lowering, not here.
 #[must_use]
 pub(crate) fn scalar_type<'ctx>(ctx: &'ctx Context, ty: &Ty) -> Option<BasicTypeEnum<'ctx>> {
     match ty {
@@ -29,6 +32,8 @@ pub(crate) fn scalar_type<'ctx>(ctx: &'ctx Context, ty: &Ty) -> Option<BasicType
         Ty::Char => Some(ctx.i32_type().into()),
         Ty::Int(kind) => Some(int_type(ctx, *kind).into()),
         Ty::Float(kind) => Some(float_type(ctx, *kind).into()),
+        // A function value is a code pointer — the opaque pointer scalar.
+        Ty::Fn(_) => Some(ctx.ptr_type(AddressSpace::default()).into()),
         _ => None,
     }
 }

@@ -101,9 +101,11 @@ fn explicit_signatures_check_calls_and_returns() {
     );
     assert_clean(&result);
     let add = find(&resolution, "add", SymbolKind::Function);
+    // A function's value type spells its parameter modes (ADR-0008 Tier 1):
+    // modes are part of the function type and its exact equality.
     assert_eq!(
         result.type_of(add).expect("fn type").render(&resolution),
-        "fn(I64, I64) -> I64"
+        "fn(in I64, in I64) -> I64"
     );
 }
 
@@ -659,4 +661,82 @@ fn loop_breaks_must_agree_on_the_loop_value() {
          }\n",
     );
     assert_eq!(codes(&result), ["T0001"]);
+}
+
+// ----------------------------------------------------------------------
+// First-class function values (ADR-0008 Tier 1)
+// ----------------------------------------------------------------------
+
+#[test]
+fn a_bare_fn_name_binds_to_a_function_value_with_modes() {
+    let (resolution, result) = check_one(
+        "fn add(take a: Int, in b: Int) -> Int { a + b }\n\
+         fn main() -> Int { var f = add; f(1, 2) }\n",
+    );
+    assert_clean(&result);
+    // The local `f` has the function's signature-as-function-type, modes
+    // included — exactly the declaration's modes.
+    assert_eq!(
+        rendered_type(&resolution, &result, "f"),
+        "fn(take I64, in I64) -> I64"
+    );
+}
+
+#[test]
+fn function_type_equality_includes_modes() {
+    // `add` is `fn(take Int, take Int) -> Int`; a parameter typed
+    // `fn(in Int, in Int) -> Int` is a *different* type, so passing `add` is a
+    // T0001 mismatch — proving modes are part of exact type equality.
+    let (_, result) = check_one(
+        "fn add(take a: Int, take b: Int) -> Int { a + b }\n\
+         fn takes(take f: fn(in Int, in Int) -> Int) -> Int { f(1, 2) }\n\
+         fn main() -> Int { takes(add) }\n",
+    );
+    assert_eq!(codes(&result), vec!["T0001"]);
+}
+
+#[test]
+fn an_indirect_call_type_checks_against_the_function_type() {
+    let (_, result) = check_one(
+        "fn add(take a: Int, take b: Int) -> Int { a + b }\n\
+         fn apply(take f: fn(take Int, take Int) -> Int, take a: Int, take b: Int) -> Int {\n\
+             f(a, b)\n\
+         }\n\
+         fn main() -> Int { apply(add, 2, 3) }\n",
+    );
+    assert_clean(&result);
+}
+
+#[test]
+fn an_indirect_call_with_a_wrong_argument_type_is_t0001() {
+    let (_, result) = check_one(
+        "fn apply(take f: fn(take Int) -> Int, take a: Int) -> Int { f(a) }\n\
+         fn main() -> Int {\n\
+             var g: fn(take Int) -> Int = apply_helper;\n\
+             g(true)\n\
+         }\n\
+         fn apply_helper(take n: Int) -> Int { n }\n",
+    );
+    assert_eq!(codes(&result), vec!["T0001"]);
+}
+
+#[test]
+fn a_builtin_used_as_a_value_is_t0015() {
+    let (_, result) = check_one("fn use_it() -> Int { var f = std::str::len; 0 }\n");
+    assert_eq!(codes(&result), vec!["T0015"]);
+}
+
+#[test]
+fn a_generic_function_used_as_a_value_is_t0015() {
+    let (_, result) = check_one(
+        "fn id[T](take x: T) -> T { x }\n\
+         fn use_it() -> Int { var f = id; 0 }\n",
+    );
+    assert_eq!(codes(&result), vec!["T0015"]);
+}
+
+#[test]
+fn calling_a_non_function_value_is_t0003() {
+    let (_, result) = check_one("fn main() -> Int { var n = 5; n(1) }\n");
+    assert_eq!(codes(&result), vec!["T0003"]);
 }

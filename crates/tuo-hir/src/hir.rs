@@ -327,8 +327,26 @@ pub enum TyKind {
         /// The length digits as written, separators removed.
         len: String,
     },
+    /// A function type `fn(mode T, …) -> R` — the type of a non-capturing
+    /// function value (ADR-0008 Tier 1). Modes are part of the type.
+    Fn {
+        /// The parameters (mode + type), in source order.
+        params: Vec<FnTyParam>,
+        /// The return type.
+        ret: Box<Ty>,
+    },
     /// A malformed type reference; poison.
     Err,
+}
+
+/// One parameter of a [`TyKind::Fn`] function type: its passing mode and its
+/// type (ADR-0008 Tier 1).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct FnTyParam {
+    /// The parameter's passing mode.
+    pub mode: ParamMode,
+    /// The parameter's type.
+    pub ty: Ty,
 }
 
 /// A `{ … }` block: statements followed by an optional tail expression. A

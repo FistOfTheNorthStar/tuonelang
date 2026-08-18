@@ -300,7 +300,7 @@ fn a_borrow_mode_call_now_compiles() {
                 },
                 tuo_mir::Statement::Call {
                     dest: Place::local(tuo_mir::LocalId(0)),
-                    callee: SymbolId::from_raw(1),
+                    callee: tuo_mir::Callee::Direct(SymbolId::from_raw(1)),
                     args: vec![Arg::Borrow(Place::local(tuo_mir::LocalId(1)))],
                 },
             ],
@@ -357,17 +357,15 @@ fn main_with_local(ty: Ty) -> Program {
 }
 
 #[test]
-fn heap_types_are_refused_at_classification_time_with_a_clean_message() {
-    // `String`, the growable `Array[T]`, and the heap wrappers all have an
-    // ABI layout (their headers), so without the explicit gate they would
-    // slip past classification and die later on an internal invariant error.
-    // The gate must refuse them up front, naming the concrete type and the
-    // road back to the interpreter. (`Str` is no longer refused: ADR-0006
-    // Stage B lowers it as an ordinary two-word aggregate.)
+fn heap_wrapper_types_are_refused_at_classification_time_with_a_clean_message() {
+    // The heap *wrappers* (`Box`/`Shared`/`Weak`) still have an ABI layout but
+    // no lowering, so the gate must refuse them up front, naming the concrete
+    // type and the road back to the interpreter. (`Str` is no longer refused
+    // since ADR-0006 Stage B; the owned `String` and growable `Array[Int]` are
+    // no longer refused since ADR-0009 Stage B — they lower as heap aggregates,
+    // pinned by the positive test below and the differential suites.)
     use tuo_types::WrapperKind;
     for (ty, marker) in [
-        (Ty::String, "a `String` value"),
-        (Ty::Array(Box::new(Ty::int())), "the growable `Array[T]`"),
         (
             Ty::Wrapper(WrapperKind::Box, Box::new(Ty::int())),
             "`Box[T]` heap wrapper",
@@ -486,7 +484,10 @@ fn an_effect_statement_now_compiles() {
         blocks: vec![BasicBlock {
             statements: vec![Statement::Effect {
                 op: EffectOp::ReadByte,
-                args: vec![Operand::Const(Const::Int(0, tuo_types::IntKind::I64))],
+                args: vec![tuo_mir::Arg::Value(Operand::Const(Const::Int(
+                    0,
+                    tuo_types::IntKind::I64,
+                )))],
                 dest: Place::local(tuo_mir::LocalId(0)),
             }],
             terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
@@ -609,4 +610,336 @@ fn a_str_local_now_compiles() {
             &TargetSpec::host(),
         )
         .expect("a Str local compiles since ADR-0006 Stage B");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0009 Stage B: the allocator-core MIR forms now compile natively
+// ---------------------------------------------------------------------------
+
+/// A program that builds and mutates an owned `String` via ADR-0009's
+/// `HeapOp`/`HeapMutate` forms, then reads its length back. Since Stage B the
+/// backend must *accept* it (allocating through `tuo_rt_alloc`, growing the
+/// buffer, and dropping it) and emit an object. (Execution agreement with the
+/// interpreter is pinned by the `str_*`/`arr_*` differential fixtures.)
+fn string_builder_main() -> Program {
+    use tuo_mir::{HeapMutOp, HeapOp, LocalId, Rvalue, Statement};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::String,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::Unit,
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::StringEmpty,
+                        subject: None,
+                        args: Vec::new(),
+                    },
+                },
+                Statement::HeapMutate {
+                    op: HeapMutOp::PushByte,
+                    target: Place::local(LocalId(1)),
+                    args: vec![Operand::Const(Const::Int(65, tuo_types::IntKind::I64))],
+                    dest: Place::local(LocalId(2)),
+                },
+                Statement::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::StringLen,
+                        subject: Some(Place::local(LocalId(1))),
+                        args: Vec::new(),
+                    },
+                },
+                Statement::Drop {
+                    place: Place::local(LocalId(1)),
+                },
+            ],
+            terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    }
+}
+
+#[test]
+fn the_allocator_core_forms_now_compile() {
+    let program = string_builder_main();
+    let artifact = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("the ADR-0009 heap forms compile natively since Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
+}
+
+/// A growable `Array[Int]` built with `array_empty` + `push`, read with
+/// `array_len`, and dropped. The backend must accept it and emit an object.
+#[test]
+fn a_growable_array_program_now_compiles() {
+    use tuo_mir::{HeapMutOp, HeapOp, LocalId, Rvalue, Statement};
+    let array_ty = Ty::Array(Box::new(Ty::int()));
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: array_ty,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::Unit,
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::ArrayEmpty,
+                        subject: None,
+                        args: Vec::new(),
+                    },
+                },
+                Statement::HeapMutate {
+                    op: HeapMutOp::Push,
+                    target: Place::local(LocalId(1)),
+                    args: vec![Operand::Const(Const::Int(7, tuo_types::IntKind::I64))],
+                    dest: Place::local(LocalId(2)),
+                },
+                Statement::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::ArrayLen,
+                        subject: Some(Place::local(LocalId(1))),
+                        args: Vec::new(),
+                    },
+                },
+                Statement::Drop {
+                    place: Place::local(LocalId(1)),
+                },
+            ],
+            terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let artifact = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("the growable Array[Int] compiles natively since ADR-0009 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
+}
+
+/// `write_string(fd, in s: String)` (ADR-0009 Stage B): the `EffectOp` now
+/// lowers to a `tuo_rt_write` call over the borrowed header's `{ptr, len}`, so
+/// the backend must accept it and emit an object.
+#[test]
+fn a_write_string_effect_now_compiles() {
+    use tuo_mir::{Arg, EffectOp, HeapOp, LocalId, Rvalue, Statement};
+    let function = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::String,
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::HeapOp {
+                        op: HeapOp::StringFromStr,
+                        subject: None,
+                        args: vec![Operand::Const(Const::Str("hi".to_owned()))],
+                    },
+                },
+                Statement::Effect {
+                    op: EffectOp::WriteString,
+                    args: vec![
+                        Arg::Value(Operand::Const(Const::Int(1, tuo_types::IntKind::I64))),
+                        Arg::Borrow(Place::local(LocalId(1))),
+                    ],
+                    dest: Place::local(LocalId(0)),
+                },
+                Statement::Drop {
+                    place: Place::local(LocalId(1)),
+                },
+            ],
+            terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+    let program = Program {
+        functions: vec![function],
+        skipped: Vec::new(),
+    };
+    let artifact = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("write_string compiles natively since ADR-0009 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
+}
+
+// ---------------------------------------------------------------------------
+// ADR-0008 Tier 1: function values now lower (Stage B — the native side)
+// ---------------------------------------------------------------------------
+
+/// Build a two-function program: `add1(take n) -> n + 1` and a `main` that
+/// materializes `add1` as a function value in local `_0`, then calls through it
+/// indirectly into `_1`. `main`'s local `_0` has the callee's function type, so
+/// the indirect-call ABI is built from that `Ty::Fn`. Returns the program.
+fn fn_value_program() -> Program {
+    use tuo_mir::{Callee, Rvalue, Statement};
+    use tuo_types::{FnParam, FnTy, IntKind, ParamMode};
+
+    let add1_sym = SymbolId::from_raw(1);
+    let fn_ty = Ty::Fn(Box::new(FnTy {
+        params: vec![FnParam {
+            mode: ParamMode::Take,
+            ty: Ty::int(),
+        }],
+        ret: Ty::int(),
+    }));
+
+    // fn add1(take n: Int) -> Int { n + 1 }
+    let add1 = Function {
+        symbol: add1_sym,
+        name: "add1".to_owned(),
+        params: vec![tuo_mir::PassMode::Value],
+        locals: vec![LocalDecl {
+            ty: Ty::int(),
+            name: None,
+            span: span(),
+        }],
+        blocks: vec![BasicBlock {
+            statements: Vec::new(),
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+
+    // fn main() -> Int { let f = add1; f(41) }
+    let main = Function {
+        symbol: SymbolId::from_raw(0),
+        name: "main".to_owned(),
+        params: Vec::new(),
+        locals: vec![
+            LocalDecl {
+                ty: fn_ty,
+                name: None,
+                span: span(),
+            },
+            LocalDecl {
+                ty: Ty::int(),
+                name: None,
+                span: span(),
+            },
+        ],
+        blocks: vec![BasicBlock {
+            statements: vec![
+                // _0 = const fn add1   (a code pointer)
+                Statement::Assign {
+                    place: Place::local(tuo_mir::LocalId(0)),
+                    rvalue: Rvalue::Use(Operand::Const(Const::Fn(add1_sym))),
+                },
+                // _1 = (copy _0)(41)   (an indirect call through the value)
+                Statement::Call {
+                    dest: Place::local(tuo_mir::LocalId(1)),
+                    callee: Callee::Indirect(Operand::Copy(Place::local(tuo_mir::LocalId(0)))),
+                    args: vec![tuo_mir::Arg::Value(Operand::Const(Const::Int(
+                        41,
+                        IntKind::I64,
+                    )))],
+                },
+            ],
+            terminator: Terminator::Return(Operand::Copy(Place::local(tuo_mir::LocalId(1)))),
+        }],
+        ret: Ty::int(),
+        span: span(),
+    };
+
+    Program {
+        functions: vec![main, add1],
+        skipped: Vec::new(),
+    }
+}
+
+/// `_0 = const fn add1` and `_1 = (copy _0)(41)`: a function-value constant is a
+/// pointer-width code pointer and the indirect call reuses the direct-call ABI
+/// (ADR-0008 Stage B). The backend must *accept* the program and emit an object.
+/// (Execution agreement with the interpreter — the exact exit byte — is pinned
+/// by the `fnval_*.tuo` differential fixtures.)
+#[test]
+fn a_function_value_and_an_indirect_call_now_compile() {
+    let program = fn_value_program();
+    let artifact = CraneliftBackend::new()
+        .compile(
+            &program,
+            &TypeckResult::default(),
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("a function value and an indirect call compile since ADR-0008 Stage B");
+    assert!(!artifact.bytes.is_empty(), "the backend emits object bytes");
 }

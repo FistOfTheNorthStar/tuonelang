@@ -78,10 +78,14 @@ fn fold_rvalue(rvalue: &Rvalue) -> Option<Const> {
         // out-of-range argument, so folding would erase an observable abort,
         // and folding only the safe cases is not worth a byte-level constant
         // evaluator here — the interpreter stays the one implementation.
+        // A `HeapOp` is never folded either (ADR-0009): its trapping ops for
+        // the same reason, and its constructors because a heap value has no
+        // `Const` form to fold into.
         Rvalue::Aggregate { .. }
         | Rvalue::Discriminant(_)
         | Rvalue::Len(_)
-        | Rvalue::StrOp { .. } => None,
+        | Rvalue::StrOp { .. }
+        | Rvalue::HeapOp { .. } => None,
     }
 }
 

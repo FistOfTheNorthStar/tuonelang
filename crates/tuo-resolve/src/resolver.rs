@@ -250,11 +250,12 @@ impl Resolver {
         }
     }
 
-    /// Install the six builtin functions of ADR-0006 ([`Builtin`]) as real
-    /// `pub` function symbols in the always-present `std::rt` / `std::str`
-    /// modules, so `std::rt::write(1, "x")` resolves through ordinary path
-    /// navigation in every program (with no stdlib loaded). The modules are
-    /// created **before** user files are collected, so a file declaring
+    /// Install the builtin functions of ADR-0006 and ADR-0009 ([`Builtin`])
+    /// as real `pub` function symbols in the always-present `std::rt` /
+    /// `std::str` / `std::string` / `std::array` modules, so
+    /// `std::rt::write(1, "x")` resolves through ordinary path navigation in
+    /// every program (with no stdlib loaded). The modules are created
+    /// **before** user files are collected, so a file declaring
     /// `module std::rt;` shares them and redeclaring a builtin's name there
     /// is an ordinary `R0001` duplicate definition — a builtin is never
     /// silently rebound at its own path.
@@ -1284,6 +1285,17 @@ impl Resolver {
                 // itself is structural — it never enters name resolution.
                 if let Some(element) = array.element() {
                     self.walk_type(scopes, element);
+                }
+            }
+            TypeRef::Fn(fn_ty) => {
+                // `fn(mode T, …) -> R` (ADR-0008 Tier 1): the `fn` keyword and
+                // the modes resolve to nothing; only the embedded parameter
+                // and return types resolve. The type is structural.
+                for param in fn_ty.params() {
+                    self.walk_type(scopes, param.ty);
+                }
+                if let Some(ret) = fn_ty.ret() {
+                    self.walk_type(scopes, ret);
                 }
             }
         }

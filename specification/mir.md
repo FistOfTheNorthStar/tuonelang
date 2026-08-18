@@ -117,8 +117,13 @@ Projections ([`Projection`]):
 
 An **operand** ([`Operand`]) reads a value:
 
-- **`Copy(place)`** — read the place's value, leaving it initialized. Emitted only
-  for `Copy` types; the copy is bitwise-equivalent and independent.
+- **`Copy(place)`** — read the place's value, leaving it initialized. Emitted
+  for `Copy` types (the copy is bitwise-equivalent and independent) — and, since
+  ADR-0009, as the documented **borrow-read** of a `String` operand of an
+  `Eq`/`Ne` binary (§5.3): the read leaves the place initialized and untouched,
+  and observably copies nothing. Everywhere else a non-`Copy` value is read
+  through a *place* (`Len`, `Discriminant`, `HeapOp` subjects, borrow
+  arguments) or consumed by `Move`.
 - **`Move(place)`** — read the place's value and **end its initialization**: the
   place's contents must not be read or dropped again until reassigned. A move is a
   transfer, never a deep copy.
@@ -134,6 +139,7 @@ An **operand** ([`Operand`]) reads a value:
 | `Float(v, kind)` | a float; an `F32` is stored at `f64` precision and rounds to nearest even when materialized. |
 | `Char(c)` | a Unicode scalar value. |
 | `Str(s)` | an immutable view of static UTF-8 text. |
+| `Fn(sym)` (`[EXPERIMENTAL]`, ADR-0008 Tier 1) | a **function value**: a compile-time-known code pointer naming the top-level function `sym`. Its type is `sym`'s signature-as-function-type (`Ty::Fn`). `Copy`, non-heap, never traps. See §4.4. |
 
 ---
 
@@ -148,8 +154,13 @@ statement that traps (arithmetic, §5.3) aborts the program deterministically.
   overwrites a live value.
 - **`Call { dest, callee, args }`** — call `callee` with `args` (§4.1) and store its
   return value into `dest`. Arguments are evaluated before the call; the call
-  returns normally or aborts — **there is no unwinding** (Constitution §24). Calls
-  are always **direct**: v0 has no function-typed values in MIR.
+  returns normally or aborts — **there is no unwinding** (Constitution §24). The
+  callee is a **`Callee`** (`[EXPERIMENTAL]`, ADR-0008 Tier 1, §4.4):
+  `Direct(sym)` names a function symbol (a v0 builtin never reaches here — those
+  lower to `Effect`/`StrOp`/`HeapOp`), and `Indirect(operand)` calls through a
+  function-value operand of function type. The two forms share **every** other
+  mechanism — argument passing, borrows, the destination, the no-unwind rule —
+  only the target differs.
 - **`Drop { place }`** — destroy the value held by `place`, which must be
   initialized; afterwards the place is uninitialized. Drop glue is
   compiler-generated only — there are **no user destructors in v0** (ADR-0003):
@@ -166,7 +177,14 @@ statement that traps (arithmetic, §5.3) aborts the program deterministically.
 
 - **`Effect { op, args, dest }`** (`[EXPERIMENTAL]`, ADR-0006 Stage A) — one
   host effect (§4.2). This is the **only** MIR construct whose meaning involves
-  the host; everything else in this document is pure computation.
+  the host; everything else in this document is pure computation. Since
+  ADR-0009 its arguments are call-style `Arg`s (§4.1), so an effect can borrow
+  a non-`Copy` value (`WriteString`'s `String`) exactly as a call does.
+- **`HeapMutate { op, target, args, dest }`** (`[EXPERIMENTAL]`, ADR-0009
+  Stage A) — mutate the `String`/`Array[I64]` at `target` in place (§4.3),
+  through what is semantically a `mut` borrow: `target` must be initialized
+  before and remains initialized after. Pure, deterministic computation — an
+  allocation is not an effect.
 
 ### 4.1 Call arguments (`Arg`)
 
@@ -183,13 +201,15 @@ Each argument names its passing semantics and must agree with the callee's
 `Statement::Effect { op, args, dest }` performs one host effect and stores its
 `I64` result into `dest`. Calls to the `std::rt` builtins
 (`static-semantics.md` §3.6) lower to it; there is no other way to construct
-one. Operand counts and types are fixed per op and verified (§7.1, `M0011`):
+one. Its arguments are call-style `Arg`s (§4.1); argument counts, kinds, and
+types are fixed per op and verified (§7.1, `M0011`):
 
-| Op | Operands | Result stored in `dest` |
-|----|----------|-------------------------|
-| `Write` | `fd: I64`, `text: Str` | Bytes written, or a negative value on host error. Never traps. |
-| `ReadByte` | `fd: I64` | The byte read (`0..=255`), `-1` on end of input, or another negative value on host error. Never traps. |
-| `Exit` | `code: I64` | Nothing — the process terminates with `code & 0xff` as its exit status; `dest` is never observably written because control never continues. |
+| Op | Arguments | Result stored in `dest` |
+|----|-----------|-------------------------|
+| `Write` | `Value fd: I64`, `Value text: Str` | Bytes written, or a negative value on host error. Never traps. |
+| `ReadByte` | `Value fd: I64` | The byte read (`0..=255`), `-1` on end of input, or another negative value on host error. Never traps. |
+| `Exit` | `Value code: I64` | Nothing — the process terminates with `code & 0xff` as its exit status; `dest` is never observably written because control never continues. |
+| `WriteString` (ADR-0009) | `Value fd: I64`, `Borrow s: String` | Bytes written, or a negative value on host error. Never traps. The `String` is **lent read-only** for the statement — a `Borrow` place, exactly as an `in` call argument — so the effect consumes nothing and the caller drops the string where it always would. |
 
 `Exit` is a **statement, not a terminator**, by choice: the surface builtin is
 declared `-> Int`, so the statement form (an effect with an `I64` destination)
@@ -211,7 +231,74 @@ asked to execute one reports it as an **internal error**
 signals — never a silent no-op and never a real effect. Effectful programs run
 **natively** (`tuo run`): since ADR-0006 Stage B both backends lower an
 `Effect` to a direct call to the matching runtime symbol (`tuo_rt_write`/
-`tuo_rt_read_byte`/`tuo_rt_exit`, `abi.md` "Effect symbols").
+`tuo_rt_read_byte`/`tuo_rt_exit`, `abi.md` "Effect symbols"). `WriteString`
+lands natively with **ADR-0009 Stage B**; until then both backends refuse it
+(they never mis-compile it).
+
+### 4.3 Heap mutations (`HeapMutOp`) — `[EXPERIMENTAL]`, ADR-0009 Stage A
+
+`Statement::HeapMutate { op, target, args, dest }` mutates the heap value at
+the place `target` **in place** and stores the op's result into `dest`. Calls
+to the mutating `std::string`/`std::array` builtins (`static-semantics.md`
+§3.7) lower to it; there is no other way to construct one. `target` is
+semantically a **`mut` borrow** for the statement's duration: it must be
+initialized before the statement and remains initialized after (the dataflow
+treats it like a `BorrowMut` call argument). Argument counts and types are
+fixed per op and verified (§7.1, `M0013`):
+
+| Op | `target` | Operands | Result stored in `dest` | Semantics |
+|----|----------|----------|-------------------------|-----------|
+| `PushByte` | `String` | `b: I64` | `()` | Append the byte `b`. **Traps `InvalidByte`** when `b < 0` or `b > 255` — the byte range is enforced, never silently masked. |
+| `Append` | `String` | `t: Str` | `()` | Append `t`'s bytes. Never traps. |
+| `Push` | `Array[I64]` | `v: I64` | `()` | Append the element `v`. Never traps. |
+| `Pop` | `Array[I64]` | — | `Option[I64]` | Remove and return the last element (`Some`), or `None` when empty. Never traps. |
+
+`Pop` both mutates and produces a value, which is exactly why it is a
+statement-level mutator and not an rvalue: an rvalue must not mutate a place.
+The traps are *statement-level* deterministic aborts, the same source as
+trapping arithmetic (§5.3) and the `StrOp`/`HeapOp` traps — not an `Assert`.
+A `HeapMutate` is **pure computation** (growth is allocation, not I/O): the
+reference interpreter executes it, specs may reach it freely, and its memory
+growth is counted against the sandbox's live-value budget (§8.1). Optimization
+passes must never eliminate one (`target`'s mutation is observable, and
+`PushByte` can trap). Native lowering is **ADR-0009 Stage B**; until then both
+backends refuse the statement (they never mis-compile it).
+
+### 4.4 Function values and indirect calls — `[EXPERIMENTAL]`, ADR-0008 Tier 1
+
+A **function value** is `Operand::Const(Const::Fn(sym))` — a compile-time-known
+code pointer naming the top-level function `sym`. It is produced only by using a
+bare `fn` name in value position (`static-semantics.md` §3.8); there is no other
+way to construct one in Tier 1, so **every** function value in MIR names a
+concrete top-level symbol. Its type is `sym`'s signature-as-function-type
+(`Ty::Fn`, modes included); it is `Copy`, non-heap, and never traps or drops.
+
+`Statement::Call`'s callee is a **`Callee`**:
+
+- **`Direct(sym)`** — the ordinary direct call; `sym` is a user function symbol.
+- **`Indirect(operand)`** — call through `operand`, which must be of function
+  type. Argument passing, borrows, the destination place, and the no-unwind rule
+  are **identical** to a direct call; only the target is looked up at run time
+  from the operand's function value.
+
+The **verifier** (§7.1, `M0014`) checks a `Const::Fn(sym)` names a function
+symbol whose signature-as-function-type is well-formed, and checks an
+`Indirect` call's callee operand is of function type. (Deep argument-vs-signature
+type equality is not attempted here, exactly as for a `Direct` call — see §7.)
+
+**Purity.** An indirect call through a known `Const::Fn(sym)` has exactly `sym`'s
+effectfulness; a call through an opaque operand is conservatively possibly
+effectful. This does not weaken the R0007 spec-gate: the type checker already
+taints any function that references an effectful function *as a value*
+(`static-semantics.md` §3.6, §3.8), and in Tier 1 a function value can only
+originate from a named top-level `fn`, so a spec can never reach an effect
+through a function value undetected.
+
+**Optimization.** A `Const::Fn` is a constant like any other: copy-propagatable,
+never folded into anything. An indirect `Call` is **never eliminable** (a call
+may trap or diverge, and its target is opaque to the passes). Native lowering of
+the indirect call is **ADR-0008 Stage B**; until then both backends refuse a
+`Const::Fn` operand and an `Indirect` call cleanly (they never mis-compile one).
 
 ---
 
@@ -233,6 +320,13 @@ value of a statically known type.
   **`Len` applies only to the growable `Array[T]`.** A `[T; N]`'s length is a
   compile-time constant; lowering emits `Const N : Usize` and the verifier
   rejects `Len` of a fixed-array place.
+- **`HeapOp { op, subject, args }`** (`[EXPERIMENTAL]`, ADR-0009 Stage A) — a
+  pure, value-producing heap operation (§5.7): construct, measure, or read an
+  owned `String`/`Array[I64]`. The borrowed heap value, when the op has one,
+  is the **place** `subject` — a non-consuming borrow-read, the same
+  discipline as `Len`/`Discriminant` — never an operand. `ByteAt`, `Slice`,
+  and `ArrayGet` **trap `IndexOutOfBounds`** exactly like the `StrOp` traps
+  below; the constructors and length ops never trap.
 - **`StrOp { op, args }`** (`[EXPERIMENTAL]`, ADR-0006 Stage A) — a pure
   byte-level string operation on `Str` operands (§5.6). `Len` never traps;
   `ByteAt` and `Slice` **trap `IndexOutOfBounds`** on an out-of-range argument,
@@ -274,8 +368,12 @@ arithmetic is IEEE 754 (round to nearest even) and **never traps**.
 | `Gt` | as `Lt` | as `Lt` |
 | `Ge` | as `Lt` | as `Lt` |
 
-`Eq`/`Ne` are also defined on `Bool`, `Char` (scalar values), and `Str` (byte-wise
-content equality). `Lt`/`Le`/`Gt`/`Ge` are also defined on `Char` by scalar value.
+`Eq`/`Ne` are also defined on `Bool`, `Char` (scalar values), `Str` (byte-wise
+content equality) and — since ADR-0009 — `String` (the same byte-wise content
+equality, over the same byte buffer). `Lt`/`Le`/`Gt`/`Ge` are also defined on
+`Char` by scalar value. A `String` operand of an `Eq`/`Ne` is a
+**borrow-read** (§3): the comparison reads the bytes and consumes neither
+side, so `Operand::Copy` of a `String` place is legal exactly there.
 
 ### 5.4 Casts (`CastKind`) — all total, never trap
 
@@ -321,6 +419,45 @@ backends lower a `StrOp` natively over the `{ptr, len}` fat pointer
 (`abi.md` "Slices"), with the same deterministic traps, pinned by the
 `str_*.tuo` fixtures in the differential suites.
 
+### 5.7 Heap operations (`HeapOp`) — `[EXPERIMENTAL]`, ADR-0009 Stage A
+
+`Rvalue::HeapOp { op, subject, args }` carries one pure, value-producing
+operation over an owned `String` or growable `Array[I64]`. Calls to the
+non-mutating `std::string`/`std::array` builtins (`static-semantics.md` §3.7)
+lower to it. When the op reads an existing heap value, that value is the
+**place** `subject` — a non-consuming borrow-read (the value stays initialized
+and untouched), the same discipline `Len` and `Discriminant` use — while the
+`Str` and integer inputs are ordinary operands in `args`. Subject presence and
+type, operand counts and types, and the destination type are fixed per op and
+verified (§7.1, `M0012`). Let `len(x)` be the byte/element length:
+
+| Op | `subject` | Operands | Result | Semantics |
+|----|-----------|----------|--------|-----------|
+| `StringEmpty` | — | — | `String` | The empty string. Never traps. |
+| `StringFromStr` | — | `s: Str` | `String` | `s`'s bytes, copied into a new owned buffer. Never traps. |
+| `StringConcat` | — | `a: Str`, `b: Str` | `String` | `a`'s bytes then `b`'s, in a new owned buffer. Never traps. |
+| `StringLen` | `String` | — | `I64` | `len(subject)`. Never traps. |
+| `StringByteAt` | `String` | `i: I64` | `I64` | The byte (`0..=255`) at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |
+| `StringSlice` | `String` | `a: I64`, `b: I64` | `String` | The byte range `[a, b)` **copied out** as a new owned `String` — never an aliasing view. **Traps `IndexOutOfBounds`** unless `0 <= a <= b <= len(subject)`. |
+| `ArrayEmpty` | — | — | `Array[I64]` | The empty array. Never traps. |
+| `ArrayLen` | `Array[I64]` | — | `I64` | `len(subject)`. Never traps. |
+| `ArrayGet` | `Array[I64]` | `i: I64` | `I64` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |
+
+Like `StrOp`, the traps are *statement-level* deterministic aborts (§5.6's
+rationale applies unchanged), and like `String` itself the operations are
+**byte-level**: a `StringSlice` may split a multi-byte code point, so a
+`String`'s bytes are UTF-8 *by convention*, not by invariant. A `HeapOp` is
+pure — specs may execute it, and the interpreter counts the produced value
+against the live-value budget (§8.1). Optimization passes must **not**
+constant-fold a `HeapOp` (the trapping ops for the usual reason; the
+constructors because folding would have to invent a heap value the constant
+domain does not model) and must not eliminate a trapping one whose result is
+unread. Distinctions worth pinning: `ArrayLen`/`StringLen` produce `I64` (the
+surface `-> Int` contract), while the pre-existing `Rvalue::Len` produces
+`Usize` for the indexing path — both remain, with different types and
+different jobs. Native lowering is **ADR-0009 Stage B**; until then both
+backends refuse every `HeapOp` (they never mis-compile one).
+
 ---
 
 ## 6. Terminators
@@ -352,8 +489,10 @@ The MIR-level `Trap` enum names the two causes a terminator can carry:
 The trapping *arithmetic* causes — integer overflow, division by zero, `MIN / -1`,
 `MIN % -1`, negation of the minimum — are **not** carried as a terminator payload.
 They arise directly from evaluating a `Neg` unary or an `Add`/`Sub`/`Mul`/`Div`/
-`Rem` binary statement (§5.2, §5.3). The interpreter unifies both sources — plus
-the sandbox and internal aborts — into one runtime taxonomy (§8).
+`Rem` binary statement (§5.2, §5.3); the same is true of the op-carried
+`StrOp`/`HeapOp` `IndexOutOfBounds` traps (§5.6, §5.7) and `HeapMutate`'s
+`InvalidByte` (§4.3). The interpreter unifies both sources — plus the sandbox
+and internal aborts — into one runtime taxonomy (§8).
 
 ---
 
@@ -381,8 +520,14 @@ Per function, in one pass, the verifier proves:
   observe a local that is not initialized on *every* path reaching it, and that no
   local is read after it was moved out. Parameters begin initialized; ordinary
   locals begin uninitialized; an `Assign`/`Call` destination and a `BorrowMut`
-  initialize; a `Move` (of the whole local) and a `Drop` de-initialize.
+  initialize; a `Move` (of the whole local) and a `Drop` de-initialize; a
+  `HeapMutate` `target` reads and re-initializes (a `mut` borrow).
   Unreachable blocks are excluded (dead code is not an undefined-use bug).
+  Because a `Drop` is itself a read that de-initializes, this same pass makes
+  a **double drop structurally impossible in verified MIR**: a second `Drop`
+  of the same place (or a use after a drop) is exactly an `M0004`/`M0005`
+  undefined-use error — the drop-glue invariant ADR-0009 Stage B's native
+  free relies on.
 - **Type consistency** — the two operands of a `Binary` share a type, a
   `Discriminant`/`Len` projects an enum-like / array place, a `Branch`/`Assert`
   condition is `Bool`, and a call/return destination's arity is right. An
@@ -392,8 +537,14 @@ Per function, in one pass, the verifier proves:
   error, because fixed-array lengths are lowered as constants (a backend may
   rely on never seeing one). A `StrOp` supplies exactly its op's operands with
   their fixed types into a destination of the op's result type (`M0010`,
-  §5.6); an `Effect` supplies exactly its op's operands with their fixed types
-  into an `I64` destination (`M0011`, §4.2).
+  §5.6); an `Effect` supplies exactly its op's arguments with their fixed
+  kinds and types into an `I64` destination (`M0011`, §4.2); a `HeapOp`
+  supplies exactly its op's subject and operands with their fixed types into a
+  destination of the op's result type (`M0012`, §5.7); a `HeapMutate`'s
+  target, operands, and destination match its op (`M0013`, §4.3); a
+  `Const::Fn(sym)` names a function whose signature-as-function-type is
+  well-formed, and an `Indirect` call's callee operand is of function type
+  (`M0014`, §4.4).
 - **Terminators** — a `Switch`'s arm values are pairwise distinct.
 - **Ownership invariants that must survive lowering** — a borrow argument is never
   paired against a by-value read of the same call; a `Copy`-typed place is never
@@ -419,7 +570,10 @@ Codes are in the `Mir` namespace; once shipped, a number is never reused.
 | `M0008` | A terminator is malformed (e.g. duplicated switch arm values). |
 | `M0009` | An ownership invariant that must survive lowering is violated. |
 | `M0010` | A `StrOp` rvalue is malformed: wrong operand count for its op, a non-`Str` string operand, or a non-`I64` index operand (§5.6). |
-| `M0011` | An `Effect` statement is malformed: wrong operand count for its op, a mistyped operand, or a non-`I64` destination (§4.2). |
+| `M0011` | An `Effect` statement is malformed: wrong argument count for its op, a mistyped or wrong-kind argument (`Value` where `Borrow` is required, or vice versa), or a non-`I64` destination (§4.2). |
+| `M0012` | A `HeapOp` rvalue is malformed: a missing/extra/mistyped `subject` place, wrong operand count or types for its op, or a destination that is not the op's result type (§5.7). |
+| `M0013` | A `HeapMutate` statement is malformed: a mistyped `target` place, wrong operand count or types for its op, or a destination that is not the op's result type (§4.3). |
+| `M0014` | A function value or indirect call is malformed: a `Const::Fn(sym)` whose `sym` is not a function or whose signature-as-function-type is ill-formed, or a `Call` whose `Indirect` callee operand is not of function type (§4.4). |
 
 ### 7.2 Re-verification after every pass
 
@@ -455,7 +609,8 @@ execution. The `TrapKind` variants fall into three groups:
 |------|---------|
 | `IntegerOverflow` | Integer arithmetic overflowed its type (add/sub/mul, negation of the minimum, or `MIN / -1`). |
 | `DivisionByZero` | Integer division or remainder by zero. |
-| `IndexOutOfBounds` | An array index was out of bounds (a failed bounds-check assert, or an out-of-range `Index` projection). |
+| `IndexOutOfBounds` | An array, `Str`, or `String` index was out of bounds (a failed bounds-check assert, an out-of-range `Index` projection, or an out-of-range `StrOp`/`HeapOp` argument). |
+| `InvalidByte` | (ADR-0009) A byte-valued argument was outside `0..=255` (`HeapMutate::PushByte`, §4.3). Appended to the taxonomy together with the native `TrapCode` — the taxonomy is append-only. |
 | `Unreachable` | Control reached a point the front end proved unreachable. |
 
 **Resource aborts** — the sandbox ceilings (§8.1); not part of the language, but

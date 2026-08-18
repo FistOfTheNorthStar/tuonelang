@@ -91,6 +91,10 @@ pub enum TrapCode {
     IndexOutOfBounds = 2,
     /// Control reached a point the front end proved unreachable.
     Unreachable = 3,
+    /// A byte-valued argument was outside `0..=255`
+    /// (`std::string::push_byte`, ADR-0009). Appended together with the
+    /// interpreter's `TrapKind::InvalidByte` — the taxonomy is append-only.
+    InvalidByte = 4,
 }
 
 impl TrapCode {
@@ -108,6 +112,7 @@ impl TrapCode {
             1 => Some(Self::DivisionByZero),
             2 => Some(Self::IndexOutOfBounds),
             3 => Some(Self::Unreachable),
+            4 => Some(Self::InvalidByte),
             _ => None,
         }
     }
@@ -120,6 +125,7 @@ impl TrapCode {
             Self::DivisionByZero => "tuo: trap: division by zero",
             Self::IndexOutOfBounds => "tuo: trap: index out of bounds",
             Self::Unreachable => "tuo: trap: reached unreachable code",
+            Self::InvalidByte => "tuo: trap: byte value out of range",
         }
     }
 }
@@ -172,6 +178,7 @@ pub fn trap_runtime_c_source() -> String {
             TrapCode::IndexOutOfBounds.message(),
         ),
         (TrapCode::Unreachable, TrapCode::Unreachable.message()),
+        (TrapCode::InvalidByte, TrapCode::InvalidByte.message()),
     ] {
         source.push_str(&format!(
             "        case {}: message = \"{}\"; break;\n",
@@ -198,6 +205,7 @@ mod tests {
             TrapCode::DivisionByZero,
             TrapCode::IndexOutOfBounds,
             TrapCode::Unreachable,
+            TrapCode::InvalidByte,
         ] {
             assert_eq!(TrapCode::from_i32(code.as_i32()), Some(code));
         }
@@ -215,6 +223,7 @@ mod tests {
             TrapCode::DivisionByZero,
             TrapCode::IndexOutOfBounds,
             TrapCode::Unreachable,
+            TrapCode::InvalidByte,
         ] {
             let arm = format!("case {}: message = \"{}\";", code.as_i32(), code.message());
             assert!(

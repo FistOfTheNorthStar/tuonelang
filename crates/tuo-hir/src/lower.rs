@@ -30,9 +30,9 @@ use tuo_source::Span;
 
 use crate::hir::{
     Arm, BinOp, BindingDef, Block, ConstDef, EnumDef, Expr, ExprKind, Field, FieldInit, FieldPat,
-    Function, GivenBinding, Hir, ImplDef, InterfaceDef, Item, Lit, Param, ParamMode, Pat, PatKind,
-    Res, SpecDef, SpecStmt, Stmt, StmtKind, StructDef, Ty, TyKind, TypeParam, UnOp, Variant,
-    Wrapper,
+    FnTyParam, Function, GivenBinding, Hir, ImplDef, InterfaceDef, Item, Lit, Param, ParamMode,
+    Pat, PatKind, Res, SpecDef, SpecStmt, Stmt, StmtKind, StructDef, Ty, TyKind, TypeParam, UnOp,
+    Variant, Wrapper,
 };
 
 /// Lower one resolved program snapshot into HIR.
@@ -179,13 +179,7 @@ impl Cx {
 
     fn param(&self, decl: ast::ParamDecl<'_>, fallback: Span) -> Param {
         let span = decl.span().unwrap_or(fallback);
-        let mode = match decl.mode() {
-            Some("mut") => ParamMode::Mut,
-            Some("take") => ParamMode::Take,
-            // Any other first token is the name itself: the mode was
-            // omitted, and the default is `in`.
-            _ => ParamMode::In,
-        };
+        let mode = param_mode(decl.mode());
         Param {
             symbol: self.declared(decl.name_ref()),
             span,
@@ -469,6 +463,28 @@ impl Cx {
                     _ => TyKind::Err,
                 };
                 Ty { kind, span }
+            }
+            ast::TypeRef::Fn(fn_ty) => {
+                // `fn(mode T, …) -> R` (ADR-0008 Tier 1). Modes are part of
+                // the type; an absent mode (recovery state) defaults to `in`.
+                let params = fn_ty
+                    .params()
+                    .map(|param| FnTyParam {
+                        mode: param_mode(param.mode),
+                        ty: self.ty(param.ty, span),
+                    })
+                    .collect();
+                let ret = Box::new(fn_ty.ret().map_or(
+                    Ty {
+                        kind: TyKind::Unit,
+                        span,
+                    },
+                    |ret| self.ty(ret, span),
+                ));
+                Ty {
+                    kind: TyKind::Fn { params, ret },
+                    span,
+                }
             }
             ast::TypeRef::Path(path) => {
                 let res = path
@@ -986,4 +1002,15 @@ fn bin_op(op: &str) -> Option<BinOp> {
         "||" => BinOp::Or,
         _ => return None,
     })
+}
+
+/// The passing mode behind its written keyword; an absent or unrecognized
+/// keyword defaults to `in` (the mode was omitted — a recovery state, since
+/// parsing requires a mode on every parameter).
+fn param_mode(mode: Option<&str>) -> ParamMode {
+    match mode {
+        Some("mut") => ParamMode::Mut,
+        Some("take") => ParamMode::Take,
+        _ => ParamMode::In,
+    }
 }

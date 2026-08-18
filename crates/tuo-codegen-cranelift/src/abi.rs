@@ -16,8 +16,11 @@ use tuo_types::{FloatKind, IntKind, Ty};
 /// `Bool` is a byte (`i8`, 0 or 1), `Char` a 32-bit scalar value, each
 /// integer kind its exact width (`Isize`/`Usize` are 64-bit, matching the
 /// interpreter's target-independent choice), and each float kind its IEEE-754
-/// register type (`F32`/`F64`). `Unit` has no register representation — a
-/// function returning `()` is handled specially by the lowering, not here.
+/// register type (`F32`/`F64`). A function value (ADR-0008 Tier 1) is a single
+/// pointer-width code pointer (`I64` on the 64-bit targets, matching
+/// `Isize`/`Usize` and `layout_of(Ty::Fn) = pointer()`). `Unit` has no
+/// register representation — a function returning `()` is handled specially by
+/// the lowering, not here.
 #[must_use]
 pub(crate) fn scalar_type(ty: &Ty) -> Option<Type> {
     match ty {
@@ -25,6 +28,10 @@ pub(crate) fn scalar_type(ty: &Ty) -> Option<Type> {
         Ty::Char => Some(types::I32),
         Ty::Int(kind) => Some(int_type(*kind)),
         Ty::Float(kind) => Some(float_type(*kind)),
+        // A function value is a pointer-width code pointer. The scalar core is
+        // 64-bit (like `Isize`/`Usize`), so it maps to `I64` — the target's
+        // pointer type on every supported platform.
+        Ty::Fn(_) => Some(types::I64),
         _ => None,
     }
 }

@@ -1,0 +1,18 @@
+// An indirect call to a function that RETURNS a struct (ADR-0008 Tier 1),
+// proving the sret out-pointer convention works on the indirect path exactly
+// as on the direct one. `mk` is called through a
+// `fn(take Int, take Int) -> Point` value; the returned struct's fields are
+// read for the exit byte.
+struct Point { x: Int, y: Int }
+
+fn mk(take a: Int, take b: Int) -> Point { Point { x: a, y: b } }
+
+fn build(take f: fn(take Int, take Int) -> Point, take a: Int, take b: Int) -> Point {
+    f(a, b)
+}
+
+fn main() -> Int {
+    // build(mk, 40, 2) = Point { x: 40, y: 2 } ; 40 + 2 = 42
+    let p = build(mk, 40, 2);
+    p.x + p.y
+}
