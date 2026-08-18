@@ -1,0 +1,30 @@
+// indirect-calls — a hot loop calling through a first-class function VALUE
+// (ADR-0008 Tier 1), the indirect-call sibling of the `function-calls`
+// workload (which measures only direct calls). `step` is a
+// `fn(take Int, take Int) -> Int` value: `main` passes the top-level `add` by
+// name (the only way to obtain a function value in Tier 1), and `fold` invokes
+// it through the indirect-call path once per iteration. The equivalent C peer
+// (`benchmarks/runtime/programs/c/indirect-calls.c`) runs the identical loop
+// calling through a function pointer, so the comparison isolates the indirect
+// dispatch itself: same arithmetic, same iteration count, same exit.
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+// Fold `step` over `reps` iterations, adding 1 each time. Every `step(acc, 1)`
+// is an indirect call through the function value — the operation being measured.
+fn fold(take reps: Int, take step: fn(take Int, take Int) -> Int) -> Int {
+    var acc = 0;
+    var i = 0;
+    while i < reps {
+        acc = step(acc, 1);
+        i = i + 1;
+    }
+    acc
+}
+
+fn main() -> Int {
+    // 2_000_000 indirect calls through `add`, each contributing 1, so
+    // acc = 2_000_000. Observable exit byte = 2_000_000 & 0xff = 128.
+    fold(2000000, add)
+}

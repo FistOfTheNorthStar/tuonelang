@@ -146,15 +146,21 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   the borrowed `Str` (a two-word fat pointer; literals as read-only static
   data; equality; the trapping `std::str` byte ops) and the `std::rt` effect
   primitives (`write`/`read_byte`/`exit`, via the runtime's effect shim), and
-  — since ADR-0009 — the **allocator core**: owned `String` and growable
+  since ADR-0009 — the **allocator core**: owned `String` and growable
   `Array[Int]` (the three-word `{ptr, len, cap}` header, allocating and freeing
   real heap memory through the linked `tuo_rt_alloc`/`tuo_rt_dealloc` shim with
   drop glue; the `std::string`/`std::array` builtin ops and
-  `std::rt::write_string`), laid out solely by `tdg-runtime`'s `abi` module
-  (ABI v4) — and *refuse* — never mis-compile — anything outside it (the
-  `Box`/`Shared`/`Weak` heap-wrapper **values** and `Array[T]` for non-`Int`
-  element types), refusing at storage-classification time with a message naming
-  the type and pointing the user back to the interpreter as the reference), and
+  `std::rt::write_string`), laid out by `tdg-runtime`'s `abi` module (ABI v4);
+  and — since ADR-0008 Tier 1 — **first-class (non-capturing) function values**:
+  a bare top-level `fn` name is a `Const::Fn` `Copy` code pointer of type
+  `fn(mode T, …) -> R` (ABI v5, `layout_of(Ty::Fn)` a pointer), called
+  indirectly through `Callee::Indirect` with the identical direct-call ABI
+  (sret + borrow args included), pinned three-way — and *refuse* — never
+  mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
+  **values**, `Array[T]` for non-`Int` element types, and **capturing
+  closures** — Tier 2, deferred), refusing at storage-classification time with a
+  message naming the type and pointing the user back to the interpreter as the
+  reference), and
   `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
@@ -264,20 +270,23 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: of the eight required
-  runtime workloads exactly seven (**startup, integer-computation, function-calls,
+  honesty rule the prompt demands is enforced structurally: of the nine runtime
+  workloads exactly eight (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
-  over a fixed request-log line with its C peer, and — since ADR-0009's
+  over a fixed request-log line with its C peer, — since ADR-0009's
   allocator core landed — **allocation**, a bounded allocate/grow/free loop over
   a growable `Array[Int]` and an owned `String` with its `malloc`/`realloc`/`free`
-  C peer, same doubling growth) carry a real program and are `Support::Supported`,
-  while only **networking** is `Support::Unsupported` with the *exact reason* the
-  v0 core cannot express it (no socket-open effect) and emits **no number** — the
-  entry becomes measurable the moment the feature lands, with no other change
-  (exactly how `collections`, `string-processing`, and then `allocation`
-  flipped). The compiler
+  C peer, same doubling growth, and — since ADR-0008 Tier 1's function values
+  landed — **indirect-calls**, a hot loop calling through a `fn` value with a C
+  peer calling through a function pointer, same iteration count and exit) carry a
+  real program and are `Support::Supported`, while only **networking** is
+  `Support::Unsupported` with the *exact reason* the v0 core cannot express it (no
+  socket-open effect) and emits **no number** — the entry becomes measurable the
+  moment the feature lands, with no other change (exactly how `collections`,
+  `string-processing`, and `allocation` flipped, and how `indirect-calls` was
+  added). The compiler
   lab's cold stages measure the aggregate/loop program
   (`lab::compiler::COLD_AGGREGATE`, acceptance test-pinned) so the ADR-0004
   lowering's compile cost is tracked too. Cross-language
@@ -359,8 +368,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   allocator core, `data-pipeline` also answers its query through a
   **growable-collection oracle** — it `push`es its filtered subset (a
   data-dependent size a fixed `[Int; N]` cannot express) onto a heap-backed
-  `Array[Int]` and folds it, spec-pinned equal to the streaming fold with the
-  same exit byte. Since ADR-0006 landed the
+  `Array[Int]` and folds it; and since ADR-0008 Tier 1 landed first-class
+  function values, that fold is the **generic higher-order fold** (`fold(items,
+  0, add)`, passing a named `add` as a function value — the ADR-0008 oracle), so
+  `run` also exercises a native indirect call, spec-pinned equal to the streaming
+  fold with the same exit byte. Since ADR-0006 landed the
   effect boundary, `http-service` **runs natively too**: its request-line
   parsing is pure `std::str` byte scanning (spec-checked) under a thin
   `std::rt::write` response shell, and its demo `main` prints
@@ -394,10 +406,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `ADR-0009` (the allocator core — owned `String` + growable `Array[Int]`,
   since **accepted and landed**, having unblocked its named `allocation`
   workload; `Box`/`Shared`/`Weak` **values** and non-`Int` `Array[T]` stay
-  deferred), `ADR-0007` (the concurrency model), and `ADR-0008` (first-class
-  functions), the latter two still `proposed` and each naming the
-  performance-lab workload it must unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed machine-absolute dependency
-  paths and are therefore gitignored, not committed.
+  deferred), `ADR-0008` (first-class functions — **Tier 1 accepted and landed**:
+  non-capturing function values and the generic higher-order stdlib combinators,
+  having added its named `indirect-calls` workload; **Tier 2 capturing closures
+  deferred** to a future ADR), and `ADR-0007` (the concurrency model), the last
+  still `proposed` and naming the performance-lab workload (`networking`) it must
+  unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed
+  machine-absolute dependency paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
@@ -627,7 +642,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   error classification, the pure state models of a latch/lock — which runs and
   whose specs run — including, since ADR-0009, the `std::collections`
   `Array[Int]` algorithms `sum`/`max_of`/`contains`/`index_of`/`reversed` over
-  the allocator core, whose specs build the arrays they fold), an **effect
+  the allocator core, and, since ADR-0008 Tier 1, the **generic higher-order
+  combinators** `fold`/`map_into`/`filter_into`/`any`/`all` over a first-class
+  function value — one `fold`, not N specialized folds — whose specs build the
+  arrays they fold and pass a named top-level `fn` by value), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
   over `std::rt::exit`, and — since ADR-0009 — `std::io::read_line`, which builds
   an owned `String` from the bytes `std::rt::read_byte` yields — real tuonelang

@@ -8,7 +8,11 @@
 //!     **zero** errors — the whole library, and each module on its own;
 //!   * every `spec` in the library **executes** through the reference
 //!     interpreter and **passes**, with **no** skipped specs (a skip would mean
-//!     the library shipped a spec the executable subset cannot run — dishonest);
+//!     the library shipped a spec the executable subset cannot run — dishonest)
+//!     — including the ADR-0008 Tier 1 higher-order combinators
+//!     (`std::collections::{fold,map_into,filter_into,any,all}`), whose specs
+//!     pass a named top-level `fn` as a first-class value and run indirect
+//!     calls through the reference interpreter;
 //!   * the catalog's machine-queryable surface is coherent (every module is
 //!     reachable by path, the count is what the prompt asked for);
 //!   * the **three-tier rule** holds textually for every public function: a

@@ -263,6 +263,172 @@ pub fn reversed(in xs: Array[Int]) -> Array[Int] {
 }
 
 // ----------------------------------------------------------------------------
+// Higher-order combinators — one generic fold/map/filter over a function value
+// (ADR-0008 Tier 1).
+//
+// ADR-0008 landed non-capturing first-class function values: a bare top-level
+// `fn` name is a value of type `fn(mode T, …) -> R` — a `Copy` code pointer —
+// and calling it is an indirect call with the identical direct-call ABI. That
+// is exactly what these combinators need: instead of shipping N specialized
+// folds (one per operation), the library ships *one* `fold` and lets the caller
+// pass the step as a value. `map_into`/`filter_into`/`any`/`all` follow the same
+// shape. This is the abstraction ADR-0008's D-8 finding named as missing.
+//
+// The step/predicate modes are part of the function *type*, so they are fixed
+// here and documented: because `Int` and `Bool` are `Copy` scalars, every
+// element is passed `take` (moved by copy — no borrow to thread), which is the
+// cheapest and most natural contract. A combinator over a non-`Copy` element
+// type would want an `in` element mode, but v0's runnable higher-order surface
+// is monomorphic `Int`/`Bool`, so `take` is the right and only choice today.
+//
+// The combinators are monomorphic over `Array[Int]` in v0: `map_into` and
+// `filter_into` are `Int → Int` / `Int → Bool` respectively (there is no
+// element-type polymorphism in the runnable core — that is ADR-0004's separate
+// axis). When the type system gains generics over the element type, these
+// signatures generalize with no change to their meaning.
+// ----------------------------------------------------------------------------
+
+/// Left-fold `xs` with `step`, starting from `init`: the accumulator becomes
+/// `step(acc, xs[i])` for each element in order. Zero-element arrays return
+/// `init` unchanged.
+///
+/// `step` is a function *value* — pass a bare top-level `fn(take Int, take Int)
+/// -> Int` name (ADR-0008 Tier 1). This one generic fold replaces a family of
+/// specialized folds: `sum(xs)` is `fold(xs, 0, add)`, a product is
+/// `fold(xs, 1, mul)`, and so on.
+///
+/// # Example
+/// ```tuo
+/// fn add(take a: Int, take b: Int) -> Int { a + b }
+/// let total = std::collections::fold(std::collections::of3(1, 2, 3), 0, add); // 6
+/// ```
+pub fn fold(in xs: Array[Int], take init: Int, take step: fn(take Int, take Int) -> Int) -> Int {
+    var acc = init;
+    var i = 0;
+    while i < std::array::len(xs) {
+        acc = step(acc, std::array::get(xs, i));
+        i = i + 1;
+    }
+    acc
+}
+
+/// A **new** array holding `f(x)` for every element `x` of `xs`, in order. `xs`
+/// is only borrowed; the result is freshly allocated. This is the `map` the
+/// ADR names, monomorphic `Int → Int` in v0.
+///
+/// `f` is a function *value* — pass a bare top-level `fn(take Int) -> Int` name.
+///
+/// # Example
+/// ```tuo
+/// fn double(take x: Int) -> Int { x * 2 }
+/// let ys = std::collections::map_into(std::collections::of3(1, 2, 3), double); // [2, 4, 6]
+/// ```
+pub fn map_into(in xs: Array[Int], take f: fn(take Int) -> Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        std::array::push(out, f(std::array::get(xs, i)));
+        i = i + 1;
+    }
+    out
+}
+
+/// A **new** array holding exactly the elements of `xs` for which `pred` is
+/// true, in order. `xs` is only borrowed; the result's length is
+/// data-dependent (freshly allocated).
+///
+/// `pred` is a function *value* — pass a bare top-level `fn(take Int) -> Bool`
+/// name.
+///
+/// # Example
+/// ```tuo
+/// fn is_even(take x: Int) -> Bool { x % 2 == 0 }
+/// let ys = std::collections::filter_into(std::collections::of3(1, 2, 4), is_even); // [2, 4]
+/// ```
+pub fn filter_into(in xs: Array[Int], take pred: fn(take Int) -> Bool) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        if pred(x) {
+            std::array::push(out, x);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Does `pred` hold for **any** element of `xs`? `false` for the empty array.
+/// Short-circuits on the first match.
+///
+/// `pred` is a function *value* — pass a bare top-level `fn(take Int) -> Bool`
+/// name.
+///
+/// # Example
+/// ```tuo
+/// fn is_even(take x: Int) -> Bool { x % 2 == 0 }
+/// let b = std::collections::any(std::collections::of3(1, 3, 4), is_even); // true
+/// ```
+pub fn any(in xs: Array[Int], take pred: fn(take Int) -> Bool) -> Bool {
+    var i = 0;
+    while i < std::array::len(xs) {
+        if pred(std::array::get(xs, i)) {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+/// Does `pred` hold for **every** element of `xs`? `true` for the empty array
+/// (vacuously). Short-circuits on the first counterexample.
+///
+/// `pred` is a function *value* — pass a bare top-level `fn(take Int) -> Bool`
+/// name.
+///
+/// # Example
+/// ```tuo
+/// fn is_even(take x: Int) -> Bool { x % 2 == 0 }
+/// let b = std::collections::all(std::collections::of3(2, 4, 6), is_even); // true
+/// ```
+pub fn all(in xs: Array[Int], take pred: fn(take Int) -> Bool) -> Bool {
+    var i = 0;
+    while i < std::array::len(xs) {
+        if !pred(std::array::get(xs, i)) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+// ----------------------------------------------------------------------------
+// Named transforms for the combinator specs. These are ordinary top-level
+// functions used as *values* — the only way to obtain a function value in
+// Tier 1 (ADR-0008). Each combinator spec below passes one of these by name.
+// ----------------------------------------------------------------------------
+
+/// Add two integers. Used as a `fold` step value in the specs.
+pub fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+/// Multiply two integers. Used as a `fold` step value in the specs.
+pub fn mul(take a: Int, take b: Int) -> Int {
+    a * b
+}
+
+/// Double an integer. Used as a `map_into` transform value in the specs.
+pub fn double(take x: Int) -> Int {
+    x * 2
+}
+
+/// Is an integer even? Used as a `filter_into`/`any`/`all` predicate value.
+pub fn is_even(take x: Int) -> Bool {
+    x % 2 == 0
+}
+
+// ----------------------------------------------------------------------------
 // Specs — every function above runs. The array algorithms build their input
 // with the constructors, then assert the fold/search result.
 // ----------------------------------------------------------------------------
@@ -340,4 +506,66 @@ spec reversed {
     then std::array::len(reversed(of3(1, 2, 3))) == 3;
     then sum(reversed(of2(4, 5))) == 9;
     then std::array::len(reversed(std::array::empty())) == 0;
+}
+
+// The combinator specs each pass a NAMED top-level fn as a value (ADR-0008
+// Tier 1) — `add`/`mul`/`double`/`is_even` above. Passing the function by name
+// is the only way to make a function value in Tier 1.
+
+spec fold {
+    // The one generic fold subsumes the specialized ones: `sum` is fold with
+    // `add` and init 0; a product is fold with `mul` and init 1.
+    then fold(of3(1, 2, 3), 0, add) == 6;
+    then fold(of3(1, 2, 3), 1, mul) == 6;
+    then fold(of2(10, 20), 0, add) == 30;
+    then fold(singleton(5), 100, add) == 105;
+    then fold(std::array::empty(), 42, add) == 42;
+    // fold-with-add agrees with the specialized `sum` for every array.
+    then fold(of3(4, 5, 6), 0, add) == sum(of3(4, 5, 6));
+}
+
+spec map_into {
+    then std::array::get(map_into(of3(1, 2, 3), double), 0) == 2;
+    then std::array::get(map_into(of3(1, 2, 3), double), 2) == 6;
+    then std::array::len(map_into(of3(1, 2, 3), double)) == 3;
+    then sum(map_into(of3(1, 2, 3), double)) == 12;
+    then std::array::len(map_into(std::array::empty(), double)) == 0;
+}
+
+spec filter_into {
+    // even elements of [1, 2, 3] are [2]; of [2, 4, 6] are all three.
+    then std::array::len(filter_into(of3(1, 2, 3), is_even)) == 1;
+    then std::array::get(filter_into(of3(1, 2, 3), is_even), 0) == 2;
+    then std::array::len(filter_into(of3(2, 4, 6), is_even)) == 3;
+    then sum(filter_into(of3(2, 3, 4), is_even)) == 6;
+    then std::array::len(filter_into(std::array::empty(), is_even)) == 0;
+}
+
+spec any {
+    then any(of3(1, 3, 4), is_even);
+    then !any(of3(1, 3, 5), is_even);
+    then !any(std::array::empty(), is_even);
+}
+
+spec all {
+    then all(of3(2, 4, 6), is_even);
+    then !all(of3(2, 4, 5), is_even);
+    then all(std::array::empty(), is_even);
+}
+
+spec add {
+    then add(2, 3) == 5;
+}
+
+spec mul {
+    then mul(4, 5) == 20;
+}
+
+spec double {
+    then double(6) == 12;
+}
+
+spec is_even {
+    then is_even(4);
+    then !is_even(5);
 }

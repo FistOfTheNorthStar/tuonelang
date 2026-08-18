@@ -129,10 +129,11 @@ fn honesty_rules_hold_over_the_catalog() {
     }
     // The v0 story: the four scalar-core workloads plus the fixed-array
     // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
-    // string-processing workload (ADR-0006), and the allocator-core allocation
-    // workload (ADR-0009) run; only networking is honestly recorded as
+    // string-processing workload (ADR-0006), the allocator-core allocation
+    // workload (ADR-0009), and the function-value indirect-calls workload
+    // (ADR-0008 Tier 1) run; only networking is honestly recorded as
     // not-yet-expressible.
-    assert_eq!(supported, 7);
+    assert_eq!(supported, 8);
     assert_eq!(unsupported, 1);
 }
 
@@ -172,7 +173,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     // Schema + catalog invariants.
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 7);
+    assert_eq!(committed.supported_workload_count(), 8);
 
     // The deterministic edit scenarios regenerate identically.
     let fresh_edits = vec![
@@ -189,7 +190,7 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set.
-    assert_eq!(committed.comparisons.len(), 7);
+    assert_eq!(committed.comparisons.len(), 8);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }

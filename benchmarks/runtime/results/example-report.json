@@ -112,6 +112,15 @@
       }
     },
     {
+      "label": "indirect-calls",
+      "description": "a hot loop calling through a first-class function value (ADR-0008 Tier 1) — the indirect-call sibling of function-calls, measured against a C peer calling through a function pointer",
+      "support": {
+        "support": "supported",
+        "source": "// indirect-calls — a hot loop calling through a first-class function VALUE\n// (ADR-0008 Tier 1), the indirect-call sibling of the `function-calls`\n// workload (which measures only direct calls). `step` is a\n// `fn(take Int, take Int) -> Int` value: `main` passes the top-level `add` by\n// name (the only way to obtain a function value in Tier 1), and `fold` invokes\n// it through the indirect-call path once per iteration. The equivalent C peer\n// (`benchmarks/runtime/programs/c/indirect-calls.c`) runs the identical loop\n// calling through a function pointer, so the comparison isolates the indirect\n// dispatch itself: same arithmetic, same iteration count, same exit.\nfn add(take a: Int, take b: Int) -> Int {\n    a + b\n}\n\n// Fold `step` over `reps` iterations, adding 1 each time. Every `step(acc, 1)`\n// is an indirect call through the function value — the operation being measured.\nfn fold(take reps: Int, take step: fn(take Int, take Int) -> Int) -> Int {\n    var acc = 0;\n    var i = 0;\n    while i < reps {\n        acc = step(acc, 1);\n        i = i + 1;\n    }\n    acc\n}\n\nfn main() -> Int {\n    // 2_000_000 indirect calls through `add`, each contributing 1, so\n    // acc = 2_000_000. Observable exit byte = 2_000_000 & 0xff = 128.\n    fold(2000000, add)\n}\n",
+        "expected_exit": 128
+      }
+    },
+    {
       "label": "recursion",
       "description": "deep-ish recursion (naive Fibonacci, fib(20))",
       "support": {
@@ -191,6 +200,19 @@
         "expected_exit": 30
       },
       "tuonelang_exit": 30,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "indirect-calls",
+        "peer": "c",
+        "peer_source": "// indirect-calls — the equivalent-semantics C peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function pointer** rather than tuonelang's function value:\n// the same arithmetic (`acc += add(acc, 1)`-style step), the same 2,000,000\n// iterations, and the same observable exit (2_000_000 & 0xff = 128). This is the\n// indirect-call sibling of function-calls.c, which calls f/g directly.\nstatic int add(int a, int b) { return a + b; }\n\nstatic int fold(int reps, int (*step)(int, int)) {\n    int acc = 0;\n    for (int i = 0; i < reps; i++) {\n        acc = step(acc, 1);\n    }\n    return acc;\n}\n\nint main(void) {\n    // 2_000_000 indirect calls through the `add` function pointer; acc = 2_000_000,\n    // exit byte 2_000_000 & 0xff = 128.\n    return fold(2000000, add);\n}\n",
+        "expected_exit": 128
+      },
+      "tuonelang_exit": 128,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

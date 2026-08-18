@@ -68,9 +68,11 @@ pub const CORE: Module = Module {
     source: include_str!("std/core.tuo"),
 };
 
-/// `std::collections` — `Pair`, counted ranges, and pure `Array[Int]`
-/// algorithms (`sum`/`max_of`/`contains`/`index_of`/`reversed`) over the
-/// ADR-0009 allocator core. Entirely executable.
+/// `std::collections` — `Pair`, counted ranges, pure `Array[Int]` algorithms
+/// (`sum`/`max_of`/`contains`/`index_of`/`reversed`) over the ADR-0009
+/// allocator core, and the generic higher-order combinators
+/// (`fold`/`map_into`/`filter_into`/`any`/`all`) over a first-class function
+/// value (ADR-0008 Tier 1). Entirely executable.
 pub const COLLECTIONS: Module = Module {
     path: "std::collections",
     name: "std/collections.tuo",

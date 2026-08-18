@@ -28,11 +28,17 @@ and growable `Array[Int]` allocating and freeing real heap memory
 (`std::string::{empty, from_str, push_byte, append, concat, len, byte_at,
 slice}`, `std::array::{empty, push, pop, len, get}`, `std::rt::write_string`,
 with `std::io::read_line` and the `std::collections` array algorithms built on
-top). All of it is compiled natively by both backends in lock-step with the
-interpreter. The remaining capability gaps are the heap-wrapper **values**
-`Box`/`Shared`/`Weak` (declared, construction refused — a later ADR) and
-`Array[T]` for non-`Int` element types, concurrency (ADR-0007), and
-first-class functions (ADR-0008), not yet in the runnable core.
+top); and — since ADR-0008 Tier 1 landed — **first-class (non-capturing)
+function values**: a bare top-level `fn` name is a `Copy` code pointer of type
+`fn(mode T, …) -> R`, called indirectly with the identical direct-call ABI on
+both backends, which powers the **generic higher-order stdlib combinators**
+(`std::collections::{fold, map_into, filter_into, any, all}` over a function
+value). All of it is compiled natively by both backends in lock-step with the
+interpreter. The remaining capability gaps are **capturing closures** (a
+heap-allocated captured environment — a future ADR Tier 2, non-capturing
+function values already landed), concurrency (ADR-0007), the heap-wrapper
+**values** `Box`/`Shared`/`Weak` (declared, construction refused — a later ADR),
+and `Array[T]` for non-`Int` element types, not yet in the runnable core.
 
 - ✅ Front end: lexer → parser (lossless CST) → resolver → type checker →
   ownership checker, with human and machine-versioned diagnostics.

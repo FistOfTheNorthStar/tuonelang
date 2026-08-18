@@ -223,10 +223,18 @@ Dogfooding re-derived several stdlib functions by hand because the shipped
 
 - Every example re-implemented `min`/`max`/`abs`/`isqrt` locally. `std::core` has
   `min`/`max`/`abs` but **no `isqrt`, no `pow`, no `clamp`-of-three used here**;
-  more fundamentally there is **no generic `map`/`fold`/`filter`** because v0 has
-  **no first-class functions/closures** (→ **D-8 / ADR-0008**) and **no element
-  type to be generic over** (D-1/D-2). The data-pipeline's fused
-  `filter+map+reduce` had to be written as a bespoke recursion.
+  more fundamentally there was **no generic `map`/`fold`/`filter`**, because v0
+  had **no first-class functions/closures** (→ **D-8 / ADR-0008**) and no element
+  type to be generic over (D-1/D-2). ADR-0008 Tier 1 has since landed: a bare
+  top-level `fn` name is now a first-class **function value** (`fn(mode T, …) ->
+  R`, a `Copy` code pointer, called indirectly with the identical direct-call
+  ABI on both backends), so `std::collections` ships the **generic** combinators
+  `fold`/`map_into`/`filter_into`/`any`/`all` over a function value — one `fold`,
+  not N specialized folds — and `data-pipeline`'s once-bespoke fold now calls the
+  generic `fold(items, 0, add)` with `add` passed by value, identical spec
+  verdicts and exit byte. Only **capturing closures** (a heap-allocated captured
+  environment) and non-`Int` element polymorphism remain deferred to a future
+  ADR (Tier 2).
 - The effectful entry points a CLI/HTTP/worker actually needs — `println`,
   `read_line`, `now`, `exit`, `lock` — were all **contract-tier** (documented
   signatures, no runnable body) because there was no effect boundary (→ **D-3 /
@@ -255,9 +263,13 @@ exactly as their ADRs required: `collections` when ADR-0004 landed fixed
 arrays, `string-processing` when ADR-0006 landed the borrowed `Str` core, and
 `allocation` when ADR-0009 landed the allocator core (owned `String` + growable
 `Array[Int]`, measured against a `malloc`/`realloc`/`free` C peer with the same
-doubling growth); only `networking` (no socket effect) still publishes a reason,
-not a number — seven of the eight workloads now measure. No new runtime figure
-is invented here; the lab remains the one measurement of record.
+doubling growth). ADR-0008 Tier 1 then *added* a ninth workload,
+`indirect-calls` — a hot loop through a first-class function value, measured
+against a C peer calling through a function pointer — so the indirect-call
+overhead is a recorded number, not a guess. Only `networking` (no socket effect)
+still publishes a reason, not a number: eight of the nine workloads now measure.
+No new runtime figure is invented here; the lab remains the one measurement of
+record.
 
 ---
 
@@ -273,7 +285,7 @@ benchmark-consideration section, per the prompt. None was patched ad hoc.
 | **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) **(accepted, landed)** — cli-stats now `println`s its report and http-service parses/prints its request/response line, stdout byte-asserted by the dogfood tests. The *owned, growable* `String`/`Array[Int]` half (D-3's allocator continuation) is [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — `std::io::read_line` now builds a real `String` from stdin, and `std::collections` gained real `Array[Int]` algorithms |
 | **D-2b** | No *growable* collection whose size is not compile-time-fixed — *data-pipeline filter+collect* | [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — data-pipeline now `push`es its filtered subset onto a heap-backed `Array[Int]` and folds it, spec-pinned equal to the streaming fold |
 | **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) *(proposed)* |
-| **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) *(proposed)* |
+| **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) **(Tier 1 accepted, landed)** — a bare `fn` name is now a `Copy` function value called indirectly (native, three-way pinned); `std::collections` ships generic `fold`/`map_into`/`filter_into`/`any`/`all` over a function value, and data-pipeline's fold calls the generic `fold` with `add` by value, same verdicts/exit byte. Tier 2 capturing closures deferred to a future ADR |
 | **D-5a** | `T0001` span points at the return annotation, not the offending body expression | backlog (diagnostics bug, no ADR) |
 | **D-5b** | Missing parameter mode degrades to coarse `P0002` whole-item recovery | backlog (diagnostics bug, no ADR) |
 | **D-5c** | Ownership diagnostics unreachable from the runnable core (all scalar types `Copy`) | closes with D-1/D-2 |

@@ -106,6 +106,9 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "function-calls" => {
             include_str!("../../../../benchmarks/runtime/programs/c/function-calls.c")
         }
+        "indirect-calls" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/indirect-calls.c")
+        }
         "recursion" => include_str!("../../../../benchmarks/runtime/programs/c/recursion.c"),
         "collections" => include_str!("../../../../benchmarks/runtime/programs/c/collections.c"),
         "string-processing" => {

@@ -12,11 +12,14 @@ compiler actually accepts and executes — nothing aspirational.
 > recursion, floats, borrow-mode (`in`/`mut`) calls, `Str` values with the
 > `std::str` byte operations, the **owned heap types** — an owned `String` and
 > a growable `Array[Int]` that allocate and free real memory (`std::string`/
-> `std::array`; since ADR-0009) — and the `std::rt` host effects
+> `std::array`; since ADR-0009) — the `std::rt` host effects
 > (`write`/`read_byte`/`write_string`/`exit` — native only; the spec sandbox
-> stays pure, but heap ops *are* pure, so a spec may build strings and arrays).
-> Concurrency and first-class functions are tracked ADRs (0007/0008) and are
-> not in v0.
+> stays pure, but heap ops *are* pure, so a spec may build strings and arrays) —
+> and, since ADR-0008 Tier 1, **first-class (non-capturing) function values**: a
+> bare top-level `fn` name is a `Copy` code pointer of type `fn(mode T, …) -> R`,
+> called indirectly, which powers the generic higher-order `std::collections`
+> combinators. **Capturing closures** (Tier 2) and concurrency (ADR-0007) are
+> tracked ADRs and are not in v0.
 > Anything outside the core is **refused with a clear error, never mis-compiled**.
 
 ---
@@ -574,6 +577,19 @@ Executable: `Pair[A, B]` with `pair`, `first`, `second`, `swap`; range helpers
 `range_len`, `range_sum`, `range_contains(start, end, value)`; and — real over
 the growable `Array[Int]` since ADR-0009 — `sum`, `max_of` (→ `Option[Int]`),
 `contains`, `index_of` (→ `Option[Int]`), and `reversed` (→ a new `Array[Int]`).
+Since ADR-0008 Tier 1, the **generic higher-order combinators** over a
+first-class function value (see "First-class functions" at the end of this
+section):
+
+| Combinator | Signature | Result |
+|------------|-----------|--------|
+| `fold` | `fold(in xs: Array[Int], take init: Int, take step: fn(take Int, take Int) -> Int) -> Int` | left fold: `acc = step(acc, xs[i])`, `init` for empty |
+| `map_into` | `map_into(in xs: Array[Int], take f: fn(take Int) -> Int) -> Array[Int]` | a new array of `f(x)` per element |
+| `filter_into` | `filter_into(in xs: Array[Int], take pred: fn(take Int) -> Bool) -> Array[Int]` | a new array of the elements where `pred` holds |
+| `any` / `all` | `any(in xs, take pred: fn(take Int) -> Bool) -> Bool` | does `pred` hold for any / every element |
+
+One `fold` replaces N specialized folds: `sum(xs)` is `fold(xs, 0, add)`. The
+step/predicate element modes are `take` (the `Int`/`Bool` scalars are `Copy`).
 The array primitives themselves live in the `std::array` builtin module (§11a).
 
 ### `std::test` — all executable (predicates for `then`)
@@ -614,6 +630,37 @@ An effectful function like `main` here cannot appear in a `spec` (`R0007`);
 observable output is tested from outside the process, the way
 `crates/tuo-cli/tests/stdlib.rs` pins `println` itself.
 
+### First-class functions (ADR-0008 Tier 1)
+
+A **function type** is written `fn(P1, P2, …) -> R`, where each parameter is a
+**mode** (`take`/`in`/`mut`) followed by a type — modes are **mandatory** in the
+type, and the return is always spelled (write `-> ()` for unit). Two function
+types are equal iff arity, parameter types, modes, and return type all match
+exactly: `fn(take Int) -> Int` is a *different* type from `fn(in Int) -> Int`.
+
+A bare **top-level `fn` name in value position** (not immediately called) is a
+**function value** of that function's signature-as-type — a `Copy` code pointer,
+no heap. Calling an expression of function type is an **indirect call**, checked
+and lowered with the identical ABI as a direct call. This is what the generic
+combinators consume:
+
+```tuo
+fn add(take a: Int, take b: Int) -> Int { a + b }
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 1);
+    std::array::push(xs, 2);
+    std::array::push(xs, 3);
+    std::collections::fold(xs, 0, add)   // add passed as a VALUE → 6
+}
+```
+
+Only ordinary top-level user functions are first-class in Tier 1: a **builtin**
+or a **generic** used as a value is `T0015`. **Tier 1 has no closures** — a
+function value cannot capture locals; capturing closures (with a heap-allocated
+captured environment) are Tier 2, deferred to a future ADR.
+
 ---
 
 ## 15. Runtime model: traps and determinism
@@ -649,9 +696,10 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
 | Owned `String`, growable `Array[Int]` (`std::string`/`std::array`, allocate/free) | ✅ | ✅ | ✅ |
+| First-class (non-capturing) function values `fn(mode T, …) -> R`, indirect calls | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| `Box`/`Shared`/`Weak` heap-wrapper values, `Array[T]` ops for non-`Int` `T` | declared | ❌ | ❌ refused |
+| Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values, `Array[T]` ops for non-`Int` `T` | declared / refused | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
 | Filesystem, clock, argv, threads, sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
 
@@ -671,7 +719,8 @@ call of non-function · `T0004` unknown field · `T0005` struct field-set error 
 `T0006` operator unsupported for type · `T0007` non-exhaustive match · `T0008`
 invalid cast · `T0009` invalid `?` · `T0010` wrong type-argument count ·
 `T0011` type annotation needed · `T0012` expected value/constructor · `T0013`
-break/continue outside loop · `T0014` invalid fixed-array length.
+break/continue outside loop · `T0014` invalid fixed-array length · `T0015` a
+builtin or generic function is not first-class (cannot be used as a value).
 
 **Ownership** — `O0001` use of moved value · `O0003` move out of borrowed
 param · `O0005` conflicting borrows in a call · `O0006` move of borrowed value
