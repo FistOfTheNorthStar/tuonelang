@@ -12,35 +12,12 @@ programmers and AI coding agents.
 > the *methodology tuonelang is built for*, not the name of the language. The
 > CLI binary is `tuo` and all crates use the `tuo-` prefix.
 
-## Status
+## Capabilities
 
-The compiler front end, reference interpreter, and native backends are
-implemented. tuonelang programs written against the **v0 runnable core**
-compile, spec-check, and run today. The core is deliberate: integer
-arithmetic, `if`/`else`, direct and recursive function calls, an integer
-`main`, and — since ADR-0004 landed — **structs, enums, `Option`/`Result`,
-fixed-capacity `[T; N]` arrays with checked indexing, and bounded `for`
-iteration**, plus **IEEE-754 floats and borrow-mode (`in`/`mut`) calls**,
-since ADR-0006 landed — the **borrowed `Str` string core** (literals,
-equality, `std::str::{len, byte_at, slice}`) and the **effect boundary**
-(`std::rt::{write, read_byte, exit}`, with `std::io::print`/`println` and
-`std::process::exit` implemented over it; specs stay pure by the `R0007`
-gate); and — since ADR-0009 landed — the **allocator core**: owned `String`
-and growable `Array[Int]` allocating and freeing real heap memory
-(`std::string::{empty, from_str, push_byte, append, concat, len, byte_at,
-slice}`, `std::array::{empty, push, pop, len, get}`, `std::rt::write_string`,
-with `std::io::read_line` and the `std::collections` array algorithms built on
-top); and — since ADR-0008 Tier 1 landed — **first-class (non-capturing)
-function values**: a bare top-level `fn` name is a `Copy` code pointer of type
-`fn(mode T, …) -> R`, called indirectly with the identical direct-call ABI on
-both backends, which powers the **generic higher-order stdlib combinators**
-(`std::collections::{fold, map_into, filter_into, any, all}` over a function
-value). All of it is compiled natively by both backends in lock-step with the
-interpreter. The remaining capability gaps are **capturing closures** (a
-heap-allocated captured environment — a future ADR Tier 2, non-capturing
-function values already landed), concurrency (ADR-0007), the heap-wrapper
-**values** `Box`/`Shared`/`Weak` (declared, construction refused — a later ADR),
-and `Array[T]` for non-`Int` element types, not yet in the runnable core.
+The compiler is implemented end to end — front end, reference interpreter, and
+both native backends. tuonelang programs written against the **v0 runnable
+core** compile, spec-check, and run natively on both backends, in lock-step with
+the interpreter.
 
 - ✅ Front end: lexer → parser (lossless CST) → resolver → type checker →
   ownership checker, with human and machine-versioned diagnostics.
@@ -53,6 +30,17 @@ and `Array[T]` for non-`Int` element types, not yet in the runnable core.
 - 📋 The **0.1 release gate** (`specification/RELEASE-0.1-GATE.md`) currently
   reads **READY** — all sixteen criteria are `MET`, each backed by a committed
   proving artifact.
+
+The runnable core has grown one ADR at a time: scalar arithmetic, control flow,
+and recursion; **structs, enums, `Option`/`Result`, fixed `[T; N]` arrays, and
+bounded `for`** (ADR-0004); **IEEE-754 floats and borrow-mode (`in`/`mut`)
+calls**; the **borrowed `Str` core and effect boundary** (ADR-0006); the
+**allocator core** — owned `String` and growable `Array[Int]` on real heap
+memory (ADR-0009); and **first-class non-capturing function values** with the
+generic higher-order stdlib combinators (`fold`/`map_into`/`filter_into`/`any`/
+`all`, ADR-0008 Tier 1). Still outside the core: **capturing closures**
+(ADR-0008 Tier 2), **concurrency** (ADR-0007), the heap-wrapper **values**
+`Box`/`Shared`/`Weak`, and `Array[T]` for non-`Int` elements.
 
 Because tuonelang v0 ships a deliberately bounded core, the compiler
 **refuses** programs outside it rather than mis-compiling them — no component
@@ -93,10 +81,12 @@ through the optimizing LLVM backend, or `build [-o <path>]` to produce an
 executable without running it.
 
 For real, multi-function programs written against v0, see [`examples/`](examples/)
-(four run natively — cli-stats prints its report and http-service prints its
-response line through the effect boundary; the concurrent worker documents its
-effectful shell over a runnable decision core) and
-[`DOGFOODING.md`](DOGFOODING.md).
+(four run natively — cli-stats prints its four-line report and http-service
+prints its response line through the effect boundary, data-pipeline folds a
+heap-backed `Array[Int]` through a first-class `fold`, and the concurrent
+worker runs its scheduling decision core while its effectful shell stays a
+documented contract tier; the fifth, `workspace/`, is a three-package graph
+that checks and tests green) and [`DOGFOODING.md`](DOGFOODING.md).
 
 ## CLI
 
@@ -111,7 +101,9 @@ protocol with `--message-format json` / `json-lines`.
 | `tuo fmt [--check] <files>` | Rewrite into canonical format (deterministic, idempotent, zero config). |
 | `tuo build [-o <path>] [--release] <files>` | Compile to a native executable (Cranelift debug / LLVM release). |
 | `tuo run [--release] <files>` | Compile and run; exit status is the program's own. |
-| `tuo new <name>` · `add` · `remove` · `test` | Package lifecycle over a `tdg.toml` manifest and `tdg.lock`. |
+| `tuo new <name>` · `add` · `remove` · `test` · `package symbols` | Package lifecycle over a `tdg.toml` manifest and `tdg.lock`; `package symbols` queries a package's real exported symbols. |
+| `tuo corpus validate [--category <c>] <files>` | Run a program through the compiler-validated corpus pipeline and report its per-stage results. |
+| `tuo bench report <tasks> <run>` | Score a recorded LLM code-generation run by recompiling its outputs through the real compiler. |
 | `tuo agent --stdio` | Serve the versioned JSON-lines agent protocol (one long-lived compiler DB). |
 | `tuo debug syntax\|ast\|hir\|mir <file>` | Developer dumps (unstable output, not a language protocol). |
 
@@ -127,6 +119,7 @@ tests/           Stage-organized compiler tests (lexer, parser, types, ownership
 benchmarks/      Compiler, runtime, and LLM-codegen benchmarks
 corpus/          Compiler-validated tuonelang programs (six categories)
 examples/        Real multi-function programs dogfooding the v0 core
+training/        Compiler-validated fine-tuning material for a tuonelang model
 tools/           Developer tooling
 ```
 

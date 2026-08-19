@@ -34,7 +34,7 @@ concurrent worker) could not run in v0, and the prompt itself hedges the HTTP
 service with *"when networking support exists."* For those two, the honest
 dogfooding move was to build the **pure decision core** that v0 *can* run
 (routing/status logic; scheduling arithmetic) and mark the effectful shell as a
-documented **contract tier**, mirroring exactly how `tdg-stdlib` separates its
+documented **contract tier**, mirroring exactly how `tuo-stdlib` separates its
 executable tier from its `CONTRACT:` tier. Nothing pretends to do what the
 language cannot. (The ADRs this exercise opened have since moved the boundary:
 ADR-0004 landed aggregates, and ADR-0006 landed `Str` and the effect boundary —

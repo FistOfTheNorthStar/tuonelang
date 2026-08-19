@@ -14,7 +14,7 @@
   - Every command-line example returns its result as the **process exit byte**
     because that is the *only* output channel the scalar core has. There is no
     `println`, no `read_line`, no argv.
-  - `tdg-stdlib`'s `std::io`/`std::fs`/`std::time`/`std::process` are honest about
+  - `tuo-stdlib`'s `std::io`/`std::fs`/`std::time`/`std::process` are honest about
     this: their effectful entry points are contract-tier, documented but
     unrunnable, precisely because this boundary does not exist.
 

@@ -811,3 +811,16 @@ tuo run stats.tuo      # native; exit status = main()
 For larger, multi-package layouts see [`examples/workspace/`](examples/workspace/)
 (`app → geometry → numeric` over path dependencies) and the other programs in
 [`examples/`](examples/).
+
+---
+
+## 20. Teaching a model to write tuonelang
+
+To fine-tune a language model into a professional tuonelang programmer, see
+[`training/`](training/): a compiler-validated dataset generator that turns the
+concepts in this reference into supervised-fine-tuning examples (task → correct
+program), multi-turn **repair transcripts** (buggy attempt → the compiler's real
+diagnostic → corrected program — the TDG feedback loop), and a held-out eval set
+scored by the real compiler ([`training/README.md`](training/README.md)). Every
+example is compiled through `tuo` before it is emitted, so the material can never
+drift from what the language actually accepts.

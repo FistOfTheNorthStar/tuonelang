@@ -1,0 +1,36 @@
+{
+  "seeds_total": 34,
+  "train_seeds": 21,
+  "eval_seeds": 13,
+  "oneshot_examples": 21,
+  "repair_examples": 39,
+  "eval_examples": 13,
+  "repair_by_break": {
+    "missing-param-mode": 17,
+    "chained-comparison": 7,
+    "let-mut-for-var": 6,
+    "compound-assign": 4,
+    "angle-bracket-generics": 3,
+    "positional-some": 1,
+    "use-for-import": 1
+  },
+  "concepts": {
+    "functions-arithmetic": 3,
+    "if-else": 3,
+    "recursion": 3,
+    "loops": 3,
+    "fixed-arrays": 3,
+    "structs": 2,
+    "enums-match": 2,
+    "option-result": 4,
+    "constants": 1,
+    "borrow-modes": 1,
+    "floats": 1,
+    "stdlib-core": 1,
+    "growable-array": 2,
+    "owned-string": 1,
+    "first-class-functions": 1,
+    "generics": 1,
+    "runnable-main": 2
+  }
+}

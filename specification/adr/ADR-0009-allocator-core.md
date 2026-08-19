@@ -8,7 +8,7 @@
   "building an owned, growable `String` value (and with it `concat`,
   formatting, and `String`→`Str` borrowing) is real allocator-dependent work
   and gets its own ADR." This is that ADR. The same wall stands in front of
-  every collection: `tdg-stdlib`'s `std::collections` is a **contract tier**
+  every collection: `tuo-stdlib`'s `std::collections` is a **contract tier**
   whose `Array[Int]`-monomorphic entry points (`push`, `pop`, `get`, …) are
   documented but unrunnable, "awaiting the allocator" — and the performance
   lab's **`allocation`** workload is `Support::Unsupported` for exactly the
@@ -208,7 +208,7 @@
     (a `write_string` stdout pin and a 200k-round allocate/free **leak proxy**
     that completes in bounded memory on both backends — the evidence every
     buffer is freed exactly once).
-  - *Stage C (stdlib, oracle, lab; this change):* `tdg-stdlib`'s
+  - *Stage C (stdlib, oracle, lab; this change):* `tuo-stdlib`'s
     `std::collections` array tier became **real pure-executable code** —
     `sum`/`max_of`/`contains`/`index_of`/`reversed` (plus `singleton`/`of2`/`of3`
     constructors) over `std::array::{empty, push, len, get}`, each with a

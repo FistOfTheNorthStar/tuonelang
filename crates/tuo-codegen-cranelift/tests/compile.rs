@@ -72,6 +72,51 @@ fn a_supported_entry_compiles_to_a_main_object() {
     assert_eq!(artifact.target, TargetSpec::host());
 }
 
+/// On a Darwin/macOS host the emitted Mach-O object must carry an
+/// `LC_BUILD_VERSION` load command. Without it the system linker warns "no
+/// platform load command found ... assuming: macOS" on every build. This pins
+/// the platform-stamping seam so that warning can never silently return.
+#[cfg(target_os = "macos")]
+#[test]
+fn a_macos_object_carries_a_build_version_load_command() {
+    use cranelift_object::object::Endianness;
+    use cranelift_object::object::read::macho::MachOFile64;
+
+    let program = constant_main(42);
+    let types = TypeckResult::default();
+    let artifact = CraneliftBackend::new()
+        .compile(
+            &program,
+            &types,
+            "main",
+            EntryAbi::IntReturn,
+            &TargetSpec::host(),
+        )
+        .expect("a nullary integer entry compiles");
+
+    let file: MachOFile64<'_, Endianness> =
+        MachOFile64::parse(&artifact.bytes[..]).expect("the object is a 64-bit Mach-O file");
+    let mut commands = file
+        .macho_load_commands()
+        .expect("the Mach-O header lists its load commands");
+    let mut saw_build_version = false;
+    while let Some(command) = commands.next().expect("each load command parses") {
+        if command
+            .build_version()
+            .expect("a build-version command parses")
+            .is_some()
+        {
+            saw_build_version = true;
+            break;
+        }
+    }
+    assert!(
+        saw_build_version,
+        "the Mach-O object carries an LC_BUILD_VERSION command so the linker does \
+         not warn about a missing platform"
+    );
+}
+
 #[test]
 fn a_missing_entry_is_a_distinct_error() {
     let program = constant_main(1);

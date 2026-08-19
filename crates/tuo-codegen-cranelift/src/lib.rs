@@ -62,8 +62,10 @@ mod lower;
 use cranelift_codegen::settings::{self, Configurable as _};
 use cranelift_codegen::{Context, isa};
 use cranelift_module::{Linkage, Module};
+use cranelift_object::object::macho::PLATFORM_MACOS;
+use cranelift_object::object::write::MachOBuildVersion;
 use cranelift_object::{ObjectBuilder, ObjectModule};
-use target_lexicon::Triple;
+use target_lexicon::{OperatingSystem, Triple};
 
 use tuo_codegen::{CodegenBackend, CodegenError, EntryAbi, ObjectArtifact, TargetSpec};
 use tuo_mir::Program;
@@ -123,12 +125,16 @@ impl CodegenBackend for CraneliftBackend {
             }
         };
 
-        let mut module = build_module(target)?;
+        let (mut module, triple) = build_module(target)?;
         let ids = lower::lower_program(&mut module, program, types)?;
         let entry_id = ids[&entry_fn.symbol];
         lower::emit_main_shim(&mut module, entry_id, entry_kind)?;
 
-        let product = module.finish();
+        let mut product = module.finish();
+        // Stamp a Mach-O `LC_BUILD_VERSION` on Darwin/macOS targets. Without it
+        // the linker warns "no platform load command found ... assuming: macOS"
+        // on every build; `cranelift-object` does not set one by default.
+        set_macho_platform(&mut product.object, &triple);
         let bytes = product
             .emit()
             .map_err(|error| CodegenError::backend(format!("object emission failed: {error}")))?;
@@ -145,7 +151,7 @@ impl CodegenBackend for CraneliftBackend {
 ///
 /// v0 supports the host target only; a different triple is refused as
 /// unsupported rather than silently mis-targeted.
-fn build_module(target: &TargetSpec) -> Result<ObjectModule, CodegenError> {
+fn build_module(target: &TargetSpec) -> Result<(ObjectModule, Triple), CodegenError> {
     let host = TargetSpec::host();
     if target.triple != host.triple {
         return Err(CodegenError::unsupported(format!(
@@ -169,7 +175,7 @@ fn build_module(target: &TargetSpec) -> Result<ObjectModule, CodegenError> {
         .set("is_pic", "true")
         .map_err(|error| CodegenError::backend(format!("setting is_pic: {error}")))?;
 
-    let isa_builder = isa::lookup(triple)
+    let isa_builder = isa::lookup(triple.clone())
         .map_err(|error| CodegenError::backend(format!("no backend for the host: {error}")))?;
     let isa = isa_builder
         .finish(settings::Flags::new(flag_builder))
@@ -181,7 +187,37 @@ fn build_module(target: &TargetSpec) -> Result<ObjectModule, CodegenError> {
         cranelift_module::default_libcall_names(),
     )
     .map_err(|error| CodegenError::backend(format!("creating the object module: {error}")))?;
-    Ok(ObjectModule::new(builder))
+    Ok((ObjectModule::new(builder), triple))
+}
+
+/// Encode a `major.minor.patch` version as Mach-O's packed `X.Y.Z` `u32`
+/// (`xxxx.yy.zz`), the form `LC_BUILD_VERSION` stores.
+fn macho_version(major: u16, minor: u8, patch: u8) -> u32 {
+    (u32::from(major) << 16) | (u32::from(minor) << 8) | u32::from(patch)
+}
+
+/// Stamp a Mach-O `LC_BUILD_VERSION` load command onto `object` when the target
+/// is Darwin/macOS. `cranelift-object` emits none, so the system linker warns
+/// ("no platform load command found ... assuming: macOS") on every build; this
+/// records the platform explicitly. It is a no-op on non-Darwin targets (ELF /
+/// COFF carry no such command).
+fn set_macho_platform(object: &mut cranelift_object::object::write::Object<'_>, triple: &Triple) {
+    let minos = match triple.operating_system {
+        // Honor the triple's own deployment target when it carries one, so an
+        // explicit `…-apple-darwin20` is not silently overridden.
+        OperatingSystem::Darwin(Some(dt)) | OperatingSystem::MacOSX(Some(dt)) => {
+            macho_version(dt.major, dt.minor, dt.patch)
+        }
+        // Versionless Darwin/macOS: a conservative floor the toolchain accepts.
+        OperatingSystem::Darwin(None) | OperatingSystem::MacOSX(None) => macho_version(11, 0, 0),
+        // Not a Mach-O platform — nothing to stamp.
+        _ => return,
+    };
+    let mut build_version = MachOBuildVersion::default();
+    build_version.platform = PLATFORM_MACOS;
+    build_version.minos = minos;
+    build_version.sdk = minos;
+    object.set_macho_build_version(build_version);
 }
 
 /// A prepared, reusable Cranelift codegen context. Kept as a thin newtype so

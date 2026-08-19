@@ -6,7 +6,7 @@
   in the *standard-library gaps* section, **D-8**) found that the stdlib cannot
   offer the single most useful data-processing abstraction — a generic
   `map`/`fold`/`filter` — for two reasons, and this ADR addresses one of them.
-  `tdg-stdlib`'s `std::core` documents it directly: there are **no first-class
+  `tuo-stdlib`'s `std::core` documents it directly: there are **no first-class
   function values and no closures**, so a generic `map` cannot be written and the
   library ships a specialized `map_add(opt, add)` instead. In the dogfooding
   examples this forced [`examples/data-pipeline`](../../examples/data-pipeline/)
@@ -254,7 +254,7 @@ benchmark condition — is met by a committed, test-pinned artifact:
   (`crates/tuo-cli/tests/codegen_three_way.rs`,
   `crates/tuo-cli/tests/codegen_differential.rs`) and the randomized
   differential generator routing calls through a fn-value local.
-- *Stage C (combinators, oracle, lab; this change):* `tdg-stdlib`'s
+- *Stage C (combinators, oracle, lab; this change):* `tuo-stdlib`'s
   `std::collections` gained the generic higher-order combinators —
   `fold`/`map_into`/`filter_into`/`any`/`all` over a first-class function value,
   plus the named transforms `add`/`mul`/`double`/`is_even` the specs pass by

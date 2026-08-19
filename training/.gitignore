@@ -1,0 +1,7 @@
+# Python bytecode cache — regenerated on every run.
+__pycache__/
+*.pyc
+
+# Scratch .tuo files the generator writes and unlinks; only present if a run was
+# interrupted mid-compile.
+dataset/tmp*.tuo

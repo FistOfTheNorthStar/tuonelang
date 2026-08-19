@@ -34,7 +34,8 @@ use crate::spec;
     about = "tuonelang — an experimental statically typed, memory-safe native language.",
     long_about = "tuonelang is an experimental compiler project. Compiler subcommands are added \
                   as their functionality is implemented; today the CLI exposes check, spec, \
-                  verify, fmt, build, run, the agent protocol (`agent --stdio`), and the \
+                  verify, fmt, build, run, the package commands (new, add, remove, test, \
+                  package), corpus, bench, the agent protocol (`agent --stdio`), and the \
                   `debug` developer tools.",
     disable_help_subcommand = true
 )]
