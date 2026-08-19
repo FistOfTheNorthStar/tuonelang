@@ -1,9 +1,9 @@
 # tuonelang architecture
 
 This document describes the intended architecture of the tuonelang compiler and
-tooling. It reflects the current *foundation* — a Cargo workspace with crate
-boundaries — not implemented functionality. Where it describes stages, those
-stages are planned, not built.
+tooling. It describes the implemented compiler and its crate boundaries — the
+front end, the reference MIR interpreter, the Cranelift and LLVM backends, and
+the tooling built on top of them.
 
 > **tuonelang** is the language. It is designed around **TDG — Test Driven
 > Generation**, the paradigm of driving and validating (often
@@ -114,7 +114,7 @@ checkable.
 | `tuo-codegen-cranelift` | Cranelift native backend. |
 | `tuo-codegen-llvm` | LLVM native backend. |
 | `tuo-runtime` | Minimal native runtime support. |
-| `tuo-stdlib` | Standard library scaffolding. |
+| `tuo-stdlib` | Standard library catalog (tuonelang source modules, consumed as input). |
 | `tuo-fmt` | Deterministic source formatter. |
 | `tuo-package` | Package/manifest model and build orchestration. |
 | `tuo-compiler` | Facade coordinating the pipeline (see below). |

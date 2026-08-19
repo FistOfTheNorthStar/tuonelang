@@ -4,57 +4,66 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**TDG** is an experimental statically typed, memory-safe native language and compiler,
-designed to be LLM-friendly. The repository directory is `tuonelang`; the crate/package
-prefix is `tdg-` and the compiler binary is `tdg`.
+**tuonelang** is an experimental statically typed, memory-safe native language and
+compiler, designed to be friendly to both human programmers and LLM coding agents.
+The repository directory is `tuonelang`; the crate/package prefix is `tuo-` and the
+compiler binary is `tuo`.
 
-**Current state: scaffolding.** Nearly every crate is a documented stub — the crate
-boundaries, dependency edges, and intended responsibilities are established, but the
-pipeline logic is not implemented yet. Each `lib.rs` doc comment states what the crate
-*will* own and which layers it may depend on. When adding functionality, respect the
-boundary each stub describes rather than reshaping the graph.
+The language is built around **TDG — Test Driven Generation**: a development paradigm
+in which colocated, executable specifications drive and validate machine-generated
+code. TDG is the *methodology tuonelang is built for*, not the name of the language,
+so it survives in the methodology framing and in the `tdg.toml` / `tdg.lock` package
+filenames — but every crate is `tuo-*` and the binary is `tuo`.
+
+**Current state: the compiler is implemented.** The front end (lexer → parser →
+resolver → type checker → ownership checker), the reference MIR interpreter, both
+native backends (Cranelift debug, LLVM release), and the tooling surfaces all work;
+tuonelang programs written against the **v0 runnable core** compile, spec-check, and
+run today. Each `lib.rs` doc comment states what the crate owns and which layers it
+may depend on. When adding functionality, respect the boundary each stub describes
+rather than reshaping the graph.
 
 ## Commands
 
 ```bash
 cargo build                    # build the whole workspace
-cargo build -p tdg-cli         # build a single crate (produces the `tdg` binary)
-cargo run -p tdg-cli -- --help # run the CLI
-cargo run -p tdg-cli -- check file.tuo         # parse, resolve, type-check, ownership-check (specs included)
-cargo run -p tdg-cli -- spec file.tuo          # execute the program's specs (MIR interpreter)
-cargo run -p tdg-cli -- spec --target f file.tuo # run only the specs of function `f`
-cargo run -p tdg-cli -- verify file.tuo        # all static checks + execute specs
-cargo run -p tdg-cli -- verify --affected-by a.tuo a.tuo b.tuo # …only specs an edit to a.tuo could affect
-cargo run -p tdg-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
-cargo run -p tdg-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
-cargo run -p tdg-cli -- fmt file.tuo           # rewrite into canonical format
-cargo run -p tdg-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
-cargo run -p tdg-cli -- build file.tuo         # compile to a native executable (Cranelift, debug)
-cargo run -p tdg-cli -- build -o out file.tuo  # …to a chosen path
-cargo run -p tdg-cli -- build --release file.tuo # …optimized, via the LLVM backend
-cargo run -p tdg-cli -- run file.tuo           # compile and run; exit status = the program's result
-cargo run -p tdg-cli -- run --release file.tuo # …compile with the optimizing LLVM backend, then run
-cargo run -p tdg-cli -- new app                # scaffold a new package (tdg.toml + src/main.tuo)
-cargo run -p tdg-cli -- add util --path ../util # add a path dependency; re-resolve tdg.lock
-cargo run -p tdg-cli -- remove util            # drop a dependency; re-resolve tdg.lock
-cargo run -p tdg-cli -- check                  # …with no files: resolve+check the package in `.`
-cargo run -p tdg-cli -- build [--release]      # …resolve+compile the package (checksum-verified deps)
-cargo run -p tdg-cli -- verify                 # …resolve+static-check+run the package's specs
-cargo run -p tdg-cli -- test                   # run the package's tests (its specs) across the graph
-cargo run -p tdg-cli -- --message-format=json package symbols # a package's real exported symbols
-cargo run -p tdg-cli -- corpus validate file.tuo # validate a program through the compiler-validated corpus pipeline
-cargo run -p tdg-cli -- corpus validate --category type-repair a.tuo # …proving it fails at exactly one stage
-cargo run -p tdg-cli -- --message-format=json corpus validate file.tuo # …with the full metadata record as a protocol item
-cargo run -p tdg-cli -- bench report tasks.json run.json # score a code-gen benchmark by recompiling the model's outputs
-cargo run -p tdg-cli -- --message-format=json bench report tasks.json run.json # …the metric summary as a protocol item
-cargo run -p tdg-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
-cargo run -p tdg-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
-cargo run -p tdg-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
-cargo run -p tdg-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
-cargo run -p tdg-cli -- --message-format=json-lines spec file.tuo  # machine protocol: streamed, one event per line
+cargo build -p tuo-cli         # build a single crate (produces the `tuo` binary)
+cargo run -p tuo-cli -- --help # run the CLI
+cargo run -p tuo-cli -- check file.tuo         # parse, resolve, type-check, ownership-check (specs included)
+cargo run -p tuo-cli -- spec file.tuo          # execute the program's specs (MIR interpreter)
+cargo run -p tuo-cli -- spec --target f file.tuo # run only the specs of function `f`
+cargo run -p tuo-cli -- verify file.tuo        # all static checks + execute specs
+cargo run -p tuo-cli -- verify --affected-by a.tuo a.tuo b.tuo # …only specs an edit to a.tuo could affect
+cargo run -p tuo-cli -- debug syntax file.tuo  # dump the lossless CST (dev tool)
+cargo run -p tuo-cli -- debug ast file.tuo     # dump the typed AST views (dev tool)
+cargo run -p tuo-cli -- fmt file.tuo           # rewrite into canonical format
+cargo run -p tuo-cli -- fmt --check file.tuo   # verify canonical formatting (exit 1 if not)
+cargo run -p tuo-cli -- build file.tuo         # compile to a native executable (Cranelift, debug)
+cargo run -p tuo-cli -- build -o out file.tuo  # …to a chosen path
+cargo run -p tuo-cli -- build --release file.tuo # …optimized, via the LLVM backend
+cargo run -p tuo-cli -- run file.tuo           # compile and run; exit status = the program's result
+cargo run -p tuo-cli -- run --release file.tuo # …compile with the optimizing LLVM backend, then run
+cargo run -p tuo-cli -- new app                # scaffold a new package (tdg.toml + src/main.tuo)
+cargo run -p tuo-cli -- add util --path ../util # add a path dependency; re-resolve tdg.lock
+cargo run -p tuo-cli -- remove util            # drop a dependency; re-resolve tdg.lock
+cargo run -p tuo-cli -- check                  # …with no files: resolve+check the package in `.`
+cargo run -p tuo-cli -- build [--release]      # …resolve+compile the package (checksum-verified deps)
+cargo run -p tuo-cli -- verify                 # …resolve+static-check+run the package's specs
+cargo run -p tuo-cli -- test                   # run the package's tests (its specs) across the graph
+cargo run -p tuo-cli -- --message-format=json package symbols # a package's real exported symbols
+cargo run -p tuo-cli -- corpus validate file.tuo # validate a program through the compiler-validated corpus pipeline
+cargo run -p tuo-cli -- corpus validate --category type-repair a.tuo # …proving it fails at exactly one stage
+cargo run -p tuo-cli -- --message-format=json corpus validate file.tuo # …with the full metadata record as a protocol item
+cargo run -p tuo-cli -- bench report tasks.json run.json # score a code-gen benchmark by recompiling the model's outputs
+cargo run -p tuo-cli -- --message-format=json bench report tasks.json run.json # …the metric summary as a protocol item
+cargo run -p tuo-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
+cargo run -p tuo-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
+cargo run -p tuo-cli -- debug mir --opt file.tuo # …after the MIR optimization passes
+cargo run -p tuo-cli -- --message-format=json verify file.tuo      # machine protocol: one versioned envelope
+cargo run -p tuo-cli -- --message-format=json-lines spec file.tuo  # machine protocol: streamed, one event per line
 cargo test                     # run all tests
-cargo test -p tdg-cli          # test one crate
-cargo test -p tdg-cli command_definition_is_valid  # run a single test by name
+cargo test -p tuo-cli          # test one crate
+cargo test -p tuo-cli command_definition_is_valid  # run a single test by name
 cargo clippy --all-targets     # lint; workspace lints are -D warnings in CI
 cargo fmt                      # format (stable rustfmt, config in rustfmt.toml)
 ```
@@ -73,38 +82,38 @@ source → lex → parse → resolve → type check → ownership → MIR → co
 
 Crates, lowest layer first:
 
-- **`tdg-source`** — source files, byte offsets, spans, source maps. Foundation; depends on nothing.
-- **`tdg-diagnostics`** — structured, machine-readable diagnostics.
-- **`tdg-db`** — incremental, query-based compiler database. The shared computation layer
+- **`tuo-source`** — source files, byte offsets, spans, source maps. Foundation; depends on nothing.
+- **`tuo-diagnostics`** — structured, machine-readable diagnostics.
+- **`tuo-db`** — incremental, query-based compiler database. The shared computation layer
   that CLI, LSP, and the agent protocol all drive, so semantics are computed once. Depends
-  only on `tdg-source` and `tdg-diagnostics`, so it owns the *stage-agnostic* red-green
+  only on `tuo-source` and `tuo-diagnostics`, so it owns the *stage-agnostic* red-green
   engine (`QueryEngine`, driven by a host's `QueryHost::compute`), **not** the stage wiring —
-  the real per-stage queries are registered by `tdg-compiler` (which sees every stage). No
+  the real per-stage queries are registered by `tuo-compiler` (which sees every stage). No
   engine type leaks into a host's public API; the boundary speaks source identities, plain
   values, and `QueryError`.
-- **`tdg-lexer`** → **`tdg-syntax`** (lossless CST) → **`tdg-parser`** → **`tdg-ast`**.
-- **`tdg-hir`** — desugared HIR lowered from the AST; shared input to resolution and typing.
-- **`tdg-resolve`** (name/path resolution) → **`tdg-types`** (inference/checking) →
-  **`tdg-ownership`** (memory-safety checking).
-- **`tdg-mir`** — the single executable semantic representation; **`tdg-mir-interp`** is its
+- **`tuo-lexer`** → **`tuo-syntax`** (lossless CST) → **`tuo-parser`** → **`tuo-ast`**.
+- **`tuo-hir`** — desugared HIR lowered from the AST; shared input to resolution and typing.
+- **`tuo-resolve`** (name/path resolution) → **`tuo-types`** (inference/checking) →
+  **`tuo-ownership`** (memory-safety checking).
+- **`tuo-mir`** — the single executable semantic representation; **`tuo-mir-interp`** is its
   reference interpreter.
-- **`tdg-codegen`** — backend-agnostic codegen interface, with two backends behind it:
-  **`tdg-codegen-cranelift`** and **`tdg-codegen-llvm`** (both consume MIR).
-  **`tdg-runtime`** provides minimal native runtime support.
+- **`tuo-codegen`** — backend-agnostic codegen interface, with two backends behind it:
+  **`tuo-codegen-cranelift`** and **`tuo-codegen-llvm`** (both consume MIR).
+  **`tuo-runtime`** provides minimal native runtime support.
 
-**`tdg-compiler`** is the facade: the single orchestration seam that wires the stages end
+**`tuo-compiler`** is the facade: the single orchestration seam that wires the stages end
 to end so the CLI, LSP, and agent protocol don't each re-wire the pipeline. It depends on
-the semantic-stage crates up through the `tdg-codegen` abstraction, **never on a concrete
+the semantic-stage crates up through the `tuo-codegen` abstraction, **never on a concrete
 backend and never on CLI presentation**. Keep it to orchestration + re-exports; stage
 *logic* lives in the individual stage crates.
 
-Tooling surfaces on top of the facade: **`tdg-cli`** (the `tdg` binary), **`tdg-lsp`**
-(language server), **`tdg-agent`** (exposes compiler feedback to coding agents),
-**`tdg-fmt`** (formatter), **`tdg-package`** (package/build orchestration),
-**`tdg-stdlib`**, **`tdg-spec`** (colocated executable specs), **`tdg-bench`**,
-**`tdg-corpus`** (the compiler-validated corpus pipeline),
-**`tdg-codegen-bench`** (the code-generation evaluation harness), and
-**`tdg-fuzz`** (the whole-compiler fuzzing harness).
+Tooling surfaces on top of the facade: **`tuo-cli`** (the `tuo` binary), **`tuo-lsp`**
+(language server), **`tuo-agent`** (exposes compiler feedback to coding agents),
+**`tuo-fmt`** (formatter), **`tuo-package`** (package/build orchestration),
+**`tuo-stdlib`**, **`tuo-spec`** (colocated executable specs), **`tuo-bench`**,
+**`tuo-corpus`** (the compiler-validated corpus pipeline),
+**`tuo-codegen-bench`** (the code-generation evaluation harness), and
+**`tuo-fuzz`** (the whole-compiler fuzzing harness).
 
 Test corpora and fixtures live in top-level `tests/` (by stage: `lexer`, `parser`,
 `types`, `ownership`, `mir`, `codegen`, `diagnostics`, `differential`, `specs`),
@@ -119,10 +128,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (and CI is `-D warnings`). Don't leave them in committed code.
 - **The CLI must never advertise behavior the compiler can't perform.** New
   subcommands appear only once their functionality exists; the `Command` enum in
-  `tdg-cli/src/cli.rs` is the extension point. Implemented so far:
-  `tdg check <files>` (the parse → resolve → type-check → ownership-check front end,
+  `tuo-cli/src/cli.rs` is the extension point. Implemented so far:
+  `tuo check <files>` (the parse → resolve → type-check → ownership-check front end,
   specs included per ADR-0002 — specs are checked but **not** executed here),
-  `tdg spec [--target <name>] <files>` and `tdg verify [--affected-by <file>] <files>`
+  `tuo spec [--target <name>] <files>` and `tuo verify [--affected-by <file>] <files>`
   (execute the program's colocated specs through the reference MIR interpreter — `spec`
   runs the selected specs, `verify` runs all static checks *and* the specs; both refuse a
   program with front-end errors, run each spec in the interpreter's deterministic sandbox
@@ -130,11 +139,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   latency promise; `verify --affected-by <file>` runs only the specs whose semantic
   dependency closure touches a symbol defined in `<file>` — the specs an edit to it could
   have changed, selected through the incremental dependency graph — and a cold `verify`
-  with no such flag runs every spec), `tdg fmt [--check] <files>` (the canonical
+  with no such flag runs every spec), `tuo fmt [--check] <files>` (the canonical
   formatter — deterministic,
-  idempotent, zero configuration), `tdg build [-o <path>] [--release] <files>` and
-  `tdg run [--release] <files>` (compile the accepted program to verified MIR, run the
-  TDG-native MIR optimization passes over it, and then to native code, linking the
+  idempotent, zero configuration), `tuo build [-o <path>] [--release] <files>` and
+  `tuo run [--release] <files>` (compile the accepted program to verified MIR, run the
+  tuonelang-native MIR optimization passes over it, and then to native code, linking the
   runtime trap shim into an executable — the default debug build uses the Cranelift
   backend, `--release` uses the optimizing LLVM backend; `run` additionally executes it
   and exits with the program's own status, the integer its nullary `main` returns; both
@@ -150,7 +159,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `Array[Int]` (the three-word `{ptr, len, cap}` header, allocating and freeing
   real heap memory through the linked `tuo_rt_alloc`/`tuo_rt_dealloc` shim with
   drop glue; the `std::string`/`std::array` builtin ops and
-  `std::rt::write_string`), laid out by `tdg-runtime`'s `abi` module (ABI v4);
+  `std::rt::write_string`), laid out by `tuo-runtime`'s `abi` module (ABI v4);
   and — since ADR-0008 Tier 1 — **first-class (non-capturing) function values**:
   a bare top-level `fn` name is a `Const::Fn` `Copy` code pointer of type
   `fn(mode T, …) -> R` (ABI v5, `layout_of(Ty::Fn)` a pointer), called
@@ -161,29 +170,29 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   closures** — Tier 2, deferred), refusing at storage-classification time with a
   message naming the type and pointing the user back to the interpreter as the
   reference), and
-  `tdg debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
+  `tuo debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
   verified (`tuo_mir::verify`, mandatory) before it is dumped — every backend and the
   interpreter must reject unverified MIR; `mir --opt` shows the MIR after the
-  optimization passes the native build applies), `tdg agent --stdio` (serve the
+  optimization passes the native build applies), `tuo agent --stdio` (serve the
   versioned JSON-lines agent protocol over stdio — a long-lived compiler-intelligence
   server reusing one database across requests; see the agent-protocol convention below),
-  and the **package commands** — `tdg new <name>`, `tdg add <name> --path <p>`,
-  `tdg remove <name>`, `tdg test`, the package-aware forms of `check`/`build`/`verify`
+  and the **package commands** — `tuo new <name>`, `tuo add <name> --path <p>`,
+  `tuo remove <name>`, `tuo test`, the package-aware forms of `check`/`build`/`verify`
   (invoked with no file arguments, optionally `--manifest <dir>`, they resolve the
   package graph rooted at that directory and drive the same front end / backend / spec
-  runner over its loaded sources), and `tdg package symbols` (a machine-only query of a
+  runner over its loaded sources), and `tuo package symbols` (a machine-only query of a
   package's real exported symbols); see the package-system convention below.
-  Also `tdg corpus validate [--category <c>] [--origin <o>] <files>` (run a program
+  Also `tuo corpus validate [--category <c>] [--origin <o>] <files>` (run a program
   through the compiler-validated corpus pipeline and report its per-stage results plus
   metadata; see the corpus-pipeline convention below).
-  And `tdg bench report <tasks> <run>` (score a recorded code-generation benchmark
+  And `tuo bench report <tasks> <run>` (score a recorded code-generation benchmark
   run by recompiling the model's outputs through the real compiler — never trusting
   the recorded verdicts — and report the metric summary; see the codegen-benchmark
   convention below).
 - **The trusted corpus is compiler-validated, six-cornered, and self-honest —
-  no program enters on assertion.** `tdg-corpus` (layer 115, just above the
+  no program enters on assertion.** `tuo-corpus` (layer 115, just above the
   layer-110 tools it composes — the formatter and the research harness's
   tokenizers — and below the CLI) owns tuonelang's official corpus pipeline. A candidate is
   admitted only after clearing the required, ordered gauntlet driven over the **real**
@@ -193,7 +202,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   crate cannot perform alone (it needs a concrete backend and the `cc` linker), so it is
   a **host-injected `NativeExecutor` seam** — the CLI wires in its compile-link-run
   machinery (`codegen::native_run`), mirroring how the agent injects a `Formatter`; the
-  crate itself names no concrete backend, only the backend-agnostic `tdg-codegen`
+  crate itself names no concrete backend, only the backend-agnostic `tuo-codegen`
   interface. Candidates come from four origins (human, generator, LLM, transformed
   benchmark) and are sorted into **six corpora**, each with its own admission contract:
   **correct** (passes everything), **syntax-error / type-error / ownership-error /
@@ -207,18 +216,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   conservative/token-based for the rest, skipping prelude symbols so nothing false is
   reported), the **per-stage validation results**, a coarse **complexity** measure, and
   **token counts** under every deterministic tokenizer the research harness ships (reused
-  from `tdg-bench`, so there is one measurement of record). The promise is *enforced*, not
+  from `tuo-bench`, so there is one measurement of record). The promise is *enforced*, not
   asserted: `crates/tuo-corpus/tests/shipped_corpus.rs` re-admits every fixture under
   top-level `corpus/` to the category its directory names (so the shipped corpus can never
   drift into dishonesty), `crates/tuo-corpus/tests/validation.rs` pins the pipeline and the
-  admission contracts, and `tdg-cli/tests/corpus_command.rs` drives the whole thing through
+  admission contracts, and `tuo-cli/tests/corpus_command.rs` drives the whole thing through
   the real binary including live native execution. The dependency-policy guard keeps
-  `tdg-corpus` at layer 115 (it may drive the compiler facade and every crate below it,
+  `tuo-corpus` at layer 115 (it may drive the compiler facade and every crate below it,
   including the layer-110 tools it composes, and injects native execution from the CLI
   above).
 - **The code-generation benchmark drives the real compiler for every metric,
-  embeds no model, and never changes a task silently.** `tdg-codegen-bench`
-  (layer 116, just above `tdg-corpus` and below the CLI) owns tuonelang's complete
+  embeds no model, and never changes a task silently.** `tuo-codegen-bench`
+  (layer 116, just above `tuo-corpus` and below the CLI) owns tuonelang's complete
   LLM code-generation evaluation harness. It benchmarks a model through a
   **pluggable `ModelAdapter`** seam — an LLM behind an API, a local runner, or a
   deterministic generator — and **no LLM provider is embedded** anywhere; the
@@ -243,23 +252,23 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   content digest and a `TaskSet` verifies every pin on load, so an edit without a
   re-pin is a loud error; tasks may carry comparable **syntax variants** so a
   language-design decision can be evaluated empirically across spellings. The CLI
-  cannot generate live (no model is embedded), so `tdg bench report <tasks> <run>`
+  cannot generate live (no model is embedded), so `tuo bench report <tasks> <run>`
   *proves* a recorded run's metrics instead: it verifies the task-set pins
   (refusing a silently-edited benchmark), then **recompiles every recorded output**
   (`tuo_codegen_bench::rescore`) and computes the summary from the compiler's
   verdicts, never the recorded booleans — a fabricated result cannot survive. The
-  promise is pinned by `tdg-codegen-bench`'s unit tests, its end-to-end
+  promise is pinned by `tuo-codegen-bench`'s unit tests, its end-to-end
   `tests/harness.rs` (a scripted, offline `ModelAdapter` driving the real compiler
   through a fail-then-repair loop, held-out-test scoring, variants, and provenance
   round-trip), `tests/shipped_tasks.rs` (every task under
   `benchmarks/llm/codegen/tasks/` re-verifies its pin), and
-  `tdg-cli/tests/bench_command.rs` (the whole thing through the real binary,
+  `tuo-cli/tests/bench_command.rs` (the whole thing through the real binary,
   including a run whose recorded verdict is a *lie* that recompilation exposes).
-  The dependency-policy guard keeps `tdg-codegen-bench` at layer 116.
+  The dependency-policy guard keeps `tuo-codegen-bench` at layer 116.
 - **The performance laboratory drives the real compiler for every number,
   reports only what it measured, and never publishes an unsupported claim.**
-  `tdg-bench`'s `lab` module (in the layer-110 research crate, which may sit
-  atop the `tdg-compiler` facade) owns tuonelang's reproducible compiler and
+  `tuo-bench`'s `lab` module (in the layer-110 research crate, which may sit
+  atop the `tuo-compiler` facade) owns tuonelang's reproducible compiler and
   runtime benchmarks. Every figure comes from the **real** compiler:
   `lab::compiler` times the cold stages by driving `check_sources` and the
   cold `lex`/`parse` entry points, and measures the incremental edits through
@@ -302,20 +311,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   and rustc versions, exact commands) into a versioned `LabReport`
   (`SCHEMA_VERSION`), whose human render (`render_human`) carries **no superlative
   and no aggregate verdict** ("blazing fast" appears nowhere and a test forbids it).
-  The contract is pinned by `tdg-bench`'s unit tests, `tdg-bench/tests/lab.rs`
+  The contract is pinned by `tuo-bench`'s unit tests, `tuo-bench/tests/lab.rs`
   (committed programs equal the embedded sources; every supported workload passes
   the real front end; the honesty/no-superlative rules; the committed example report
   parses, round-trips, and its deterministic parts regenerate; a `--nocapture`
-  measurement prints the full report), and `tdg-cli/tests/lab_command.rs` (the two
+  measurement prints the full report), and `tuo-cli/tests/lab_command.rs` (the two
   host seams end-to-end: the supported workloads really compile-link-run via `tuo
   run` to their expected exit byte, and a live `cc` C comparison agrees where the
   toolchain exists, recording a skip where it does not). The benchmark repository
   itself lives under `benchmarks/` (`compiler/`, `runtime/programs/`,
   `runtime/results/example-report.json`). The dependency-policy guard keeps
-  `tdg-bench` at layer 110.
+  `tuo-bench` at layer 110.
 - **The whole compiler is fuzzed through its real entry points, one invariant is
   written once, and a discovered bug becomes a committed regression forever.**
-  `tdg-fuzz` (layer 117, above the tooling surfaces it composes and below the
+  `tuo-fuzz` (layer 117, above the tooling surfaces it composes and below the
   CLI) owns tuonelang's whole-compiler fuzzing harness. It holds **no compiler
   machinery** — it is a pure consumer that drives every listed stage through its
   *real* public entry point (lexer, syntax-tree operations, parser, formatter,
@@ -335,7 +344,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `check_interp` only runs MIR the interpreter's mandatory verify gate accepted
   and rejects any `TrapKind::Internal` (the interpreter's own impossible-state
   signal). **Differential cross-engine agreement** already lives as a mandatory
-  CI gate over the *accepted-program* generator in `tdg-cli/tests/differential.rs`
+  CI gate over the *accepted-program* generator in `tuo-cli/tests/differential.rs`
   (interpreter == Cranelift == LLVM); this crate does not duplicate the native
   build and says so rather than re-asserting a weaker copy. **Regression fixtures
   are added automatically:** when a sweep or a `cargo fuzz` run finds an input
@@ -349,10 +358,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   parse iteratively but build a left-nested `BinaryExpr` tree the front-end walk
   overflowed on; the fix extends the parser's depth pre-scan to bound
   binary-operator chain length (rejected as `P0003` before parsing, keeping every
-  downstream stage's recursion bounded), pinned in `tdg-parser/tests/recovery.rs`
-  and by the committed fixtures under `regressions/front-end/`. `tdg-fuzz` exposes
+  downstream stage's recursion bounded), pinned in `tuo-parser/tests/recovery.rs`
+  and by the committed fixtures under `regressions/front-end/`. `tuo-fuzz` exposes
   **no CLI subcommand** — fuzzing is a developer/CI activity, never a promise the
-  `tdg` binary makes — and the dependency-policy guard keeps it at layer 117 with
+  `tuo` binary makes — and the dependency-policy guard keeps it at layer 117 with
   no edge into the pipeline.
 - **The language is dogfooded with real programs; a discovered gap becomes an ADR
   with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds five
@@ -383,9 +392,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   effect; a worker pool needs concurrency) keeps its **pure decision core**
   written in the runnable subset — which really runs and is spec-checked —
   while the effectful shell is a documented `CONTRACT:` tier naming the
-  missing primitive, exactly as `tdg-stdlib` splits its tiers; nothing
+  missing primitive, exactly as `tuo-stdlib` splits its tiers; nothing
   advertises behavior the compiler cannot perform. The examples are kept
-  honest by `tdg-cli/tests/dogfood_examples.rs`, which drives the **real**
+  honest by `tuo-cli/tests/dogfood_examples.rs`, which drives the **real**
   `tuo` binary over every one (`check` accepts it, `test` runs its specs to
   `0 failed`, each runnable program `run`s/`build`s to the exact documented
   exit byte, and the two printing examples' stdout is asserted
@@ -424,7 +433,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   examples working, and every known semantic divergence resolved or release-blocking.
   Each criterion names a concrete committed *proving artifact* (a test target, a
   benchmark, or a normative doc) in a machine-readable `gate-manifest` block, and
-  `tdg-cli/tests/release_gate.rs` parses that block to assert there are exactly
+  `tuo-cli/tests/release_gate.rs` parses that block to assert there are exactly
   sixteen criteria `G1`..`G16`, every status is from the gate's vocabulary, the
   manifest and the prose summary table agree, the `GRAMMAR-VERSION: 0.1` marker G1
   relies on is present in `grammar.ebnf`, and — the load-bearing check — **every
@@ -441,11 +450,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   invariants, and the interpreter's abort taxonomy + sandbox), both now normative
   peers of `ownership.md`/`abi.md`. A criterion that regressed would flip back to
   `PARTIAL`/`RELEASE-BLOCKING` the moment its artifact changed.
-- **Codegen is behind a TDG-owned interface; no backend type leaks upward.**
-  `tdg-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
+- **Codegen is behind a tuonelang-owned interface; no backend type leaks upward.**
+  `tuo-codegen` defines `CodegenBackend` (verified MIR + `TypeckResult` → a
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
   (`TargetSpec`, `ObjectArtifact`, `CodegenError`, `EntryAbi`). Two backends implement
-  it — `tdg-codegen-cranelift` (the default debug build) and `tdg-codegen-llvm` (the
+  it — `tuo-codegen-cranelift` (the default debug build) and `tuo-codegen-llvm` (the
   `--release` build, wrapping LLVM 19 via inkwell, pinned by the `llvm19-1` feature and
   located at build time through `LLVM_SYS_191_PREFIX` / `llvm-config-19` / a Homebrew
   `llvm@19`; the local default prefix is set in `.cargo/config.toml`, CI installs LLVM
@@ -458,19 +467,19 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   unoptimized code, and the LLVM backend prioritizes semantic equivalence, using LLVM's
   **standard** `default<O2>` pipeline (`OptLevel::Release`) rather than a custom pass
   stack. The interpreter-vs-native agreement is pinned by the differential suites in
-  `tdg-cli/tests/codegen_differential.rs` (interpreter vs default backend), the
-  **three-way** `tdg-cli/tests/codegen_three_way.rs` (interpreter == Cranelift == LLVM),
-  and the randomized `tdg-cli/tests/differential.rs` (both backends over generated
+  `tuo-cli/tests/codegen_differential.rs` (interpreter vs default backend), the
+  **three-way** `tuo-cli/tests/codegen_three_way.rs` (interpreter == Cranelift == LLVM),
+  and the randomized `tuo-cli/tests/differential.rs` (both backends over generated
   programs), all over `tests/codegen/fixtures/`; any mismatch is a release blocker.
-  `tdg-runtime` is the minimal native runtime linked into
+  `tuo-runtime` is the minimal native runtime linked into
   every built binary: it owns the deterministic trap (a stable `TrapCode` → stderr
   message → `abort()` with a fixed status), emitted as C so a generated executable
   needs no Rust runtime.
 - **MIR optimization is a set of isolated, meaning-preserving, re-verified passes;
-  the interpreter stays the reference on _unoptimized_ MIR.** `tdg-mir`'s `opt` module
+  the interpreter stays the reference on _unoptimized_ MIR.** `tuo-mir`'s `opt` module
   (`tuo_mir::optimize`) runs a small pipeline — constant folding, simple copy
   propagation, unreachable-block removal, dead-local elimination — to a bounded fixed
-  point on the native build path (`tdg build`/`tdg run`), before the backend and *after*
+  point on the native build path (`tuo build`/`tuo run`), before the backend and *after*
   the mandatory verifier. Each pass is one `Pass` with a declared purpose and
   preconditions; the driver calls `tuo_mir::debug_assert_verified` after every pass, so a
   pass that corrupts MIR panics (named) in debug/test rather than reaching a backend.
@@ -480,17 +489,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   observable abort. Nothing speculative lives here (no inlining, no loop transforms); the
   release backend layers LLVM's own optimizer on top. The contract is pinned by the
   before/after golden suite (`tests/mir/opt/fixtures/*.mir` / `*.opt.mir`,
-  `tdg-mir/tests/opt_golden.rs`), the MIR-level semantic differential and compile-time /
-  code-size **measurement** (`tdg-cli/tests/opt_semantics.rs`, interpreter agrees on raw
+  `tuo-mir/tests/opt_golden.rs`), the MIR-level semantic differential and compile-time /
+  code-size **measurement** (`tuo-cli/tests/opt_semantics.rs`, interpreter agrees on raw
   vs optimized MIR), and the existing native differential suites — which now compile
   *optimized* MIR, so they pin interpreter (unopt) == Cranelift (opt) == LLVM (opt +
   LLVM O2). Any divergence is a bug in the pass, never the interpreter.
-- **The runtime ABI is TDG-owned, backend-independent, and versioned before it is
-  frozen.** `tdg-runtime` is the single normative home of the ABI compiled programs
+- **The runtime ABI is tuonelang-owned, backend-independent, and versioned before it is
+  frozen.** `tuo-runtime` is the single normative home of the ABI compiled programs
   obey — value layouts, panic/trap, startup/exit, the allocation boundary,
   destruction, and internal calling conventions — specified in prose in
   `specification/abi.md` and implemented in the crate's `abi` and `alloc` modules.
-  Layouts (`abi::layout_of` → `Layout{size,align}`, computed from `tdg-types` alone;
+  Layouts (`abi::layout_of` → `Layout{size,align}`, computed from `tuo-types` alone;
   `#[repr(C)]` packing, explicit `u32` enum discriminants numbered in declaration
   order to match the interpreter's `Value::Variant`, no niche packing in v0) carry no
   Cranelift or LLVM type: a backend *consults* them, never defines its own, so the two
@@ -500,13 +509,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   allocator is one swappable seam — the C-ABI `tuo_rt_alloc`/`tuo_rt_dealloc`
   (`alloc_runtime_c_source`, OOM traps, never returns null) — through which every
   `Box`/`Shared`/`String`/`Array` allocation flows. ABI layout tests
-  (`tdg-runtime/tests/abi_layout.rs`, checked against real `#[repr(C)]` Rust types) and
-  interpreter⇄ABI equivalence tests (`tdg-cli/tests/abi_equivalence.rs`) pin the
+  (`tuo-runtime/tests/abi_layout.rs`, checked against real `#[repr(C)]` Rust types) and
+  interpreter⇄ABI equivalence tests (`tuo-cli/tests/abi_equivalence.rs`) pin the
   contract; the crate stays independent of any concrete backend.
 - **Machine output is a versioned contract, human output is not.** A global
   `--message-format` selects `human` (default), `json` (one envelope), or
   `json-lines` (streamed, one event per line) for every result-producing command
-  (`check`, `spec`, `verify`, `fmt`, `build`, `run`). The wire shape lives in `tdg-cli`'s
+  (`check`, `spec`, `verify`, `fmt`, `build`, `run`). The wire shape lives in `tuo-cli`'s
   `protocol` module, versioned by `PROTOCOL_VERSION`; every machine message
   carries the protocol version, event kind, command, status, stable diagnostics
   (serialized with the independently-versioned `tuo_diagnostics::json` schema),
@@ -514,17 +523,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   output only**, and internal logging reaches **stderr only under `--log`**. The
   `debug` dumps have no machine encoding (unstable developer output) and reject a
   non-human format. The contract is pinned by `tests/cli/protocol/` fixtures and
-  the backwards-compatibility tests in `tdg-cli/tests/protocol_command.rs`:
+  the backwards-compatibility tests in `tuo-cli/tests/protocol_command.rs`:
   additive changes are allowed without a bump, but dropping/renaming a guaranteed
   field or changing the version must move `PROTOCOL_VERSION` and the schema
   fixture together.
 - **Incremental compilation is fine-grained at the query-graph level, and
-  correctness beats invalidation reduction.** `tdg-db` owns a generic red-green
+  correctness beats invalidation reduction.** `tuo-db` owns a generic red-green
   engine (`QueryEngine`): opaque `QueryKey`s, opaque host-comparable `StoredValue`s
   (the host's own `PartialEq` decides **early cutoff**), dependency recording, cycle
-  detection, and cooperative cancellation — pinned by `tdg-db/tests/incremental.rs`.
-  Because `tdg-db` may not see a stage crate, the real stage wiring lives in
-  `tdg-compiler`'s `IncrementalSession`, which implements `QueryHost` and registers the
+  detection, and cooperative cancellation — pinned by `tuo-db/tests/incremental.rs`.
+  Because `tuo-db` may not see a stage crate, the real stage wiring lives in
+  `tuo-compiler`'s `IncrementalSession`, which implements `QueryHost` and registers the
   seven tracked queries — source file, parse, module interface, resolution, per-function
   type-check, per-function MIR, and per-spec dependency graph. The whole-program stage
   passes (`resolve`, `check`, `lower`) are not yet internally per-item incremental, so the
@@ -538,18 +547,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   digest (so a spec's dependency change never re-checks function typing). Everywhere else
   the session errs toward recomputing. The five edit scenarios — no-change,
   function-body-only, function-signature, unrelated-file, spec-only — are pinned as **hard
-  assertions on which queries re-execute** (`tdg-compiler/tests/incremental_stages.rs`) and
+  assertions on which queries re-execute** (`tuo-compiler/tests/incremental_stages.rs`) and
   reported with measured timing (`.../incremental_measure.rs`, run with `--nocapture`).
   Affected-spec selection (`IncrementalSession::affected_specs`, `Selection::Affected` in
-  `tdg-spec`, `tdg verify --affected-by`) runs only the specs an edit may have changed and
+  `tuo-spec`, `tuo verify --affected-by`) runs only the specs an edit may have changed and
   is proven sound, precise, and verdict-preserving in
-  `tdg-compiler/tests/affected_specs.rs`. Interactive hosts read the snapshot's semantic
+  `tuo-compiler/tests/affected_specs.rs`. Interactive hosts read the snapshot's semantic
   results — resolution, types, the source map, and diagnostics with their spans — through
   the scoped-closure accessor `IncrementalSession::with_semantics(|Semantics| …)`; the
   snapshot retains the full `Vec<Diagnostic>` (not just an `accepted` boolean) so spans
   survive to the surface.
 - **The LSP is a projection of the shared query engine, never a second
-  front end.** `tdg-lsp` implements every language feature — diagnostics, hover,
+  front end.** `tuo-lsp` implements every language feature — diagnostics, hover,
   go-to-definition, find-references, rename, document symbols, completion, signature help,
   semantic tokens, quick-fix code actions, and navigation both ways between a function and
   its colocated specs — as a read-only translation of what `IncrementalSession` already
@@ -564,13 +573,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   one method per feature over the session). Code actions offer **only** compiler-authored,
   machine-applicable suggestions — the server never invents a fix the compiler did not
   vouch for. `Analysis` is the testable semantic core (answers are plain typed values,
-  pinned in `tdg-lsp/tests/features.rs`); a JSON-RPC/stdio transport is a thin future
+  pinned in `tuo-lsp/tests/features.rs`); a JSON-RPC/stdio transport is a thin future
   addition, so no wire server is advertised before it exists. The read-only
   `SourceMap::file_id(name)` lookup lets a host resolve a document URI to its `FileId`
   without mutating the map.
 - **The agent protocol is the third projection of the shared engine — a compiler
-  intelligence protocol, not an AI model.** `tdg agent --stdio` speaks a versioned,
-  JSON-lines request/response protocol (`tdg-agent`'s `protocol` module,
+  intelligence protocol, not an AI model.** `tuo agent --stdio` speaks a versioned,
+  JSON-lines request/response protocol (`tuo-agent`'s `protocol` module,
   `PROTOCOL_VERSION`) so a coding agent drives the compiler by writing one request per
   line and reading one response per line. Like the LSP it **reimplements no stage**: every
   method is a read-only projection of what `IncrementalSession` already computed —
@@ -590,21 +599,21 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   state yields the same `result`; the only non-deterministic field is a *measured* spec
   duration, reported as an observation in its own field, never a promise. **No LLM provider
   is embedded** anywhere. The protocol core is transport-agnostic and directly testable
-  (`tdg-agent/tests/protocol.rs`); the `tdg agent --stdio` transport lives in the CLI (which
-  also injects the canonical formatter through a `Formatter` seam, since `tdg-fmt` sits at
+  (`tuo-agent/tests/protocol.rs`); the `tuo agent --stdio` transport lives in the CLI (which
+  also injects the canonical formatter through a `Formatter` seam, since `tuo-fmt` sits at
   the agent's own dependency layer and cannot be imported there) and is pinned end-to-end by
-  `tdg-cli/tests/agent_command.rs`. `--stdio` is required, so the CLI never advertises a
+  `tuo-cli/tests/agent_command.rs`. `--stdio` is required, so the CLI never advertises a
   transport it does not have.
 - **The agent's generation queries help an agent write the *next* token, and keep
   syntactic guidance strictly apart from semantic guidance — never over-claiming.**
-  `tdg-agent`'s `generation` module (`GenerationQueries`, implemented for `Session`)
+  `tuo-agent`'s `generation` module (`GenerationQueries`, implemented for `Session`)
   adds seven compiler-guided methods on top of the descriptive ones: `context_at`,
   `expected_type_at`, `visible_symbols_at`, `valid_members_of`, `call_signature`,
   `imports_for_symbol`, `expected_syntax_at`. Like every other method they **reimplement
   no stage** — the *semantic* answers (`expected_type_at`, `visible_symbols_at`,
   `valid_members_of`, `call_signature`, `imports_for_symbol`, and `context_at`'s semantic
   block) are read-only projections of the shared `Resolution`/`TypeckResult`. Two honesty
-  rules are load-bearing and pinned by tests (`tdg-agent/tests/generation.rs`): (1)
+  rules are load-bearing and pinned by tests (`tuo-agent/tests/generation.rs`): (1)
   **syntactic** guidance (`expected_syntax_at`, `context_at`'s `syntactic` block) is a
   **conservative lexical heuristic** over raw text, *always* flagged `"exhaustive": false`
   with a note that the compiler does **not** enumerate every valid next token — because the
@@ -616,7 +625,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   which), never a general hole-typing power the compiler lacks. `valid_members_of` is precise
   (`"exhaustive": true`) because the type checker's struct/enum shapes are complete. Whether
   the queries actually raise an agent's **Compile@1**/**Repair@1** is measured
-  deterministically in `tdg-agent/tests/generation_benchmark.rs` (`--nocapture`): a fixed
+  deterministically in `tuo-agent/tests/generation_benchmark.rs` (`--nocapture`): a fixed
   task corpus where the naive text-only guess is wrong, scored by *really* compiling each
   pick through `check_sources` under a baseline (no guidance) vs a guided policy (keep only
   candidates consistent with the queries' evidence) — the test asserts guidance is never
@@ -624,7 +633,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   power, not a live-LLM eval (no provider is embedded); the doc says so plainly.
 - **The standard library is written in tuonelang, consumed as input, and split
   into three honest tiers — executable, effect, and contract — it never
-  advertises an effect the compiler cannot perform.** `tdg-stdlib` is a
+  advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
   compiler machinery, layer 90): each of the eight initial modules — `std::core`,
   `std::collections`, `std::io`, `std::fs`, `std::time`, `std::process`,
@@ -656,7 +665,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   yet — `read`/`now`/`lock`/`arg_count` a file/clock/thread/argv primitive —
   given as exact signatures + documented contracts marked `CONTRACT:`,
   with **no** executable spec so nothing claims to run that cannot). The promise
-  is enforced, not asserted: `tdg-cli/tests/stdlib.rs` really compiles every
+  is enforced, not asserted: `tuo-cli/tests/stdlib.rs` really compiles every
   module (alone and together) with zero errors, runs every shipped spec to
   green with **no skips** (a skipped spec would mean a dishonest, unrunnable
   contract slipped into the executable tier), enforces the three-tier rule
@@ -664,18 +673,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   native test; `CONTRACT:` ⇒ no spec), and proves the effect tier natively on
   both backends (`println` prints `hi\n` exactly; `exit` really exits with the
   status's code), and
-  `tdg-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
+  `tuo-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
   benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
   plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by
   *really* compiling each pick, showing a baseline (priors only) at 0% versus a
   grounded policy (keep only calls to functions the module's real symbols export)
   at 100%. It is a proxy for the symbol surface's discriminative power, not a
   live-LLM eval (no provider is embedded); the doc says so plainly. The
-  dependency-policy guard pins `tdg-compiler → tdg-stdlib` (the stdlib is input,
+  dependency-policy guard pins `tuo-compiler → tuo-stdlib` (the stdlib is input,
   never the reverse) and keeps the catalog crate free of any stage dependency.
 - **The package format is data-and-filesystem only; the compiler and agent query a
   package's real symbols by compiling its resolved sources, never by guessing.**
-  `tdg-package` (layer 110) owns tuonelang's first package format and holds **no
+  `tuo-package` (layer 110) owns tuonelang's first package format and holds **no
   compiler machinery** — it models the manifest and lockfile, resolves a path-dependency
   graph off disk, and computes content checksums, all as plain values, so it depends on
   no tuonelang stage crate. A **package** is a directory with a `tdg.toml` manifest and a
@@ -699,21 +708,21 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (`toml`) — top-level key/values, `[table]`/`[[array-of-tables]]` headers, strings,
   non-negative integers, string arrays, inline tables — that reports a precise error on
   anything outside the subset rather than a silent misparse (no full-TOML dependency).
-  The CLI (`tdg-cli`, layer 120) is the only host that reaches up to the compiler: its
+  The CLI (`tuo-cli`, layer 120) is the only host that reaches up to the compiler: its
   package commands resolve the graph, load every module source across it into one
   `SourceMap`, and drive the **exact same** `check_sources` / codegen / `tuo_spec::run`
   the file-based commands use — the package layer only decides *which sources* form the
-  program. `tdg package symbols` compiles the resolved sources and reports the actual
+  program. `tuo package symbols` compiles the resolved sources and reports the actual
   public, module-level symbols (`Resolution::symbols()`, the same surface the agent
   protocol and LSP project), which is what lets a tool *query installed package symbols
-  without guessing*. Pinned by `tdg-package`'s unit tests + `tdg-package/tests/resolve.rs`
+  without guessing*. Pinned by `tuo-package`'s unit tests + `tuo-package/tests/resolve.rs`
   (transitive graphs, cycle/duplicate/missing-dep detection, checksum drift vs. root-edit
-  exemption, deterministic re-resolution) and `tdg-cli/tests/package_command.rs`
+  exemption, deterministic re-resolution) and `tuo-cli/tests/package_command.rs`
   (the whole lifecycle through the real binary: scaffold → check/test green, add/remove,
   a build resolving a dependency graph and running its specs, dependency-drift refusal,
-  and the machine `symbols` query). The dependency-policy guard keeps `tdg-package` free
+  and the machine `symbols` query). The dependency-policy guard keeps `tuo-package` free
   of any stage dependency.
-- Third-party deps and TDG crate paths are declared once in `[workspace.dependencies]`;
+- Third-party deps and tuonelang crate paths are declared once in `[workspace.dependencies]`;
   members opt in with `dep.workspace = true`. Add shared versions there, not per-crate.
 - `Cargo.lock` **is** committed (this is an application/toolchain workspace).
 - New crates inherit metadata via `field.workspace = true` and should set `[lints] workspace = true`.
