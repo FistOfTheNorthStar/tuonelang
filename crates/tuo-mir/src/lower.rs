@@ -1810,6 +1810,7 @@ impl FnLower<'_> {
             | Builtin::StringLen
             | Builtin::StringByteAt
             | Builtin::StringSlice
+            | Builtin::StringAsStr
             | Builtin::ArrayEmpty
             | Builtin::ArrayLen
             | Builtin::ArrayGet => {
@@ -1820,6 +1821,7 @@ impl FnLower<'_> {
                     Builtin::StringLen => HeapOp::StringLen,
                     Builtin::StringByteAt => HeapOp::StringByteAt,
                     Builtin::StringSlice => HeapOp::StringSlice,
+                    Builtin::StringAsStr => HeapOp::StringAsStr,
                     Builtin::ArrayEmpty => HeapOp::ArrayEmpty,
                     Builtin::ArrayLen => HeapOp::ArrayLen,
                     _ => HeapOp::ArrayGet,

@@ -118,6 +118,20 @@ enum PlaceState {
 
 type StateMap = BTreeMap<Place, PlaceState>;
 
+/// A live `Str` view borrowed into a `String` (ADR-0010, Q-0012). Recorded
+/// when a binding is initialized *exactly* with `std::string::as_str(s)`: the
+/// bound view root borrows `s`'s root, so while the view is live `s` may not be
+/// moved, mutated, or dropped (its bytes could be freed/reallocated out from
+/// under the view). The view stops being live when its own root leaves scope or
+/// is reassigned.
+#[derive(Clone, Copy, Debug)]
+struct ViewBorrow {
+    /// The root of the binding that holds the view (`let v = as_str(s)` → `v`).
+    view_root: SymbolId,
+    /// Where the view was created, for the "view still in use" secondary label.
+    view_span: Span,
+}
+
 /// One enclosing loop: where `break`/`continue` states accumulate.
 struct LoopFrame {
     label: Option<String>,
@@ -278,6 +292,12 @@ impl Cx<'_> {
             };
             checker.register(symbol, name, origin, true);
         }
+        // ADR-0010 rule 3: a `Str` view in the body's tail position escapes the
+        // frame (it becomes the return value). Refuse it before evaluating the
+        // block, so the diagnostic is emitted once at the view site.
+        if let Some(tail) = body.tail() {
+            checker.check_escaping_view(tail);
+        }
         checker.eval_block(body, Use::Value);
         if !checker.diverged {
             checker.scope_end();
@@ -370,6 +390,10 @@ struct Body<'a> {
     healed: BTreeSet<Place>,
     /// Places already diagnosed as moves out of borrows (O0003).
     reported_borrow_moves: HashSet<Place>,
+    /// Live `Str` views borrowed into a `String` (ADR-0010), keyed by the
+    /// borrowed `String`'s root. Empty for every body that never calls
+    /// `std::string::as_str`, so this is zero-cost for the common case.
+    view_borrows: HashMap<SymbolId, Vec<ViewBorrow>>,
     diverged: bool,
     diagnostics: Vec<Diagnostic>,
     fallback: Span,
@@ -386,6 +410,7 @@ impl<'a> Body<'a> {
             loops: Vec::new(),
             healed: BTreeSet::new(),
             reported_borrow_moves: HashSet::new(),
+            view_borrows: HashMap::new(),
             diverged: false,
             diagnostics: Vec::new(),
             fallback,
@@ -602,6 +627,10 @@ impl<'a> Body<'a> {
         if self.is_copy_place(place) {
             return;
         }
+        // ADR-0010: moving a `String` out while a `Str` view of it is still
+        // live would leave the view dangling — refuse it (`O0011`). Checked
+        // before the move is recorded so the message points at the move site.
+        self.check_view_conflict(place.root, span, "moved");
         if let Some(mode) = self
             .roots
             .get(&place.root)
@@ -779,6 +808,7 @@ impl<'a> Body<'a> {
             }
             Expr::Return(ret) => {
                 if let Some(value) = ret.value() {
+                    self.check_escaping_view(value);
                     self.expr(value, Use::Value);
                 }
                 self.drop_sanity_from(0);
@@ -786,6 +816,7 @@ impl<'a> Body<'a> {
             }
             Expr::Break(brk) => {
                 if let Some(value) = brk.value() {
+                    self.check_escaping_view(value);
                     self.expr(value, Use::Value);
                 }
                 if let Some(index) = self.frame_index(brk.label()) {
@@ -948,6 +979,14 @@ impl<'a> Body<'a> {
             );
             return;
         };
+        // ADR-0010: assigning over a place expires any view *held by* that
+        // binding (the old view is gone), and — if the place being overwritten
+        // is a `String` with a live view borrowed *into* it — is a
+        // drop-while-viewed conflict (`O0011`), since the old buffer is freed.
+        if !self.view_borrows.is_empty() && place.path.is_empty() {
+            self.check_view_conflict(place.root, span, "overwritten");
+            self.expire_views_of(place.root);
+        }
         // Writing through a moved (or possibly moved) prefix is a use of
         // that prefix.
         let mut prefix = Place::root(place.root);
@@ -1144,6 +1183,20 @@ impl<'a> Body<'a> {
             if rec.mode.is_borrow() {
                 let place = rec.place.clone();
                 self.check_usable(&place, rec.span);
+            }
+        }
+        // ADR-0010: a `mut` borrow of a `String` (e.g. `push_byte`/`append`,
+        // which may reallocate) while a `Str` view of it is still live would
+        // leave the view dangling — refuse it (`O0011`). A second *shared*
+        // (`in`) borrow is fine; only exclusive `mut` access conflicts.
+        if !self.view_borrows.is_empty() {
+            let mut_roots: Vec<(SymbolId, Span)> = recs
+                .iter()
+                .filter(|rec| rec.mode == Mode::Mut)
+                .map(|rec| (rec.place.root, rec.span))
+                .collect();
+            for (root, span) in mut_roots {
+                self.check_view_conflict(root, span, "mutated");
             }
         }
         let mut_violations: Vec<(Place, Span)> = recs
@@ -1634,11 +1687,128 @@ impl<'a> Body<'a> {
                 deferred: initializer.is_none(),
             }
         };
-        for name in collect_bindings(pattern) {
+        let names: Vec<Name<'_>> = collect_bindings(pattern);
+        for name in &names {
             if let Some(&symbol) = self.cx.decls.get(&name.span) {
-                self.register(symbol, name, origin, initializer.is_some());
+                self.register(symbol, *name, origin, initializer.is_some());
             }
         }
+        // ADR-0010: if this binding is initialized *exactly* with
+        // `std::string::as_str(s)`, the bound view root borrows `s`'s root for
+        // as long as the view is live. Only a whole-view binding to a single
+        // name is tracked; an `as_str` result used inline (e.g.
+        // `std::str::len(as_str(s))`) is a call-scoped borrow that ends
+        // immediately and needs no tracking.
+        if let (Some(init), [name]) = (initializer, names.as_slice())
+            && let Some((string_root, view_span)) = self.as_str_source(init)
+            && let Some(&view_root) = self.cx.decls.get(&name.span)
+        {
+            self.view_borrows
+                .entry(string_root)
+                .or_default()
+                .push(ViewBorrow {
+                    view_root,
+                    view_span,
+                });
+        }
+    }
+
+    /// If `expr` is exactly a `std::string::as_str(s)` call whose argument is a
+    /// place (looking through parentheses), return the borrowed `String`'s
+    /// root symbol and the call's span. Anything else (a non-`as_str` call, a
+    /// non-place argument, a view nested in a larger expression) returns
+    /// `None` — those are not tracked view bindings.
+    fn as_str_source(&self, expr: Expr<'_>) -> Option<(SymbolId, Span)> {
+        let call = match expr {
+            Expr::Call(call) => call,
+            Expr::Group(group) => return self.as_str_source(group.inner()?),
+            _ => return None,
+        };
+        let callee = call.callee()?;
+        let name = match callee {
+            Expr::Path(path) => path.segment_names().last()?,
+            _ => return None,
+        };
+        let symbol = *self.cx.refs.get(&name.span)?;
+        if self.cx.resolution.builtin(symbol) != Some(tuo_resolve::Builtin::StringAsStr) {
+            return None;
+        }
+        let arg = call.args().next()?;
+        let place = self.place_of(arg)?;
+        Some((place.root, call.span().unwrap_or(self.fallback)))
+    }
+
+    /// Refuse an action on a `String` that still has a live view borrowed into
+    /// it (ADR-0010, `O0011`). `action` names what is being attempted ("moved",
+    /// "mutated", "goes out of scope") for the message. Reports at most one
+    /// diagnostic per call and heals nothing (the underlying place is fine; it
+    /// is the *timing* that is wrong).
+    fn check_view_conflict(&mut self, string_root: SymbolId, span: Span, action: &str) {
+        let Some(views) = self.view_borrows.get(&string_root) else {
+            return;
+        };
+        let Some(view) = views.first().copied() else {
+            return;
+        };
+        let name = self
+            .roots
+            .get(&string_root)
+            .map_or_else(|| "<string>".to_owned(), |root| root.name.clone());
+        self.report(
+            Diagnostic::error(
+                code(11),
+                format!("`{name}` is {action} while a view of it is still in use"),
+                span,
+            )
+            .with_primary_label(format!(
+                "`{name}` cannot be {action} here: a `Str` view borrows its bytes"
+            ))
+            .with_secondary_label(view.view_span, "the view was created here")
+            .with_help(
+                "a `Str` from `std::string::as_str` borrows the `String`; finish using the view \
+                 before moving, mutating, or dropping the `String` (or copy with \
+                 `std::string::slice`)",
+            ),
+        );
+    }
+
+    /// ADR-0010 rule 3: a `Str` view produced by `std::string::as_str` may not
+    /// leave the frame that created it — the `String` it borrows (a local, or
+    /// the `in`/`take` argument) does not outlive the call, so a returned view
+    /// would dangle. `expr` is an expression in return position (a function's
+    /// tail or a `return`/`break` value); if it is exactly an `as_str(place)`
+    /// view, refuse it (`O0011`). A view used to *compute* an owned result
+    /// (e.g. `std::string::from_str` of a slice of the view) is fine — only a
+    /// view that is itself the escaping value is refused.
+    fn check_escaping_view(&mut self, expr: Expr<'_>) {
+        if let Some((_string_root, view_span)) = self.as_str_source(expr) {
+            self.report(
+                Diagnostic::error(
+                    code(11),
+                    "a `Str` view of a `String` cannot escape the function that created it",
+                    view_span,
+                )
+                .with_primary_label(
+                    "this view borrows a `String` that does not outlive the call",
+                )
+                .with_help(
+                    "return the owned `String` (or a copy via `std::string::slice`) instead of a \
+                     borrowed view; a `Str` view is valid only within the borrow of its `String`",
+                ),
+            );
+        }
+    }
+
+    /// The view binding rooted at `view_root` is leaving scope or being
+    /// overwritten: it is no longer live, so drop every view-borrow it held.
+    fn expire_views_of(&mut self, view_root: SymbolId) {
+        if self.view_borrows.is_empty() {
+            return;
+        }
+        for views in self.view_borrows.values_mut() {
+            views.retain(|view| view.view_root != view_root);
+        }
+        self.view_borrows.retain(|_, views| !views.is_empty());
     }
 
     /// Leave the innermost scope normally: its roots reach their drop point
@@ -1649,6 +1819,17 @@ impl<'a> Body<'a> {
             return;
         };
         for &symbol in scope.iter().rev() {
+            // ADR-0010: dropping a `String` at scope end while a `Str` view of
+            // it is still live is a dangling view — refuse it (`O0011`). Views
+            // held *by* a binding leaving scope expire first (reverse
+            // declaration order, so a view declared after its source dies
+            // before the source drops — the common, safe shape).
+            self.expire_views_of(symbol);
+            if let Some(root) = self.roots.get(&symbol) {
+                let drop_span = root.decl;
+                self.check_view_conflict(symbol, drop_span, "goes out of scope");
+            }
+            self.view_borrows.remove(&symbol);
             self.drop_sanity_root(symbol);
             self.state.retain(|key, _| key.root != symbol);
             self.init_spans.retain(|key, _| key.root != symbol);
@@ -1662,6 +1843,8 @@ impl<'a> Body<'a> {
             return;
         };
         for symbol in scope {
+            self.expire_views_of(symbol);
+            self.view_borrows.remove(&symbol);
             self.state.retain(|key, _| key.root != symbol);
             self.init_spans.retain(|key, _| key.root != symbol);
         }

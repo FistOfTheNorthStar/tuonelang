@@ -968,6 +968,28 @@ fn string_slice_copies_out_a_new_owned_string() {
 }
 
 #[test]
+fn string_as_str_views_the_whole_string() {
+    // ADR-0010: `as_str` yields a `Str` view of the whole String. The
+    // interpreter models it as a byte copy (sound: the ownership checker keeps
+    // the source pinned while the view is live), so the view's length equals
+    // the String's and its bytes compare equal to the original text.
+    let src = r#"
+        fn view_len(in s: Str) -> Int {
+            std::str::len(std::string::as_str(std::string::from_str(s)))
+        }
+        fn view_bytes(in s: Str) -> Str {
+            std::string::as_str(std::string::from_str(s))
+        }
+        fn view_eq_literal() -> Bool {
+            std::string::as_str(std::string::from_str("hi")) == "hi"
+        }
+    "#;
+    assert_eq!(value(src, "view_len", vec![bytes("héllo")]), int(6));
+    assert_eq!(value(src, "view_bytes", vec![bytes("abc")]), bytes("abc"));
+    assert_eq!(value(src, "view_eq_literal", vec![]), Value::Bool(true));
+}
+
+#[test]
 fn string_slice_may_split_a_code_point_byte_level() {
     // Byte-level slicing: "héllo" bytes are [h, 0xC3, 0xA9, l, l, o]; slicing
     // [1, 2) yields the single 0xC3 byte (not valid UTF-8 alone).

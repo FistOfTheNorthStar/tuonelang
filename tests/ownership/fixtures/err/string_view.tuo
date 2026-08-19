@@ -1,0 +1,51 @@
+// ownership.md §13, O0011 (ADR-0010) — a `Str` view produced by
+// `std::string::as_str` is a shared borrow of the `String` it views. While the
+// view is live, the `String` may not be moved, mutated (a `mut` borrow that
+// could reallocate its buffer), dropped, or overwritten; and a view may not
+// escape the frame that created it. Each is O0011.
+
+fn consume(take s: String) -> Int {
+    std::string::len(s)
+}
+
+// Mutating the String while a view of it is live (push_byte may reallocate).
+fn case_mutate_while_viewed() -> Int {
+    var s = std::string::from_str("hi");
+    let v = std::string::as_str(s);
+    std::string::push_byte(s, 33); // ERROR: O0011 `s` mutated while a view is live
+    std::str::len(v)
+}
+
+// `append` is also a `mut` borrow of the destination String.
+fn case_append_while_viewed() -> Int {
+    var s = std::string::from_str("hi");
+    let v = std::string::as_str(s);
+    std::string::append(s, "x"); // ERROR: O0011 `s` mutated while a view is live
+    std::str::len(v)
+}
+
+// Moving the String out (into a `take` argument) while a view is live.
+fn case_move_while_viewed() -> Int {
+    let s = std::string::from_str("hi");
+    let v = std::string::as_str(s);
+    consume(s) + std::str::len(v) // ERROR: O0011 `s` moved while a view is live
+}
+
+// Overwriting the viewed String (its old buffer would be freed).
+fn case_overwrite_while_viewed() -> Int {
+    var s = std::string::from_str("hi");
+    let v = std::string::as_str(s);
+    s = std::string::from_str("bye"); // ERROR: O0011 `s` overwritten while a view is live
+    std::str::len(v)
+}
+
+// A view may not escape the function that created it (rule 3): the borrowed
+// `String` does not outlive the call.
+fn case_escaping_tail(in s: String) -> Str {
+    std::string::as_str(s) // ERROR: O0011 a view cannot escape its frame
+}
+
+// The same, via an explicit `return`.
+fn case_escaping_return(in s: String) -> Str {
+    return std::string::as_str(s); // ERROR: O0011 a view cannot escape its frame
+}

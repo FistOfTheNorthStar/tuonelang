@@ -1,0 +1,53 @@
+// ownership.md §13, ADR-0010 — the accepted `std::string::as_str` view uses.
+// A `Str` view of a `String` is sound as long as the `String` is not moved,
+// mutated, dropped, or overwritten while the view is live, and the view does
+// not escape the frame. These programs respect that, so they produce no
+// ownership diagnostics.
+
+// Inline view use: the view is call-scoped and ends immediately, so a later
+// mutation of the String is fine.
+fn case_inline_then_mutate() -> Int {
+    var s = std::string::from_str("hi");
+    let n = std::str::len(std::string::as_str(s)); // view ends here
+    std::string::push_byte(s, 33);                 // now safe
+    n + std::string::len(s)
+}
+
+// A view bound to a `let`, used, and never followed by a move/mutate of the
+// String before the view leaves scope.
+fn case_bound_view_read_only() -> Int {
+    let s = std::string::from_str("hello");
+    let v = std::string::as_str(s);
+    std::str::len(v)
+}
+
+// Multiple shared views of the same String coexist (all are `in` borrows).
+fn case_many_shared_views() -> Int {
+    let s = std::string::from_str("hello");
+    let a = std::string::as_str(s);
+    let b = std::string::as_str(s);
+    std::str::len(a) + std::str::len(b)
+}
+
+// Comparing a String-view to a Str literal (the ergonomic payoff).
+fn case_view_equals_literal() -> Bool {
+    let s = std::string::from_str("hi");
+    std::string::as_str(s) == "hi"
+}
+
+// Passing a String-view to a Str-consuming operation.
+fn case_view_into_str_op(in prefix: Str) -> Bool {
+    let s = std::string::from_str("GET /health");
+    let n = std::str::len(prefix);
+    if std::str::len(std::string::as_str(s)) < n {
+        false
+    } else {
+        std::str::slice(std::string::as_str(s), 0, n) == prefix
+    }
+}
+
+// Deriving an *owned* result from a view is fine to return (the returned value
+// is a fresh String, not the borrowed view).
+fn case_owned_copy_of_view_escapes(in s: String) -> String {
+    std::string::from_str(std::string::as_str(s))
+}

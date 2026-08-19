@@ -64,11 +64,15 @@ fn load_one(module: tuo_stdlib::Module) -> (SourceMap, SourceId) {
 }
 
 #[test]
-fn the_catalog_lists_the_eight_prompt_modules() {
-    // The prompt names exactly these eight initial modules.
+fn the_catalog_lists_exactly_its_modules() {
+    // The eight initial modules the prompt named, plus the two pure modules
+    // grown on top of the runnable core: `std::math` (Int/Float arithmetic) and
+    // `std::str` (byte-level string algorithms + integer⇄text conversion).
     let expected = [
         "std::core",
         "std::collections",
+        "std::math",
+        "std::str",
         "std::io",
         "std::fs",
         "std::time",
@@ -87,7 +91,7 @@ fn the_catalog_lists_the_eight_prompt_modules() {
     assert_eq!(
         tuo_stdlib::MODULES.len(),
         expected.len(),
-        "the catalog holds exactly the eight initial modules"
+        "the catalog holds exactly its listed modules"
     );
 }
 

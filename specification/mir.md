@@ -439,6 +439,7 @@ verified (§7.1, `M0012`). Let `len(x)` be the byte/element length:
 | `StringLen` | `String` | — | `I64` | `len(subject)`. Never traps. |
 | `StringByteAt` | `String` | `i: I64` | `I64` | The byte (`0..=255`) at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |
 | `StringSlice` | `String` | `a: I64`, `b: I64` | `String` | The byte range `[a, b)` **copied out** as a new owned `String` — never an aliasing view. **Traps `IndexOutOfBounds`** unless `0 <= a <= b <= len(subject)`. |
+| `StringAsStr` | `String` | — | `Str` | (ADR-0010) A borrowed `Str` **view** of the whole subject — the `{ptr, len}` prefix of its header, no copy. The result aliases the subject; the ownership checker keeps the subject shared-borrowed for the view's lifetime (`O0011`), so no defensive copy is needed. Never traps. |
 | `ArrayEmpty` | — | — | `Array[I64]` | The empty array. Never traps. |
 | `ArrayLen` | `Array[I64]` | — | `I64` | `len(subject)`. Never traps. |
 | `ArrayGet` | `Array[I64]` | `i: I64` | `I64` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |

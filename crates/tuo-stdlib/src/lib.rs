@@ -69,7 +69,9 @@ pub const CORE: Module = Module {
 };
 
 /// `std::collections` — `Pair`, counted ranges, pure `Array[Int]` algorithms
-/// (`sum`/`max_of`/`contains`/`index_of`/`reversed`) over the ADR-0009
+/// (`sum`/`min_of`/`max_of`/`contains`/`index_of`/`reversed`/`concat`), the
+/// sorting and ordered-array queries (`sorted_ascending`/`sorted_descending`/
+/// `insert_ascending`/`is_sorted`/`binary_search`/`deduped`) over the ADR-0009
 /// allocator core, and the generic higher-order combinators
 /// (`fold`/`map_into`/`filter_into`/`any`/`all`) over a first-class function
 /// value (ADR-0008 Tier 1). Entirely executable.
@@ -77,6 +79,26 @@ pub const COLLECTIONS: Module = Module {
     path: "std::collections",
     name: "std/collections.tuo",
     source: include_str!("std/collections.tuo"),
+};
+
+/// `std::math` — integer arithmetic (`pow`/`gcd`/`lcm`/`modulo`/`is_even`/
+/// `is_odd`) and IEEE-754 `Float` arithmetic (`fabs`/`fmin`/`fmax`/`floor`/
+/// `ceil`/`round`/`sqrt`) over the scalar core. Entirely executable.
+pub const MATH: Module = Module {
+    path: "std::math",
+    name: "std/math.tuo",
+    source: include_str!("std/math.tuo"),
+};
+
+/// `std::str` — string algorithms over the byte-level `Str`/`String` builtins:
+/// search (`index_of_byte`/`find`/`contains`/`starts_with`/`ends_with`/
+/// `count`), trimming (`trim`), ASCII case/classification (`to_upper`/
+/// `to_lower`/`is_digit`/`is_space`), and the integer⇄decimal-text conversions
+/// (`parse_int`/`to_string`). Entirely executable.
+pub const STR: Module = Module {
+    path: "std::str",
+    name: "std/str.tuo",
+    source: include_str!("std/str.tuo"),
 };
 
 /// `std::io` — the I/O error vocabulary (executable), and the real
@@ -132,7 +154,18 @@ pub const TEST: Module = Module {
 /// The order is stable: hosts that load the whole library into one program can
 /// rely on it. No module imports another today, so any order type-checks, but
 /// `core` leads by convention.
-pub const MODULES: &[Module] = &[CORE, COLLECTIONS, IO, FS, TIME, PROCESS, SYNC, TEST];
+pub const MODULES: &[Module] = &[
+    CORE,
+    COLLECTIONS,
+    MATH,
+    STR,
+    IO,
+    FS,
+    TIME,
+    PROCESS,
+    SYNC,
+    TEST,
+];
 
 /// Look up a module by its dotted path (e.g. `"std::core"`).
 #[must_use]

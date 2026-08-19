@@ -262,6 +262,186 @@ pub fn reversed(in xs: Array[Int]) -> Array[Int] {
     out
 }
 
+/// The smallest element of `xs`, or `None` when `xs` is empty. The `min`
+/// counterpart to `max_of`.
+///
+/// # Example
+/// ```tuo
+/// let m = std::collections::min_of(std::collections::of3(3, 1, 4)); // Some { value: 1 }
+/// ```
+pub fn min_of(in xs: Array[Int]) -> Option[Int] {
+    if std::array::len(xs) == 0 {
+        return None;
+    }
+    var best = std::array::get(xs, 0);
+    var i = 1;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        if x < best {
+            best = x;
+        }
+        i = i + 1;
+    }
+    Some { value: best }
+}
+
+/// A **new** array holding every element of `xs` followed by every element of
+/// `ys`, in order. Both inputs are only borrowed; the result is freshly
+/// allocated. The array analogue of `std::string::concat`.
+///
+/// # Example
+/// ```tuo
+/// let zs = std::collections::concat(std::collections::of2(1, 2), std::collections::of2(3, 4)); // [1, 2, 3, 4]
+/// ```
+pub fn concat(in xs: Array[Int], in ys: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        std::array::push(out, std::array::get(xs, i));
+        i = i + 1;
+    }
+    var j = 0;
+    while j < std::array::len(ys) {
+        std::array::push(out, std::array::get(ys, j));
+        j = j + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Sorting and ordered-array queries.
+//
+// `sorted_ascending`/`sorted_descending` return a **new** sorted array (the
+// input is only borrowed, so the caller's array is never disturbed — the same
+// non-mutating contract as `reversed`). The sort is an insertion sort: O(n²),
+// but stable, in-place on the freshly-copied buffer, and the obvious correct
+// algorithm for the small arrays the runnable core builds. `is_sorted` and
+// `binary_search` are the queries that pair with a sorted array; `deduped`
+// collapses runs of equal elements in an already-sorted array.
+// ----------------------------------------------------------------------------
+
+/// A **new** array holding `xs`'s elements in non-decreasing order. `xs` is
+/// only borrowed; the result is freshly allocated (insertion sort).
+///
+/// # Example
+/// ```tuo
+/// let ys = std::collections::sorted_ascending(std::collections::of3(3, 1, 2)); // [1, 2, 3]
+/// ```
+pub fn sorted_ascending(in xs: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        out = insert_ascending(out, std::array::get(xs, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// A **new** array holding `xs`'s elements in non-increasing order. `xs` is
+/// only borrowed; the result is freshly allocated.
+///
+/// # Example
+/// ```tuo
+/// let ys = std::collections::sorted_descending(std::collections::of3(1, 3, 2)); // [3, 2, 1]
+/// ```
+pub fn sorted_descending(in xs: Array[Int]) -> Array[Int] {
+    reversed(sorted_ascending(xs))
+}
+
+/// Insert `value` into the already-ascending array `sorted`, returning a new
+/// array that stays ascending. The per-element step of the insertion sort,
+/// exposed because it is independently useful (maintaining a sorted array).
+///
+/// # Example
+/// ```tuo
+/// let ys = std::collections::insert_ascending(std::collections::of2(1, 3), 2); // [1, 2, 3]
+/// ```
+pub fn insert_ascending(in sorted: Array[Int], take value: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    var placed = false;
+    while i < std::array::len(sorted) {
+        let x = std::array::get(sorted, i);
+        if !placed && value <= x {
+            std::array::push(out, value);
+            placed = true;
+        }
+        std::array::push(out, x);
+        i = i + 1;
+    }
+    if !placed {
+        std::array::push(out, value);
+    }
+    out
+}
+
+/// Is `xs` in non-decreasing order? Vacuously true for the empty and
+/// single-element arrays.
+///
+/// # Example
+/// ```tuo
+/// let b = std::collections::is_sorted(std::collections::of3(1, 2, 2)); // true
+/// ```
+pub fn is_sorted(in xs: Array[Int]) -> Bool {
+    var i = 1;
+    while i < std::array::len(xs) {
+        if std::array::get(xs, i - 1) > std::array::get(xs, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// The index of `needle` in the **ascending** array `xs` by binary search, or
+/// `None` when absent. `xs` must be sorted (the caller's responsibility — the
+/// search does not verify it); on an unsorted array the result is unspecified
+/// but never traps. When `needle` occurs more than once, *an* index of it is
+/// returned (not necessarily the first).
+///
+/// # Example
+/// ```tuo
+/// let at = std::collections::binary_search(std::collections::of3(1, 3, 5), 3); // Some { value: 1 }
+/// ```
+pub fn binary_search(in xs: Array[Int], take needle: Int) -> Option[Int] {
+    var lo = 0;
+    var hi = std::array::len(xs);
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let x = std::array::get(xs, mid);
+        if x == needle {
+            return Some { value: mid };
+        } else if x < needle {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    None
+}
+
+/// A **new** array holding the elements of the **ascending** array `xs` with
+/// each run of equal elements collapsed to one. `xs` must be sorted for this to
+/// remove *all* duplicates (it only compares adjacent elements); on an unsorted
+/// array it removes adjacent duplicates only, and never traps.
+///
+/// # Example
+/// ```tuo
+/// let ys = std::collections::deduped(std::collections::of3(1, 1, 2)); // [1, 2]
+/// ```
+pub fn deduped(in xs: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        if i == 0 || std::array::get(xs, i - 1) != x {
+            std::array::push(out, x);
+        }
+        i = i + 1;
+    }
+    out
+}
+
 // ----------------------------------------------------------------------------
 // Higher-order combinators — one generic fold/map/filter over a function value
 // (ADR-0008 Tier 1).
@@ -506,6 +686,75 @@ spec reversed {
     then std::array::len(reversed(of3(1, 2, 3))) == 3;
     then sum(reversed(of2(4, 5))) == 9;
     then std::array::len(reversed(std::array::empty())) == 0;
+}
+
+spec min_of {
+    then match min_of(of3(3, 1, 4)) { Some { value } => value, None => -1 } == 1;
+    then match min_of(of2(8, 2)) { Some { value } => value, None => -1 } == 2;
+    then match min_of(singleton(5)) { Some { value } => value, None => -1 } == 5;
+    then match min_of(std::array::empty()) { Some { value } => value, None => -1 } == -1;
+}
+
+spec concat {
+    then std::array::len(concat(of2(1, 2), of2(3, 4))) == 4;
+    then std::array::get(concat(of2(1, 2), of2(3, 4)), 0) == 1;
+    then std::array::get(concat(of2(1, 2), of2(3, 4)), 3) == 4;
+    then sum(concat(of3(1, 2, 3), singleton(4))) == 10;
+    then std::array::len(concat(std::array::empty(), of2(3, 4))) == 2;
+    then std::array::len(concat(of2(1, 2), std::array::empty())) == 2;
+}
+
+spec insert_ascending {
+    then std::array::get(insert_ascending(of2(1, 3), 2), 1) == 2;
+    then std::array::len(insert_ascending(of2(1, 3), 2)) == 3;
+    then std::array::get(insert_ascending(of2(2, 4), 1), 0) == 1; // before all
+    then std::array::get(insert_ascending(of2(2, 4), 9), 2) == 9; // after all
+    then std::array::get(insert_ascending(std::array::empty(), 5), 0) == 5;
+}
+
+spec sorted_ascending {
+    then is_sorted(sorted_ascending(of3(3, 1, 2)));
+    then std::array::get(sorted_ascending(of3(3, 1, 2)), 0) == 1;
+    then std::array::get(sorted_ascending(of3(3, 1, 2)), 2) == 3;
+    then std::array::len(sorted_ascending(of3(3, 1, 2))) == 3;
+    // A sort permutes: the sum is preserved.
+    then sum(sorted_ascending(of3(5, 9, 1))) == sum(of3(5, 9, 1));
+    then std::array::len(sorted_ascending(std::array::empty())) == 0;
+}
+
+spec sorted_descending {
+    then std::array::get(sorted_descending(of3(1, 3, 2)), 0) == 3;
+    then std::array::get(sorted_descending(of3(1, 3, 2)), 2) == 1;
+    then sum(sorted_descending(of3(1, 3, 2))) == 6;
+}
+
+spec is_sorted {
+    then is_sorted(of3(1, 2, 3));
+    then is_sorted(of3(1, 2, 2)); // non-strict
+    then !is_sorted(of3(3, 1, 2));
+    then is_sorted(singleton(5));
+    then is_sorted(std::array::empty());
+}
+
+spec binary_search {
+    then match binary_search(of3(1, 3, 5), 3) { Some { value } => value, None => -1 } == 1;
+    then match binary_search(of3(1, 3, 5), 1) { Some { value } => value, None => -1 } == 0;
+    then match binary_search(of3(1, 3, 5), 5) { Some { value } => value, None => -1 } == 2;
+    then match binary_search(of3(1, 3, 5), 4) { Some { value } => value, None => -1 } == -1;
+    then match binary_search(std::array::empty(), 0) { Some { value } => value, None => -1 } == -1;
+    // Agrees with linear index_of on a sorted array.
+    then match binary_search(of3(2, 4, 6), 4) { Some { value } => value, None => -1 }
+        == match index_of(of3(2, 4, 6), 4) { Some { value } => value, None => -1 };
+}
+
+spec deduped {
+    then std::array::len(deduped(of3(1, 1, 2))) == 2;
+    then std::array::get(deduped(of3(1, 1, 2)), 0) == 1;
+    then std::array::get(deduped(of3(1, 1, 2)), 1) == 2;
+    then std::array::len(deduped(of3(1, 2, 3))) == 3; // no dups
+    then std::array::len(deduped(std::array::empty())) == 0;
+    // deduping a sorted array leaves it sorted.
+    then is_sorted(deduped(sorted_ascending(of3(3, 1, 1))));
 }
 
 // The combinator specs each pass a NAMED top-level fn as a value (ADR-0008

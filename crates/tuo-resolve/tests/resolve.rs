@@ -931,12 +931,13 @@ fn allocator_core_builtins_resolve_without_any_stdlib() {
          \x20   let e = std::string::empty();\n\
          \x20   let sl = std::string::slice(s, 0, 1);\n\
          \x20   let sb = std::string::byte_at(s, 0);\n\
+         \x20   let av = std::str::len(std::string::as_str(s));\n\
          \x20   var xs = std::array::empty();\n\
          \x20   std::array::push(xs, 7);\n\
          \x20   let p = std::array::pop(xs);\n\
          \x20   let g = std::array::get(xs, 0);\n\
          \x20   let w = std::rt::write_string(1, s);\n\
-         \x20   std::string::len(t) + std::array::len(xs) + sb + g + w\n\
+         \x20   std::string::len(t) + std::array::len(xs) + sb + g + w + av\n\
          }\n",
     );
     assert_clean(&resolution);
@@ -950,6 +951,7 @@ fn allocator_core_builtins_resolve_without_any_stdlib() {
         tuo_resolve::Builtin::StringLen,
         tuo_resolve::Builtin::StringByteAt,
         tuo_resolve::Builtin::StringSlice,
+        tuo_resolve::Builtin::StringAsStr,
         tuo_resolve::Builtin::ArrayEmpty,
         tuo_resolve::Builtin::ArrayPush,
         tuo_resolve::Builtin::ArrayPop,

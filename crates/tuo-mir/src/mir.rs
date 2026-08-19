@@ -546,6 +546,12 @@ pub enum HeapOp {
     /// view). **Traps `IndexOutOfBounds`** unless
     /// `0 <= a <= b <= len(subject)`.
     StringSlice,
+    /// `as_str(subject: String) -> Str` — a borrowed `Str` view of the whole
+    /// subject (the `{ptr, len}` prefix of its header), **no copy** (ADR-0010).
+    /// The result aliases the subject's bytes; the ownership checker keeps the
+    /// subject shared-borrowed for the view's lifetime, so the native lowering
+    /// (Stage B) needs no defensive copy. Never traps.
+    StringAsStr,
     /// `empty() -> Array[I64]` — the empty growable array. Never traps.
     ArrayEmpty,
     /// `len(subject: Array[I64]) -> I64` — `len(subject)`. Never traps.
@@ -570,6 +576,7 @@ impl HeapOp {
             Self::StringLen => "string_len",
             Self::StringByteAt => "string_byte_at",
             Self::StringSlice => "string_slice",
+            Self::StringAsStr => "string_as_str",
             Self::ArrayEmpty => "array_empty",
             Self::ArrayLen => "array_len",
             Self::ArrayGet => "array_get",
@@ -586,6 +593,7 @@ impl HeapOp {
             Self::StringLen
                 | Self::StringByteAt
                 | Self::StringSlice
+                | Self::StringAsStr
                 | Self::ArrayLen
                 | Self::ArrayGet
         )
@@ -595,7 +603,11 @@ impl HeapOp {
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::StringEmpty | Self::StringLen | Self::ArrayEmpty | Self::ArrayLen => 0,
+            Self::StringEmpty
+            | Self::StringLen
+            | Self::StringAsStr
+            | Self::ArrayEmpty
+            | Self::ArrayLen => 0,
             Self::StringFromStr | Self::StringByteAt | Self::ArrayGet => 1,
             Self::StringConcat | Self::StringSlice => 2,
         }

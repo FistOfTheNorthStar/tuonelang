@@ -116,10 +116,17 @@ struct tuo_str {
 
 - Size = 2 × pointer-width (16 bytes), align = pointer-width. Owns nothing;
   dropping it is a no-op.
-- In v0 a `Str` only ever points at a string **literal** with static storage
-  duration (ADR-0003 ruling 8), so its bytes outlive any borrow. `String`→`Str`
-  borrowing is deferred (Q-0012); the representation is already the general fat
-  pointer so that later work needs no layout change.
+- A `Str` points either at a string **literal** with static storage duration
+  (ADR-0003 ruling 8), or — since ADR-0010 (resolving Q-0012) — at a live
+  `String`'s buffer, obtained by `std::string::as_str` as the `{ptr, len}`
+  prefix of the `String` header (no copy, no layout change: the representation
+  was already this general fat pointer). A literal-derived `Str` outlives every
+  borrow; a `String`-derived `Str` is a **shared borrow** of that `String`, and
+  the ownership checker (`ownership.md` §13, `O0011`) forbids moving, mutating,
+  dropping, or overwriting the `String` while the view is live and forbids the
+  view escaping its frame — so the viewed bytes are always valid for the view's
+  lifetime and the backend needs no defensive copy. Dropping a `Str` is still a
+  no-op (it owns nothing).
 
 The same fat-pointer shape is the general **slice** layout `[T]` for a future
 array-slice type: `(T *ptr, usize len)`. It is specified now so the shape is

@@ -29,6 +29,16 @@ fn window(in s: String) -> String {
     std::string::slice(s, 0, 1)
 }
 
+// ADR-0010: `as_str` views a `String` as a `Str` (in String -> Str), so a
+// String's bytes flow into the Str builtins and compare to a Str literal.
+fn view_len(in s: String) -> Int {
+    std::str::len(std::string::as_str(s))
+}
+
+fn view_is_empty(in s: String) -> Bool {
+    std::string::as_str(s) == ""
+}
+
 fn empties() -> Int {
     let s = std::string::empty();
     let xs = std::array::empty();

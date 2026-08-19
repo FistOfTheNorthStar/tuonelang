@@ -1,0 +1,496 @@
+// std::str — string algorithms over the byte-level `Str`/`String` builtins.
+//
+// This module is entirely executable: every function is pure byte computation,
+// runs through the reference interpreter, and every spec below proves it.
+//
+// The runnable core gives two string types and a small builtin surface over
+// each:
+//   * `Str` — a borrowed, read-only fat pointer (`std::str::len`/`byte_at`/
+//     `slice`, and `==` for content equality);
+//   * `String` — an owned, growable buffer (`std::string::empty`/`from_str`/
+//     `push_byte`/`append`/`concat`/`len`/`byte_at`/`slice`).
+// Those builtins are the *primitive* layer — indexing, slicing, length. This
+// module never re-spells them; it composes them into the algorithms a caller
+// actually reaches for (search, prefix/suffix tests, trimming, counting) and
+// the two conversions between an integer and its decimal text. Everything is
+// byte-oriented: `Str` in the runnable core is a sequence of bytes, so "length"
+// and "index" are byte counts, and the ASCII helpers below (`to_upper`,
+// `is_digit`) act on the ASCII byte range and pass every other byte through
+// unchanged — honest for ASCII text, and never claiming a Unicode algorithm the
+// core does not implement.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`s.trim()`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+
+module std::str;
+
+// ----------------------------------------------------------------------------
+// Search and membership over a borrowed `Str`.
+// ----------------------------------------------------------------------------
+
+/// The index of the first byte equal to `needle` at or after 0, or `None` when
+/// no byte matches. `needle` is a byte value (`0..=255`).
+///
+/// # Example
+/// ```tuo
+/// let at = std::str::index_of_byte("hello", 108); // Some { value: 2 } ('l')
+/// ```
+pub fn index_of_byte(in s: Str, take needle: Int) -> Option[Int] {
+    var i = 0;
+    while i < std::str::len(s) {
+        if std::str::byte_at(s, i) == needle {
+            return Some { value: i };
+        }
+        i = i + 1;
+    }
+    None
+}
+
+/// Does `s` contain the byte `needle` anywhere?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::contains_byte("hello", 101); // true ('e')
+/// ```
+pub fn contains_byte(in s: Str, take needle: Int) -> Bool {
+    match index_of_byte(s, needle) {
+        Some { value } => true,
+        None => false,
+    }
+}
+
+/// The index at which `needle` first occurs as a contiguous substring of `s`,
+/// or `None` when it does not occur. The empty needle occurs at index 0.
+///
+/// A straightforward byte-by-byte scan (no suffix-automaton cleverness): the
+/// runnable core has bounded loops and this is the obvious, correct algorithm.
+///
+/// # Example
+/// ```tuo
+/// let at = std::str::find("hello world", "world"); // Some { value: 6 }
+/// ```
+pub fn find(in s: Str, in needle: Str) -> Option[Int] {
+    let n = std::str::len(s);
+    let m = std::str::len(needle);
+    if m == 0 {
+        return Some { value: 0 };
+    }
+    if m > n {
+        return None;
+    }
+    var start = 0;
+    while start <= n - m {
+        var j = 0;
+        var matched = true;
+        while j < m {
+            if std::str::byte_at(s, start + j) != std::str::byte_at(needle, j) {
+                matched = false;
+                j = m; // break the inner scan
+            } else {
+                j = j + 1;
+            }
+        }
+        if matched {
+            return Some { value: start };
+        }
+        start = start + 1;
+    }
+    None
+}
+
+/// Does `s` contain `needle` as a contiguous substring?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::contains("hello world", "o w"); // true
+/// ```
+pub fn contains(in s: Str, in needle: Str) -> Bool {
+    match find(s, needle) {
+        Some { value } => true,
+        None => false,
+    }
+}
+
+/// Does `s` begin with `prefix` (byte-wise)? The empty prefix always matches.
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::starts_with("GET /health", "GET"); // true
+/// ```
+pub fn starts_with(in s: Str, in prefix: Str) -> Bool {
+    let n = std::str::len(prefix);
+    if std::str::len(s) < n {
+        false
+    } else {
+        std::str::slice(s, 0, n) == prefix
+    }
+}
+
+/// Does `s` end with `suffix` (byte-wise)? The empty suffix always matches.
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::ends_with("file.tuo", ".tuo"); // true
+/// ```
+pub fn ends_with(in s: Str, in suffix: Str) -> Bool {
+    let n = std::str::len(s);
+    let m = std::str::len(suffix);
+    if n < m {
+        false
+    } else {
+        std::str::slice(s, n - m, n) == suffix
+    }
+}
+
+/// How many non-overlapping occurrences of `needle` appear in `s`. The empty
+/// needle counts as `len(s) + 1` (the gaps between and around every byte),
+/// matching the conventional definition.
+///
+/// # Example
+/// ```tuo
+/// let n = std::str::count("banana", "a"); // 3
+/// ```
+pub fn count(in s: Str, in needle: Str) -> Int {
+    let n = std::str::len(s);
+    let m = std::str::len(needle);
+    if m == 0 {
+        return n + 1;
+    }
+    var total = 0;
+    var i = 0;
+    while i <= n - m {
+        if std::str::slice(s, i, i + m) == needle {
+            total = total + 1;
+            i = i + m; // non-overlapping: skip past the match
+        } else {
+            i = i + 1;
+        }
+    }
+    total
+}
+
+// ----------------------------------------------------------------------------
+// Trimming — produces a new borrowed sub-slice of `s` (no allocation).
+//
+// "Whitespace" here is the ASCII set the runnable core sees on a line: space
+// (32), tab (9), carriage return (13), and newline (10). A byte outside that
+// set ends the trim. The result is a slice of the *same* backing bytes, so it
+// borrows `s` and allocates nothing.
+// ----------------------------------------------------------------------------
+
+/// Is byte `b` ASCII whitespace (space, tab, CR, or LF)?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::is_space(32); // true (' ')
+/// ```
+pub fn is_space(take b: Int) -> Bool {
+    b == 32 || b == 9 || b == 13 || b == 10
+}
+
+/// `s` with leading and trailing ASCII whitespace removed, as a sub-slice.
+///
+/// # Example
+/// ```tuo
+/// let t = std::str::trim("  hi  "); // "hi"
+/// ```
+pub fn trim(in s: Str) -> Str {
+    let n = std::str::len(s);
+    var start = 0;
+    while start < n && is_space(std::str::byte_at(s, start)) {
+        start = start + 1;
+    }
+    var end = n;
+    while end > start && is_space(std::str::byte_at(s, end - 1)) {
+        end = end - 1;
+    }
+    std::str::slice(s, start, end)
+}
+
+// ----------------------------------------------------------------------------
+// ASCII case and classification. These operate on the ASCII byte range and
+// pass every other byte through unchanged — they are byte helpers, not a
+// Unicode algorithm, and the doc says so.
+// ----------------------------------------------------------------------------
+
+/// Is byte `b` an ASCII decimal digit (`'0'..='9'`)?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::is_digit(53); // true ('5')
+/// ```
+pub fn is_digit(take b: Int) -> Bool {
+    b >= 48 && b <= 57
+}
+
+/// The ASCII-uppercase form of `s`, as a fresh owned `String`. Bytes `'a'..='z'`
+/// map to `'A'..='Z'`; every other byte is copied unchanged.
+///
+/// # Example
+/// ```tuo
+/// let u = std::str::to_upper("Hi!"); // a String holding "HI!"
+/// ```
+pub fn to_upper(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b >= 97 && b <= 122 {
+            std::string::push_byte(out, b - 32);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The ASCII-lowercase form of `s`, as a fresh owned `String`. Bytes `'A'..='Z'`
+/// map to `'a'..='z'`; every other byte is copied unchanged.
+///
+/// # Example
+/// ```tuo
+/// let l = std::str::to_lower("Hi!"); // a String holding "hi!"
+/// ```
+pub fn to_lower(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b >= 65 && b <= 90 {
+            std::string::push_byte(out, b + 32);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Integer ⇄ decimal text (the `strconv` layer).
+//
+// `parse_int` is Atoi over a borrowed `Str`; `to_string` is Itoa into a fresh
+// owned `String`. They are the single, obvious bridge between the integer and
+// its human text — there is no second `format`/`itoa` spelling. `parse_int`
+// returns a `Result` because failure is data (empty, a stray non-digit), not a
+// trap.
+// ----------------------------------------------------------------------------
+
+/// Parse a decimal integer from `s` (optionally leading `-`), or an `Err`
+/// naming why it failed. Accepts `"0"`, `"42"`, `"-7"`; rejects the empty
+/// string, a lone `"-"`, and any string with a non-digit byte. Does not skip
+/// surrounding whitespace — `trim` first if the input may be padded.
+///
+/// Overflow of the accumulator traps (the same honest `*`/`+` contract), so a
+/// caller parsing untrusted extremes should bound the input length first.
+///
+/// # Example
+/// ```tuo
+/// // match std::str::parse_int("-42") { Ok { value } => value, Err { error } => 0 } // -42
+/// ```
+pub fn parse_int(in s: Str) -> Result[Int, Str] {
+    let n = std::str::len(s);
+    if n == 0 {
+        return Err { error: "empty" };
+    }
+    var i = 0;
+    var neg = false;
+    if std::str::byte_at(s, 0) == 45 {
+        neg = true;
+        i = 1;
+        if n == 1 {
+            return Err { error: "lone minus" };
+        }
+    }
+    var acc = 0;
+    while i < n {
+        let b = std::str::byte_at(s, i);
+        if b < 48 || b > 57 {
+            return Err { error: "non-digit" };
+        }
+        acc = acc * 10 + (b - 48);
+        i = i + 1;
+    }
+    if neg {
+        Ok { value: 0 - acc }
+    } else {
+        Ok { value: acc }
+    }
+}
+
+/// The decimal text of `n` as a fresh owned `String`, with a leading `-` for a
+/// negative value. `to_string(0)` is `"0"`.
+///
+/// # Example
+/// ```tuo
+/// let s = std::str::to_string(0 - 42); // "-42"
+/// ```
+pub fn to_string(take n: Int) -> String {
+    if n == 0 {
+        return std::string::from_str("0");
+    }
+    var neg = false;
+    var m = n;
+    if m < 0 {
+        neg = true;
+        m = 0 - m;
+    }
+    // Collect digits least-significant first, then emit most-significant first.
+    var digits = std::array::empty();
+    while m > 0 {
+        std::array::push(digits, m % 10);
+        m = m / 10;
+    }
+    var out = std::string::empty();
+    if neg {
+        std::string::push_byte(out, 45); // '-'
+    }
+    var i = std::array::len(digits) - 1;
+    while i >= 0 {
+        std::string::push_byte(out, 48 + std::array::get(digits, i));
+        i = i - 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter. Byte
+// values are written as their ASCII code points, the same convention the
+// builtins use.
+//
+// A local `or` unwraps a Result[Int, Str] to a scalar (equality in v0 is on
+// scalars), and a local `opt_or` does the same for Option[Int].
+// ----------------------------------------------------------------------------
+
+fn or(in r: Result[Int, Str], take fallback: Int) -> Int {
+    match r {
+        Ok { value } => value,
+        Err { error } => fallback,
+    }
+}
+
+fn opt_or(in o: Option[Int], take fallback: Int) -> Int {
+    match o {
+        Some { value } => value,
+        None => fallback,
+    }
+}
+
+spec index_of_byte {
+    then opt_or(index_of_byte("hello", 108), 0 - 1) == 2;
+    then opt_or(index_of_byte("hello", 104), 0 - 1) == 0;
+    then opt_or(index_of_byte("hello", 122), 0 - 1) == 0 - 1;
+    then opt_or(index_of_byte("", 97), 0 - 1) == 0 - 1;
+}
+
+spec contains_byte {
+    then contains_byte("hello", 101);
+    then !contains_byte("hello", 122);
+}
+
+spec find {
+    then opt_or(find("hello world", "world"), 0 - 1) == 6;
+    then opt_or(find("hello world", "hello"), 0 - 1) == 0;
+    then opt_or(find("hello world", "xyz"), 0 - 1) == 0 - 1;
+    then opt_or(find("aaa", "aa"), 0 - 1) == 0;
+    then opt_or(find("abc", ""), 0 - 1) == 0; // empty needle at 0
+    then opt_or(find("ab", "abc"), 0 - 1) == 0 - 1; // needle longer than haystack
+}
+
+spec contains {
+    then contains("hello world", "o w");
+    then contains("hello", "hello");
+    then !contains("hello", "world");
+}
+
+spec starts_with {
+    then starts_with("GET /health", "GET");
+    then starts_with("anything", "");
+    then !starts_with("GET", "GETX");
+    then !starts_with("POST", "GET");
+}
+
+spec ends_with {
+    then ends_with("file.tuo", ".tuo");
+    then ends_with("anything", "");
+    then !ends_with("file.tuo", ".rs");
+    then !ends_with("hi", "ahi");
+}
+
+spec count {
+    then count("banana", "a") == 3;
+    then count("banana", "na") == 2;
+    then count("aaaa", "aa") == 2; // non-overlapping
+    then count("hello", "z") == 0;
+    then count("abc", "") == 4; // len + 1
+}
+
+spec is_space {
+    then is_space(32);
+    then is_space(9);
+    then is_space(10);
+    then is_space(13);
+    then !is_space(97);
+}
+
+spec trim {
+    then trim("  hi  ") == "hi";
+    then trim("hi") == "hi";
+    then trim("   ") == "";
+    then trim("\thi\n") == "hi";
+    then trim("") == "";
+}
+
+spec is_digit {
+    then is_digit(48);
+    then is_digit(57);
+    then !is_digit(47);
+    then !is_digit(58);
+    then !is_digit(97);
+}
+
+// `to_upper`/`to_lower`/`to_string` return an owned `String`, and v0 has no
+// `String`→`Str` view (Q-0012 is deferred), so their specs compare against a
+// `String` built with `std::string::from_str`, never a bare `Str` literal.
+
+spec to_upper {
+    then to_upper("Hi!") == std::string::from_str("HI!");
+    then to_upper("abc") == std::string::from_str("ABC");
+    then to_upper("ABC") == std::string::from_str("ABC");
+    then to_upper("a1z") == std::string::from_str("A1Z");
+}
+
+spec to_lower {
+    then to_lower("Hi!") == std::string::from_str("hi!");
+    then to_lower("ABC") == std::string::from_str("abc");
+    then to_lower("abc") == std::string::from_str("abc");
+    then to_lower("A1Z") == std::string::from_str("a1z");
+}
+
+spec parse_int {
+    then or(parse_int("123"), 0 - 1) == 123;
+    then or(parse_int("0"), 0 - 1) == 0;
+    then or(parse_int("-42"), 0) == 0 - 42;
+    then or(parse_int(""), 999) == 999;
+    then or(parse_int("-"), 999) == 999;
+    then or(parse_int("12x"), 999) == 999;
+    then or(parse_int("x12"), 999) == 999;
+}
+
+spec to_string {
+    then to_string(0) == std::string::from_str("0");
+    then to_string(123) == std::string::from_str("123");
+    then to_string(0 - 42) == std::string::from_str("-42");
+    then to_string(7) == std::string::from_str("7");
+    // Structural round-trip: the digits `to_string` emits parse back with a
+    // `Str` literal of the same text (v0 has no `String`→`Str` view to close
+    // the loop through the owned buffer directly).
+    then or(parse_int("9876"), 0 - 1) == 9876;
+    then or(parse_int("-500"), 0) == 0 - 500;
+    then std::string::byte_at(to_string(9876), 0) == 57; // '9'
+    then std::string::len(to_string(9876)) == 4;
+}
