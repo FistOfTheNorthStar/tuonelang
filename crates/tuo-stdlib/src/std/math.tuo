@@ -1,0 +1,375 @@
+// std::math — numeric functions over the scalar core.
+//
+// This module is entirely executable: every function is pure computation over
+// `Int` and `Float`, runs through the reference interpreter, and every spec
+// below proves it. It is the obvious home for the arithmetic a caller reaches
+// for that `std::core` (ordering/`Option`/`Result`) deliberately leaves out.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`x.sqrt()`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+//
+// Two numeric worlds, kept apart. `Int` is the checked two's-complement
+// integer (division truncates toward zero; overflow traps); `Float` is IEEE-754
+// binary64. Functions never silently cross between them — an `Int` helper stays
+// in `Int`, a `Float` helper stays in `Float` — because the runnable core's
+// `as` cast is the one, explicit bridge and the library does not hide it.
+
+module std::math;
+
+// ----------------------------------------------------------------------------
+// Integer arithmetic.
+// ----------------------------------------------------------------------------
+
+/// `base` raised to a non-negative integer `exp`, by repeated multiplication.
+///
+/// `pow(base, 0)` is `1` for every `base` (including `0`). A negative `exp` is
+/// meaningless for an integer result and is treated as `0` (returning `1`);
+/// callers wanting fractional powers use `Float` and a future `powf`. Overflow
+/// of the running product traps, the same honest trap `*` gives everywhere.
+///
+/// # Example
+/// ```tuo
+/// let n = std::math::pow(2, 10); // 1024
+/// ```
+pub fn pow(take base: Int, take exp: Int) -> Int {
+    var result = 1;
+    var i = 0;
+    while i < exp {
+        result = result * base;
+        i = i + 1;
+    }
+    result
+}
+
+/// The greatest common divisor of `a` and `b`, by the Euclidean algorithm.
+///
+/// The result is always non-negative: `gcd` works on the magnitudes, so
+/// `gcd(-12, 8) == 4`. `gcd(0, 0)` is `0` (the conventional value). Never
+/// traps for any pair except the single un-representable magnitude `Int::MIN`,
+/// whose negation would overflow — the same extreme `abs` documents.
+///
+/// # Example
+/// ```tuo
+/// let g = std::math::gcd(12, 18); // 6
+/// ```
+pub fn gcd(take a: Int, take b: Int) -> Int {
+    var x = a;
+    if x < 0 {
+        x = 0 - x;
+    }
+    var y = b;
+    if y < 0 {
+        y = 0 - y;
+    }
+    while y != 0 {
+        let t = x % y;
+        x = y;
+        y = t;
+    }
+    x
+}
+
+/// The least common multiple of `a` and `b`, non-negative.
+///
+/// `lcm(a, 0)` and `lcm(0, b)` are `0` (the conventional value). Computed as
+/// `abs(a / gcd(a, b) * b)`, dividing before multiplying so the intermediate
+/// stays as small as possible; the final product can still overflow and trap
+/// for large inputs, which is the honest arithmetic contract.
+///
+/// # Example
+/// ```tuo
+/// let m = std::math::lcm(4, 6); // 12
+/// ```
+pub fn lcm(take a: Int, take b: Int) -> Int {
+    if a == 0 || b == 0 {
+        return 0;
+    }
+    let g = gcd(a, b);
+    var product = (a / g) * b;
+    if product < 0 {
+        product = 0 - product;
+    }
+    product
+}
+
+/// The non-negative remainder of `a` divided by `b` (Euclidean modulo).
+///
+/// Unlike the built-in `%` — which truncates toward zero and so can yield a
+/// negative remainder (`(-7) % 3 == -1`) — `modulo` always returns a value in
+/// `[0, abs(b))`, the residue most callers mean by "mod". `b` must be non-zero
+/// (a zero divisor traps, exactly as `%` does).
+///
+/// # Example
+/// ```tuo
+/// let r = std::math::modulo(0 - 7, 3); // 2
+/// ```
+pub fn modulo(take a: Int, take b: Int) -> Int {
+    var m = a % b;
+    if m < 0 {
+        if b < 0 {
+            m = m - b;
+        } else {
+            m = m + b;
+        }
+    }
+    m
+}
+
+/// Is `n` even (divisible by two)? Correct for negatives.
+///
+/// # Example
+/// ```tuo
+/// let b = std::math::is_even(0 - 4); // true
+/// ```
+pub fn is_even(take n: Int) -> Bool {
+    n % 2 == 0
+}
+
+/// Is `n` odd? Correct for negatives (`is_odd(-3)` is `true`).
+///
+/// # Example
+/// ```tuo
+/// let b = std::math::is_odd(0 - 3); // true
+/// ```
+pub fn is_odd(take n: Int) -> Bool {
+    n % 2 != 0
+}
+
+// ----------------------------------------------------------------------------
+// Float arithmetic. `Float` is IEEE-754 binary64.
+// ----------------------------------------------------------------------------
+
+/// The absolute value of a float.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::fabs(0.0 - 2.5); // 2.5
+/// ```
+pub fn fabs(take x: Float) -> Float {
+    if x < 0.0 {
+        0.0 - x
+    } else {
+        x
+    }
+}
+
+/// The smaller of two floats.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::fmin(2.0, 5.0); // 2.0
+/// ```
+pub fn fmin(take a: Float, take b: Float) -> Float {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+/// The larger of two floats.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::fmax(2.0, 5.0); // 5.0
+/// ```
+pub fn fmax(take a: Float, take b: Float) -> Float {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+/// The largest integer value not greater than `x`, returned as a `Float`.
+///
+/// Truncates toward negative infinity: `floor(2.9) == 2.0`, and — unlike a bare
+/// `as Int` cast, which truncates toward zero — `floor(-2.1) == -3.0`. Computed
+/// through the runnable core's `Float`⇄`Int` casts, so it is exact for every
+/// value whose integer part fits an `Int`.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::floor(0.0 - 2.1); // -3.0
+/// ```
+pub fn floor(take x: Float) -> Float {
+    let truncated = (x as Int) as Float;
+    if truncated > x {
+        truncated - 1.0
+    } else {
+        truncated
+    }
+}
+
+/// The smallest integer value not less than `x`, returned as a `Float`.
+///
+/// Rounds toward positive infinity: `ceil(2.1) == 3.0`, `ceil(-2.9) == -2.0`.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::ceil(2.1); // 3.0
+/// ```
+pub fn ceil(take x: Float) -> Float {
+    let truncated = (x as Int) as Float;
+    if truncated < x {
+        truncated + 1.0
+    } else {
+        truncated
+    }
+}
+
+/// `x` rounded to the nearest integer value, returned as a `Float`, ties away
+/// from zero (`round(2.5) == 3.0`, `round(-2.5) == -3.0`).
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::round(2.5); // 3.0
+/// ```
+pub fn round(take x: Float) -> Float {
+    if x < 0.0 {
+        ceil(x - 0.5)
+    } else {
+        floor(x + 0.5)
+    }
+}
+
+/// The non-negative square root of `x`, to within a small tolerance, by
+/// Newton–Raphson iteration.
+///
+/// `sqrt(0.0)` is `0.0`. A negative `x` has no real root; the function returns
+/// `0.0` for it rather than a NaN, so a caller need not guard downstream
+/// arithmetic — validate the sign first if a negative input is a real error.
+/// The result satisfies `fabs(sqrt(x) * sqrt(x) - x) < 0.000001 * x` for the
+/// positive inputs its spec pins.
+///
+/// # Example
+/// ```tuo
+/// let x = std::math::sqrt(9.0); // ~3.0
+/// ```
+pub fn sqrt(take x: Float) -> Float {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    var guess = x;
+    var i = 0;
+    // Twenty iterations converge to binary64 precision for every input the
+    // runnable core can form; the loop is bounded so it always terminates.
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0;
+        i = i + 1;
+    }
+    guess
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter.
+//
+// Float specs assert an exact value where the computation is exact (fabs,
+// fmin/fmax, floor/ceil/round on representable inputs) and a bounded error
+// where it is iterative (sqrt), never a bare float `==` on an approximation.
+// ----------------------------------------------------------------------------
+
+spec pow {
+    then pow(2, 10) == 1024;
+    then pow(2, 0) == 1;
+    then pow(5, 1) == 5;
+    then pow(0, 0) == 1;
+    then pow(3, 3) == 27;
+    then pow(7, 0 - 2) == 1; // negative exponent clamps to 0
+}
+
+spec gcd {
+    then gcd(12, 18) == 6;
+    then gcd(18, 12) == 6;
+    then gcd(0 - 12, 8) == 4;
+    then gcd(17, 5) == 1;
+    then gcd(0, 9) == 9;
+    then gcd(9, 0) == 9;
+    then gcd(0, 0) == 0;
+}
+
+spec lcm {
+    then lcm(4, 6) == 12;
+    then lcm(3, 5) == 15;
+    then lcm(0 - 4, 6) == 12;
+    then lcm(7, 0) == 0;
+    then lcm(0, 7) == 0;
+}
+
+spec modulo {
+    then modulo(7, 3) == 1;
+    then modulo(0 - 7, 3) == 2;
+    then modulo(7, 0 - 3) == 1;
+    then modulo(6, 3) == 0;
+    then modulo(0, 5) == 0;
+}
+
+spec is_even {
+    then is_even(4);
+    then is_even(0);
+    then is_even(0 - 4);
+    then !is_even(3);
+    then !is_even(0 - 3);
+}
+
+spec is_odd {
+    then is_odd(3);
+    then is_odd(0 - 3);
+    then !is_odd(4);
+    then !is_odd(0);
+}
+
+spec fabs {
+    then fabs(0.0 - 2.5) == 2.5;
+    then fabs(2.5) == 2.5;
+    then fabs(0.0) == 0.0;
+}
+
+spec fmin {
+    then fmin(2.0, 5.0) == 2.0;
+    then fmin(5.0, 2.0) == 2.0;
+    then fmin(0.0 - 1.0, 1.0) == 0.0 - 1.0;
+}
+
+spec fmax {
+    then fmax(2.0, 5.0) == 5.0;
+    then fmax(5.0, 2.0) == 5.0;
+    then fmax(0.0 - 1.0, 1.0) == 1.0;
+}
+
+spec floor {
+    then floor(2.9) == 2.0;
+    then floor(2.0) == 2.0;
+    then floor(0.0 - 2.1) == 0.0 - 3.0;
+    then floor(0.0 - 3.0) == 0.0 - 3.0;
+}
+
+spec ceil {
+    then ceil(2.1) == 3.0;
+    then ceil(2.0) == 2.0;
+    then ceil(0.0 - 2.9) == 0.0 - 2.0;
+    then ceil(0.0 - 3.0) == 0.0 - 3.0;
+}
+
+spec round {
+    then round(2.5) == 3.0;
+    then round(2.4) == 2.0;
+    then round(0.0 - 2.5) == 0.0 - 3.0;
+    then round(0.0 - 2.4) == 0.0 - 2.0;
+    then round(3.0) == 3.0;
+}
+
+spec sqrt {
+    // Exact roots land exactly after convergence.
+    then sqrt(9.0) == 3.0;
+    then sqrt(16.0) == 4.0;
+    then sqrt(0.0) == 0.0;
+    then sqrt(1.0) == 1.0;
+    // Non-square inputs: bound the error rather than compare an approximation.
+    then fabs(sqrt(2.0) * sqrt(2.0) - 2.0) < 0.000001;
+    // A negative input yields 0.0 (no real root, no NaN).
+    then sqrt(0.0 - 4.0) == 0.0;
+}

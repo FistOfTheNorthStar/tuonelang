@@ -395,13 +395,38 @@ struct Node {
 ## 13. `Str` and view types
 
 `Str` is a borrowed view, which a lifetime-free model must keep from
-dangling. v0 resolves this by construction: **every `Str` originates from a
-string literal**, and string literals live for the whole program. `Str` is
-therefore `Copy` and unrestricted — it can be stored, returned, and kept
-freely. The borrowing operations that would create a `Str` view *into a
-`String`* are **deferred from v0** (Q-0012) until the model grows a sound
-view-tracking rule; until then `String` data is reached only through
-`in String` parameters.
+dangling. A `Str` that originates from a **string literal** cannot dangle by
+construction — literals live for the whole program — so such a `Str` is `Copy`
+and unrestricted: it can be stored, returned, and kept freely.
+
+Since ADR-0010 a `Str` may also originate from **`std::string::as_str(in s:
+String) -> Str`**, a zero-copy view of a live `String`'s bytes (resolving
+Q-0012). A view *into a `String`* **can** dangle — the `String` may be moved,
+mutated (a `push_byte`/`append` that reallocates its buffer), dropped, or
+overwritten — so it is not unrestricted. The rule that keeps it sound, without
+user lifetimes, is a **value-provenance borrow**:
+
+> A `Str` value produced by `std::string::as_str(s)` is a **shared borrow of
+> `s`** for as long as that `Str` value is live. While it is live, `s` may not
+> be moved, mutably borrowed, dropped, or overwritten. A `Str` derived from a
+> `String` may not **escape the frame** that created it (it may not be returned,
+> `break`-ed out, or stored where it outlives the borrow).
+
+This is the model's first borrow whose source is a **value** (an expression's
+result) rather than a named place; it is tracked flow-sensitively per body, just
+like place borrows. A view bound with `let v = as_str(s)` keeps `s` borrowed
+until `v` leaves scope or is overwritten; a view used **inline** (e.g.
+`std::str::len(as_str(s))`) borrows `s` only for that expression, exactly like
+any other `in` argument. The rule is deliberately **conservative** — it keeps
+`s` borrowed for the *whole* lexical extent of a bound view, not only up to the
+view's last use (NLL-style last-use shrinking is future work), and it forbids
+returning or storing a `String`-derived view entirely. Both restrictions are
+sound with no lifetime inference and are purely additive to relax later.
+
+Violations are diagnosed as: moving `s` while a view is live — the use-of-moved
+family **O0001**/**O0002**; a `mut` borrow of `s` while a view is live —
+**O0011**; dropping/overwriting `s` while a view is live — **O0011**; and a view
+escaping its frame — **O0011**. See §15.
 
 ## 14. Resource cleanup and `unsafe`
 
@@ -435,6 +460,7 @@ the negative fixture corpus:
 | `O0008` | Conditional move without reinitialization at a drop point (no hidden drop flags). |
 | `O0009` | Use of a partially moved value. |
 | `O0010` | Repeat array literal `[x; N]` of a non-`Copy` element (ADR-0004 Stage 2). |
+| `O0011` | A `String` is moved, mutated, dropped, or overwritten while a `Str` view of it (from `std::string::as_str`) is still live, or such a view escapes its frame (ADR-0010, §13). |
 
 Every diagnostic names the place, the earlier action that produced the state
 (the move site, the borrow, the conflicting argument), and — where one

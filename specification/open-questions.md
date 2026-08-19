@@ -151,7 +151,8 @@ remains in version control).
 
 ### Q-0012: `String` → `Str` view borrowing
 
-- **Status:** open (deferred from v0 by ADR-0003)
+- **Status:** addressed by [ADR-0010](adr/ADR-0010-string-to-str-view.md)
+  (proposed) — resolves once that ADR's Stages A–C land.
 - **Area:** ownership / types
 - **Constitution ref:** §10, §21
 - **Question:** The sound rule that lets a `Str` view borrow into a live
@@ -161,3 +162,11 @@ remains in version control).
   the lifetime-free ownership model needs a view-tracking rule before allowing
   it.
 - **Blocks:** the `String`/`Str` stdlib API surface.
+- **Proposed answer (ADR-0010):** an `std::string::as_str(in String) -> Str`
+  builtin whose returned view is **borrow-scoped** — a `Str` derived from a
+  `String` is treated as a shared borrow of that `String`, so moving, mutating,
+  dropping the `String` while a derived view is live is the existing
+  use-of-moved / borrow-conflict family (`O0001`/`O0002`/`O0005`), and
+  returning-a-view-across-a-frame is the new appended code `O0011`. No lifetimes,
+  no layout change (the `Str` fat pointer is the `String` header's `{ptr, len}`
+  prefix); the checker gains its first value-provenance borrow.

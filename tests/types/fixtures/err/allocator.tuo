@@ -11,6 +11,16 @@ fn wrong_types() -> String {
     std::string::concat(1, 2)
 }
 
+// ADR-0010: `as_str` takes `in String`, not `Str`; passing a `Str` (here a
+// literal) is a plain type error, and its result is a `Str`, not a `String`.
+fn as_str_wants_string() -> Int {
+    std::str::len(std::string::as_str("already a Str"))
+}
+
+fn as_str_result_is_str() -> String {
+    std::string::as_str(std::string::from_str("x"))
+}
+
 fn wrong_element() -> Int {
     // `std::array::push` is `Array[Int]`-monomorphic: pushing a `Str` onto an
     // `Array[Int]` is an ordinary type error.

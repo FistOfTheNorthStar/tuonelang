@@ -853,7 +853,10 @@ impl Verifier<'_> {
         let name = self.fn_name().to_owned();
         let int_array = Ty::Array(Box::new(Ty::int()));
         let subject_ty: Option<Ty> = match op {
-            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice => Some(Ty::String),
+            HeapOp::StringLen
+            | HeapOp::StringByteAt
+            | HeapOp::StringSlice
+            | HeapOp::StringAsStr => Some(Ty::String),
             HeapOp::ArrayLen | HeapOp::ArrayGet => Some(int_array.clone()),
             HeapOp::StringEmpty
             | HeapOp::StringFromStr
@@ -861,9 +864,11 @@ impl Verifier<'_> {
             | HeapOp::ArrayEmpty => None,
         };
         let operand_tys: Vec<Ty> = match op {
-            HeapOp::StringEmpty | HeapOp::StringLen | HeapOp::ArrayEmpty | HeapOp::ArrayLen => {
-                Vec::new()
-            }
+            HeapOp::StringEmpty
+            | HeapOp::StringLen
+            | HeapOp::StringAsStr
+            | HeapOp::ArrayEmpty
+            | HeapOp::ArrayLen => Vec::new(),
             HeapOp::StringFromStr => vec![Ty::Str],
             HeapOp::StringConcat => vec![Ty::Str, Ty::Str],
             HeapOp::StringByteAt | HeapOp::ArrayGet => vec![Ty::int()],
@@ -874,6 +879,7 @@ impl Verifier<'_> {
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
             | HeapOp::StringSlice => Ty::String,
+            HeapOp::StringAsStr => Ty::Str,
             HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen | HeapOp::ArrayGet => {
                 Ty::int()
             }
@@ -2327,6 +2333,8 @@ mod tests {
                 vec![int(0), int(1)],
                 Ty::String,
             ),
+            // ADR-0010: `as_str` reads a String subject and produces a Str.
+            (HeapOp::StringAsStr, Ty::String, vec![], Ty::Str),
             (HeapOp::ArrayLen, int_array(), vec![], Ty::int()),
             (HeapOp::ArrayGet, int_array(), vec![int(0)], Ty::int()),
         ] {

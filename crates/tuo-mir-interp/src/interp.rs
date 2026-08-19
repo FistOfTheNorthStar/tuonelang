@@ -1053,7 +1053,7 @@ impl Machine<'_, '_> {
                 bytes.extend_from_slice(&str_at(1, self)?);
                 Ok(Value::Str(bytes))
             }
-            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice => {
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice | HeapOp::StringAsStr => {
                 let bytes = match subject {
                     Some(Value::Str(bytes)) => bytes,
                     other => {
@@ -1068,6 +1068,13 @@ impl Machine<'_, '_> {
                 let len = bytes.len() as i128;
                 match op {
                     HeapOp::StringLen => Ok(Value::Int(len, IntKind::I64)),
+                    // A `Str` view of the whole String (ADR-0010). The
+                    // interpreter models the view as a byte copy — sound because
+                    // the ownership checker forbids mutating/dropping the source
+                    // while the view is live, so a real alias and this copy are
+                    // observationally identical. Native lowering (Stage B) is a
+                    // true zero-copy `{ptr, len}` view.
+                    HeapOp::StringAsStr => Ok(Value::Str(bytes.clone())),
                     HeapOp::StringByteAt => {
                         let index = int_at(0, self)?;
                         if index < 0 || index >= len {

@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym33)",
         "fn_body(sym34)",
         "fn_body(sym35)",
+        "fn_body(sym36)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym33)",
         "fn_body(sym34)",
         "fn_body(sym35)",
+        "fn_body(sym36)",
         "interface(file#0)",
-        "mir_of(sym33)",
+        "mir_of(sym34)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym33)",
         "type_of(sym34)",
-        "type_of(sym35)"
+        "type_of(sym35)",
+        "type_of(sym36)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym33)",
         "fn_body(sym34)",
         "fn_body(sym35)",
+        "fn_body(sym36)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:36"
+        "spec:37"
       ],
       "reexecuted_count": 1
     }

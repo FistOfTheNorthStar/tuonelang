@@ -81,6 +81,14 @@ pub enum Builtin {
     /// `IndexOutOfBounds` unless `0 <= a <= b <= len(s)`. Byte-level: the
     /// range may split a multi-byte code point. Pure. (ADR-0009.)
     StringSlice,
+    /// `std::string::as_str(in s: String) -> Str` — a borrowed `Str` view of
+    /// `s`'s bytes (the `{ptr, len}` prefix of the header), **no copy**. The
+    /// returned `Str` is a **shared borrow** of `s`: it is valid only while
+    /// `s` is (the ownership checker keeps `s` shared-borrowed for as long as
+    /// the view is live, refusing a move/mutate/drop of `s` while it is —
+    /// `O0001`/`O0002`/`O0005`, and `O0011` for a view escaping its frame).
+    /// Pure; never traps. (ADR-0010 — resolves Q-0012.)
+    StringAsStr,
     /// `std::array::empty() -> Array[Int]` — the empty growable array.
     /// Pure; never traps. (ADR-0009.)
     ArrayEmpty,
@@ -116,7 +124,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 21] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -132,6 +140,7 @@ impl Builtin {
         Self::StringLen,
         Self::StringByteAt,
         Self::StringSlice,
+        Self::StringAsStr,
         Self::ArrayEmpty,
         Self::ArrayPush,
         Self::ArrayPop,
@@ -152,7 +161,8 @@ impl Builtin {
             | Self::StringConcat
             | Self::StringLen
             | Self::StringByteAt
-            | Self::StringSlice => &["std", "string"],
+            | Self::StringSlice
+            | Self::StringAsStr => &["std", "string"],
             Self::ArrayEmpty
             | Self::ArrayPush
             | Self::ArrayPop
@@ -177,6 +187,7 @@ impl Builtin {
             Self::StringPushByte => "push_byte",
             Self::StringAppend => "append",
             Self::StringConcat => "concat",
+            Self::StringAsStr => "as_str",
             Self::ArrayPush => "push",
             Self::ArrayPop => "pop",
             Self::ArrayGet => "get",
@@ -202,6 +213,7 @@ impl Builtin {
             Self::StringLen => "std::string::len",
             Self::StringByteAt => "std::string::byte_at",
             Self::StringSlice => "std::string::slice",
+            Self::StringAsStr => "std::string::as_str",
             Self::ArrayEmpty => "std::array::empty",
             Self::ArrayPush => "std::array::push",
             Self::ArrayPop => "std::array::pop",
@@ -238,7 +250,7 @@ impl Builtin {
             Self::StringPushByte => &[Mut, Take],
             Self::StringAppend => &[Mut, In],
             Self::StringConcat => &[In, In],
-            Self::StringLen | Self::ArrayLen => &[In],
+            Self::StringLen | Self::ArrayLen | Self::StringAsStr => &[In],
             Self::StringByteAt | Self::ArrayGet => &[In, Take],
             Self::StringSlice => &[In, Take, Take],
             Self::ArrayPush => &[Mut, Take],

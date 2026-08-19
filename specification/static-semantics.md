@@ -340,6 +340,7 @@ the interpreter sandbox's memory budget — [`mir.md`](mir.md) §8.1). Only the
 | `fn len(in s: String) -> Int` | The byte length of `s`. Never traps. |
 | `fn byte_at(in s: String, take i: Int) -> Int` | The byte (`0..=255`) at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(s)`. |
 | `fn slice(in s: String, take a: Int, take b: Int) -> String` | The byte range `[a, b)` **copied out** as a new owned `String` (no aliasing view). **Traps `IndexOutOfBounds`** unless `0 <= a <= b <= len(s)`. |
+| `fn as_str(in s: String) -> Str` | (ADR-0010) A borrowed `Str` **view** of the whole `String` — the `{ptr, len}` prefix of its header, no copy. The result is a **shared borrow** of `s`: while it is live, `s` may not be moved, mutated, dropped, or overwritten, and it may not escape its frame (`O0011`; see `ownership.md` §13). Never traps. |
 
 **Growable-array builtins (`std::array`)** — a *monomorphic* v0 surface over
 the generic `Array[T]` type: the builtins operate on `Array[Int]` only, and a

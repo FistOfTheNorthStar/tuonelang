@@ -253,6 +253,7 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::StringLen => (vec![Ty::String], Ty::int()),
         Builtin::StringByteAt => (vec![Ty::String, Ty::int()], Ty::int()),
         Builtin::StringSlice => (vec![Ty::String, Ty::int(), Ty::int()], Ty::String),
+        Builtin::StringAsStr => (vec![Ty::String], Ty::Str),
         Builtin::ArrayEmpty => (Vec::new(), int_array()),
         Builtin::ArrayPush => (vec![int_array(), Ty::int()], Ty::Unit),
         Builtin::ArrayPop => (vec![int_array()], Ty::Option(Box::new(Ty::int()))),
