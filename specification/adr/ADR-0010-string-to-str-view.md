@@ -1,8 +1,9 @@
 # ADR-0010: The `String` → `Str` borrowing view (Q-0012)
 
-- **Status:** proposed (Stage A landed 2026-08-19 — front end + MIR + interpreter
-  + the ownership borrow rule; Stage B landed 2026-08-21 — native zero-copy
-  lowering on both backends; Stage C pending, see Progress)
+- **Status:** accepted (2026-08-21 — all three stages landed: Stage A the front
+  end + MIR + interpreter + the ownership borrow rule, Stage B the native
+  zero-copy lowering on both backends, Stage C the stdlib spec rewrites and the
+  dogfood `String`→`Str` composition; see Progress)
 - **Date:** 2026-08-19
 - **Context:** ADR-0009 landed the owned, growable `String` but deliberately
   left one gap open: **there is no way to obtain a `Str` view into a live
@@ -274,5 +275,27 @@
   `crates/tuo-cli/tests/codegen_three_way.rs`
   (`owned_heap_values_agree_across_all_three_engines`), and exercised for real
   by the natively-running `std::str` module
-  (`stdlib_split_and_join_run_natively`). Stage C (the spec rewrites and the
-  dogfood composition) remains before acceptance.
+  (`stdlib_split_and_join_run_natively`).
+
+- **Progress — Stage C (2026-08-21), accepting the ADR:** the stdlib payoff
+  landed:
+  - *Spec rewrites:* the `std::str` `to_upper`/`to_lower`/`to_string` specs now
+    compare through the view — `as_str(to_upper("Hi!")) == "HI!"` instead of
+    `== from_str("HI!")` — so each assertion reads as the resulting text, and
+    `to_string`'s round-trip finally closes **through the owned buffer itself**
+    (`parse_int(as_str(to_string(9876)))` parses the digits straight back out
+    of the `String` the function built, where it previously re-parsed a
+    separate literal). Pinned by `crates/tuo-cli/tests/stdlib.rs`, which runs
+    every shipped spec to green with no skips.
+  - *Dogfood composition:* `examples/data-pipeline`'s record-struct oracle
+    (ADR-0012) composes a `String` producer into `Str` consumers **natively**:
+    `label_for` builds each record's owned label, and `label_is`/`label_len`
+    view it zero-copy through `as_str` into a `Str` equality and a
+    `std::str::len` call — compiled and run by both backends under
+    `crates/tuo-cli/tests/dogfood_examples.rs`. The `std::str` module's own
+    `split`/`join`/`replace`/builder specs already lean on the view throughout
+    (`rejoins_3`'s `Array[Str]` of `String`-derived views being the richest
+    case).
+
+  With Stages A–C landed and their fixtures committed, the acceptance
+  condition the staging section names is met.

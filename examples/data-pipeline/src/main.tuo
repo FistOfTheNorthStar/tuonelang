@@ -38,6 +38,21 @@ module data_pipeline;
 // stdlib suite; here we dogfood the identical higher-order fold in a program
 // that runs natively.
 //
+// Record-struct oracle (ADR-0012). Since ADR-0012 widened the array element
+// set to structs (including structs with owned `String` fields), the packed
+// integers can finally be decoded into what they always stood for: a
+// `Record { category, amount, label }` struct, held in a growable
+// `Array[Record]`. The last section of this file does exactly that — decode,
+// filter+collect at the record level, and fold with the **struct
+// instantiation** of the generic combinator (`fold_records` over an
+// `in Record` function value) — and `main` now answers the query through it,
+// so the native binary exercises the owned-element deep-copy `get` and
+// recursive drop for real. The specs pin the record path equal to the
+// streaming packed-`Int` fold and the packed-`Int` collect path — the oracle
+// ADR-0012 names. The owned `label` also composes ADR-0010 for real: a
+// `String` producer (`label_for`) is viewed zero-copy by `Str` consumers
+// (`label_is`/`label_len`) natively.
+//
 // Record encoding (a deliberately real serialization exercise):
 //
 //     record = category * 100000 + amount
@@ -198,15 +213,119 @@ fn sum_collected(take wanted: Int) -> Int {
     fold(items, 0, add)
 }
 
+// --- The record-struct oracle (ADR-0012) -----------------------------------
+
+/// A decoded record — the struct the packed integer has stood in for all
+/// along, now expressible as an array element (ADR-0012's widened element
+/// set), carrying the owned `label` a genuinely parsed record would: two
+/// scalar fields plus a heap-backed `String`, so an `Array[Record]` exercises
+/// the owned-element deep-copy `get` and recursive drop for real.
+struct Record {
+    category: Int,
+    amount: Int,
+    label: String,
+}
+
+/// The human-readable name of a category tag, as a fresh owned `String` — the
+/// `String` *producer* half of the ADR-0010 composition (`label_is` below is
+/// the `Str`-consumer half).
+fn label_for(take c: Int) -> String {
+    if c == 1 {
+        std::string::from_str("groceries")
+    } else if c == 2 {
+        std::string::from_str("transport")
+    } else if c == 3 {
+        std::string::from_str("utilities")
+    } else {
+        std::string::from_str("other")
+    }
+}
+
+/// Decode a packed integer into a full `Record` — the same field arithmetic as
+/// `category`/`amount`, materialised as a struct with its owned label.
+fn decode(take packed: Int) -> Record {
+    Record { category: category(packed), amount: amount(packed), label: label_for(category(packed)) }
+}
+
+/// Decode the whole batch into a growable `Array[Record]` — parsed records
+/// held as structs, the shape ADR-0012 names as this example's oracle.
+fn decode_records() -> Array[Record] {
+    var out = std::array::empty();
+    for packed in records() {
+        std::array::push(out, decode(packed));
+    }
+    out
+}
+
+/// Filter+collect at the record level: the records of the wanted category, as
+/// a data-dependent-length `Array[Record]` — `collect_amounts` lifted from the
+/// decoded field to the decoded struct.
+fn collect_records(take wanted: Int) -> Array[Record] {
+    var out = std::array::empty();
+    for packed in records() {
+        if category(packed) == wanted {
+            std::array::push(out, decode(packed));
+        }
+    }
+    out
+}
+
+/// The generic left fold over an `Array[Record]` and a function-value step —
+/// the **struct instantiation** of the ADR-0008 combinator shape (the `String`
+/// instantiations live in `std::collections`; this is the concrete-struct
+/// sibling ADR-0012 names). Because `Record` owns heap, the step *borrows*
+/// each element (`in Record`); each visited element is a fresh deep copy from
+/// `std::array::get`, dropped at the end of its iteration through the
+/// recursive per-element glue.
+fn fold_records(in xs: Array[Record], take init: Int, take step: fn(take Int, in Record) -> Int) -> Int {
+    var acc = init;
+    var i = 0;
+    while i < std::array::len(xs) {
+        let r = std::array::get(xs, i);
+        acc = step(acc, r);
+        i = i + 1;
+    }
+    acc
+}
+
+/// Add a record's amount to the accumulator. Passed by name to `fold_records`
+/// as a first-class function value.
+fn add_amount(take acc: Int, in r: Record) -> Int {
+    acc + r.amount
+}
+
+/// Sum the wanted category through the record path: collect the matching
+/// records as structs, then fold their `amount` field with `add_amount` as a
+/// function value. The specs pin this equal to `total_for` (the streaming
+/// packed-`Int` fold) and `sum_collected` (the packed-`Int` collect path) for
+/// every category — the ADR-0012 oracle.
+fn sum_records(take wanted: Int) -> Int {
+    let rs = collect_records(wanted);
+    fold_records(rs, 0, add_amount)
+}
+
+/// Does the record's owned label read as `want`? The `Str`-consumer half of
+/// the ADR-0010 composition: the owned `String` field is viewed zero-copy
+/// through `as_str` and compared against a borrowed literal.
+fn label_is(in r: Record, in want: Str) -> Bool {
+    std::string::as_str(r.label) == want
+}
+
+/// The record label's length in bytes, read by composing the `String` producer
+/// into a `Str` consumer (`std::str::len` over the `as_str` view).
+fn label_len(in r: Record) -> Int {
+    std::str::len(std::string::as_str(r.label))
+}
+
 /// The query the program answers: total transport (category 2) spend. Computed
-/// through the growable-collection path (`sum_collected`), which folds the
-/// materialised subset with the generic `std::collections::fold` over a
-/// first-class `add` value (ADR-0008 Tier 1). The specs pin it equal to the
-/// streaming `total_for`, so the exit byte is unchanged (400, i.e. 400 & 0xff =
-/// 144) while the program now exercises real heap allocation *and* an indirect
-/// call through a function value.
+/// through the record-struct path (`sum_records`): the batch is decoded into
+/// real `Record` structs with owned labels, filtered, and folded with a
+/// first-class `add_amount` value — so the native binary exercises ADR-0012's
+/// owned-element array for real. The specs pin it equal to the streaming
+/// `total_for` and the packed-`Int` collect path, so the exit byte is
+/// unchanged (400, i.e. 400 & 0xff = 144).
 fn main() -> Int {
-    sum_collected(2)
+    sum_records(2)
 }
 
 // --- Executable specs ------------------------------------------------------
@@ -276,6 +395,43 @@ spec "the collected subset has the data-dependent size a fixed array cannot" {
     then collected_count(1) == 2;
     then collected_count(9) == 0;
     then collected_count(2) == count_for(2);
+}
+
+spec "records decode into structs with owned labels (ADR-0012)" {
+    let rs = decode_records();
+    then std::array::len(rs) == 8;
+    // Each `get` is a deep copy of the stored record; its scalar fields carry
+    // the decoded values and its owned label reads back through the ADR-0010
+    // view (the String producer composed into a Str consumer).
+    let head = std::array::get(rs, 0);
+    then head.category == 1;
+    then head.amount == 150;
+    then label_is(head, "groceries");
+    let next = std::array::get(rs, 1);
+    then next.category == 2;
+    then label_is(next, "transport");
+    then label_len(next) == 9;
+    let last = std::array::get(rs, 7);
+    then label_is(last, "utilities");
+}
+
+spec "the record-struct path equals the packed-Int pipeline (ADR-0012 oracle)" {
+    // Parsed records held in an `Array[Record]`, filtered and folded through
+    // the struct instantiation of the generic fold, agree with the streaming
+    // packed-`Int` fold *and* the packed-`Int` collect path for every
+    // category — the oracle ADR-0012 names for this example.
+    then sum_records(2) == total_for(2);
+    then sum_records(1) == total_for(1);
+    then sum_records(3) == total_for(3);
+    then sum_records(9) == total_for(9);
+    then sum_records(2) == sum_collected(2);
+    // Concrete totals, so the oracle is not merely self-consistent.
+    then sum_records(2) == 400;
+    then sum_records(1) == 225;
+    then sum_records(9) == 0;
+    // The record-level subset has the same data-dependent size.
+    then std::array::len(collect_records(2)) == count_for(2);
+    then std::array::len(collect_records(9)) == 0;
 }
 
 spec main {

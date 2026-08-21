@@ -149,14 +149,20 @@ fn cli_stats_vendored_std_io_matches_the_catalog() {
 }
 
 /// data-pipeline: a runnable record-processing pipeline. Since ADR-0009 landed
-/// the allocator, `main` answers the query through the **growable-collection
-/// oracle** — it `push`es the filtered subset (a data-dependent size a fixed
-/// `[Int; N]` cannot express) into a heap-backed `Array[Int]`, then folds it.
-/// Since ADR-0008 Tier 1 landed first-class function values, that fold is the
+/// the allocator, the file carries the **growable-collection oracle** — it
+/// `push`es the filtered subset (a data-dependent size a fixed `[Int; N]`
+/// cannot express) into a heap-backed `Array[Int]` and folds it with the
 /// **generic higher-order fold** (`fold(items, 0, add)`, `add` passed as a
-/// function value — the ADR-0008 oracle), so `run` also exercises a native
-/// indirect call. Its specs pin the higher-order path equal to the streaming
-/// fold. `sum_collected(2)` = `total_for(2)` = 400, exit = 400 & 0xff = 144
+/// function value — the ADR-0008 oracle). Since ADR-0012 landed the
+/// element-generic array surface, `main` answers the query through the
+/// **record-struct oracle**: the batch decodes into `Record` structs with
+/// owned `String` labels held in an `Array[Record]`, filtered and folded via
+/// the struct instantiation of the generic fold (`fold_records` over an
+/// `in Record` function value) — so `run` exercises the owned-element
+/// deep-copy `get`, the recursive drop glue, a native indirect call, and the
+/// ADR-0010 `String`→`Str` composition (`label_is`/`label_len` over `as_str`).
+/// Its specs pin every path equal to the streaming fold. `sum_records(2)` =
+/// `sum_collected(2)` = `total_for(2)` = 400, exit = 400 & 0xff = 144
 /// (unchanged).
 #[test]
 fn data_pipeline_checks_specs_and_runs() {

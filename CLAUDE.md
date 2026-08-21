@@ -387,7 +387,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   function values, that fold is the **generic higher-order fold** (`fold(items,
   0, add)`, passing a named `add` as a function value — the ADR-0008 oracle), so
   `run` also exercises a native indirect call, spec-pinned equal to the streaming
-  fold with the same exit byte. Since ADR-0006 landed the
+  fold with the same exit byte. Since ADR-0012 landed the element-generic array
+  surface, `data-pipeline` additionally carries the **record-struct oracle**:
+  the packed batch decodes into `Record { category, amount, label: String }`
+  structs held in a growable `Array[Record]`, filtered and folded through the
+  struct instantiation of the generic fold (`fold_records` over an `in Record`
+  function value), with `main` routed through that path — same exit byte,
+  spec-pinned equal to both packed-`Int` paths — so the native binary exercises
+  the owned-element deep-copy `get`, the recursive drop glue, and the ADR-0010
+  `String`→`Str` composition (`label_is`/`label_len` over `as_str`) for real.
+  Since ADR-0006 landed the
   effect boundary, `http-service` **runs natively too**: its request-line
   parsing is pure `std::str` byte scanning (spec-checked) under a thin
   `std::rt::write` response shell, and its demo `main` prints
@@ -426,7 +435,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   having added its named `indirect-calls` workload; **Tier 2 capturing closures
   deferred** to a future ADR), and `ADR-0007` (the concurrency model), the last
   still `proposed` and naming the performance-lab workload (`networking`) it must
-  unblock before it can be accepted. Resolved `examples/**/tdg.lock` files embed
+  unblock before it can be accepted. The successor ADRs the dogfooding chain
+  produced — `ADR-0010` (the `String`→`Str` view) and `ADR-0012` (generic
+  `Array[T]` element types) — are both since **accepted and landed** (all
+  stages, including ADR-0010's Stage C stdlib payoff and ADR-0012's
+  owned-element increment, combinator instantiations, and the record-struct
+  oracle above); `ADR-0011` (the hash map) remains `proposed`. Resolved `examples/**/tdg.lock` files embed
   machine-absolute dependency paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -660,7 +674,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   the allocator core, and, since ADR-0008 Tier 1, the **generic higher-order
   combinators** `fold`/`map_into`/`filter_into`/`any`/`all` over a first-class
   function value — one `fold`, not N specialized folds — whose specs build the
-  arrays they fold and pass a named top-level `fn` by value), an **effect
+  arrays they fold and pass a named top-level `fn` by value, joined since
+  ADR-0012 by their `String`-element instantiations
+  `fold_strings`/`map_into_strings`/`filter_into_strings` with the non-`Copy`
+  modes that element demands), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
   over `std::rt::exit`, and — since ADR-0009 — `std::io::read_line`, which builds
   an owned `String` from the bytes `std::rt::read_byte` yields — real tuonelang

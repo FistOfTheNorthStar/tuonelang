@@ -344,6 +344,7 @@ fn owned_array_elements_agree_across_all_three_engines() {
     for name in [
         "array_owned_string_elements.tuo", // Array[String]: deep-copy get + Option drop glue
         "array_owned_struct_elements.tuo", // Array[Rec{String,Int}]: per-field deep copy/drop
+        "else_if_owned_result.tuo", // else-if chain producing String: scoped bare-expression arm
     ] {
         assert_three_way_agreement(name);
     }

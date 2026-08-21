@@ -2053,11 +2053,32 @@ impl FnLower<'_> {
         self.restore(&before);
         self.switch_to(else_block);
         let else_value = match els {
-            Some(els) => self.expr(els)?,
+            // The else arm is a bare expression (an `else if` chain is a
+            // nested `if` expression, not a block), so it gets its own scope:
+            // otherwise a temporary the arm creates — e.g. the nested `if`'s
+            // result slot — lands in the enclosing scope and the merge states
+            // disagree (initialized on one path, absent on the other).
+            Some(els) => self.scoped_value(els, &ty)?,
             None => Some(Value::Operand(Operand::Const(Const::Unit))),
         };
         states.extend(self.close_branch(else_value, &ty, result, &mut join)?);
         self.join_branches(states, join, result)
+    }
+
+    /// Lower a branch-arm expression inside its own scope, mirroring
+    /// [`Self::block`]'s tail handling: the value escapes as an operand
+    /// before the scope's drops run, so temporaries the arm creates never
+    /// leak into the branch-merge state.
+    fn scoped_value(&mut self, expr: &Expr, ty: &Ty) -> Lowered {
+        self.push_scope();
+        let Some(value) = self.expr(expr)? else {
+            self.discard_scope();
+            return Ok(None);
+        };
+        let operand = self.use_value(value, ty);
+        let operand = self.escape_operand(operand, ty, expr.span)?;
+        self.end_scope()?;
+        Ok(Some(Value::Operand(operand)))
     }
 
     fn while_expr(&mut self, cond: &Expr, body: &Block) -> Lowered {

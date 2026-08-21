@@ -158,8 +158,8 @@ remains in version control).
 
 ### Q-0012: `String` → `Str` view borrowing
 
-- **Status:** addressed by [ADR-0010](adr/ADR-0010-string-to-str-view.md)
-  (proposed) — resolves once that ADR's Stages A–C land.
+- **Status:** resolved (→ [ADR-0010](adr/ADR-0010-string-to-str-view.md),
+  accepted 2026-08-21 — all three stages landed).
 - **Area:** ownership / types
 - **Constitution ref:** §10, §21
 - **Question:** The sound rule that lets a `Str` view borrow into a live
