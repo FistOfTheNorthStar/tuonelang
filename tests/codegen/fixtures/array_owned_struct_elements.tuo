@@ -1,0 +1,19 @@
+// ADR-0012 owned-element increment: a growable array of a struct carrying an
+// owned `String` field. `get` deep-copies the whole record (the scalar field
+// by bytes, `name` with a freshly allocated buffer), and array drop walks each
+// element's heap-owning fields before freeing the buffer. Returns
+// len(xs)*10 + len("hi") + len("world")*4 + 7 + 9 = 58.
+struct Rec {
+    name: String,
+    id: Int,
+}
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, Rec { name: std::string::from_str("hi"), id: 7 });
+    std::array::push(xs, Rec { name: std::string::from_str("world"), id: 9 });
+    let a = std::array::get(xs, 0);
+    let b = std::array::get(xs, 1);
+    let total = std::array::len(xs) * 10 + std::string::len(a.name);
+    total + std::string::len(b.name) * 4 + a.id + b.id
+}

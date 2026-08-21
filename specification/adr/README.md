@@ -58,9 +58,9 @@ the replacement, preserving the decision history.
 | [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | proposed |
 | [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | accepted (Tier 1; Tier 2 closures deferred) |
 | [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | accepted |
-| [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | proposed (Stage A landed) |
+| [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | proposed (Stages A/B landed) |
 | [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | proposed |
-| [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | proposed (Stages A/B/C-core landed) |
+| [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | proposed (Stages A/B/C landed, owned elements native) |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -80,13 +80,16 @@ Four ADRs remain `proposed`, each pending its staged spec/fixtures/benchmark:
 **ADR-0007** (concurrency — its performance-lab entry is `networking`);
 **ADR-0010** (the `String`→`Str` borrowing view that resolves the long-deferred
 Q-0012, unblocking the stdlib's `String`-producer / `Str`-consumer composition —
-gated on static borrow-conflict fixtures and the three-way differential, not on a
-lab workload); **ADR-0011** (the hash map — the largest remaining Go-parity
-gap, gated on a new `map-lookup` lab workload); and **ADR-0012** (generic
-`Array[T]` element types — widening the ADR-0009 array builtins from `Int` to a
-defined element set, so `Array[String]`/`Array[Str]`/`Array[struct]` become
-expressible; the enabling increment for `std::str::split`/`join` and for the
-richer `Array[Str]` half of ADR-0011). ADR-0010, ADR-0011, and ADR-0012 are
+its Stage B native zero-copy lowering has since landed and is three-way
+differential-pinned; only the Stage C stdlib payoff remains); **ADR-0011** (the
+hash map — the largest remaining Go-parity gap, gated on a new `map-lookup` lab
+workload); and **ADR-0012** (generic `Array[T]` element types — widening the
+ADR-0009 array builtins from `Int` to a defined element set, so
+`Array[String]`/`Array[Str]`/`Array[struct]` become expressible; its
+owned-element native increment has since landed — deep-copy `get` and recursive
+drop glue on both backends — so `std::str::split`/`join` run natively, leaving
+only the ADR-0008 combinator instantiations and the dogfood oracle before
+acceptance). ADR-0010, ADR-0011, and ADR-0012 are
 independent of the (still-absent) trait system, and all ride the same
 monomorphic-builtin machinery ADR-0009 used for `Array[Int]` — ADR-0012 is that
 machinery's element-surface widening, explicitly **not** user-written generics

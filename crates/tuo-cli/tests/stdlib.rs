@@ -595,3 +595,41 @@ fn main() -> Int {
         );
     }
 }
+
+/// `std::str::split` returns an `Array[String]` that now runs **natively**
+/// (the ADR-0012 owned-element increment): the split pieces are heap-owning
+/// elements read back by deep-copying `get` and freed by the recursive drop
+/// glue, and `join` folds an `Array[Str]` back into one owned `String`. Both
+/// backends. Until the increment landed this program was interpreter-only —
+/// this pin is the payoff the ADR names.
+#[test]
+fn stdlib_split_and_join_run_natively() {
+    let caller = "\
+module caller;
+
+import std::str;
+
+fn main() -> Int {
+    let parts = std::str::split(\"a,bb,ccc\", \",\");
+    let third = std::string::len(std::array::get(parts, 2));
+    var pieces = std::array::empty();
+    std::array::push(pieces, \"x\");
+    std::array::push(pieces, \"yz\");
+    let joined = std::str::join(pieces, \"-\");
+    std::array::len(parts) * 10 + third + std::string::len(joined)
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("split_join_{which}"));
+        let output = run_with_module(&dir, tuo_stdlib::STR, caller, release);
+        assert_eq!(
+            output.status.code(),
+            Some(37),
+            "{which}: split(\"a,bb,ccc\", \",\") has 3 parts (30) with a 3-byte \
+             third part, and join([\"x\", \"yz\"], \"-\") is \"x-yz\" (4 bytes); \
+             stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

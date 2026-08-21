@@ -160,15 +160,21 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   real heap memory through the linked `tuo_rt_alloc`/`tuo_rt_dealloc` shim with
   drop glue; the `std::string`/`std::array` builtin ops and
   `std::rt::write_string`), laid out by `tuo-runtime`'s `abi` module (ABI v4);
-  and — since ADR-0008 Tier 1 — **first-class (non-capturing) function values**:
-  a bare top-level `fn` name is a `Const::Fn` `Copy` code pointer of type
-  `fn(mode T, …) -> R` (ABI v5, `layout_of(Ty::Fn)` a pointer), called
+  since ADR-0012 — the **element-generic array surface** over the whole
+  checker-accepted element set (`Int`/`Bool`/`Str`/`String` and structs/enums
+  whose fields are supported), including the owned-element increment: `get` of
+  a heap-owning element is a recursive **deep copy** and drop is recursive
+  per-element glue matching the interpreter's clone/drop, with
+  `std::string::as_str` lowered as a zero-copy two-word view (ADR-0010 Stage
+  B); and — since ADR-0008 Tier 1 — **first-class (non-capturing) function
+  values**: a bare top-level `fn` name is a `Const::Fn` `Copy` code pointer of
+  type `fn(mode T, …) -> R` (ABI v5, `layout_of(Ty::Fn)` a pointer), called
   indirectly through `Callee::Indirect` with the identical direct-call ABI
   (sret + borrow args included), pinned three-way — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
-  **values**, `Array[T]` for non-`Int` element types, and **capturing
-  closures** — Tier 2, deferred), refusing at storage-classification time with a
-  message naming the type and pointing the user back to the interpreter as the
+  **values**, array elements containing one, and **capturing closures** — Tier
+  2, deferred), refusing at storage-classification time with a message naming
+  the type and pointing the user back to the interpreter as the
   reference), and
   `tuo debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted

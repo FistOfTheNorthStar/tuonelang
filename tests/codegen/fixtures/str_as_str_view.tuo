@@ -1,0 +1,11 @@
+// ADR-0010: `std::string::as_str` natively — a zero-copy `{ptr, len}` view of
+// the owned `String`'s live bytes (the interpreter models the view as a byte
+// copy; the observable behavior must agree). The O0011 ownership rule keeps
+// the view inside the String's frame, so the pointer cannot dangle. Returns
+// len("hello") + (byte_at(view, 1) - 100) = 5 + ('e' - 100) = 6.
+fn main() -> Int {
+    var s = std::string::from_str("hello");
+    let v = std::string::as_str(s);
+    let e = std::str::byte_at(v, 1) - 100;
+    std::str::len(v) + e
+}
