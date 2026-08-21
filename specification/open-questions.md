@@ -135,6 +135,13 @@ remains in version control).
 - **Why it matters:** These are intentionally excluded from v0 to keep it small;
   each is a candidate for a later edition if experience justifies it.
 - **Blocks:** nothing in v0 — tracked so the exclusions are not forgotten.
+- **Note:** **user-written generics** (`fn f[T](…)`, generic structs/impls,
+  monomorphization or dictionary-passing, bounds/traits) belong here too and stay
+  deferred. ADR-0012 deliberately does **not** add them — it widens the
+  *language-provided* `Array` builtin surface to more element types (receiver-
+  witnessed, no user type parameters), which is enough to unblock
+  `std::str::split`/`join` and `Array[String]`/`Array[struct]`. User generics
+  remain a separate future ADR under this question.
 
 ### Q-0011: User-written destructors
 

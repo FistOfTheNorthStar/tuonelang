@@ -1,0 +1,16 @@
+// ADR-0012 Stage B: a growable `Array[Str]` — push borrowed slices, read one
+// back by `get`, pop the last. Exercises element-size-aware indexing and the
+// aggregate (fat-pointer) element memcpy on push/get/pop. Returns
+// len("worlds") + len(popped "cd") = 6 + 2 = 8.
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, "hi");
+    std::array::push(xs, "worlds");
+    std::array::push(xs, "cd");
+    let got = std::str::len(std::array::get(xs, 1));
+    let popped = match std::array::pop(xs) {
+        Some { value } => std::str::len(value),
+        None => 0,
+    };
+    got + popped
+}

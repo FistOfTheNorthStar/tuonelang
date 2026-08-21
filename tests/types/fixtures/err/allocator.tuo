@@ -22,8 +22,10 @@ fn as_str_result_is_str() -> String {
 }
 
 fn wrong_element() -> Int {
-    // `std::array::push` is `Array[Int]`-monomorphic: pushing a `Str` onto an
-    // `Array[Int]` is an ordinary type error.
+    // Since ADR-0012 the array element type is generic, but it is *witnessed by
+    // the receiver*: the first push fixes `T = Int`, so pushing a `Str` onto the
+    // now-`Array[Int]` is an ordinary type error (element mismatch, not a
+    // monomorphic-`Int` hardcoding).
     var xs = std::array::empty();
     std::array::push(xs, 5);
     std::array::push(xs, "nope");

@@ -1788,9 +1788,7 @@ impl<'a> Body<'a> {
                     "a `Str` view of a `String` cannot escape the function that created it",
                     view_span,
                 )
-                .with_primary_label(
-                    "this view borrows a `String` that does not outlive the call",
-                )
+                .with_primary_label("this view borrows a `String` that does not outlive the call")
                 .with_help(
                     "return the owned `String` (or a copy via `std::string::slice`) instead of a \
                      borrowed view; a `Str` view is valid only within the borrow of its `String`",

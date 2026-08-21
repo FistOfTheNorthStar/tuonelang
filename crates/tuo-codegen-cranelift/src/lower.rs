@@ -263,6 +263,115 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     }
 }
 
+/// Whether `ty` transitively **owns heap** — a `String`, a growable `Array`, a
+/// `Box`/`Shared`/`Weak` wrapper, or a struct/enum any of whose fields does.
+/// Such a type needs a deep copy on read-out and per-element drop glue, which the
+/// native array path does not do yet (see [`require_native_array_element`]).
+/// `Str` is **not** heap-owning (it is a borrowed fat pointer), so an
+/// `Array[Str]` is lowerable.
+fn ty_owns_heap(ty: &Ty, types: &TypeckResult) -> bool {
+    match ty {
+        Ty::String | Ty::Array(_) | Ty::Wrapper(..) => true,
+        Ty::Struct(symbol, targs) => types.struct_shape(*symbol).is_some_and(|shape| {
+            shape_field_owns_heap(&shape.fields, &shape.type_params, targs, types)
+        }),
+        Ty::Enum(symbol, targs) => types.enum_shape(*symbol).is_some_and(|shape| {
+            shape
+                .variants
+                .iter()
+                .any(|(_, fields)| shape_field_owns_heap(fields, &shape.type_params, targs, types))
+        }),
+        Ty::Option(item) | Ty::Range(item) => ty_owns_heap(item, types),
+        Ty::Result(a, b) => ty_owns_heap(a, types) || ty_owns_heap(b, types),
+        Ty::Tuple(items) => items.iter().any(|item| ty_owns_heap(item, types)),
+        Ty::FixedArray(item, _) => ty_owns_heap(item, types),
+        _ => false,
+    }
+}
+
+/// Do any of `fields` (under a struct/enum's `params` → `targs` substitution) own
+/// heap? Fields carry declaration-form types (`Ty::Param`), substituted here.
+fn shape_field_owns_heap(
+    fields: &[(String, Ty)],
+    params: &[SymbolId],
+    targs: &[Ty],
+    types: &TypeckResult,
+) -> bool {
+    fields
+        .iter()
+        .any(|(_, ty)| ty_owns_heap(&substitute_targs(ty, params, targs), types))
+}
+
+/// Substitute a struct/enum's type parameters into a field type. A minimal
+/// positional substitution mirroring the type checker's `substitute`.
+fn substitute_targs(ty: &Ty, params: &[SymbolId], targs: &[Ty]) -> Ty {
+    match ty {
+        Ty::Param(symbol) => params
+            .iter()
+            .position(|p| p == symbol)
+            .and_then(|i| targs.get(i).cloned())
+            .unwrap_or_else(|| ty.clone()),
+        Ty::Option(item) => Ty::Option(Box::new(substitute_targs(item, params, targs))),
+        Ty::Array(item) => Ty::Array(Box::new(substitute_targs(item, params, targs))),
+        Ty::FixedArray(item, n) => {
+            Ty::FixedArray(Box::new(substitute_targs(item, params, targs)), *n)
+        }
+        Ty::Tuple(items) => Ty::Tuple(
+            items
+                .iter()
+                .map(|item| substitute_targs(item, params, targs))
+                .collect(),
+        ),
+        Ty::Result(a, b) => Ty::Result(
+            Box::new(substitute_targs(a, params, targs)),
+            Box::new(substitute_targs(b, params, targs)),
+        ),
+        Ty::Struct(sym, args) => Ty::Struct(
+            *sym,
+            args.iter()
+                .map(|arg| substitute_targs(arg, params, targs))
+                .collect(),
+        ),
+        Ty::Enum(sym, args) => Ty::Enum(
+            *sym,
+            args.iter()
+                .map(|arg| substitute_targs(arg, params, targs))
+                .collect(),
+        ),
+        Ty::Wrapper(kind, item) => {
+            Ty::Wrapper(*kind, Box::new(substitute_targs(item, params, targs)))
+        }
+        other => other.clone(),
+    }
+}
+
+/// Refuse a growable-`Array` element type the native path does not lower yet.
+///
+/// The type checker widened `Array[T]` to more element types (ADR-0012), and the
+/// reference interpreter runs them all. The native path (Stage B) lowers every
+/// element that **owns no heap** — the scalars `Int`/`Bool`, the borrowed `Str`,
+/// and structs/enums whose fields own no heap — via element-size-aware
+/// load/store and memcpy. An element that **owns heap** (`String`, a nested
+/// `Array`, a `Box`/`Shared`/`Weak`, or a struct/enum containing one) is refused:
+/// `get` would need a deep copy and array drop a per-element recursive free,
+/// which is a later increment. Refusal is an honest `unsupported`, pointing back
+/// to the interpreter, never a mis-compile.
+///
+/// # Errors
+///
+/// [`CodegenError::unsupported`] for any heap-owning element type.
+fn require_native_array_element(element: &Ty, types: &TypeckResult) -> Result<(), CodegenError> {
+    if ty_owns_heap(element, types) {
+        Err(CodegenError::unsupported(format!(
+            "the native backend does not lower a growable array of a heap-owning element yet; \
+             `Array[{element:?}]` needs per-element deep-copy/drop glue (a later ADR-0012 \
+             increment) — use `tuo spec`/`tuo verify` to run it on the reference interpreter"
+        )))
+    } else {
+        Ok(())
+    }
+}
+
 /// Declare then define every lowerable function of `program` into `module`.
 ///
 /// # Errors
@@ -752,6 +861,16 @@ impl<'a> Lowering<'a> {
             // reads (`len`/`byte_at`/`get`) take the scalar rvalue path below.
             Rvalue::HeapOp { op, subject, args } if heap_op_produces_aggregate(*op) => {
                 self.lower_heap_op_aggregate(place, *op, subject.as_ref(), args)
+            }
+            // `array::get` whose element is an aggregate (`Str`/`String`/struct,
+            // ADR-0012 Stage B) produces an aggregate: read it into the dest slot
+            // by memcpy rather than returning a scalar register value.
+            Rvalue::HeapOp {
+                op: HeapOp::ArrayGet,
+                subject: Some(subject),
+                args,
+            } if self.array_get_produces_aggregate(subject)? => {
+                self.lower_array_get_aggregate(place, subject, args)
             }
             // A unit-valued copy/move (a unit local, or a zero-sized aggregate
             // such as `[T; 0]`) carries no bytes: nothing to emit.
@@ -2303,14 +2422,28 @@ impl<'a> Lowering<'a> {
             .store(MemFlags::trusted(), cap, base, HDR_CAP_OFFSET);
     }
 
+    /// The element type of a growable `Array[T]` header place. Errors if the
+    /// place is not an array (a `String`/scalar), which the callers never pass.
+    fn array_element_ty(&self, place: &Place) -> Result<Ty, CodegenError> {
+        match self.place_type(place) {
+            Ty::Array(element) => Ok((*element).clone()),
+            other => Err(CodegenError::backend(format!(
+                "an array element was requested from a non-array place: {other:?}"
+            ))),
+        }
+    }
+
     /// The element stride of a growable heap value's buffer: `1` for a
     /// `String`'s bytes, `stride(Int)` (8) for an `Array[Int]`. Derived from the
     /// header place's declared type.
     fn heap_stride(&self, place: &Place) -> Result<i64, CodegenError> {
         match self.place_type(place) {
             Ty::String => Ok(1),
-            Ty::Array(element) => i64::try_from(self.layout(&element)?.stride())
-                .map_err(|_| CodegenError::backend("array element stride exceeds i64")),
+            Ty::Array(element) => {
+                require_native_array_element(&element, self.types)?;
+                i64::try_from(self.layout(&element)?.stride())
+                    .map_err(|_| CodegenError::backend("array element stride exceeds i64"))
+            }
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -2345,7 +2478,12 @@ impl<'a> Lowering<'a> {
         match op {
             HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
                 // `{ptr = sentinel, len = 0, cap = 0}` — never dereferenced,
-                // never freed.
+                // never freed. For an array, refuse a non-`Int` element up front
+                // (ADR-0012 Stage A is interpreter-only for those) so no native
+                // path half-builds an unsupported array.
+                if let Ty::Array(element) = self.place_type(dest) {
+                    require_native_array_element(&element, self.types)?;
+                }
                 let base = self.aggregate_dest_address(dest)?;
                 let sentinel = self.zero_size_sentinel();
                 let zero = self.builder.ins().iconst(types::I64, 0);
@@ -2477,19 +2615,66 @@ impl<'a> Lowering<'a> {
                     .ins()
                     .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
                 self.guard(oob, TrapCode::IndexOutOfBounds);
-                // Element stride is 8 (Int); address = ptr + index * 8.
+                // Scalar element read: address = ptr + index * stride, load the
+                // element's own register width (`I64` for `Int`, `I8` for `Bool`,
+                // …), ADR-0012. An aggregate element never reaches here — it is
+                // routed to `lower_array_get_aggregate` by the rvalue dispatch.
                 let stride = self.heap_stride(subject)?;
                 let offset = self.builder.ins().imul_imm(index, stride);
                 let addr = self.builder.ins().iadd(ptr, offset);
+                let element = self.array_element_ty(subject)?;
+                let load_ty = scalar_type(&element).ok_or_else(|| {
+                    CodegenError::backend("a scalar array_get reached a non-scalar element")
+                })?;
                 Ok(self
                     .builder
                     .ins()
-                    .load(types::I64, MemFlags::trusted(), addr, 0))
+                    .load(load_ty, MemFlags::trusted(), addr, 0))
             }
             _ => Err(CodegenError::backend(
                 "an aggregate-producing heap op reached `lower_heap_op_scalar`",
             )),
         }
+    }
+
+    /// Does `array::get` on this array place produce an aggregate element
+    /// (`Str`/`String`/struct), rather than a scalar? (ADR-0012 Stage B.)
+    fn array_get_produces_aggregate(&self, subject: &Place) -> Result<bool, CodegenError> {
+        let element = self.array_element_ty(subject)?;
+        Ok(scalar_type(&element).is_none())
+    }
+
+    /// Lower `array::get` whose element is an aggregate: bounds-check, then memcpy
+    /// `stride` bytes from `ptr + index*stride` into the destination slot. Mirrors
+    /// the scalar `get` path but reads an aggregate the way `Use` of an aggregate
+    /// does. The read is a **copy** (the array retains its element); a v0
+    /// aggregate element owns no distinct heap the copy would alias, and an
+    /// owned-element copy (`Array[String]`) is not readable by value in v0
+    /// (`get` returns a fresh owned copy only for `Copy` aggregates like `Str`
+    /// and plain structs — an owned `String` element is read via the interpreter
+    /// until copy-out semantics are specified; see the refusal note below).
+    fn lower_array_get_aggregate(
+        &mut self,
+        dest: &Place,
+        subject: &Place,
+        args: &[Operand],
+    ) -> Result<(), CodegenError> {
+        let element = self.array_element_ty(subject)?;
+        let header = self.header_address(subject)?;
+        let (ptr, len, _cap) = self.load_header(header);
+        let index = self.heap_index_arg(args)?;
+        let oob = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        self.guard(oob, TrapCode::IndexOutOfBounds);
+        let stride = self.heap_stride(subject)?;
+        let offset = self.builder.ins().imul_imm(index, stride);
+        let src = self.builder.ins().iadd(ptr, offset);
+        let dest_addr = self.aggregate_dest_address(dest)?;
+        let layout = self.layout(&element)?;
+        self.emit_memcpy(dest_addr, src, layout);
+        Ok(())
     }
 
     /// The single integer index operand of a `byte_at`/`get` heap read.
@@ -2560,17 +2745,30 @@ impl<'a> Lowering<'a> {
                 self.write_unit_dest(dest)
             }
             HeapMutOp::Push => {
-                // Grow by one element, store `v` at buf + len*stride, len += 1.
-                let v = self
-                    .heap_index_arg(args)
-                    .map_err(|_| CodegenError::backend("push is missing its element"))?;
+                // Grow by one element, write the element at buf + len*stride,
+                // len += 1. A scalar element is a single store of its register
+                // width; an aggregate element (`Str`/`String`/struct) is a memcpy
+                // of `stride` bytes from the operand's slot (ADR-0012 Stage B).
+                let element = self.array_element_ty(target)?;
                 let one = self.builder.ins().iconst(types::I64, 1);
                 let buf = self.ensure_capacity(target, one, stride, align)?;
                 let header = self.header_address(target)?;
                 let (_ptr, len, _cap) = self.load_header(header);
                 let offset = self.builder.ins().imul_imm(len, stride);
                 let addr = self.builder.ins().iadd(buf, offset);
-                self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
+                let arg = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("push is missing its element"))?;
+                if let Some(scalar) = scalar_type(&element) {
+                    let v = self.lower_operand(arg)?;
+                    self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
+                    let _ = scalar; // the operand already carries the right width
+                } else {
+                    // Aggregate element: memcpy its bytes from the source slot.
+                    let src = self.operand_aggregate_address(arg)?;
+                    let layout = self.layout(&element)?;
+                    self.emit_memcpy(addr, src, layout);
+                }
                 let new_len = self.builder.ins().iadd_imm(len, 1);
                 self.builder
                     .ins()
@@ -2697,10 +2895,6 @@ impl<'a> Lowering<'a> {
             .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
         let offset = self.builder.ins().imul_imm(new_len, stride);
         let elem_addr = self.builder.ins().iadd(ptr, offset);
-        let value = self
-            .builder
-            .ins()
-            .load(types::I64, MemFlags::trusted(), elem_addr, 0);
         let some_tag = self.builder.ins().iconst(types::I32, 0);
         self.builder
             .ins()
@@ -2709,13 +2903,27 @@ impl<'a> Lowering<'a> {
             .map_err(|error| self.layout_error(error))?;
         let payload_offset = *payload_offsets
             .first()
-            .ok_or_else(|| CodegenError::backend("Option[Int] Some payload has no field"))?;
+            .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
         let payload_offset = i64::try_from(payload_offset)
             .map_err(|_| CodegenError::backend("Option payload offset exceeds i64"))?;
         let payload_addr = self.builder.ins().iadd_imm(dest_base, payload_offset);
-        self.builder
-            .ins()
-            .store(MemFlags::trusted(), value, payload_addr, 0);
+        // Move the popped element into the `Some` payload. A scalar element is a
+        // load-and-store of its register width; an aggregate element (`Str`/
+        // struct) is a memcpy of `stride` bytes (ADR-0012 Stage B). `pop` moves
+        // the element out (no aliasing), so no copy semantics are needed.
+        let element = self.array_element_ty(target)?;
+        if let Some(load_ty) = scalar_type(&element) {
+            let value = self
+                .builder
+                .ins()
+                .load(load_ty, MemFlags::trusted(), elem_addr, 0);
+            self.builder
+                .ins()
+                .store(MemFlags::trusted(), value, payload_addr, 0);
+        } else {
+            let layout = self.layout(&element)?;
+            self.emit_memcpy(payload_addr, elem_addr, layout);
+        }
         self.builder.ins().jump(join, &[]);
 
         self.builder.switch_to_block(join);
@@ -2740,9 +2948,12 @@ impl<'a> Lowering<'a> {
         let (stride, align) = match &ty {
             Ty::String => (1i64, 1i64),
             Ty::Array(element) => {
-                // Array[Int] only in v0: the element is a scalar with no inner
-                // drop; free just the buffer. (Nested drops — arrays of strings
-                // — are out of v0 scope, `specification/abi.md`.)
+                // Array[Int]-family scalar elements only in the native path
+                // (ADR-0012 Stage A): the element has no inner drop, so freeing
+                // the buffer suffices. A non-`Int` element (e.g. `Array[String]`,
+                // which would need per-element drop glue — Stage B) is refused
+                // here rather than leaked or mis-freed.
+                require_native_array_element(element, self.types)?;
                 let stride = i64::try_from(self.layout(element)?.stride())
                     .map_err(|_| CodegenError::backend("array element stride exceeds i64"))?;
                 let align = i64::try_from(self.layout(element)?.align)

@@ -11,13 +11,18 @@
 //     `push_byte`/`append`/`concat`/`len`/`byte_at`/`slice`).
 // Those builtins are the *primitive* layer — indexing, slicing, length. This
 // module never re-spells them; it composes them into the algorithms a caller
-// actually reaches for (search, prefix/suffix tests, trimming, counting) and
-// the two conversions between an integer and its decimal text. Everything is
-// byte-oriented: `Str` in the runnable core is a sequence of bytes, so "length"
-// and "index" are byte counts, and the ASCII helpers below (`to_upper`,
-// `is_digit`) act on the ASCII byte range and pass every other byte through
-// unchanged — honest for ASCII text, and never claiming a Unicode algorithm the
-// core does not implement.
+// actually reaches for (search, prefix/suffix tests, trimming, counting,
+// all/first replacement, separator splitting and joining, and a named
+// string-builder idiom over the owned `String`) and the two conversions
+// between an integer and its decimal text. `split`/`join` (ADR-0012 Stage C)
+// ride the generic `Array[T]` element surface that ADR-0012 landed: `split`
+// produces an `Array[String]` of owned pieces, `join` consumes an `Array[Str]`
+// of borrowed pieces. Everything present is byte-oriented: `Str` in the
+// runnable core is a sequence of bytes, so "length" and "index" are byte
+// counts, and the ASCII helpers below (`to_upper`, `is_digit`) act on the
+// ASCII byte range and pass every other byte through unchanged — honest for
+// ASCII text, and never claiming a Unicode algorithm the core does not
+// implement.
 //
 // Design rules (shared across the whole standard library):
 //   * One obvious way to do each fundamental thing — no competing APIs.
@@ -173,6 +178,160 @@ pub fn count(in s: Str, in needle: Str) -> Int {
 }
 
 // ----------------------------------------------------------------------------
+// Replacement — scans a borrowed `Str` and builds a fresh owned `String`.
+//
+// These allocate (the result is a new `String`, since a replacement can change
+// the length), which the ADR-0009 allocator core and the ADR-0010 `as_str`
+// view together make expressible in the pure executable tier: build the output
+// by pushing byte slices of the input, then view the result back as a `Str`
+// when a spec needs to compare it. There is deliberately one `replace` (all
+// occurrences) and one `replace_first` (just the first) — no third spelling.
+//
+// An empty `from` matches nothing and yields a copy of `s` unchanged; this is
+// the honest choice (the alternative — inserting `to` between every byte —
+// is a surprising behavior no caller reaches for by that name).
+// ----------------------------------------------------------------------------
+
+/// `s` with **every** non-overlapping occurrence of `from` replaced by `to`, as
+/// a fresh owned `String`. An empty `from` yields a copy of `s` unchanged.
+///
+/// A byte-by-byte scan: at each position, if `from` matches, append `to` and
+/// skip past the match; otherwise append the single byte and advance one.
+///
+/// # Example
+/// ```tuo
+/// let r = std::str::replace("a.b.c", ".", "/"); // a String holding "a/b/c"
+/// ```
+pub fn replace(in s: Str, in from: Str, in to: Str) -> String {
+    let n = std::str::len(s);
+    let m = std::str::len(from);
+    var out = std::string::empty();
+    if m == 0 {
+        // Nothing to match: copy the input through unchanged.
+        std::string::append(out, s);
+        return out;
+    }
+    var i = 0;
+    while i < n {
+        if i + m <= n && std::str::slice(s, i, i + m) == from {
+            std::string::append(out, to);
+            i = i + m;
+        } else {
+            std::string::push_byte(out, std::str::byte_at(s, i));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+/// `s` with only the **first** occurrence of `from` replaced by `to`, as a fresh
+/// owned `String`. If `from` does not occur (or is empty), the result is a copy
+/// of `s` unchanged.
+///
+/// # Example
+/// ```tuo
+/// let r = std::str::replace_first("a.b.c", ".", "/"); // "a/b.c"
+/// ```
+pub fn replace_first(in s: Str, in from: Str, in to: Str) -> String {
+    let n = std::str::len(s);
+    let m = std::str::len(from);
+    var out = std::string::empty();
+    if m == 0 {
+        std::string::append(out, s);
+        return out;
+    }
+    let at = find(s, from);
+    match at {
+        None => {
+            std::string::append(out, s);
+            out
+        },
+        Some { value } => {
+            std::string::append(out, std::str::slice(s, 0, value));
+            std::string::append(out, to);
+            std::string::append(out, std::str::slice(s, value + m, n));
+            out
+        },
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Splitting and joining — the sequence layer over strings (ADR-0012 Stage C).
+//
+// `split` produces an `Array[String]` of **owned** pieces (each copied out of
+// the input with `std::string::from_str`), so the result escapes its function
+// freely — no borrow scope at the call site. `join` consumes an `Array[Str]`
+// of **borrowed** pieces (view an owned piece with `std::string::as_str` at
+// the call site if needed). One input form, one output form — no combinatorial
+// API. The pair follows Go's `strings.Split`/`Join` semantics: splitting
+// `"a.b.c"` on `"."` yields `["a", "b", "c"]`, splitting the empty string
+// yields one empty piece, separators do not overlap, and
+// `join(split(s, sep), sep)` reproduces `s`.
+//
+// An empty separator yields the whole input as a single piece (Go's `Split`
+// with `""` splits into UTF-8 runes — a Unicode algorithm the byte-level core
+// does not implement, so this module does not fake it; the doc says so).
+// ----------------------------------------------------------------------------
+
+/// The pieces of `s` between non-overlapping occurrences of `sep`, in order, as
+/// a fresh `Array[String]` of owned copies. Adjacent separators yield empty
+/// pieces; a leading/trailing separator yields a leading/trailing empty piece;
+/// the empty input yields one empty piece; an empty `sep` yields the whole
+/// input as a single piece (no rune splitting — see the section note).
+///
+/// # Example
+/// ```tuo
+/// let parts = std::str::split("a.b.c", "."); // ["a", "b", "c"], len 3
+/// ```
+pub fn split(in s: Str, in sep: Str) -> Array[String] {
+    var out = std::array::empty();
+    let n = std::str::len(s);
+    let m = std::str::len(sep);
+    if m == 0 {
+        std::array::push(out, std::string::from_str(s));
+        return out;
+    }
+    var start = 0;
+    var i = 0;
+    while i + m <= n {
+        if std::str::slice(s, i, i + m) == sep {
+            std::array::push(out, std::string::from_str(std::str::slice(s, start, i)));
+            i = i + m; // non-overlapping: skip past the separator
+            start = i;
+        } else {
+            i = i + 1;
+        }
+    }
+    std::array::push(out, std::string::from_str(std::str::slice(s, start, n)));
+    out
+}
+
+/// The pieces of `parts` concatenated in order with `sep` between consecutive
+/// pieces (none leading, none trailing), as a fresh owned `String`. An empty
+/// array yields the empty string; a single piece yields that piece alone.
+///
+/// # Example
+/// ```tuo
+/// var parts = std::array::empty();
+/// std::array::push(parts, "a");
+/// std::array::push(parts, "b");
+/// let joined = std::str::join(parts, "-"); // a String holding "a-b"
+/// ```
+pub fn join(in parts: Array[Str], in sep: Str) -> String {
+    var out = std::string::empty();
+    let n = std::array::len(parts);
+    var i = 0;
+    while i < n {
+        if i > 0 {
+            std::string::append(out, sep);
+        }
+        std::string::append(out, std::array::get(parts, i));
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
 // Trimming — produces a new borrowed sub-slice of `s` (no allocation).
 //
 // "Whitespace" here is the ASCII set the runnable core sees on a line: space
@@ -268,6 +427,64 @@ pub fn to_lower(in s: Str) -> String {
         i = i + 1;
     }
     out
+}
+
+// ----------------------------------------------------------------------------
+// String builder — accumulate text piece by piece into an owned `String`.
+//
+// In v0 the owned `String` *is* the builder: `std::string::empty` gives a fresh
+// buffer and `append`/`push_byte` grow it in place (amortized doubling, per the
+// ADR-0009 allocator core). This layer is the named, obvious spelling of the
+// *accumulation* idiom — the equivalent of Go's `strings.Builder` — so a caller
+// writes `builder()` / `push` / `push_int` instead of reaching for the
+// `std::string` primitives directly. There is no separate builder *type* (v0
+// has no methods).
+//
+// There is deliberately **no** `finish` function. Per ADR-0010, a `Str` view of
+// a `String` is a within-block borrow and may not escape the function that owns
+// the `String` (`O0011`): a wrapper returning `std::string::as_str(b)` would be
+// refused. So to read the built text, call `std::string::as_str(b)` directly at
+// the use site — where the builder `b` is still live — or keep the owned
+// `String`. The builder helpers only *grow* the buffer; viewing it is the
+// caller's in-scope read.
+// ----------------------------------------------------------------------------
+
+/// A fresh, empty string builder — an owned `String` ready to be grown by
+/// `push`/`push_int`. Exactly `std::string::empty`, named for the builder idiom.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "x = ");
+/// ```
+pub fn builder() -> String {
+    std::string::empty()
+}
+
+/// Append the bytes of `piece` to the builder `b`, in place.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "hello ");
+/// std::str::push(b, "world"); // b now holds "hello world"
+/// ```
+pub fn push(mut b: String, in piece: Str) {
+    std::string::append(b, piece);
+}
+
+/// Append the decimal text of the integer `n` to the builder `b`, in place
+/// (a leading `-` for a negative value). Composes `to_string` — the one
+/// integer→text conversion — so a builder never needs a second itoa.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "count=");
+/// std::str::push_int(b, 42); // b now holds "count=42"
+/// ```
+pub fn push_int(mut b: String, take n: Int) {
+    std::string::append(b, std::string::as_str(to_string(n)));
 }
 
 // ----------------------------------------------------------------------------
@@ -380,6 +597,34 @@ fn opt_or(in o: Option[Int], take fallback: Int) -> Int {
     }
 }
 
+// `Array == Array` over non-scalar elements is deferred, so split's specs
+// compare *observations*: `nth_is` reads the i-th owned piece and compares its
+// text through the ADR-0010 `as_str` view (the piece is bound locally, so the
+// view stays inside its borrow).
+fn nth_is(in xs: Array[String], take i: Int, in want: Str) -> Bool {
+    let piece = std::array::get(xs, i);
+    std::string::as_str(piece) == want
+}
+
+// The split→join round-trip over a three-piece input: split, view each owned
+// piece back to a `Str`, join with the same separator, and compare against the
+// original text. Exercises `Array[Str]` holding `String`-derived views (the
+// ADR-0012 §6 borrow-provenance case) with every source piece still live.
+fn rejoins_3(in s: Str, in sep: Str) -> Bool {
+    let parts = split(s, sep);
+    if std::array::len(parts) != 3 {
+        return false;
+    }
+    let p0 = std::array::get(parts, 0);
+    let p1 = std::array::get(parts, 1);
+    let p2 = std::array::get(parts, 2);
+    var views = std::array::empty();
+    std::array::push(views, std::string::as_str(p0));
+    std::array::push(views, std::string::as_str(p1));
+    std::array::push(views, std::string::as_str(p2));
+    std::string::as_str(join(views, sep)) == s
+}
+
 spec index_of_byte {
     then opt_or(index_of_byte("hello", 108), 0 - 1) == 2;
     then opt_or(index_of_byte("hello", 104), 0 - 1) == 0;
@@ -429,6 +674,82 @@ spec count {
     then count("abc", "") == 4; // len + 1
 }
 
+// `replace`/`replace_first` return an owned `String`; compare via the ADR-0010
+// `as_str` view so the assertion reads as the resulting text.
+
+spec replace {
+    then std::string::as_str(replace("a.b.c", ".", "/")) == "a/b/c";
+    then std::string::as_str(replace("banana", "a", "o")) == "bonono";
+    then std::string::as_str(replace("aaaa", "aa", "b")) == "bb"; // non-overlapping
+    then std::string::as_str(replace("hello", "z", "Z")) == "hello"; // no match
+    then std::string::as_str(replace("abc", "", "X")) == "abc"; // empty from: unchanged
+    then std::string::as_str(replace("a.b", ".", "")) == "ab"; // delete
+    then std::string::as_str(replace("x", "x", "yy")) == "yy"; // grow
+}
+
+spec replace_first {
+    then std::string::as_str(replace_first("a.b.c", ".", "/")) == "a/b.c";
+    then std::string::as_str(replace_first("banana", "a", "o")) == "bonana";
+    then std::string::as_str(replace_first("hello", "z", "Z")) == "hello"; // no match
+    then std::string::as_str(replace_first("abc", "", "X")) == "abc"; // empty from
+    then std::string::as_str(replace_first("aa", "a", "bbb")) == "bbba"; // grow, first only
+}
+
+spec split {
+    // The Go-parity core: "a.b.c" on "." → ["a", "b", "c"].
+    let parts = split("a.b.c", ".");
+    then std::array::len(parts) == 3;
+    then nth_is(parts, 0, "a");
+    then nth_is(parts, 1, "b");
+    then nth_is(parts, 2, "c");
+    // Adjacent separators yield an empty middle piece; a trailing separator a
+    // trailing empty piece.
+    let gaps = split("a..b.", ".");
+    then std::array::len(gaps) == 4;
+    then nth_is(gaps, 0, "a");
+    then nth_is(gaps, 1, "");
+    then nth_is(gaps, 2, "b");
+    then nth_is(gaps, 3, "");
+    // No separator present → the whole input as one piece.
+    let whole = split("abc", ".");
+    then std::array::len(whole) == 1;
+    then nth_is(whole, 0, "abc");
+    // Empty input → one empty piece (Go's Split("", sep)).
+    let nothing = split("", ".");
+    then std::array::len(nothing) == 1;
+    then nth_is(nothing, 0, "");
+    // Empty separator → the whole input as a single piece (documented — no
+    // rune splitting in the byte-level core).
+    let nosep = split("ab", "");
+    then std::array::len(nosep) == 1;
+    then nth_is(nosep, 0, "ab");
+    // A multi-byte separator, non-overlapping.
+    let multi = split("x--y--z", "--");
+    then std::array::len(multi) == 3;
+    then nth_is(multi, 1, "y");
+    // The round-trip law: join(split(s, sep), sep) == s.
+    then rejoins_3("a.b.c", ".");
+    then rejoins_3("x--y--z", "--");
+}
+
+spec join {
+    var parts = std::array::empty();
+    std::array::push(parts, "a");
+    std::array::push(parts, "b");
+    std::array::push(parts, "c");
+    then std::string::as_str(join(parts, ".")) == "a.b.c";
+    // `join` borrows its array, so the same pieces join again with another
+    // separator — including a multi-byte one.
+    then std::string::as_str(join(parts, "--")) == "a--b--c";
+    // A single piece emits no separator at all.
+    var solo = std::array::empty();
+    std::array::push(solo, "only");
+    then std::string::as_str(join(solo, ".")) == "only";
+    // An empty array joins to the empty string.
+    let none: Array[Str] = std::array::empty();
+    then std::string::as_str(join(none, ".")) == "";
+}
+
 spec is_space {
     then is_space(32);
     then is_space(9);
@@ -469,6 +790,37 @@ spec to_lower {
     then to_lower("ABC") == std::string::from_str("abc");
     then to_lower("abc") == std::string::from_str("abc");
     then to_lower("A1Z") == std::string::from_str("a1z");
+}
+
+// The builder layer: build a `String` piece by piece, then read it in-block with
+// `std::string::as_str` (per ADR-0010, the view stays where the builder lives).
+// Statements before `then` accumulate into the builder, exactly as a caller
+// would; the `then` asserts on the accumulated text.
+
+spec builder {
+    var b = builder();
+    push(b, "hello ");
+    push(b, "world");
+    then std::string::as_str(b) == "hello world";
+}
+
+spec push {
+    var b = builder();
+    push(b, ""); // empty piece is a no-op
+    push(b, "x");
+    then std::string::as_str(b) == "x";
+    // The builder keeps growing after a read; the view is re-taken each time.
+    push(b, "yz");
+    then std::string::as_str(b) == "xyz";
+}
+
+spec push_int {
+    var b = builder();
+    push(b, "count=");
+    push_int(b, 42);
+    push(b, ", n=");
+    push_int(b, 0 - 7); // negative gets a leading '-'
+    then std::string::as_str(b) == "count=42, n=-7";
 }
 
 spec parse_int {

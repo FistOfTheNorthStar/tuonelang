@@ -1,0 +1,34 @@
+// ADR-0012 Stage A error rules: an `Array[T]` whose element `T` is outside the
+// v0-supported set is a plain type error (`T0001`), and an `empty()` whose
+// element type is never determined needs an annotation (`T0011`) — the element
+// is never silently defaulted to `Int`.
+
+// A nested owned container element (`Array[[Int; 2]]`) is not supported yet.
+fn nested_fixed_array() -> Int {
+    var xs = std::array::empty();
+    let row = [1, 2];
+    std::array::push(xs, row);
+    0
+}
+
+// An `Option[Int]` element is likewise outside the Stage A set.
+fn option_element() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, Some { value: 1 });
+    0
+}
+
+// A determined element type still rejects a mismatched later element: the first
+// push fixes `T = Int`, so pushing a `Str` is a `T0001` against that element.
+fn mismatched_element() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 5);
+    std::array::push(xs, "nope");
+    0
+}
+
+// An empty array whose element type is never used/pinned needs an annotation.
+fn undetermined_empty() -> Int {
+    let xs = std::array::empty();
+    std::array::len(xs)
+}

@@ -233,9 +233,14 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
 }
 
 /// The fixed signature `(params, ret)` of a builtin function
-/// (`specification/static-semantics.md` §3.6–§3.7). `Int` is `I64`; the
-/// ADR-0009 array builtins are `Array[Int]`-monomorphic, so a call with any
-/// other element type is an ordinary `T0001`.
+/// (`specification/static-semantics.md` §3.6–§3.7). `Int` is `I64`.
+///
+/// The growable-`Array` builtins are **generic over the element type** since
+/// ADR-0012 and are checked by [`Checker::check_array_builtin_call`], which
+/// intercepts them before the fixed path. The `Array[Int]` entries kept here are
+/// only the seed installed into `symbol_types`/`fns` (arity + a monomorphic
+/// fallback); every real call resolves its element type from the receiver, so
+/// these `Int` shapes are never the type a widened call is checked against.
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
     let int_array = || Ty::Array(Box::new(Ty::int()));
     match builtin {
@@ -2261,6 +2266,141 @@ impl<'a> Checker<'a> {
         }))
     }
 
+    /// Type-check a call to one of the growable-`Array` builtins, generic over
+    /// the element type `T` (ADR-0012). Returns `Some(result_ty)` when `builtin`
+    /// is an array builtin (having checked the arguments), or `None` when it is
+    /// not — the caller then falls through to the ordinary fixed-signature path.
+    ///
+    /// The element type `T` is **witnessed by the receiver**: for
+    /// `push`/`pop`/`get`/`len` the first argument's type must be `Array[T]`, and
+    /// `push`'s value / `get`'s result / `pop`'s `Option[T]` follow that `T`. For
+    /// `empty()` there is no receiver, so `T` is a fresh variable solved from the
+    /// use site (the `let`'s binding, a later `push`), exactly as an empty
+    /// `[T; N]` literal's element already is; an element that never gets
+    /// determined is a `T0001`, never a silent default to `Int`.
+    fn check_array_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        args: &[Expr<'_>],
+        span: Span,
+    ) -> Option<Ty> {
+        let int = Ty::int();
+        match builtin {
+            Builtin::ArrayEmpty => {
+                // `empty() -> Array[T]`; T is a fresh var solved from context.
+                self.check_args(&[], args, span);
+                let elem = self.fresh(span);
+                Some(Ty::Array(Box::new(elem)))
+            }
+            Builtin::ArrayPush => {
+                // `push(Array[T], T) -> Unit`; T is witnessed by the receiver.
+                let elem = self.fresh(span);
+                let array = Ty::Array(Box::new(elem.clone()));
+                self.check_args(&[array, elem.clone()], args, span);
+                self.reject_unsupported_array_element(&elem, span);
+                Some(Ty::Unit)
+            }
+            Builtin::ArrayPop => {
+                // `pop(Array[T]) -> Option[T]`.
+                let elem = self.fresh(span);
+                let array = Ty::Array(Box::new(elem.clone()));
+                self.check_args(&[array], args, span);
+                self.reject_unsupported_array_element(&elem, span);
+                Some(Ty::Option(Box::new(elem)))
+            }
+            Builtin::ArrayGet => {
+                // `get(Array[T], Int) -> T`.
+                let elem = self.fresh(span);
+                let array = Ty::Array(Box::new(elem.clone()));
+                self.check_args(&[array, int], args, span);
+                self.reject_unsupported_array_element(&elem, span);
+                Some(elem)
+            }
+            Builtin::ArrayLen => {
+                // `len(Array[T]) -> Int`; the count, always `Int`.
+                let elem = self.fresh(span);
+                let array = Ty::Array(Box::new(elem));
+                self.check_args(&[array], args, span);
+                Some(int)
+            }
+            _ => None,
+        }
+    }
+
+    /// Refuse an `Array[T]` whose element type `T` is outside the v0-supported
+    /// set (ADR-0012 Stage A) with a `T0001`. The supported set is the scalars
+    /// `Int`/`Bool`/`Str`/`String` and user structs/enums whose fields are
+    /// themselves supported; nested owned containers (`Array[Array[T]]`,
+    /// `Array[Map]`) and wrapped values (`Box`/`Shared`/`Weak`) stay refused.
+    /// An unsolved/`Error` element is left alone (it is reported elsewhere).
+    fn reject_unsupported_array_element(&mut self, elem: &Ty, span: Span) {
+        let resolved = self.icx.apply(elem);
+        if !self.is_supported_array_element(&resolved) {
+            let rendered = self.render(&resolved);
+            self.push(
+                Diagnostic::error(
+                    code(1),
+                    format!("`Array[{rendered}]` is not supported in v0"),
+                    span,
+                )
+                .with_primary_label(format!(
+                    "the growable `Array` element type must be a scalar \
+                     (`Int`/`Bool`/`Str`/`String`) or a supported struct/enum, not `{rendered}`"
+                ))
+                .with_help(
+                    "nested owned containers and wrapped values are not lowered yet (ADR-0012); \
+                     use the reference interpreter for those, or a supported element type",
+                )
+                .with_actual(StructuredValue::Type(rendered)),
+            );
+        }
+    }
+
+    /// Is `ty` a v0-supported growable-`Array` element type (ADR-0012 Stage A)?
+    /// Unsolved variables and `Error` are treated as supported here (not this
+    /// check's job to report them), so only a *determined, unsupported* type is
+    /// rejected.
+    fn is_supported_array_element(&self, ty: &Ty) -> bool {
+        match ty {
+            Ty::Int(_) | Ty::Bool | Ty::Str | Ty::String => true,
+            // A struct/enum is supported iff every field/variant-field type is.
+            // The recursion terminates: a type cannot contain itself by value
+            // (that is an infinite-size error caught elsewhere), and we only
+            // descend through already-instantiated shapes.
+            Ty::Struct(symbol, targs) => self.aggregate_fields_supported(*symbol, targs, true),
+            Ty::Enum(symbol, targs) => self.aggregate_fields_supported(*symbol, targs, false),
+            // Unsolved / poisoned: not this check's responsibility.
+            Ty::Var(_) | Ty::Error | Ty::Never => true,
+            // Everything else — nested Array/FixedArray/Option/Result/Tuple/Fn/
+            // Wrapper/Range/Char/Float/Unit — is out of the Stage A set.
+            _ => false,
+        }
+    }
+
+    /// Are all field types of a struct (`is_struct == true`) or enum's variants
+    /// supported array elements, under the given type arguments?
+    fn aggregate_fields_supported(&self, symbol: SymbolId, targs: &[Ty], is_struct: bool) -> bool {
+        if is_struct {
+            let Some(def) = self.structs.get(&symbol) else {
+                return false;
+            };
+            let map = substitution(&def.type_params, targs);
+            def.fields
+                .iter()
+                .all(|(_, ty)| self.is_supported_array_element(&substitute(ty, &map)))
+        } else {
+            let Some(def) = self.enums.get(&symbol) else {
+                return false;
+            };
+            let map = substitution(&def.type_params, targs);
+            def.variants.iter().all(|(_, fields)| {
+                fields
+                    .iter()
+                    .all(|(_, ty)| self.is_supported_array_element(&substitute(ty, &map)))
+            })
+        }
+    }
+
     /// Instantiate a function signature: explicit turbofish arguments pin
     /// the type parameters, otherwise fresh variables are solved from the
     /// call.
@@ -2302,6 +2442,16 @@ impl<'a> Checker<'a> {
             if let Some(symbol) = self.symbol_at(path.segment_names().last()) {
                 if self.resolution.symbol(symbol).kind == SymbolKind::Function {
                     self.record_call_edge(symbol);
+                    // The growable-`Array` builtins are generic over the element
+                    // type `T` (ADR-0012): their signatures are element-parametric
+                    // and `T` is witnessed by the receiver argument, not fixed to
+                    // `Int`. Handle them here rather than through the fixed
+                    // `builtin_signature`, which cannot spell a type variable.
+                    if let Some(builtin) = self.resolution.builtin(symbol) {
+                        if let Some(ret) = self.check_array_builtin_call(builtin, &args, span) {
+                            return ret;
+                        }
+                    }
                     let given_args: Option<Vec<Ty>> = path
                         .turbofish()
                         .map(|list| list.types().map(|ty| self.lower_type(ty)).collect());

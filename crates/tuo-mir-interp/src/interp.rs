@@ -1053,7 +1053,10 @@ impl Machine<'_, '_> {
                 bytes.extend_from_slice(&str_at(1, self)?);
                 Ok(Value::Str(bytes))
             }
-            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::StringSlice | HeapOp::StringAsStr => {
+            HeapOp::StringLen
+            | HeapOp::StringByteAt
+            | HeapOp::StringSlice
+            | HeapOp::StringAsStr => {
                 let bytes = match subject {
                     Some(Value::Str(bytes)) => bytes,
                     other => {

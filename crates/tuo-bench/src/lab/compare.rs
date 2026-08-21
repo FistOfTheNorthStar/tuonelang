@@ -12,10 +12,19 @@
 //!    a language that, like tuonelang, compiles ahead-of-time to native code,
 //!    traps on nothing here, and has a matching `int`/byte model for these
 //!    programs — including the allocation workload, whose peer uses
-//!    `malloc`/`realloc`/`free` with the same doubling growth. A workload whose
-//!    tuonelang side is
+//!    `malloc`/`realloc`/`free` with the same doubling growth. **Go** is a
+//!    second admitted peer for the same workloads: it too compiles ahead-of-time
+//!    to a native binary and has a matching 64-bit integer / byte-slice model,
+//!    but it ships a managed runtime (GC + goroutine scheduler), so it measures
+//!    the *runtime-bearing* AOT point that C (no runtime) does not — the two
+//!    peers bracket tuonelang rather than duplicating each other. Each Go peer
+//!    computes the same value the same way as its C counterpart (the allocation
+//!    peer even replicates the explicit doubling growth rather than leaning on
+//!    Go's `append` heuristic), so the equivalent-semantics rule still holds. A
+//!    workload whose tuonelang side is
 //!    [`Unsupported`](super::runtime::Support::Unsupported) (networking) has
-//!    **no comparison** — you cannot compare a feature that does not exist.
+//!    **no comparison** for any peer — you cannot compare a feature that does not
+//!    exist.
 //!
 //! 2. **No claim without both numbers.** A [`Comparison`] can only reach a
 //!    [`Verdict::Measured`] when *both* sides actually compiled and ran under the
@@ -40,8 +49,16 @@ use crate::lab::runtime::{RuntimeWorkload, Support};
 pub enum PeerLanguage {
     /// C, compiled ahead-of-time to native code. The apt peer for the scalar,
     /// control-flow core: matching integer arithmetic and recursion, native
-    /// codegen, no runtime between the program and the CPU.
+    /// codegen, **no runtime** between the program and the CPU.
     C,
+    /// Go, compiled ahead-of-time to a native binary. Like C an AOT-native peer
+    /// with a matching 64-bit integer / byte-slice model, but it **ships a
+    /// managed runtime** (garbage collector + goroutine scheduler). Admitted for
+    /// the same equivalent-semantics workloads as C — each Go peer computes the
+    /// same value the same way — so the two together bracket tuonelang (a
+    /// runtime-free peer and a runtime-bearing one) rather than duplicating a
+    /// single point of comparison.
+    Go,
 }
 
 impl PeerLanguage {
@@ -50,7 +67,16 @@ impl PeerLanguage {
     pub fn label(self) -> &'static str {
         match self {
             Self::C => "c",
+            Self::Go => "go",
         }
+    }
+
+    /// Every peer language a supported workload is compared against, in a stable
+    /// order. The comparison builder pairs each supported workload with one
+    /// [`ComparisonWorkload`] per entry here.
+    #[must_use]
+    pub fn all() -> [PeerLanguage; 2] {
+        [PeerLanguage::C, PeerLanguage::Go]
     }
 }
 
@@ -71,23 +97,50 @@ pub struct ComparisonWorkload {
     pub expected_exit: i32,
 }
 
-/// Build the equivalent-semantics comparison for one runtime workload, or `None`
-/// when the workload is unsupported in tuonelang (nothing to compare against).
+/// Build the equivalent-semantics **C** comparison for one runtime workload, or
+/// `None` when the workload is unsupported in tuonelang (nothing to compare
+/// against). Retained for callers that want only the C peer; for the full peer
+/// set use [`comparisons_for`].
 #[must_use]
 pub fn comparison_for(workload: &RuntimeWorkload) -> Option<ComparisonWorkload> {
+    comparison_for_peer(workload, PeerLanguage::C)
+}
+
+/// Build the equivalent-semantics comparison for one runtime workload against a
+/// specific `peer`, or `None` when the workload is unsupported in tuonelang
+/// (nothing to compare against) or the peer has no program for it.
+#[must_use]
+pub fn comparison_for_peer(
+    workload: &RuntimeWorkload,
+    peer: PeerLanguage,
+) -> Option<ComparisonWorkload> {
     // Only a supported workload can be compared; an unsupported one has no
     // tuonelang program, so any peer program would be comparing against nothing.
     let expected_exit = match &workload.support {
         Support::Supported { expected_exit, .. } => *expected_exit,
         Support::Unsupported { .. } => return None,
     };
-    let peer_source = c_equivalent(&workload.label)?;
+    let peer_source = match peer {
+        PeerLanguage::C => c_equivalent(&workload.label)?,
+        PeerLanguage::Go => go_equivalent(&workload.label)?,
+    };
     Some(ComparisonWorkload {
         label: workload.label.clone(),
-        peer: PeerLanguage::C,
+        peer,
         peer_source: peer_source.to_string(),
         expected_exit,
     })
+}
+
+/// Build every equivalent-semantics comparison for one runtime workload — one per
+/// peer language that has a program for it — in [`PeerLanguage::all`] order. An
+/// unsupported workload yields an empty vector.
+#[must_use]
+pub fn comparisons_for(workload: &RuntimeWorkload) -> Vec<ComparisonWorkload> {
+    PeerLanguage::all()
+        .into_iter()
+        .filter_map(|peer| comparison_for_peer(workload, peer))
+        .collect()
 }
 
 /// The C program equivalent to a supported scalar-core workload, computing the
@@ -115,6 +168,36 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
             include_str!("../../../../benchmarks/runtime/programs/c/string-processing.c")
         }
         "allocation" => include_str!("../../../../benchmarks/runtime/programs/c/allocation.c"),
+        _ => return None,
+    })
+}
+
+/// The Go program equivalent to a supported scalar-core workload, computing the
+/// same value the same way as its C counterpart (same arithmetic, same
+/// recursion, same doubling growth). Returns `None` for a label with no defined
+/// equivalent, so no comparison is fabricated.
+fn go_equivalent(label: &str) -> Option<&'static str> {
+    // Each Go peer program is the committed file under
+    // `benchmarks/runtime/programs/go/`, embedded via `include_str!` so the
+    // recorded Go source lives on disk beside its tuonelang and C counterparts
+    // and the three cannot drift out of sync.
+    Some(match label {
+        "startup" => include_str!("../../../../benchmarks/runtime/programs/go/startup.go"),
+        "integer-computation" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/integer-computation.go")
+        }
+        "function-calls" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/function-calls.go")
+        }
+        "indirect-calls" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/indirect-calls.go")
+        }
+        "recursion" => include_str!("../../../../benchmarks/runtime/programs/go/recursion.go"),
+        "collections" => include_str!("../../../../benchmarks/runtime/programs/go/collections.go"),
+        "string-processing" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/string-processing.go")
+        }
+        "allocation" => include_str!("../../../../benchmarks/runtime/programs/go/allocation.go"),
         _ => return None,
     })
 }
@@ -224,6 +307,61 @@ mod tests {
     }
 
     #[test]
+    fn every_supported_workload_has_both_peers_and_unsupported_has_none() {
+        for workload in workloads() {
+            let comparisons = comparisons_for(&workload);
+            if workload.is_supported() {
+                assert_eq!(
+                    comparisons.len(),
+                    PeerLanguage::all().len(),
+                    "supported workload `{}` must have one comparison per peer",
+                    workload.label
+                );
+                let peers: Vec<PeerLanguage> = comparisons.iter().map(|c| c.peer).collect();
+                assert_eq!(
+                    peers,
+                    PeerLanguage::all().to_vec(),
+                    "comparisons must be in stable peer order"
+                );
+            } else {
+                assert!(
+                    comparisons.is_empty(),
+                    "unsupported workload `{}` must have no comparison for any peer",
+                    workload.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn go_peer_targets_the_same_result_as_the_workload() {
+        for workload in workloads() {
+            if let (Some(cmp), Support::Supported { expected_exit, .. }) = (
+                comparison_for_peer(&workload, PeerLanguage::Go),
+                &workload.support,
+            ) {
+                assert_eq!(cmp.peer, PeerLanguage::Go);
+                assert_eq!(
+                    cmp.expected_exit, *expected_exit,
+                    "the Go peer for `{}` must target the same result",
+                    workload.label
+                );
+                assert!(
+                    cmp.peer_source.contains("package main"),
+                    "the Go peer for `{}` must be a real Go program",
+                    workload.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn peer_labels_are_stable_and_distinct() {
+        assert_eq!(PeerLanguage::C.label(), "c");
+        assert_eq!(PeerLanguage::Go.label(), "go");
+    }
+
+    #[test]
     fn peer_expected_exit_matches_the_tuonelang_workload() {
         for workload in workloads() {
             if let (Some(cmp), Support::Supported { expected_exit, .. }) =
@@ -300,5 +438,48 @@ mod tests {
             Verdict::Skipped { reason } => assert!(reason.contains("not semantically equal")),
             Verdict::Measured { .. } => panic!("an unequal peer must not be reported as measured"),
         }
+    }
+
+    struct FakeGo {
+        status: i32,
+    }
+
+    impl ComparisonRunner for FakeGo {
+        fn language(&self) -> PeerLanguage {
+            PeerLanguage::Go
+        }
+        fn compile_link_run(&self, _source: &str) -> Result<PeerRun, String> {
+            Ok(PeerRun {
+                exit_status: self.status,
+                compiler_version: "go version go1.99 fake/amd64".to_string(),
+                command: "go build -o peer peer.go".to_string(),
+            })
+        }
+    }
+
+    #[test]
+    fn a_matching_go_peer_run_is_measured_with_provenance() {
+        let workload = &workloads()[0]; // startup, expected 0
+        let cmp = comparison_for_peer(workload, PeerLanguage::Go).expect("startup has a Go peer");
+        let verdict = run_comparison(&FakeGo { status: 0 }, &cmp);
+        match verdict {
+            Verdict::Measured {
+                compiler_version, ..
+            } => assert!(compiler_version.contains("go version")),
+            Verdict::Skipped { reason } => panic!("expected a measured verdict, got {reason}"),
+        }
+    }
+
+    #[test]
+    fn a_runner_for_the_wrong_peer_is_skipped_not_measured() {
+        // A Go runner handed a C workload (or vice versa) must not produce a
+        // number — the peer languages must match.
+        let go_cmp =
+            comparison_for_peer(&workloads()[0], PeerLanguage::Go).expect("go peer exists");
+        let verdict = run_comparison(&FakeC { status: 0 }, &go_cmp);
+        assert!(
+            matches!(verdict, Verdict::Skipped { .. }),
+            "a C runner must not measure a Go workload"
+        );
     }
 }

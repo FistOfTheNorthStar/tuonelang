@@ -36,18 +36,30 @@ them via `include_str!`, so a file and its measurement can never drift.
 ## Comparison against established languages
 
 The prompt requires comparison *only against languages with equivalent
-semantics*. For the scalar core the apt peer is **C** — like tuonelang it
-compiles ahead-of-time to native code with a matching integer model and no
-runtime between the program and the CPU. Each supported workload has an
-equivalent-semantics C program under [`programs/c/`](programs/c/) computing the
-same result the same way (same arithmetic, same recursion).
+semantics*. Two AOT-native peers are used, and together they bracket tuonelang:
+
+- **C** — the runtime-free peer. Like tuonelang it compiles ahead-of-time to
+  native code with a matching integer model and **no runtime** between the
+  program and the CPU. Programs under [`programs/c/`](programs/c/).
+- **Go** — the runtime-bearing peer. Also AOT-native with a matching 64-bit
+  integer / byte-slice model, but it ships a **managed runtime** (garbage
+  collector + goroutine scheduler), so it measures the AOT-with-a-runtime point
+  that C does not. Programs under [`programs/go/`](programs/go/).
+
+Each supported workload has an equivalent-semantics program in **both** peers,
+computing the same result the same way (same arithmetic, same recursion, same
+byte scans; the allocation peers even replicate the explicit doubling growth
+rather than leaning on Go's built-in `append` heuristic). The three source sets
+(`programs/tuo/`, `programs/c/`, `programs/go/`) are embedded via `include_str!`,
+so a workload and its two peers can never drift.
 
 A comparison is reported **only when both languages actually compiled and ran**
-under recorded toolchains and produced the same result. If a C toolchain is
-absent, or the peer program does not produce the semantically-equal result, the
-comparison is recorded as *skipped* with the reason — never a one-sided or
-fabricated figure. Unsupported workloads have no comparison, because you cannot
-compare a feature that does not exist.
+under recorded toolchains and produced the same result. If a peer toolchain is
+absent (`cc` for C, `go` for Go), or the peer program does not produce the
+semantically-equal result, that comparison is recorded as *skipped* with the
+reason — never a one-sided or fabricated figure. Unsupported workloads have no
+comparison for any peer, because you cannot compare a feature that does not
+exist.
 
 ## What every run records
 

@@ -1,0 +1,15 @@
+// ADR-0012 Stage B: a growable `Array[Point]` of a `Copy` struct (owns no heap)
+// — the multi-word element is moved by memcpy on push/get/pop. Returns
+// p1.x + p1.y (10 + 20) = 30.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, Point { x: 3, y: 4 });
+    std::array::push(xs, Point { x: 10, y: 20 });
+    let p = std::array::get(xs, 1);
+    p.x + p.y
+}

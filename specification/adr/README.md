@@ -60,6 +60,7 @@ the replacement, preserving the decision history.
 | [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | accepted |
 | [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | proposed (Stage A landed) |
 | [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | proposed |
+| [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | proposed (Stages A/B/C-core landed) |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -75,12 +76,18 @@ that ADR-0006's first amendment promised — it landed the owned `String` and
 growable `Array[Int]`. Of the nine runtime workloads, eight now measure, leaving
 only `networking`.
 
-Three ADRs remain `proposed`, each pending its staged spec/fixtures/benchmark:
+Four ADRs remain `proposed`, each pending its staged spec/fixtures/benchmark:
 **ADR-0007** (concurrency — its performance-lab entry is `networking`);
 **ADR-0010** (the `String`→`Str` borrowing view that resolves the long-deferred
 Q-0012, unblocking the stdlib's `String`-producer / `Str`-consumer composition —
 gated on static borrow-conflict fixtures and the three-way differential, not on a
-lab workload); and **ADR-0011** (the hash map — the largest remaining Go-parity
-gap, gated on a new `map-lookup` lab workload). ADR-0010 and ADR-0011 are
-independent of each other and of the trait system, and ride the same
-monomorphic-builtin machinery ADR-0009 used for `Array[Int]`.)
+lab workload); **ADR-0011** (the hash map — the largest remaining Go-parity
+gap, gated on a new `map-lookup` lab workload); and **ADR-0012** (generic
+`Array[T]` element types — widening the ADR-0009 array builtins from `Int` to a
+defined element set, so `Array[String]`/`Array[Str]`/`Array[struct]` become
+expressible; the enabling increment for `std::str::split`/`join` and for the
+richer `Array[Str]` half of ADR-0011). ADR-0010, ADR-0011, and ADR-0012 are
+independent of the (still-absent) trait system, and all ride the same
+monomorphic-builtin machinery ADR-0009 used for `Array[Int]` — ADR-0012 is that
+machinery's element-surface widening, explicitly **not** user-written generics
+(`fn f[T]`, generic structs), which stay deferred under Q-0010.)
