@@ -484,15 +484,27 @@ impl Verifier<'_> {
         dest: &Place,
     ) {
         let name = self.fn_name().to_owned();
-        let int_array = Ty::Array(Box::new(Ty::int()));
+        // The growable-`Array` element type is generic (ADR-0012): read it from
+        // the target place's actual `Ty::Array(elem)` rather than assuming `Int`,
+        // so `push`/`pop` validate the operand/result against the real element.
+        // If the target's type is unavailable (a poisoned place), fall back to a
+        // fresh `Array[?]` shape that only checks the container-ness.
+        let elem = match op {
+            HeapMutOp::Push | HeapMutOp::Pop => self
+                .place_ty(target)
+                .and_then(|ty| array_element(&ty))
+                .unwrap_or_else(Ty::int),
+            _ => Ty::int(),
+        };
+        let elem_array = Ty::Array(Box::new(elem.clone()));
         let (target_ty, operand_tys, result): (Ty, Vec<Ty>, Ty) = match op {
             HeapMutOp::PushByte => (Ty::String, vec![Ty::int()], Ty::Unit),
             HeapMutOp::Append => (Ty::String, vec![Ty::Str], Ty::Unit),
-            HeapMutOp::Push => (int_array.clone(), vec![Ty::int()], Ty::Unit),
+            HeapMutOp::Push => (elem_array.clone(), vec![elem.clone()], Ty::Unit),
             HeapMutOp::Pop => (
-                int_array.clone(),
+                elem_array.clone(),
                 Vec::new(),
-                Ty::Option(Box::new(Ty::int())),
+                Ty::Option(Box::new(elem.clone())),
             ),
         };
         if let Some(ty) = self.place_ty(target)
@@ -505,9 +517,9 @@ impl Verifier<'_> {
                      `{}`",
                     op.name(),
                     if matches!(target_ty, Ty::String) {
-                        "String"
+                        "String".to_owned()
                     } else {
-                        "Array[I64]"
+                        format!("{target_ty:?}")
                     }
                 ),
             );
@@ -851,13 +863,22 @@ impl Verifier<'_> {
         dest: &Place,
     ) {
         let name = self.fn_name().to_owned();
-        let int_array = Ty::Array(Box::new(Ty::int()));
+        // The growable-`Array` element type is generic (ADR-0012). Derive it from
+        // the place that carries the array: the `subject` for `len`/`get`, the
+        // `dest` for `empty`. A poisoned/absent type falls back to `Int`, which
+        // only relaxes the check (never wrongly rejects a valid element type).
+        let subject_elem = || {
+            subject
+                .and_then(|place| self.place_ty(place))
+                .and_then(|ty| array_element(&ty))
+                .unwrap_or_else(Ty::int)
+        };
         let subject_ty: Option<Ty> = match op {
             HeapOp::StringLen
             | HeapOp::StringByteAt
             | HeapOp::StringSlice
             | HeapOp::StringAsStr => Some(Ty::String),
-            HeapOp::ArrayLen | HeapOp::ArrayGet => Some(int_array.clone()),
+            HeapOp::ArrayLen | HeapOp::ArrayGet => Some(Ty::Array(Box::new(subject_elem()))),
             HeapOp::StringEmpty
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
@@ -880,10 +901,15 @@ impl Verifier<'_> {
             | HeapOp::StringConcat
             | HeapOp::StringSlice => Ty::String,
             HeapOp::StringAsStr => Ty::Str,
-            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen | HeapOp::ArrayGet => {
-                Ty::int()
-            }
-            HeapOp::ArrayEmpty => int_array,
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen => Ty::int(),
+            // `get` returns the element type, read from the subject array.
+            HeapOp::ArrayGet => subject_elem(),
+            // `empty` produces `Array[T]`; the element is read from the dest.
+            HeapOp::ArrayEmpty => Ty::Array(Box::new(
+                self.place_ty(dest)
+                    .and_then(|ty| array_element(&ty))
+                    .unwrap_or_else(Ty::int),
+            )),
         };
         match (subject, &subject_ty) {
             (None, None) => {}
@@ -1557,6 +1583,16 @@ fn types_agree(a: &Ty, b: &Ty) -> bool {
         return true;
     }
     a == b
+}
+
+/// The element type of a growable `Array[T]` (ADR-0012), or `None` for any other
+/// type. Used to validate the generic `push`/`pop`/`get` element against the
+/// array place's actual element type rather than a hardcoded `Int`.
+fn array_element(ty: &Ty) -> Option<Ty> {
+    match ty {
+        Ty::Array(item) => Some((**item).clone()),
+        _ => None,
+    }
 }
 
 fn const_ty(constant: &crate::mir::Const) -> Ty {

@@ -3,5 +3,5 @@ T0001@416..417 mismatched types | expected type `I64` | actual type `Str`
 T0001@419..420 mismatched types | expected type `I64` | actual type `Str`
 T0001@651..666 mismatched types | expected type `String` | actual type `Str`
 T0001@708..763 mismatched types | expected type `String` | actual type `Str`
-T0001@1007..1013 mismatched types | expected type `I64` | actual type `Str`
-R0007@1124..1196 spec `"via write_string"` reaches the effectful function `emit`; specs execute only the pure core in the deterministic sandbox | actual name `emit`
+T0001@1157..1163 mismatched types | expected type `I64` | actual type `Str`
+R0007@1274..1346 spec `"via write_string"` reaches the effectful function `emit`; specs execute only the pure core in the deterministic sandbox | actual name `emit`

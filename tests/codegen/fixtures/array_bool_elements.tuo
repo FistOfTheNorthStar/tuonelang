@@ -1,0 +1,17 @@
+// ADR-0012 Stage B: a growable `Array[Bool]` — a 1-byte scalar element, so the
+// load/store must use the element's own register width, not a hardcoded 8-byte
+// `Int`. Returns 3 (get index 0 is true -> +2, index 2 is true -> +1).
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, true);
+    std::array::push(xs, false);
+    std::array::push(xs, true);
+    var total = 0;
+    if std::array::get(xs, 0) {
+        total = total + 2;
+    }
+    if std::array::get(xs, 2) {
+        total = total + 1;
+    }
+    total
+}

@@ -1,0 +1,4 @@
+T0001@451..476 `Array[[_; 2]]` is not supported in v0 | actual type `[_; 2]`
+T0001@619..658 `Array[Option[_]]` is not supported in v0 | actual type `Option[_]`
+T0001@950..956 mismatched types | expected type `I64` | actual type `Str`
+T0011@1093..1112 type annotation needed

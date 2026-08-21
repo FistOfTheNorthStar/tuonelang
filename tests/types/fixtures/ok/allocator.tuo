@@ -41,7 +41,9 @@ fn view_is_empty(in s: String) -> Bool {
 
 fn empties() -> Int {
     let s = std::string::empty();
-    let xs = std::array::empty();
+    // An empty array with no other element evidence needs its element type
+    // annotated (ADR-0012: the element is never silently defaulted to `Int`).
+    let xs: Array[Int] = std::array::empty();
     std::string::len(s) + std::array::len(xs)
 }
 

@@ -342,17 +342,31 @@ the interpreter sandbox's memory budget — [`mir.md`](mir.md) §8.1). Only the
 | `fn slice(in s: String, take a: Int, take b: Int) -> String` | The byte range `[a, b)` **copied out** as a new owned `String` (no aliasing view). **Traps `IndexOutOfBounds`** unless `0 <= a <= b <= len(s)`. |
 | `fn as_str(in s: String) -> Str` | (ADR-0010) A borrowed `Str` **view** of the whole `String` — the `{ptr, len}` prefix of its header, no copy. The result is a **shared borrow** of `s`: while it is live, `s` may not be moved, mutated, dropped, or overwritten, and it may not escape its frame (`O0011`; see `ownership.md` §13). Never traps. |
 
-**Growable-array builtins (`std::array`)** — a *monomorphic* v0 surface over
-the generic `Array[T]` type: the builtins operate on `Array[Int]` only, and a
-call with any other element type is an ordinary `T0001`:
+**Growable-array builtins (`std::array`)** — **element-generic** over `Array[T]`
+since ADR-0012 (they were `Array[Int]`-monomorphic in ADR-0009). `T` is
+**witnessed by the receiver**: `push`/`pop`/`get`/`len` take `Array[T]` and the
+value/result follow that `T`, unified from the first argument; `empty()` gives
+`Array[T]` for a `T` solved from the use site (an annotation or a later `push`).
+These are not user-written generics — the operations stay language-provided
+builtins whose element type is resolved from the call, not user type parameters:
 
 | Signature | Meaning |
 |-----------|---------|
-| `fn empty() -> Array[Int]` | The empty array. Never traps. |
-| `fn push(mut xs: Array[Int], take v: Int)` | Appends `v`. Never traps. |
-| `fn pop(mut xs: Array[Int]) -> Option[Int]` | Removes and returns the last element; `None` when empty. Never traps. |
-| `fn len(in xs: Array[Int]) -> Int` | The element count. Never traps. |
-| `fn get(in xs: Array[Int], take i: Int) -> Int` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(xs)`. |
+| `fn empty() -> Array[T]` | The empty array. `T` is inferred from context; an undetermined `T` is `T0011` ("type annotation needed"), never silently `Int`. Never traps. |
+| `fn push(mut xs: Array[T], take v: T)` | Appends `v`. Never traps. |
+| `fn pop(mut xs: Array[T]) -> Option[T]` | Removes and returns the last element; `None` when empty. Never traps. |
+| `fn len(in xs: Array[T]) -> Int` | The element count. Never traps. |
+| `fn get(in xs: Array[T], take i: Int) -> T` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(xs)`. |
+
+The **v0-supported element set** is the scalars `Int`/`Bool`/`Str`/`String` and
+user structs/enums whose fields are themselves supported; an element outside it
+(a nested `Array`/`Map`, a `Box`/`Shared`/`Weak` wrapper) is an ordinary
+`T0001`. The reference interpreter runs every supported element type. The native
+backends (Stage B) lower every element that **owns no heap** — the scalars, the
+borrowed `Str`, and `Copy` structs/enums — and refuse a **heap-owning** element
+(`String`, a nested `Array`, a wrapper, or a struct/enum containing one) with an
+honest `unsupported` diagnostic, since native deep-copy-on-`get` and per-element
+drop are a later increment (`abi.md` §Arrays, ADR-0012).
 
 **String equality.** `==`/`!=` on two `String` operands is **byte-wise content
 equality**, the same contract as `Str == Str` (§3.4); the comparison consumes

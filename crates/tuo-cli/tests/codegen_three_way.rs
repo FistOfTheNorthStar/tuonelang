@@ -311,6 +311,25 @@ fn owned_heap_values_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0012 Stage B: a growable `Array[T]` over a **no-heap** element type
+/// beyond `Int` — the borrowed `Str` (a two-word fat pointer, moved by memcpy),
+/// `Bool` (a 1-byte scalar whose load/store must use its own width, not `I64`),
+/// and a `Copy` struct (a multi-word aggregate element). `push`/`get`/`pop` must
+/// index at `i × stride(T)` and move the element the right way on all three
+/// engines. Heap-owning elements (`String`, …) are refused natively (a later
+/// increment) — not exercised here. Every array's buffer is freed once at scope
+/// end; the elements own no heap, so no per-element drop is needed.
+#[test]
+fn generic_array_elements_agree_across_all_three_engines() {
+    for name in [
+        "array_str_elements.tuo",    // Array[Str]: fat-pointer element push/get/pop
+        "array_bool_elements.tuo",   // Array[Bool]: 1-byte scalar element
+        "array_struct_elements.tuo", // Array[Point]: Copy multi-word aggregate element
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// ADR-0008 Tier 1 function values: `Const::Fn` as a pointer-width code pointer
 /// and `Callee::Indirect` as an indirect call whose signature is built from the
 /// callee value's `Ty::Fn` (identical ABI to the direct path). All three engines

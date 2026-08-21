@@ -152,6 +152,22 @@ struct tuo_array {
   reads past `len`.
 - Dropping an `Array[T]` drops elements front-to-back, then frees the buffer.
 
+This header layout is **generic in `T`** and unchanged across element types. The
+*type* `Array[T]` admits any `T`; the **v0 element set** the builtins operate
+over is staged (ADR-0012). The **reference interpreter** runs every element type
+in the supported set: the scalars `Int`/`Bool`/`Str`/`String` and user
+structs/enums whose fields are themselves supported. The **native backends**
+(Stage B) lower every element that **owns no heap** — the scalars `Int`/`Bool`
+(a single load/store of the element's own width), the borrowed `Str` (a two-word
+fat pointer), and `Copy` structs/enums (moved by a memcpy of `stride` bytes),
+indexing at `ptr + i×stride(T)`. A **heap-owning** element (`String`, a nested
+`Array`, a `Box`/`Shared`/`Weak`, or a struct/enum containing one) is refused
+natively with an honest `unsupported` diagnostic pointing back to the
+interpreter — a native `get` of an owned element needs a recursive deep copy and
+array drop a per-element recursive free, a later increment. `Str` owns nothing,
+so `Array[Str]` lowers. Nested owned containers and wrapped values stay out of
+the set entirely — a plain type error, not a silent half-feature.
+
 ## Fixed-size arrays
 
 `[T; N]` is the builtin **inline, fixed-length** homogeneous sequence

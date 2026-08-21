@@ -1147,6 +1147,47 @@ fn array_push_pop_round_trips() {
     assert_eq!(value(src, "pop_empty", vec![]), int(-1));
 }
 
+/// ADR-0012 Stage A: the growable `Array[T]` element type is generic in the
+/// reference interpreter — the array is a `Vec<Value>` that already holds any
+/// element (`Str`, `String`, `Bool`, a struct/enum `Variant`), and `push`/`get`/
+/// `pop` move those values without assuming `Int`. This pins that a non-`Int`
+/// element round-trips: build → get → read, and `pop` transfers an owned
+/// `String` element out.
+#[test]
+fn array_generic_elements_round_trip() {
+    let src = r#"
+        // Array[Str]: get returns the stored slice; its length is read back.
+        fn str_get() -> Int {
+            var xs = std::array::empty();
+            std::array::push(xs, "hello");
+            std::array::push(xs, "worlds");
+            std::str::len(std::array::get(xs, 1))
+        }
+        // Array[String]: pop transfers the owned element out as Option[String].
+        fn string_pop() -> Int {
+            var xs = std::array::empty();
+            std::array::push(xs, std::string::from_str("abc"));
+            std::array::push(xs, std::string::from_str("de"));
+            match std::array::pop(xs) {
+                Some { value: v } => std::string::len(v),
+                None => -1,
+            }
+        }
+        // Array[Bool]: the element is a bool, returned as-is by get.
+        fn bool_get() -> Bool {
+            var xs = std::array::empty();
+            std::array::push(xs, true);
+            std::array::push(xs, false);
+            std::array::get(xs, 0)
+        }
+    "#;
+    // len("worlds") == 6.
+    assert_eq!(value(src, "str_get", vec![]), int(6));
+    // pop returns the last pushed "de"; len == 2.
+    assert_eq!(value(src, "string_pop", vec![]), int(2));
+    assert_eq!(value(src, "bool_get", vec![]), Value::Bool(true));
+}
+
 #[test]
 fn array_get_reads_and_traps_out_of_bounds() {
     let src = r#"

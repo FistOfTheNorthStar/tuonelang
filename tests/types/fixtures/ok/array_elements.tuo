@@ -1,0 +1,56 @@
+// ADR-0012 Stage A: the growable `Array[T]` element type is generic over the
+// v0-supported set — the scalars `Int`/`Bool`/`Str`/`String` and user
+// structs/enums whose fields are supported. `T` is witnessed by the receiver
+// (`push`/`get`/`pop`), or annotated when `empty()` has no other evidence.
+
+// Array[Str] — borrowed string slices as elements.
+fn strs() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, "hello");
+    std::array::push(xs, "world");
+    std::str::len(std::array::get(xs, 0))
+}
+
+// Array[String] — owned strings as elements (a non-`Copy` element type).
+fn strings() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, std::string::from_str("abc"));
+    std::string::len(std::array::get(xs, 0))
+}
+
+// Array[Bool].
+fn bools() -> Bool {
+    var xs = std::array::empty();
+    std::array::push(xs, true);
+    std::array::push(xs, false);
+    std::array::get(xs, 0)
+}
+
+// Array[struct] — a user aggregate whose fields are supported.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn structs() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, Point { x: 3, y: 4 });
+    let p = std::array::get(xs, 0);
+    p.x + p.y
+}
+
+// `pop` transfers ownership of an owned element out as `Option[T]`.
+fn pop_string() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, std::string::from_str("de"));
+    match std::array::pop(xs) {
+        Some { value } => std::string::len(value),
+        None => 0,
+    }
+}
+
+// An empty array's element type may be pinned by an annotation.
+fn annotated_empty() -> Int {
+    let xs: Array[Str] = std::array::empty();
+    std::array::len(xs)
+}
