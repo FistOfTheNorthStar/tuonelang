@@ -361,12 +361,14 @@ builtins whose element type is resolved from the call, not user type parameters:
 The **v0-supported element set** is the scalars `Int`/`Bool`/`Str`/`String` and
 user structs/enums whose fields are themselves supported; an element outside it
 (a nested `Array`/`Map`, a `Box`/`Shared`/`Weak` wrapper) is an ordinary
-`T0001`. The reference interpreter runs every supported element type. The native
-backends (Stage B) lower every element that **owns no heap** — the scalars, the
-borrowed `Str`, and `Copy` structs/enums — and refuse a **heap-owning** element
-(`String`, a nested `Array`, a wrapper, or a struct/enum containing one) with an
-honest `unsupported` diagnostic, since native deep-copy-on-`get` and per-element
-drop are a later increment (`abi.md` §Arrays, ADR-0012).
+`T0001`. The reference interpreter **and both native backends** run every
+supported element type: since the ADR-0012 owned-element increment, a
+heap-owning element (`String`, or a struct/enum carrying one) gets a native
+deep copy on `get` and recursive per-element drop glue matching the
+interpreter's clone/drop semantics (`abi.md` §Arrays). Only an element
+containing a heap wrapper would be refused natively — and the wrapper is
+already outside the type-level set, so the refusal is unreachable from checked
+code.
 
 **String equality.** `==`/`!=` on two `String` operands is **byte-wise content
 equality**, the same contract as `Str == Str` (§3.4); the comparison consumes

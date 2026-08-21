@@ -305,6 +305,7 @@ fn owned_heap_values_agree_across_all_three_engines() {
         "arr_grow.tuo",         // array push loop + get + len
         "arr_pop.tuo",          // pop unwrapped via match (Some/None)
         "str_from_slice.tuo",   // from_str + slice (copy-out) + byte_at
+        "str_as_str_view.tuo",  // as_str: zero-copy {ptr, len} view (ADR-0010)
         "str_invalid_byte.tuo", // push_byte 256 traps InvalidByte on all three
     ] {
         assert_three_way_agreement(name);
@@ -316,15 +317,33 @@ fn owned_heap_values_agree_across_all_three_engines() {
 /// `Bool` (a 1-byte scalar whose load/store must use its own width, not `I64`),
 /// and a `Copy` struct (a multi-word aggregate element). `push`/`get`/`pop` must
 /// index at `i × stride(T)` and move the element the right way on all three
-/// engines. Heap-owning elements (`String`, …) are refused natively (a later
-/// increment) — not exercised here. Every array's buffer is freed once at scope
-/// end; the elements own no heap, so no per-element drop is needed.
+/// engines. Every array's buffer is freed once at scope end; the elements own
+/// no heap, so no per-element drop is needed.
 #[test]
 fn generic_array_elements_agree_across_all_three_engines() {
     for name in [
         "array_str_elements.tuo",    // Array[Str]: fat-pointer element push/get/pop
         "array_bool_elements.tuo",   // Array[Bool]: 1-byte scalar element
         "array_struct_elements.tuo", // Array[Point]: Copy multi-word aggregate element
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// ADR-0012 owned-element increment: a growable `Array[T]` over a
+/// **heap-owning** element type — `Array[String]` and an array of a struct
+/// carrying a `String` field. All three engines must agree that `get` is a
+/// **deep copy** (the `array_owned_string_elements` fixture mutates the copy
+/// and re-reads the element — a shallow copy would alias one buffer and
+/// double-free on drop), that `pop` moves the element out (including a whole
+/// un-matched `Some { String }` dropped through the enum-variant glue), and
+/// that the recursive drop glue frees element buffers before the array's own —
+/// each exactly once (a mis-freed buffer aborts, breaking the agreed exit).
+#[test]
+fn owned_array_elements_agree_across_all_three_engines() {
+    for name in [
+        "array_owned_string_elements.tuo", // Array[String]: deep-copy get + Option drop glue
+        "array_owned_struct_elements.tuo", // Array[Rec{String,Int}]: per-field deep copy/drop
     ] {
         assert_three_way_agreement(name);
     }

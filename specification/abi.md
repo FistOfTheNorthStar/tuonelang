@@ -154,19 +154,21 @@ struct tuo_array {
 
 This header layout is **generic in `T`** and unchanged across element types. The
 *type* `Array[T]` admits any `T`; the **v0 element set** the builtins operate
-over is staged (ADR-0012). The **reference interpreter** runs every element type
-in the supported set: the scalars `Int`/`Bool`/`Str`/`String` and user
-structs/enums whose fields are themselves supported. The **native backends**
-(Stage B) lower every element that **owns no heap** — the scalars `Int`/`Bool`
+over is staged (ADR-0012). Both the **reference interpreter** and the **native
+backends** run every element type in the supported set: the scalars `Int`/`Bool`
 (a single load/store of the element's own width), the borrowed `Str` (a two-word
-fat pointer), and `Copy` structs/enums (moved by a memcpy of `stride` bytes),
-indexing at `ptr + i×stride(T)`. A **heap-owning** element (`String`, a nested
-`Array`, a `Box`/`Shared`/`Weak`, or a struct/enum containing one) is refused
-natively with an honest `unsupported` diagnostic pointing back to the
-interpreter — a native `get` of an owned element needs a recursive deep copy and
-array drop a per-element recursive free, a later increment. `Str` owns nothing,
-so `Array[Str]` lowers. Nested owned containers and wrapped values stay out of
-the set entirely — a plain type error, not a silent half-feature.
+fat pointer), the owned `String`, and user structs/enums whose fields are
+themselves supported — indexing at `ptr + i×stride(T)`. A **heap-owning**
+element (`String`, or a struct/enum carrying one) gets real per-element glue
+(the ADR-0012 owned-element increment): a native `get` is a shallow stride copy
+followed by a recursive **deep-copy fixup** — every owned buffer in the copy is
+replaced with a fresh allocation, matching the interpreter's element clone — and
+array drop walks elements front-to-back, freeing each element's buffers before
+the array's own, each exactly once; `push`/`pop` move shallowly (the source is
+de-initialized). `Str` owns nothing, so `Array[Str]` needs no glue. Only an
+element containing a `Box`/`Shared`/`Weak` wrapper is refused natively (wrapper
+values are not lowered anywhere); nested owned containers stay out of the
+checker's element set entirely — a plain type error, not a silent half-feature.
 
 ## Fixed-size arrays
 

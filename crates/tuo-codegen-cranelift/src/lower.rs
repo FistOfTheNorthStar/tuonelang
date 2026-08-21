@@ -211,15 +211,16 @@ enum Storage {
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] if the type is heap-owning (`String`, the
-/// growable `Array[T]`, `Box`/`Shared`/`Weak` — refused **here**, before any
-/// layout query, so the refusal names the concrete type) or has no v0 runtime
-/// layout. `Str` is *not* refused (ADR-0006 Stage B): it is an ordinary
-/// two-word aggregate whose bytes live in static data.
+/// [`CodegenError::unsupported`] if the type is a `Box`/`Shared`/`Weak` heap
+/// wrapper (refused **here**, before any layout query, so the refusal names
+/// the concrete type) or has no v0 runtime layout. `Str` is *not* refused
+/// (ADR-0006 Stage B): it is an ordinary two-word aggregate whose bytes live
+/// in static data; `String`/`Array` are three-word headers with real drop glue
+/// (ADR-0009 and the ADR-0012 owned-element increment).
 fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Storage, CodegenError> {
-    // Heap-owning types have an ABI *layout* (their headers), but the backend
-    // has no allocator to give them meaning yet. Refuse them at classification
-    // time with a message naming the type and the road back, so they can never
+    // Wrapper values have an ABI *layout* (a pointer), but the backend has no
+    // lowering to give them meaning yet. Refuse them at classification time
+    // with a message naming the type and the road back, so they can never
     // wander into an internal invariant error downstream.
     if let Some(refusal) = heap_type_refusal(ty, context) {
         return Err(CodegenError::unsupported(refusal));
@@ -265,10 +266,11 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
 
 /// Whether `ty` transitively **owns heap** — a `String`, a growable `Array`, a
 /// `Box`/`Shared`/`Weak` wrapper, or a struct/enum any of whose fields does.
-/// Such a type needs a deep copy on read-out and per-element drop glue, which the
-/// native array path does not do yet (see [`require_native_array_element`]).
+/// Such a type needs a deep copy on read-out (`emit_heap_glue` with
+/// [`HeapGlue::DeepFixup`]) and recursive drop glue ([`HeapGlue::DropInPlace`]),
+/// matching the interpreter's `Value::clone` and de-initializing drop.
 /// `Str` is **not** heap-owning (it is a borrowed fat pointer), so an
-/// `Array[Str]` is lowerable.
+/// `Array[Str]` needs neither.
 fn ty_owns_heap(ty: &Ty, types: &TypeckResult) -> bool {
     match ty {
         Ty::String | Ty::Array(_) | Ty::Wrapper(..) => true,
@@ -345,31 +347,77 @@ fn substitute_targs(ty: &Ty, params: &[SymbolId], targs: &[Ty]) -> Ty {
     }
 }
 
-/// Refuse a growable-`Array` element type the native path does not lower yet.
+/// Does `ty` transitively contain a `Box`/`Shared`/`Weak` heap wrapper?
+/// Wrapper *values* are not lowered at all (they await their own ADR), so a
+/// container element carrying one is refused rather than half-lowered. This is
+/// narrower than [`ty_owns_heap`]: since the ADR-0012 owned-element increment,
+/// `String` and nested `Array` elements get real deep-copy/drop glue and are no
+/// longer refused.
+fn ty_contains_wrapper(ty: &Ty, types: &TypeckResult) -> bool {
+    match ty {
+        Ty::Wrapper(..) => true,
+        Ty::Struct(symbol, targs) => types.struct_shape(*symbol).is_some_and(|shape| {
+            shape.fields.iter().any(|(_, field)| {
+                ty_contains_wrapper(&substitute_targs(field, &shape.type_params, targs), types)
+            })
+        }),
+        Ty::Enum(symbol, targs) => types.enum_shape(*symbol).is_some_and(|shape| {
+            shape.variants.iter().any(|(_, fields)| {
+                fields.iter().any(|(_, field)| {
+                    ty_contains_wrapper(&substitute_targs(field, &shape.type_params, targs), types)
+                })
+            })
+        }),
+        Ty::Option(item) | Ty::Range(item) | Ty::Array(item) | Ty::FixedArray(item, _) => {
+            ty_contains_wrapper(item, types)
+        }
+        Ty::Result(a, b) => ty_contains_wrapper(a, types) || ty_contains_wrapper(b, types),
+        Ty::Tuple(items) => items.iter().any(|item| ty_contains_wrapper(item, types)),
+        _ => false,
+    }
+}
+
+/// Refuse a growable-`Array` element type the native path does not lower.
 ///
-/// The type checker widened `Array[T]` to more element types (ADR-0012), and the
-/// reference interpreter runs them all. The native path (Stage B) lowers every
-/// element that **owns no heap** — the scalars `Int`/`Bool`, the borrowed `Str`,
-/// and structs/enums whose fields own no heap — via element-size-aware
-/// load/store and memcpy. An element that **owns heap** (`String`, a nested
-/// `Array`, a `Box`/`Shared`/`Weak`, or a struct/enum containing one) is refused:
-/// `get` would need a deep copy and array drop a per-element recursive free,
-/// which is a later increment. Refusal is an honest `unsupported`, pointing back
-/// to the interpreter, never a mis-compile.
+/// The type checker widened `Array[T]` to more element types (ADR-0012), and
+/// since the owned-element increment the native path lowers the whole
+/// checker-accepted set: no-heap elements (`Int`/`Bool`/`Str`/plain aggregates)
+/// via element-size-aware load/store and memcpy, and heap-owning elements
+/// (`String`, a struct/enum carrying one) with a deep copy on `get` and
+/// per-element drop glue (`emit_heap_glue`), matching the interpreter's
+/// `Value::clone` semantics. Only an element containing a `Box`/`Shared`/`Weak`
+/// heap wrapper is still refused — wrapper values are not lowered anywhere
+/// (their own ADR) — with an honest `unsupported`, never a mis-compile.
 ///
 /// # Errors
 ///
-/// [`CodegenError::unsupported`] for any heap-owning element type.
+/// [`CodegenError::unsupported`] for a wrapper-containing element type.
 fn require_native_array_element(element: &Ty, types: &TypeckResult) -> Result<(), CodegenError> {
-    if ty_owns_heap(element, types) {
+    if ty_contains_wrapper(element, types) {
         Err(CodegenError::unsupported(format!(
-            "the native backend does not lower a growable array of a heap-owning element yet; \
-             `Array[{element:?}]` needs per-element deep-copy/drop glue (a later ADR-0012 \
-             increment) — use `tuo spec`/`tuo verify` to run it on the reference interpreter"
+            "the native backend does not lower an array element containing a \
+             `Box`/`Shared`/`Weak` heap wrapper; `Array[{element:?}]` awaits the wrapper ADR — \
+             use `tuo spec`/`tuo verify` to run it on the reference interpreter"
         )))
     } else {
         Ok(())
     }
+}
+
+/// Which heap glue `emit_heap_glue` walks a value with (ADR-0012 owned-element
+/// increment). Both walks visit exactly the heap-owning parts of a value, so
+/// they can never disagree about what owns a buffer.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeapGlue {
+    /// The value at the address is a fresh *bitwise* copy whose heap headers
+    /// still alias the original owner's buffers: replace each with a freshly
+    /// allocated copy, making the value an independent owner — the native
+    /// mirror of the interpreter's `Value::clone` on `array::get`.
+    DeepFixup,
+    /// Free every buffer the value at the address owns (elements first, then
+    /// the containing storage) — the native mirror of the interpreter's
+    /// de-initializing drop, where dropping `Value::Array` recursively frees.
+    DropInPlace,
 }
 
 /// Declare then define every lowerable function of `program` into `module`.
@@ -2478,9 +2526,9 @@ impl<'a> Lowering<'a> {
         match op {
             HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
                 // `{ptr = sentinel, len = 0, cap = 0}` — never dereferenced,
-                // never freed. For an array, refuse a non-`Int` element up front
-                // (ADR-0012 Stage A is interpreter-only for those) so no native
-                // path half-builds an unsupported array.
+                // never freed. For an array, refuse a wrapper-containing
+                // element up front (wrapper values are not lowered anywhere)
+                // so no native path half-builds an unsupported array.
                 if let Ty::Array(element) = self.place_type(dest) {
                     require_native_array_element(&element, self.types)?;
                 }
@@ -2551,6 +2599,24 @@ impl<'a> Lowering<'a> {
                 let count = self.builder.ins().isub(end, start);
                 let range_ptr = self.builder.ins().iadd(src_ptr, start);
                 self.build_owned_from_bytes(dest, range_ptr, count)
+            }
+            HeapOp::StringAsStr => {
+                // A borrowed `{ptr, len}` view of the subject `String`'s live
+                // bytes — **zero-copy**: the two header words are copied, the
+                // buffer never is (ADR-0010). The ownership checker's O0011
+                // rule keeps the view from outliving (or aliasing a mutation
+                // of) the `String`, so the pointer cannot dangle.
+                let subject = subject.ok_or_else(|| {
+                    CodegenError::backend("string_as_str is missing its String subject")
+                })?;
+                let header = self.header_address(subject)?;
+                let (ptr, len, _cap) = self.load_header(header);
+                let base = self.aggregate_dest_address(dest)?;
+                self.builder.ins().store(MemFlags::trusted(), ptr, base, 0);
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), len, base, STR_LEN_OFFSET);
+                Ok(())
             }
             _ => Err(CodegenError::backend(
                 "a non-aggregate heap op reached `lower_heap_op_aggregate`",
@@ -2647,12 +2713,12 @@ impl<'a> Lowering<'a> {
     /// Lower `array::get` whose element is an aggregate: bounds-check, then memcpy
     /// `stride` bytes from `ptr + index*stride` into the destination slot. Mirrors
     /// the scalar `get` path but reads an aggregate the way `Use` of an aggregate
-    /// does. The read is a **copy** (the array retains its element); a v0
-    /// aggregate element owns no distinct heap the copy would alias, and an
-    /// owned-element copy (`Array[String]`) is not readable by value in v0
-    /// (`get` returns a fresh owned copy only for `Copy` aggregates like `Str`
-    /// and plain structs — an owned `String` element is read via the interpreter
-    /// until copy-out semantics are specified; see the refusal note below).
+    /// does. The read is a **copy** (the array retains its element); for a
+    /// heap-owning element (`String`, a struct/enum carrying one) the shallow
+    /// byte copy is then deep-fixed-up — every owned buffer in the copy is
+    /// replaced with a fresh allocation — so the result is an independent owner,
+    /// exactly the interpreter's `elements[index].clone()` (ADR-0012
+    /// owned-element increment).
     fn lower_array_get_aggregate(
         &mut self,
         dest: &Place,
@@ -2674,6 +2740,9 @@ impl<'a> Lowering<'a> {
         let dest_addr = self.aggregate_dest_address(dest)?;
         let layout = self.layout(&element)?;
         self.emit_memcpy(dest_addr, src, layout);
+        if ty_owns_heap(&element, self.types) {
+            self.emit_heap_glue(&element, dest_addr, HeapGlue::DeepFixup)?;
+        }
         Ok(())
     }
 
@@ -2937,35 +3006,292 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    /// Lower `Statement::Drop` (ADR-0009 Stage B). A `String`/`Array[Int]`
-    /// place frees its buffer with `tuo_rt_dealloc(ptr, cap × stride, align)`,
-    /// guarded on `cap != 0` (an empty sentinel is never freed). Every other
-    /// value (scalars, `Str`, Stage-1 aggregates, fixed arrays) owns no heap, so
-    /// its drop is a no-op. The moved-from place is de-initialized by MIR and
-    /// never dropped, so a buffer is freed exactly once.
+    /// Lower `Statement::Drop` (ADR-0009 Stage B; recursive since the ADR-0012
+    /// owned-element increment). A value that owns no heap drops as a no-op; a
+    /// heap-owning value (a `String`, an `Array`, or an aggregate carrying one)
+    /// is walked by `emit_heap_glue`, which frees element buffers before the
+    /// containing buffer — the native mirror of the interpreter's
+    /// de-initializing drop of a recursive `Value`. The moved-from place is
+    /// de-initialized by MIR and never dropped, so a buffer is freed exactly
+    /// once.
     fn lower_drop(&mut self, place: &Place) -> Result<(), CodegenError> {
         let ty = self.place_type(place);
-        let (stride, align) = match &ty {
-            Ty::String => (1i64, 1i64),
+        if !ty_owns_heap(&ty, self.types) {
+            // Scalars, Str, plain aggregates, fixed arrays: no heap to free.
+            return Ok(());
+        }
+        let base = self.header_address(place)?;
+        self.emit_heap_glue(&ty, base, HeapGlue::DropInPlace)
+    }
+
+    /// Walk the heap-owning parts of the value of type `ty` at `addr`, applying
+    /// `glue` (deep-copy fixup or drop) to each owned buffer, recursively —
+    /// the single traversal both `array::get`'s deep copy and `Drop` use, so
+    /// the two can never disagree about ownership. A no-op for a type that owns
+    /// no heap.
+    ///
+    /// # Errors
+    ///
+    /// [`CodegenError::unsupported`] for a `Box`/`Shared`/`Weak` wrapper (not
+    /// lowered anywhere); [`CodegenError::backend`] on a layout failure.
+    fn emit_heap_glue(
+        &mut self,
+        ty: &Ty,
+        addr: ClifValue,
+        glue: HeapGlue,
+    ) -> Result<(), CodegenError> {
+        if !ty_owns_heap(ty, self.types) {
+            return Ok(());
+        }
+        match ty {
+            Ty::String => match glue {
+                HeapGlue::DeepFixup => {
+                    // Replace the aliased buffer with a fresh copy of the live
+                    // `len` bytes; the copy's capacity is its length.
+                    let (ptr, len, _cap) = self.load_header(addr);
+                    let buf = self.rt_alloc(len, 1);
+                    self.builder
+                        .call_memcpy(self.frontend_config, buf, ptr, len);
+                    self.store_header(addr, buf, len, len);
+                    Ok(())
+                }
+                HeapGlue::DropInPlace => {
+                    let (ptr, _len, cap) = self.load_header(addr);
+                    self.emit_buffer_free(ptr, cap, 1, 1);
+                    Ok(())
+                }
+            },
             Ty::Array(element) => {
-                // Array[Int]-family scalar elements only in the native path
-                // (ADR-0012 Stage A): the element has no inner drop, so freeing
-                // the buffer suffices. A non-`Int` element (e.g. `Array[String]`,
-                // which would need per-element drop glue — Stage B) is refused
-                // here rather than leaked or mis-freed.
-                require_native_array_element(element, self.types)?;
                 let stride = i64::try_from(self.layout(element)?.stride())
                     .map_err(|_| CodegenError::backend("array element stride exceeds i64"))?;
                 let align = i64::try_from(self.layout(element)?.align)
                     .map_err(|_| CodegenError::backend("array element align exceeds i64"))?;
-                (stride, align)
+                match glue {
+                    HeapGlue::DeepFixup => {
+                        // Fresh buffer for the live `len` elements, shallow-copy
+                        // them, then fix each copied element up in turn.
+                        let (ptr, len, _cap) = self.load_header(addr);
+                        let bytes = self.builder.ins().imul_imm(len, stride);
+                        let buf = self.rt_alloc(bytes, align);
+                        self.builder
+                            .call_memcpy(self.frontend_config, buf, ptr, bytes);
+                        self.store_header(addr, buf, len, len);
+                        if ty_owns_heap(element, self.types) {
+                            self.emit_element_loop(buf, len, stride, element, glue)?;
+                        }
+                        Ok(())
+                    }
+                    HeapGlue::DropInPlace => {
+                        // Elements first (front to back, like the interpreter's
+                        // `Vec` drop), then the buffer itself.
+                        let (ptr, len, cap) = self.load_header(addr);
+                        if ty_owns_heap(element, self.types) {
+                            self.emit_element_loop(ptr, len, stride, element, glue)?;
+                        }
+                        self.emit_buffer_free(ptr, cap, stride, align);
+                        Ok(())
+                    }
+                }
             }
-            // Scalars, Str, Stage-1 aggregates, fixed arrays: no heap to free.
-            _ => return Ok(()),
+            Ty::Struct(..) | Ty::Tuple(..) => {
+                for (offset, field_ty) in self.heap_struct_fields(ty)? {
+                    let field_addr = self.builder.ins().iadd_imm(addr, offset);
+                    self.emit_heap_glue(&field_ty, field_addr, glue)?;
+                }
+                Ok(())
+            }
+            Ty::Enum(..) | Ty::Option(_) | Ty::Result(..) => self.emit_variant_glue(ty, addr, glue),
+            Ty::FixedArray(element, count) => {
+                let stride = i64::try_from(self.layout(element)?.stride())
+                    .map_err(|_| CodegenError::backend("array element stride exceeds i64"))?;
+                for index in 0..*count {
+                    let offset = i64::try_from(index)
+                        .map_err(|_| CodegenError::backend("fixed-array index exceeds i64"))?
+                        * stride;
+                    let element_addr = self.builder.ins().iadd_imm(addr, offset);
+                    self.emit_heap_glue(element, element_addr, glue)?;
+                }
+                Ok(())
+            }
+            Ty::Wrapper(kind, _) => Err(CodegenError::unsupported(format!(
+                "the native backend does not lower a `{}[T]` heap wrapper value \
+                 (heap wrappers await a later ADR); the interpreter remains the reference",
+                kind.name()
+            ))),
+            other => Err(CodegenError::backend(format!(
+                "heap glue reached a type that cannot own heap: {other:?}"
+            ))),
+        }
+    }
+
+    /// The heap-owning fields of a struct/tuple as `(byte offset, field type)`
+    /// pairs, targs substituted — the fields `emit_heap_glue` must visit.
+    fn heap_struct_fields(&self, ty: &Ty) -> Result<Vec<(i64, Ty)>, CodegenError> {
+        let offsets = struct_field_offsets(ty, self.types).map_err(|e| self.layout_error(e))?;
+        let field_tys: Vec<Ty> = match ty {
+            Ty::Struct(symbol, targs) => {
+                let shape = self
+                    .types
+                    .struct_shape(*symbol)
+                    .ok_or_else(|| CodegenError::backend("heap glue on an unknown struct"))?;
+                shape
+                    .fields
+                    .iter()
+                    .map(|(_, field)| substitute_targs(field, &shape.type_params, targs))
+                    .collect()
+            }
+            Ty::Tuple(items) => items.clone(),
+            other => {
+                return Err(CodegenError::backend(format!(
+                    "struct heap glue on a non-struct type: {other:?}"
+                )));
+            }
         };
-        let base = self.header_address(place)?;
-        let (ptr, _len, cap) = self.load_header(base);
-        // Guard cap != 0: free only a real buffer, never the empty sentinel.
+        offsets
+            .into_iter()
+            .zip(field_tys)
+            .filter(|(_, field_ty)| ty_owns_heap(field_ty, self.types))
+            .map(|(offset, field_ty)| {
+                i64::try_from(offset)
+                    .map(|offset| (offset, field_ty))
+                    .map_err(|_| CodegenError::backend("field offset exceeds i64"))
+            })
+            .collect()
+    }
+
+    /// The variant payload field types of an enum-shaped type (`Enum`,
+    /// `Option`, `Result`), variant-indexed in the ABI's declaration order
+    /// (`Some`/`Ok` = 0, `None`/`Err` = 1), targs substituted.
+    fn variant_payloads(&self, ty: &Ty) -> Result<Vec<Vec<Ty>>, CodegenError> {
+        match ty {
+            Ty::Enum(symbol, targs) => {
+                let shape = self
+                    .types
+                    .enum_shape(*symbol)
+                    .ok_or_else(|| CodegenError::backend("heap glue on an unknown enum"))?;
+                Ok(shape
+                    .variants
+                    .iter()
+                    .map(|(_, fields)| {
+                        fields
+                            .iter()
+                            .map(|(_, field)| substitute_targs(field, &shape.type_params, targs))
+                            .collect()
+                    })
+                    .collect())
+            }
+            Ty::Option(item) => Ok(vec![vec![(**item).clone()], Vec::new()]),
+            Ty::Result(ok, err) => Ok(vec![vec![(**ok).clone()], vec![(**err).clone()]]),
+            other => Err(CodegenError::backend(format!(
+                "variant heap glue on a non-enum type: {other:?}"
+            ))),
+        }
+    }
+
+    /// Apply `glue` to the heap-owning payload fields of the *live* variant of
+    /// the enum-shaped value at `addr`: load the `u32` discriminant, then a
+    /// chain of compare-and-branch arms, one per variant that carries a
+    /// heap-owning field (variants without one need no code).
+    fn emit_variant_glue(
+        &mut self,
+        ty: &Ty,
+        addr: ClifValue,
+        glue: HeapGlue,
+    ) -> Result<(), CodegenError> {
+        let payloads = self.variant_payloads(ty)?;
+        let disc = self
+            .builder
+            .ins()
+            .load(types::I32, MemFlags::trusted(), addr, 0);
+        let join = self.builder.create_block();
+        for (variant, fields) in payloads.iter().enumerate() {
+            let heap_fields: Vec<(i64, Ty)> = {
+                let offsets = variant_field_offsets(ty, variant, self.types)
+                    .map_err(|e| self.layout_error(e))?;
+                offsets
+                    .into_iter()
+                    .zip(fields.iter().cloned())
+                    .filter(|(_, field_ty)| ty_owns_heap(field_ty, self.types))
+                    .map(|(offset, field_ty)| {
+                        i64::try_from(offset)
+                            .map(|offset| (offset, field_ty))
+                            .map_err(|_| CodegenError::backend("variant offset exceeds i64"))
+                    })
+                    .collect::<Result<_, _>>()?
+            };
+            if heap_fields.is_empty() {
+                continue;
+            }
+            let variant_tag = i64::try_from(variant)
+                .map_err(|_| CodegenError::backend("variant index exceeds i64"))?;
+            let is_live = self.builder.ins().icmp_imm(IntCC::Equal, disc, variant_tag);
+            let glue_block = self.builder.create_block();
+            let next_block = self.builder.create_block();
+            self.builder
+                .ins()
+                .brif(is_live, glue_block, &[], next_block, &[]);
+            self.builder.switch_to_block(glue_block);
+            self.builder.seal_block(glue_block);
+            for (offset, field_ty) in heap_fields {
+                let field_addr = self.builder.ins().iadd_imm(addr, offset);
+                self.emit_heap_glue(&field_ty, field_addr, glue)?;
+            }
+            self.builder.ins().jump(join, &[]);
+            self.builder.switch_to_block(next_block);
+            self.builder.seal_block(next_block);
+        }
+        self.builder.ins().jump(join, &[]);
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        Ok(())
+    }
+
+    /// A counted loop applying `glue` to each of the `len` elements of type
+    /// `element` in the buffer at `buf` (`stride` bytes apart) — the one place
+    /// codegen emits a genuine back-edge. The loop header's induction index is
+    /// a block parameter; the header is sealed only after the back-edge jump.
+    fn emit_element_loop(
+        &mut self,
+        buf: ClifValue,
+        len: ClifValue,
+        stride: i64,
+        element: &Ty,
+        glue: HeapGlue,
+    ) -> Result<(), CodegenError> {
+        let header_block = self.builder.create_block();
+        self.builder.append_block_param(header_block, types::I64);
+        let body_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.ins().jump(header_block, &[zero.into()]);
+
+        self.builder.switch_to_block(header_block);
+        let index = self.builder.block_params(header_block)[0];
+        let done = self
+            .builder
+            .ins()
+            .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+        self.builder
+            .ins()
+            .brif(done, exit_block, &[], body_block, &[]);
+
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+        let offset = self.builder.ins().imul_imm(index, stride);
+        let element_addr = self.builder.ins().iadd(buf, offset);
+        self.emit_heap_glue(element, element_addr, glue)?;
+        let next = self.builder.ins().iadd_imm(index, 1);
+        self.builder.ins().jump(header_block, &[next.into()]);
+        self.builder.seal_block(header_block);
+
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+        Ok(())
+    }
+
+    /// Free a heap buffer of `cap × stride` bytes at `ptr`, guarded on
+    /// `cap != 0` (an empty sentinel is never freed).
+    fn emit_buffer_free(&mut self, ptr: ClifValue, cap: ClifValue, stride: i64, align: i64) {
         let has_buffer = self.builder.ins().icmp_imm(IntCC::NotEqual, cap, 0);
         let free_block = self.builder.create_block();
         let after = self.builder.create_block();
@@ -2979,7 +3305,6 @@ impl<'a> Lowering<'a> {
         self.builder.ins().jump(after, &[]);
         self.builder.switch_to_block(after);
         self.builder.seal_block(after);
-        Ok(())
     }
 
     // ----- traps -----
@@ -3349,10 +3674,11 @@ fn trap_code_of(trap: Trap) -> TrapCode {
     }
 }
 
-/// Whether a `Rvalue::HeapOp` produces an owned `String`/`Array[Int]` value (a
-/// three-word header, materialized in place by `lower_heap_op_aggregate`) rather
-/// than a scalar `I64` (the length/element reads, taken by
-/// `lower_heap_op_scalar`). Matches the interpreter's split in `eval_heap_op`.
+/// Whether a `Rvalue::HeapOp` produces an aggregate value — an owned
+/// `String`/`Array` three-word header, or `as_str`'s borrowed two-word `Str`
+/// view — materialized in place by `lower_heap_op_aggregate`, rather than a
+/// scalar `I64` (the length/element reads, taken by `lower_heap_op_scalar`).
+/// Matches the interpreter's split in `eval_heap_op`.
 fn heap_op_produces_aggregate(op: HeapOp) -> bool {
     matches!(
         op,
@@ -3360,6 +3686,7 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
             | HeapOp::StringSlice
+            | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
     )
 }

@@ -1,6 +1,9 @@
 # ADR-0012: Generic `Array[T]` element types — widening the monomorphic builtin surface
 
-- **Status:** proposed (Stage A landed; Stage B landed for no-heap elements; Stage C split/join landed)
+- **Status:** proposed (Stages A/B/C landed, including the owned-element native
+  increment — deep-copy `get` + recursive drop glue on both backends; the
+  ADR-0008 combinator instantiations and the dogfood oracle remain before
+  acceptance)
 - **Date:** 2026-08-19
 - **Context:** tuonelang's growable `Array` is **generic in its type but
   monomorphic in its operations**. ADR-0009 landed `Ty::Array(Box<Ty>)` — the
@@ -188,13 +191,11 @@
   - **Nested owned containers** (`Array[Array[T]]`, `Array[Map[K,V]]`) — sound by
     the same drop recursion, staged to a later increment.
   - **Native lowering of a heap-owning element** (`Array[String]`,
-    `Array[struct-with-owned-field]`) — the type checker and reference
-    interpreter run these (Stage A), but the native backends refuse them (Stage B
-    lowers no-heap elements only), because a native `get` deep-copy and array
-    drop's per-element recursive free are a later increment. `std::str::split`
-    returning `Array[String]` (Stage C) therefore runs on the interpreter today
-    and gains native execution when this increment lands — its specs pin the
-    semantics regardless.
+    `Array[struct-with-owned-field]`) — deferred at first (Stage B initially
+    lowered no-heap elements only), **since landed** as the owned-element
+    increment: a native `get` deep-copy and array drop's per-element recursive
+    free on both backends (see the Stage B follow-up below). `std::str::split`
+    returning `Array[String]` (Stage C) therefore runs natively too.
   - **An array `set`/`insert-at`/`remove-at`** — v0 arrays grow (`push`) and are
     read (`get`/`pop`/`len`); mutating an interior element is a later increment
     (and interacts with drop of the displaced element).
@@ -280,17 +281,48 @@
     build/drop churn loop completing in bounded memory (each array's buffer freed
     once; no-heap elements need no per-element drop).
 
-    **Heap-owning elements stay interpreter-only** (a later increment), a
-    refinement discovered during implementation: the reference interpreter's
-    `array::get` returns a **deep clone** of the element (`Value::clone`), so a
-    native `get` of an owned element (`String`, a struct with an owned field)
-    would need a recursive deep copy — not just a header memcpy, which would
-    create two owners of one buffer (double-free) — and array drop would need
-    per-element recursive free. Both backends therefore **refuse** a heap-owning
-    element (`ty_owns_heap`: `String`, a nested `Array`, a `Box`/`Shared`/`Weak`,
-    or a struct/enum containing one) with an honest `unsupported` diagnostic
-    pointing back to the interpreter — never a mis-compile. `Str` (a borrowed
-    pointer that owns nothing) is *not* heap-owning, so `Array[Str]` lowers.
+    **Heap-owning elements were at first interpreter-only**, a refinement
+    discovered during implementation: the reference interpreter's `array::get`
+    returns a **deep clone** of the element (`Value::clone`), so a native `get`
+    of an owned element (`String`, a struct with an owned field) needs a
+    recursive deep copy — not just a header memcpy, which would create two
+    owners of one buffer (double-free) — and array drop needs per-element
+    recursive free. Both backends initially **refused** a heap-owning element
+    (`ty_owns_heap`) with an honest `unsupported` diagnostic. `Str` (a borrowed
+    pointer that owns nothing) is *not* heap-owning, so `Array[Str]` lowered
+    from the start.
+
+    **Stage B follow-up — the owned-element increment landed.** Both backends
+    now lower the whole checker-accepted element set through one recursive
+    walker (`emit_heap_glue`, mirrored Cranelift/LLVM) with two modes over the
+    same traversal, so copy and drop can never disagree about what owns a
+    buffer: **deep-copy fixup** — after `get`'s shallow stride memcpy, every
+    heap-owning part of the copy (a `String`'s bytes, a struct/tuple field at
+    its ABI offset, the live enum/`Option`/`Result` variant's payload found by a
+    discriminant-compare chain, each element of a nested buffer via a genuine
+    counted loop — codegen's first back-edge) is re-pointed at a freshly
+    allocated copy, exactly the interpreter's `elements[index].clone()`; and
+    **drop-in-place** — the same walk frees element buffers front to back (the
+    interpreter's `Vec` drop order) before the containing buffer, each exactly
+    once. `push`/`pop` stay shallow moves (MIR de-initializes the source). The
+    refusal seam narrows from `ty_owns_heap` to `ty_contains_wrapper` — only an
+    element carrying a `Box`/`Shared`/`Weak` (wrapper values are not lowered
+    anywhere) is still refused. Two side effects worth naming: recursive drop
+    also **fixes a pre-existing silent leak** (dropping a `String`-carrying
+    struct/enum/`Option` local natively was a no-op before — invisible to
+    exit-code differentials), and the increment forced `std::string::as_str`'s
+    native lowering (ADR-0010 Stage B, a two-word zero-copy view), which the
+    `str.tuo` module's own spec helpers needed to compile natively. No header
+    or layout change — **no `abi::ABI_VERSION` bump**. Pinned by the
+    `array_owned_string_elements` (deep-copy independence: mutate the copy,
+    re-read the element; a whole un-matched `Some { String }` dropped through
+    the variant glue) and `array_owned_struct_elements` (per-field copy/drop)
+    fixtures agreeing interpreter == Cranelift == LLVM
+    (`owned_array_elements_agree_across_all_three_engines`), the `str_as_str_view`
+    three-way fixture, and `stdlib_split_and_join_run_natively` (the Stage C
+    payoff, both backends); both owned-element fixtures were additionally
+    leak-checked with macOS `leaks` at 0 bytes leaked — a measurement, not a CI
+    promise.
   - **Stage C — split/join landed.** `std::str::split(in s: Str, in sep: Str)
     -> Array[String]` and `std::str::join(in parts: Array[Str], in sep: Str)
     -> String` ship in the pure executable tier with specs, following Go's
@@ -305,10 +337,11 @@
     byte-level core does not implement, and the doc says so. Because
     `Array == Array` over non-scalar elements is deferred, the specs compare
     observations (`len` + a per-index `nth_is` text check), the established
-    heap-spec idiom. `split`'s result is an owned-element array, so it runs on
-    the reference interpreter today and gains native execution when the
-    owned-element increment lands; `join` consumes the natively-lowered
-    `Array[Str]`. **Still open before this ADR can be accepted:** the ADR-0008
+    heap-spec idiom. `split`'s result is an owned-element array; since the
+    owned-element increment landed it **runs natively on both backends**
+    (`stdlib_split_and_join_run_natively`), and `join` consumes the
+    natively-lowered `Array[Str]`. **Still open before this ADR can be
+    accepted:** the ADR-0008
     combinators' `String`/struct instantiations, and the dogfood oracle
     (`data-pipeline` holding parsed records in an `Array[struct]`, spec-pinned
     equal to its packed-`Int` predecessor).
@@ -323,9 +356,10 @@
   the same way), following the exact mechanics by which the runtime lab flips a
   workload from scan-only to build-and-scan. Per the lab's rule, any such
   variant's `Verdict` is `Measured` only when both sides compile, run, and agree
-  on the observable exit; it publishes no number until Stage B lands the native
-  per-element lowering. This ADR is not "accepted" until its Stage C consumers
-  (split/join with specs, and the dogfood oracle) are committed and green.
+  on the observable exit; the native per-element lowering that gates it has
+  since landed (the owned-element increment), so the variant is now addable.
+  This ADR is not "accepted" until its Stage C consumers (split/join with
+  specs, and the dogfood oracle) are committed and green.
 
 - **Dependencies and sequencing:** this ADR is **independent of the trait
   system** and lands on today's monomorphic-builtin machinery — it widens that

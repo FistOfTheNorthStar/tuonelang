@@ -2348,8 +2348,8 @@ impl<'a> Checker<'a> {
                      (`Int`/`Bool`/`Str`/`String`) or a supported struct/enum, not `{rendered}`"
                 ))
                 .with_help(
-                    "nested owned containers and wrapped values are not lowered yet (ADR-0012); \
-                     use the reference interpreter for those, or a supported element type",
+                    "nested owned containers and wrapped values are outside the v0 element \
+                     set (ADR-0012); use a supported element type",
                 )
                 .with_actual(StructuredValue::Type(rendered)),
             );

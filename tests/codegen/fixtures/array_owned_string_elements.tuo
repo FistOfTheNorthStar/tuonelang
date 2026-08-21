@@ -1,0 +1,26 @@
+// ADR-0012 owned-element increment: a growable `Array[String]` natively.
+// `get` returns a **deep copy** (mutating the copy leaves the stored element
+// untouched — the interpreter's `Value::clone`), `pop` moves the last element
+// out, and drops free every buffer exactly once: the array's remaining
+// elements, the two `get` copies, the matched-out payload, and the whole
+// un-matched `Some { String }` swallowed by `swallow` (the enum-variant drop
+// glue). Returns len("ab!!!")*10 + len("ab") + len("cde") + swallow = 56.
+fn swallow(take boxed: Option[String]) -> Int {
+    // Dropped whole here: the live-variant walk frees the payload's buffer.
+    1
+}
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, std::string::from_str("ab"));
+    std::array::push(xs, std::string::from_str("cde"));
+    var copy = std::array::get(xs, 0);
+    std::string::append(copy, "!!!");
+    let again = std::array::get(xs, 0);
+    let popped = match std::array::pop(xs) {
+        Some { value } => std::string::len(value),
+        None => 0,
+    };
+    let bonus = swallow(std::array::pop(xs));
+    std::string::len(copy) * 10 + std::string::len(again) + popped + bonus
+}

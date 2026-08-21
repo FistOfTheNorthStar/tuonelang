@@ -1,7 +1,8 @@
 # ADR-0010: The `String` → `Str` borrowing view (Q-0012)
 
 - **Status:** proposed (Stage A landed 2026-08-19 — front end + MIR + interpreter
-  + the ownership borrow rule; Stages B/C pending, see Progress)
+  + the ownership borrow rule; Stage B landed 2026-08-21 — native zero-copy
+  lowering on both backends; Stage C pending, see Progress)
 - **Date:** 2026-08-19
 - **Context:** ADR-0009 landed the owned, growable `String` but deliberately
   left one gap open: **there is no way to obtain a `Str` view into a live
@@ -252,9 +253,26 @@
     whole lexical extent, not to last-use). Pinned by `tests/ownership/fixtures/
     {ok,err}/string_view.tuo` and documented in `ownership.md` §13/§15 and
     `abi.md`.
-  - *Deferred to Stage B/C, unchanged:* native lowering (a true zero-copy
+  - *Deferred to Stage B/C at the time:* native lowering (a true zero-copy
     `{ptr, len}` view on both backends, three-way differential), and the stdlib
     payoff (the `std::str` `to_upper`/`to_lower`/`to_string` specs switching to
     `as_str(…) == "<literal>"`, plus a dogfood example composing a `String`
     producer into a `Str` consumer natively). No ABI version bump (the `Str`
     fat-pointer layout is unchanged).
+
+- **Progress — Stage B (2026-08-21):** native lowering landed on both backends,
+  pulled in by the ADR-0012 owned-element increment (whose native `std::str`
+  module compile needed `as_str` in the spec helpers). `HeapOp::StringAsStr` is
+  materialized by each backend's aggregate heap-op path as exactly the two field
+  reads the staging promised: the subject `String` header's `{ptr, len}` words
+  stored into the destination's two-word `Str` slot — **zero-copy**, no
+  allocation, no ABI change (the interpreter keeps modeling the view as a byte
+  copy; the observable behavior agrees). The O0011 borrow rule from Stage A is
+  what makes the raw pointer safe: a view cannot outlive, or alias a mutation
+  of, its `String`. Pinned by the `str_as_str_view.tuo` fixture agreeing
+  interpreter == Cranelift == LLVM in
+  `crates/tuo-cli/tests/codegen_three_way.rs`
+  (`owned_heap_values_agree_across_all_three_engines`), and exercised for real
+  by the natively-running `std::str` module
+  (`stdlib_split_and_join_run_natively`). Stage C (the spec rewrites and the
+  dogfood composition) remains before acceptance.
