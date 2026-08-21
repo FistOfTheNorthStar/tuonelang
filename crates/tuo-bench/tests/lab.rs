@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tuo_bench::lab::compare::{Verdict, comparison_for};
+use tuo_bench::lab::compare::{PeerLanguage, Verdict, comparison_for, comparison_for_peer};
 use tuo_bench::lab::compiler::{self, ColdStage, Edit, measure_cold, measure_edit};
 use tuo_bench::lab::env::Environment;
 use tuo_bench::lab::report::{ComparisonEntry, LabReport, render_human};
@@ -72,6 +72,18 @@ fn committed_programs_match_the_embedded_sources() {
             comparison.peer_source,
             "committed {} drifted from the embedded peer source",
             c_path.display()
+        );
+
+        let go_comparison = comparison_for_peer(&workload, PeerLanguage::Go)
+            .expect("supported workloads have a Go peer");
+        let go_path = root
+            .join("benchmarks/runtime/programs/go")
+            .join(format!("{}.go", workload.label));
+        assert_eq!(
+            read(&go_path),
+            go_comparison.peer_source,
+            "committed {} drifted from the embedded Go peer source",
+            go_path.display()
         );
     }
 }
@@ -189,11 +201,24 @@ fn committed_example_report_is_valid_and_regenerable() {
     );
 
     // The example's comparisons are all recorded as skipped (no live toolchain
-    // is assumed for the committed file) and cover exactly the supported set.
-    assert_eq!(committed.comparisons.len(), 8);
+    // is assumed for the committed file) and cover exactly the supported set,
+    // once per peer language — 8 supported workloads × 2 peers (C and Go) = 16.
+    assert_eq!(committed.comparisons.len(), 16);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
+    let c_count = committed
+        .comparisons
+        .iter()
+        .filter(|e| e.workload.peer == PeerLanguage::C)
+        .count();
+    let go_count = committed
+        .comparisons
+        .iter()
+        .filter(|e| e.workload.peer == PeerLanguage::Go)
+        .count();
+    assert_eq!(c_count, 8, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 8, "every supported workload has a Go peer entry");
 
     // Round-trip.
     let reserialized = committed.to_json_pretty().expect("serialize");
@@ -264,17 +289,18 @@ fn measured_lab_report_prints_under_nocapture() {
     ];
 
     // Comparisons: skipped here (this in-crate test injects no toolchain — the
-    // CLI seam test drives live C). The point is to exercise the full render.
+    // CLI seam test drives live C and Go). One entry per peer (C and Go), so the
+    // render exercises the full peer set. The point is to exercise the full
+    // render, not to claim a number.
     report.comparisons = workloads()
         .iter()
-        .filter_map(|w| {
-            comparison_for(w).map(|cmp| ComparisonEntry {
-                workload: cmp,
-                tuonelang_exit: None,
-                peer: Verdict::Skipped {
-                    reason: "no toolchain injected in this in-crate test".to_string(),
-                },
-            })
+        .flat_map(tuo_bench::lab::compare::comparisons_for)
+        .map(|cmp| ComparisonEntry {
+            workload: cmp,
+            tuonelang_exit: None,
+            peer: Verdict::Skipped {
+                reason: "no toolchain injected in this in-crate test".to_string(),
+            },
         })
         .collect();
 

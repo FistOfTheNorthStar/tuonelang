@@ -7,20 +7,23 @@
 //!
 //! - the **native runner** shells out to the real `tuo` binary (`tuo run`), the
 //!   same Cranelift+`cc` path a user gets, and
-//! - the **comparison runner** compiles the C peer with the platform `cc`.
+//! - the **comparison runners** compile the peer program with the platform
+//!   toolchain — `cc` for the C peer, `go build` for the Go peer.
 //!
 //! With those injected it drives the lab's own `run_supported` and
 //! `run_comparison`, and asserts the honest end-to-end contract: every supported
 //! scalar-core workload actually compiles, links, and runs to its expected exit
-//! byte, and where a C toolchain exists the equivalent-semantics C program agrees
-//! — while an absent toolchain yields a recorded *skip*, never a fabricated
-//! number. This is the proof that the benchmark repository can back its claims.
+//! byte, and where a peer toolchain exists the equivalent-semantics peer program
+//! agrees — while an absent toolchain yields a recorded *skip*, never a
+//! fabricated number. This is the proof that the benchmark repository can back
+//! its claims for both a runtime-free peer (C) and a runtime-bearing one (Go).
 
 use std::path::PathBuf;
 use std::process::Command;
 
 use tuo_bench::lab::compare::{
-    ComparisonRunner, PeerLanguage, PeerRun, Verdict, comparison_for, run_comparison,
+    ComparisonRunner, PeerLanguage, PeerRun, Verdict, comparison_for, comparison_for_peer,
+    run_comparison,
 };
 use tuo_bench::lab::runtime::{NativeRunner, run_supported, workloads};
 
@@ -114,6 +117,69 @@ impl ComparisonRunner for CcComparisonRunner {
     }
 }
 
+/// The real Go comparison runner: compile the peer with `go build` and run it,
+/// recording the toolchain version and the exact command. Returns `Err` (which
+/// the lab turns into a recorded *skip*) if `go` is absent or anything fails.
+/// Go is the runtime-bearing AOT peer (GC + goroutine scheduler); the exit byte
+/// must still equal the equivalent tuonelang program's.
+struct GoComparisonRunner;
+
+impl ComparisonRunner for GoComparisonRunner {
+    fn language(&self) -> PeerLanguage {
+        PeerLanguage::Go
+    }
+
+    fn compile_link_run(&self, source: &str) -> Result<PeerRun, String> {
+        let src_path = scratch("peer", "go");
+        let exe_path = scratch("peer", "gout");
+        std::fs::write(&src_path, source).map_err(|e| format!("writing Go source: {e}"))?;
+
+        let command = format!("go build -o {} {}", exe_path.display(), src_path.display());
+        let compile = Command::new("go")
+            .arg("build")
+            .arg("-o")
+            .arg(&exe_path)
+            .arg(&src_path)
+            .output()
+            .map_err(|e| format!("no Go compiler available: {e}"))?;
+        if !compile.status.success() {
+            let _ = std::fs::remove_file(&src_path);
+            return Err(format!(
+                "Go compile failed: {}",
+                String::from_utf8_lossy(&compile.stderr)
+            ));
+        }
+
+        let version = Command::new("go")
+            .arg("version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "go (version unknown)".to_string());
+
+        let run = Command::new(&exe_path)
+            .output()
+            .map_err(|e| format!("running the Go binary: {e}"))?;
+        let _ = std::fs::remove_file(&src_path);
+        let _ = std::fs::remove_file(&exe_path);
+        let exit_status = run
+            .status
+            .code()
+            .ok_or_else(|| "Go process terminated by signal".to_string())?;
+
+        Ok(PeerRun {
+            exit_status,
+            compiler_version: version,
+            command,
+        })
+    }
+}
+
 /// Every supported workload compiles, links, and runs natively to its expected
 /// exit byte — through the real `tuo run`. This is the load-bearing proof that a
 /// "supported" workload is truly runnable, not just claimed.
@@ -187,5 +253,58 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {
         eprintln!("note: no C toolchain found; all comparisons recorded as skipped");
+    }
+}
+
+/// The Go cross-language comparison, run through a live `go build`: for each
+/// supported workload the equivalent-semantics Go program is compiled and run,
+/// and its exit must equal the tuonelang workload's — a real, provenance-carrying
+/// `Measured` verdict. Go is the runtime-bearing AOT peer, so this proves the
+/// equivalence holds even across a GC'd runtime. If `go` is absent the verdict is
+/// `Skipped` (recorded, not faked); the test tolerates that so it stays green on
+/// a machine without a Go toolchain.
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "diagnostic note when a machine has no Go toolchain; keeps the test green there"
+)]
+fn go_comparison_agrees_where_the_toolchain_exists() {
+    let runner = GoComparisonRunner;
+    let mut measured = 0;
+    let mut skipped = 0;
+    for workload in workloads() {
+        let Some(comparison) = comparison_for_peer(&workload, PeerLanguage::Go) else {
+            continue; // unsupported workloads have no comparison
+        };
+        match run_comparison(&runner, &comparison) {
+            Verdict::Measured {
+                exit_status,
+                compiler_version,
+                command,
+            } => {
+                measured += 1;
+                assert_eq!(
+                    exit_status, comparison.expected_exit,
+                    "Go peer for `{}` must produce the equivalent result",
+                    workload.label
+                );
+                assert!(
+                    !compiler_version.trim().is_empty(),
+                    "a measured comparison must record the compiler version"
+                );
+                assert!(
+                    command.contains("go build"),
+                    "the exact command is recorded"
+                );
+            }
+            Verdict::Skipped { reason } => {
+                skipped += 1;
+                assert!(!reason.trim().is_empty(), "a skip must record its reason");
+            }
+        }
+    }
+    assert_eq!(measured + skipped, 8);
+    if measured == 0 {
+        eprintln!("note: no Go toolchain found; all Go comparisons recorded as skipped");
     }
 }
