@@ -1,19 +1,31 @@
-// std::sync — synchronization primitives.
+// std::sync — synchronization and structured concurrency.
 //
 // Synchronization is inherently about *effects* — threads observing and
-// changing shared state — and v0 has no threads: ADR-0006's effect seam covers
-// only descriptor I/O and process exit, and no thread or lock primitive exists
-// (that is ADR-0007's ground). So this module is mostly contract, and it says
-// so plainly rather than pretending to synchronize anything.
+// changing shared state. Since ADR-0007 landed, v0 has exactly **one**
+// concurrency primitive: the structured fork-join `std::rt::par_map`, wrapped
+// here as `par_map`. It is deliberately the *only* way to start a thread —
+// every worker joins before the call returns, and the only values that cross
+// a thread boundary are a non-capturing function value, `Copy` `Int` tasks
+// read from a shared read-only buffer, and each thread's own disjoint result
+// slot, so no data race is expressible through it (the ADR's "no data races,
+// checked" constraint, enforced by the primitive's shape rather than a
+// bolted-on marker system).
 //
 //   Executable tier — the pure *state models*: whether a one-shot latch has
-//   fired, whether a lock is held. Reasoning about the state is computation and
-//   runs; performing the synchronization is not and does not.
+//   fired, whether a lock is held. Reasoning about the state is computation
+//   and runs; performing the synchronization is not and does not.
 //
-//   Contract tier — `lock`, `unlock`, `spawn`. These are exact signatures with
-//   documented contracts and no executable spec, marked `CONTRACT:`.
+//   Effect tier — `par_map`. Spawning is a typed effect (ADR-0007), so it
+//   carries no spec; the native CLI test named in its doc pins it on both
+//   backends.
 //
-// One lock model, one one-shot latch model — no competing primitives.
+//   Contract tier — `lock`, `unlock`. Shared-state locking needs a mutable
+//   place shared across threads, which the structured primitive deliberately
+//   does not admit; these stay exact signatures with documented contracts and
+//   no executable spec, marked `CONTRACT:`, until an ADR admits shared state.
+//
+// One lock model, one one-shot latch model, one way to go parallel — no
+// competing primitives.
 
 module std::sync;
 
@@ -121,19 +133,23 @@ pub fn unlock(in state: LockState) -> LockState {
     LockState { held: false }
 }
 
-/// CONTRACT (not executable in v0): run `task_id` on a new thread, returning a
-/// handle id.
-///
-/// Threads need a spawn effect primitive `std::rt` does not expose (ADR-0007's
-/// ground), so this is a contract.
+/// EFFECT (runs natively; no spec — spawning is a typed effect, so a spec
+/// would be `R0007`): apply the non-capturing function value `f` to every
+/// task, distributing tasks round-robin over `workers` OS threads (task `i`
+/// runs on worker `i % workers`, the partition `examples/concurrent-worker`'s
+/// scheduling model predicts; `workers` below 1 behaves as 1), and return
+/// the results **in task order**. Every thread is joined before the call
+/// returns — structured fork-join, nothing detaches — and the result is
+/// deterministic whenever `f` is pure. Pinned natively on both backends by
+/// `crates/tuo-cli/tests/stdlib.rs` (`par_map_runs_natively`).
 ///
 /// # Example
 /// ```tuo
-/// // let handle = std::sync::spawn(0);
+/// // fn square(take x: Int) -> Int { x * x }
+/// // let squares = std::sync::par_map(square, tasks, 4);
 /// ```
-pub fn spawn(take task_id: Int) -> Int {
-    // Contract placeholder: the real implementation starts a thread.
-    task_id
+pub fn par_map(take f: fn(take Int) -> Int, in tasks: Array[Int], take workers: Int) -> Array[Int] {
+    std::rt::par_map(f, tasks, workers)
 }
 
 // ----------------------------------------------------------------------------

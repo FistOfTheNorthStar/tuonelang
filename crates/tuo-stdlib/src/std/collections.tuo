@@ -706,6 +706,41 @@ pub fn filter_into_strings(in xs: Array[String], take pred: fn(in String) -> Boo
 }
 
 // ----------------------------------------------------------------------------
+// Keyed aggregation over the hash map (ADR-0011).
+//
+// The dictionary-shaped algorithms the map unblocks. `counts` is the
+// canonical one — the frequency table every dedup/histogram/group-by reduces
+// to with an `Int` value — and it composes with the map builtins
+// (`std::map::{get,len,keys}`) for everything richer. Richer `group_by`
+// shapes (a map holding an `Array` per key) await non-`Int` map values, a
+// later additive increment the ADR names.
+// ----------------------------------------------------------------------------
+
+/// The frequency table of `xs`: a map from each distinct element to how many
+/// times it occurs. The keys carry `xs`'s distinct elements in first-seen
+/// order (`std::map::keys`' insertion order).
+///
+/// # Example
+/// ```tuo
+/// let freq = std::collections::counts(std::collections::of3(2, 7, 2));
+/// // std::map::get(freq, 2) == Some { value: 2 }
+/// ```
+pub fn counts(in xs: Array[Int]) -> Map[Int, Int] {
+    var freq = std::map::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        let seen = match std::map::get(freq, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(freq, x, seen + 1);
+        i = i + 1;
+    }
+    freq
+}
+
+// ----------------------------------------------------------------------------
 // Named transforms and observation helpers for the String-combinator specs.
 // The transforms are private: they exist to be passed as *values* (the only
 // way to obtain a function value in Tier 1); the public API is the
@@ -1034,6 +1069,33 @@ spec filter_into_strings {
     // Filtering agrees with folding: the kept text lengths sum to 3.
     then fold_strings(kept, 0, add_len) == 3;
     then std::array::len(filter_into_strings(std::array::empty(), is_nonempty)) == 0;
+}
+
+spec counts {
+    // [2, 7, 2] → {2: 2, 7: 1}, keys in first-seen order.
+    let freq = counts(of3(2, 7, 2));
+    then std::map::len(freq) == 2;
+    then match std::map::get(freq, 2) {
+        Some { value } => value,
+        None => 0 - 1,
+    } == 2;
+    then match std::map::get(freq, 7) {
+        Some { value } => value,
+        None => 0 - 1,
+    } == 1;
+    then match std::map::get(freq, 9) {
+        Some { value } => value,
+        None => 0 - 1,
+    } == 0 - 1;
+    then std::array::get(std::map::keys(freq), 0) == 2;
+    then std::array::get(std::map::keys(freq), 1) == 7;
+    then std::map::len(counts(std::array::empty())) == 0;
+    // The counts sum back to the input length.
+    then fold(std::map::keys(counts(of3(5, 5, 5))), 0, add) == 5;
+    then match std::map::get(counts(of3(5, 5, 5)), 5) {
+        Some { value } => value,
+        None => 0,
+    } == 3;
 }
 
 spec add {

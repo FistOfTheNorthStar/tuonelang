@@ -1,0 +1,41 @@
+module map_str_ops;
+
+// ADR-0011 Stage B: the `Map[Str, Int]` surface — borrowed two-word keys
+// hashed by content (FNV-1a) and compared by bytes — agreeing across
+// interpreter == Cranelift == LLVM. `keys` yields an `Array[Str]` in
+// insertion order; the first key's length proves the stored view survived
+// the table round-trip intact.
+
+fn main() -> Int {
+    var routes = std::map::empty();
+    let a = std::map::insert(routes, "/health", 200);
+    let b = std::map::insert(routes, "/missing", 404);
+    let hit = match std::map::get(routes, "/health") {
+        Some { value } => value,
+        None => 0 - 1,
+    };
+    let miss = match std::map::get(routes, "/nope") {
+        Some { value } => value,
+        None => 7,
+    };
+    let ks = std::map::keys(routes);
+    let k0len = std::str::len(std::array::get(ks, 0));
+    let removed = match std::map::remove(routes, "/missing") {
+        Some { value } => value,
+        None => 0 - 1,
+    };
+    let n = std::map::len(routes);
+    let fresh = match a {
+        Some { value } => value,
+        None => 0,
+    } + match b {
+        Some { value } => value,
+        None => 0,
+    };
+    // 200 + 7 + 7 + 404 + 1 + 0 = 619; 619 & 0xff = 107
+    hit + miss + k0len + removed + n + fresh
+}
+
+spec main {
+    then main() == 619;
+}

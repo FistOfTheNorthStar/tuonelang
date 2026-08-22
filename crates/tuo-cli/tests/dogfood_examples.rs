@@ -191,8 +191,14 @@ fn http_service_parses_routes_prints_and_runs() {
     );
 }
 
-/// concurrent-worker: the scheduling model runs (execution is contract-tier).
-/// The makespan is 15, which `main` returns.
+/// concurrent-worker: since ADR-0007 the pool **runs live** — `main` computes
+/// the makespan through the pure scheduling model AND through a real
+/// `std::rt::par_map` fork-join (one OS thread per worker, each running the
+/// model's own `worker_load` over its round-robin partition), and exits with
+/// the model's answer (15) only when the live parallel run agrees. This
+/// native run is exactly the ADR's "the deterministic scheduling model is
+/// the oracle" constraint, executed: a scheduling bug in the primitive would
+/// break the agreement and flip the exit to 0.
 #[test]
 fn concurrent_worker_scheduling_core_checks_specs_and_runs() {
     let dir = example_dir("concurrent-worker");

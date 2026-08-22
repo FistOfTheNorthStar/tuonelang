@@ -1,0 +1,58 @@
+module map_int_ops;
+
+// ADR-0011 Stage B: the whole `Map[Int, Int]` surface on one map — empty,
+// insert (fresh and overwrite, with the previous value coming back), get
+// (hit and miss), len, keys (insertion order), remove (order-preserving),
+// contains_key — agreeing across interpreter == Cranelift == LLVM. The map
+// drops at scope end with a live entry, freeing the table exactly once.
+
+fn main() -> Int {
+    var m = std::map::empty();
+    let first = std::map::insert(m, 7, 100);
+    let second = std::map::insert(m, 9, 200);
+    let overwrite = std::map::insert(m, 7, 150);
+    let prev = match overwrite {
+        Some { value } => value,
+        None => 0 - 1,
+    };
+    let hit = match std::map::get(m, 9) {
+        Some { value } => value,
+        None => 0 - 1,
+    };
+    let miss = match std::map::get(m, 12) {
+        Some { value } => value,
+        None => 5,
+    };
+    let n = std::map::len(m);
+    let ks = std::map::keys(m);
+    let k0 = std::array::get(ks, 0);
+    let removed = match std::map::remove(m, 7) {
+        Some { value } => value,
+        None => 0 - 1,
+    };
+    let n2 = std::map::len(m);
+    let still_there = if std::map::contains_key(m, 9) {
+        1
+    } else {
+        0
+    };
+    let gone = if std::map::contains_key(m, 7) {
+        1
+    } else {
+        0
+    };
+    let fresh_a = match first {
+        Some { value } => value,
+        None => 1,
+    };
+    let fresh_b = match second {
+        Some { value } => value,
+        None => 1,
+    };
+    // 100 + 200 + 5 + 2 + 7 + 150 + 1 + 1 + 0 + 1 + 1 = 468; 468 & 0xff = 212
+    prev + hit + miss + n + k0 + removed + n2 + still_there + gone + fresh_a + fresh_b
+}
+
+spec main {
+    then main() == 468;
+}

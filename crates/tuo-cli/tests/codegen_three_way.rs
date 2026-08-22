@@ -350,6 +350,25 @@ fn owned_array_elements_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0011 Stage B: the hash map. The interpreter's insertion-ordered
+/// reference table and both backends' `tuo_rt_map_*` open-addressing table
+/// must agree on every observable — insert/overwrite previous values, hit
+/// and miss lookups, `len`, `keys` in insertion order, order-preserving
+/// `remove`, `contains_key` — for both key kinds (`Int` mixed by the
+/// splitmix64 finalizer, `Str` hashed by FNV-1a over its bytes), and the
+/// churn fixture crosses the growth threshold repeatedly so every entry
+/// frees exactly once (a double-free aborts, breaking the agreed exit).
+#[test]
+fn map_operations_agree_across_all_three_engines() {
+    for name in [
+        "map_int_ops.tuo", // Map[Int, Int]: the whole surface on one map
+        "map_str_ops.tuo", // Map[Str, Int]: byte-hashed borrowed keys
+        "map_churn.tuo",   // growth + sliding-window remove churn (leak proxy)
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// ADR-0008 Tier 1 function values: `Const::Fn` as a pointer-width code pointer
 /// and `Callee::Indirect` as an indirect call whose signature is built from the
 /// callee value's `Ty::Fn` (identical ABI to the direct path). All three engines

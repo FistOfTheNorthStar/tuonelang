@@ -60,6 +60,13 @@ pub enum Value {
     },
     /// An array of elements.
     Array(Vec<Value>),
+    /// A hash map (ADR-0011), modelled as its **reference semantics**: an
+    /// insertion-ordered association list of `(key, value)` entries. The
+    /// interpreter is the semantic oracle, not the performance model — a
+    /// linear scan implements exactly the observable contract (insertion
+    /// order, `remove` preserving relative order, key equality by scalar
+    /// `==`) that the native hash table must reproduce.
+    Map(Vec<(Value, Value)>),
     /// A **function value** (ADR-0008 Tier 1): a callable naming a top-level
     /// function by its `SymbolId`. `Copy` (cloning copies the id), rendered by
     /// the function's symbol. An indirect call resolves this to the function
@@ -124,6 +131,13 @@ impl Value {
             Self::Array(elements) => {
                 let inner: Vec<String> = elements.iter().map(Self::render).collect();
                 format!("[{}]", inner.join(", "))
+            }
+            Self::Map(entries) => {
+                let inner: Vec<String> = entries
+                    .iter()
+                    .map(|(key, value)| format!("{}: {}", key.render(), value.render()))
+                    .collect();
+                format!("{{{}}}", inner.join(", "))
             }
             // A function value is rendered by its symbol id (the interpreter
             // has no name table here); it is `Copy` and names a top-level fn.

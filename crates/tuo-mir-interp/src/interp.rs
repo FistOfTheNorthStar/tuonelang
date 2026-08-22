@@ -463,6 +463,48 @@ impl Machine<'_, '_> {
                 };
                 (Value::Array(elements), result)
             }
+            (HeapMutOp::MapInsert, Value::Map(mut entries)) => {
+                let key = operands.first().cloned().unwrap_or(Value::Unit);
+                let value = operands.get(1).cloned().unwrap_or(Value::Unit);
+                // Overwrite keeps the key's insertion position; a fresh key
+                // appends (ADR-0011's deterministic order).
+                let result = match entries.iter_mut().find(|(k, _)| map_key_eq(k, &key)) {
+                    Some((_, slot)) => {
+                        let previous = std::mem::replace(slot, value);
+                        Value::Variant {
+                            variant: 0,
+                            fields: vec![previous],
+                        }
+                    }
+                    None => {
+                        entries.push((key, value));
+                        Value::Variant {
+                            variant: 1,
+                            fields: Vec::new(),
+                        }
+                    }
+                };
+                (Value::Map(entries), result)
+            }
+            (HeapMutOp::MapRemove, Value::Map(mut entries)) => {
+                let key = operands.first().cloned().unwrap_or(Value::Unit);
+                // `Vec::remove` shifts the tail down, preserving the relative
+                // insertion order of the remaining entries (ADR-0011).
+                let result = match entries.iter().position(|(k, _)| map_key_eq(k, &key)) {
+                    Some(index) => {
+                        let (_, value) = entries.remove(index);
+                        Value::Variant {
+                            variant: 0,
+                            fields: vec![value],
+                        }
+                    }
+                    None => Value::Variant {
+                        variant: 1,
+                        fields: Vec::new(),
+                    },
+                };
+                (Value::Map(entries), result)
+            }
             (_, other) => {
                 return Err(self.type_bug(function, "heap mutation of a mistyped target", &other));
             }
@@ -1147,6 +1189,47 @@ impl Machine<'_, '_> {
                 )]
                 Ok(elements[index as usize].clone())
             }
+            HeapOp::MapEmpty => Ok(Value::Map(Vec::new())),
+            HeapOp::MapGet | HeapOp::MapContainsKey | HeapOp::MapLen | HeapOp::MapKeys => {
+                let entries = match subject {
+                    Some(Value::Map(entries)) => entries,
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(
+                            function,
+                            "heap op subject is not a Map",
+                            &value,
+                        ));
+                    }
+                };
+                match op {
+                    HeapOp::MapLen => Ok(Value::Int(entries.len() as i128, IntKind::I64)),
+                    // Insertion order is the observable contract (ADR-0011):
+                    // the keys come back in the order they entered the map.
+                    HeapOp::MapKeys => Ok(Value::Array(
+                        entries.iter().map(|(key, _)| key.clone()).collect(),
+                    )),
+                    HeapOp::MapGet => {
+                        let key = values.first().cloned().unwrap_or(Value::Unit);
+                        Ok(match entries.iter().find(|(k, _)| map_key_eq(k, &key)) {
+                            Some((_, value)) => Value::Variant {
+                                variant: 0,
+                                fields: vec![value.clone()],
+                            },
+                            None => Value::Variant {
+                                variant: 1,
+                                fields: Vec::new(),
+                            },
+                        })
+                    }
+                    _ => {
+                        let key = values.first().cloned().unwrap_or(Value::Unit);
+                        Ok(Value::Bool(
+                            entries.iter().any(|(k, _)| map_key_eq(k, &key)),
+                        ))
+                    }
+                }
+            }
         }
     }
 
@@ -1645,6 +1728,25 @@ fn value_cost(value: &Value) -> u64 {
             1 + fields.iter().map(value_cost).sum::<u64>()
         }
         Value::Array(elements) => 1 + elements.iter().map(value_cost).sum::<u64>(),
+        Value::Map(entries) => {
+            1 + entries
+                .iter()
+                .map(|(key, value)| value_cost(key) + value_cost(value))
+                .sum::<u64>()
+        }
+    }
+}
+
+/// Key equality for the map ops (ADR-0011): the v0 keys are the scalars
+/// `Int` and `Str`, compared exactly as the surface `==` compares them —
+/// integers by value, strings by byte content. Anything else is a verifier
+/// bug upstream; comparing structurally here keeps the reference semantics
+/// total.
+fn map_key_eq(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Int(x, _), Value::Int(y, _)) => x == y,
+        (Value::Str(x), Value::Str(y)) => x == y,
+        _ => a == b,
     }
 }
 

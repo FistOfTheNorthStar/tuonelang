@@ -168,6 +168,7 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
             include_str!("../../../../benchmarks/runtime/programs/c/string-processing.c")
         }
         "allocation" => include_str!("../../../../benchmarks/runtime/programs/c/allocation.c"),
+        "map-lookup" => include_str!("../../../../benchmarks/runtime/programs/c/map-lookup.c"),
         _ => return None,
     })
 }
@@ -198,6 +199,7 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
             include_str!("../../../../benchmarks/runtime/programs/go/string-processing.go")
         }
         "allocation" => include_str!("../../../../benchmarks/runtime/programs/go/allocation.go"),
+        "map-lookup" => include_str!("../../../../benchmarks/runtime/programs/go/map-lookup.go"),
         _ => return None,
     })
 }

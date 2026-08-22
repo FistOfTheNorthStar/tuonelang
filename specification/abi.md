@@ -188,6 +188,64 @@ slot, a struct field), with no header, no indirection, and no allocation.
   its drop a no-op.
 - The `Array[T]` header layout above is unchanged by this section.
 
+## Maps (ADR-0011)
+
+`Map[K, V]` is the builtin hash map. Its program-visible value is the **same
+three-word header** as `String`/`Array` — `(ptr, len, cap)`, `Layout::words(3)`
+— where `ptr` points at the **dense entries** buffer, `len` is the live entry
+count, and `cap` the entry capacity. An empty map is the sentinel header
+`(ZERO_SIZE_SENTINEL, 0, 0)` with no allocation. The v0 operation surface is
+`Map[Int, Int]` and `Map[Str, Int]`; entries are stored **in insertion
+order**:
+
+- `Map[Int, Int]` entry: `{ i64 key, i64 value }`, stride 16.
+- `Map[Str, Int]` entry: `{ const u8 *key_ptr, u64 key_len, i64 value }`,
+  stride 24 — the borrowed `Str` key stored as its two-word view, never
+  copied.
+
+Every observable is defined by the insertion-ordered dense region: `keys`
+lists keys in insertion order, `remove` shifts the tail down one slot
+(preserving the relative order of the rest), and an overwrite keeps the key's
+position — exactly the reference interpreter's association-list semantics.
+
+The **hash index is not part of the ABI a backend consults**: it lives inside
+the same allocation, *before* the entries
+(`[ u64 index[index_cap] ][ u64 index_cap ][ entries ]`, `index_cap = 2 ×
+cap`, slots holding `dense_index + 1` or `0`), and is owned entirely by the
+`tuo_rt_map_*` runtime shim (`tuo_runtime::map::map_runtime_c_source`,
+linked into every built binary). Backends lower the map operations to shim
+calls and never touch the internals; only `len` (a header word read) and
+`empty` (a sentinel header store) lower inline. The hash functions are fixed
+and unseeded — reproducibility over hash-flooding resistance, the documented
+ADR-0011 trade — and **unobservable** (no observable depends on bucket
+placement): `Int` keys mix through the splitmix64 finalizer, `Str` keys hash
+with 64-bit FNV-1a over their bytes, both vector-pinned in
+`tuo_runtime::map`.
+
+```c
+void tuo_rt_map_int_insert(long long *hdr, long long k, long long v, long long *out);
+void tuo_rt_map_int_get(const long long *hdr, long long k, long long *out);
+void tuo_rt_map_int_remove(long long *hdr, long long k, long long *out);
+void tuo_rt_map_int_keys(const long long *hdr, long long *out_hdr);
+void tuo_rt_map_str_insert(long long *hdr, const unsigned char *kp,
+                           unsigned long long kn, long long v, long long *out);
+void tuo_rt_map_str_get(const long long *hdr, const unsigned char *kp,
+                        unsigned long long kn, long long *out);
+void tuo_rt_map_str_remove(long long *hdr, const unsigned char *kp,
+                           unsigned long long kn, long long *out);
+void tuo_rt_map_str_keys(const long long *hdr, long long *out_hdr);
+void tuo_rt_map_drop(long long *hdr, long long stride);
+```
+
+`out` is a two-word `{found, value}` buffer (`found` ∈ {0, 1}; `value` is 0
+when absent) from which the backend materializes the `Option[Int]` result;
+`keys` writes a fresh `Array[K]` header through `out_hdr` (allocated via
+`tuo_rt_alloc`; the sentinel header for an empty map); `drop` frees the whole
+block (index + entries) via `tuo_rt_dealloc`, taking the entry stride only to
+compute the block size. Growth doubles the entry capacity from 8, allocating
+a new block, copying the dense entries, and rebuilding the index. `Map[K, V]`
+is non-`Copy`; a map moves as a 24-byte header memcpy like `String`/`Array`.
+
 ## Function values (Tier 1)
 
 A **function value** (ADR-0008 Tier 1) — a value of a function type
@@ -362,6 +420,9 @@ long long tuo_rt_read_byte(long long fd);
                                        /* 0..=255; -1 on EOF; -2 on host error */
 _Noreturn void tuo_rt_exit(long long code);
                                        /* terminates with (code & 0xff); never returns */
+void tuo_rt_par_map(long long f, const long long *tasks, long long n,
+                    long long workers, long long *out_hdr);
+                                       /* ADR-0007: structured fork-join */
 ```
 
 - `tuo_rt_write` writes the `len` bytes at `ptr` to file descriptor `fd`,
@@ -377,6 +438,19 @@ _Noreturn void tuo_rt_exit(long long code);
   runs no destructors (none are pending by construction: a trap-free v0
   program's drops are statically placed, and an exit abandons them exactly as
   the documented trap rule abandons cleanup).
+- `tuo_rt_par_map` (ADR-0007) applies the task function `f` — a tuonelang
+  `fn(take Int) -> Int` code pointer, whose native calling convention is
+  exactly C's `long long (*)(long long)` — to the `n` tasks at `tasks`,
+  distributing them **round-robin** over `workers` POSIX threads (task `i`
+  on thread `i % workers`; `workers < 1` behaves as 1, never more threads
+  than tasks, capped at 64), joins every thread, and writes a fresh
+  `Array[Int]` header of the results **in task order** through `out_hdr`
+  (buffer via `tuo_rt_alloc`; the sentinel header for zero tasks). It is
+  **structured fork-join**: nothing outlives the call; each thread reads the
+  shared task buffer read-only and writes only its own disjoint result
+  slots, so the shim contains no lock and needs none. A thread that fails to
+  start runs its partition inline — the result is identical, only less
+  parallel. It never traps.
 
 **Static string data.** A `Str` *constant*'s bytes (a string literal) live in
 **read-only static data** in the emitted object, deduplicated per module; its
@@ -479,7 +553,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `5`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `6`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -496,5 +570,8 @@ layout changed. Version `5` (ADR-0008 Tier 1) gave the **function type**
 (`Ty::Fn`) a layout — a single code pointer (pointer-width, `Copy`) — where it
 previously had none (`layout_of` returned a `LayoutError`); a previously
 unlayoutable type gaining a layout is a layout-affecting change, so the version
-bumps. The version is asserted by the crate's tests so a silent reinterpretation
-of bytes is impossible.
+bumps. Version `6` (ADR-0011) gave the **map type** (`Ty::Map`) its three-word
+header layout and added the `tuo_rt_map_*` runtime symbols (and, with
+ADR-0007, the `tuo_rt_par_map` fork-join symbol); a new heap layout is
+layout-affecting, so the version bumps. The version is asserted by the crate's
+tests so a silent reinterpretation of bytes is impossible.

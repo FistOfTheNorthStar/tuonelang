@@ -93,6 +93,9 @@ impl InferCtx {
             Ty::Result(ok, err) => {
                 Ty::Result(Box::new(self.apply(&ok)), Box::new(self.apply(&err)))
             }
+            Ty::Map(key, value) => {
+                Ty::Map(Box::new(self.apply(&key)), Box::new(self.apply(&value)))
+            }
             Ty::Struct(symbol, args) => {
                 Ty::Struct(symbol, args.iter().map(|arg| self.apply(arg)).collect())
             }
@@ -118,7 +121,9 @@ impl InferCtx {
                 fn_ty.params.iter().any(|param| self.occurs(var, &param.ty))
                     || self.occurs(var, &fn_ty.ret)
             }
-            Ty::Result(ok, err) => self.occurs(var, &ok) || self.occurs(var, &err),
+            Ty::Result(ok, err) | Ty::Map(ok, err) => {
+                self.occurs(var, &ok) || self.occurs(var, &err)
+            }
             Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(|arg| self.occurs(var, arg)),
             _ => false,
         }
@@ -214,7 +219,8 @@ impl InferCtx {
             // fall through to the mismatch arm.
             (Ty::FixedArray(a, n), Ty::FixedArray(b, m)) if n == m => self.unify(&a, &b),
             (Ty::Option(a), Ty::Option(b)) => self.unify(&a, &b),
-            (Ty::Result(a_ok, a_err), Ty::Result(b_ok, b_err)) => {
+            (Ty::Result(a_ok, a_err), Ty::Result(b_ok, b_err))
+            | (Ty::Map(a_ok, a_err), Ty::Map(b_ok, b_err)) => {
                 self.unify(&a_ok, &b_ok)?;
                 self.unify(&a_err, &b_err)
             }

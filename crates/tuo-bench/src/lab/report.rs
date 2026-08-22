@@ -21,6 +21,7 @@ use crate::SCHEMA_VERSION;
 use crate::lab::compare::{ComparisonWorkload, Verdict};
 use crate::lab::compiler::{ColdResult, EditResult};
 use crate::lab::env::Environment;
+use crate::lab::parallel::SpeedupMeasurement;
 use crate::lab::runtime::{RuntimeWorkload, Support};
 
 /// One cross-language comparison entry: the workload, its peer program, and the
@@ -51,6 +52,11 @@ pub struct LabReport {
     pub runtime_workloads: Vec<RuntimeWorkload>,
     /// Cross-language comparisons, where a peer with equivalent semantics exists.
     pub comparisons: Vec<ComparisonEntry>,
+    /// Parallel-speedup measurements (ADR-0007): serial vs `par_map` wall
+    /// clock, tuonelang and C pairs. Additive field — an older report without
+    /// it parses as "not measured".
+    #[serde(default)]
+    pub parallel: Vec<SpeedupMeasurement>,
 }
 
 impl LabReport {
@@ -65,6 +71,7 @@ impl LabReport {
             edit_scenarios: Vec::new(),
             runtime_workloads: crate::lab::runtime::workloads(),
             comparisons: Vec::new(),
+            parallel: Vec::new(),
         }
     }
 
@@ -204,6 +211,38 @@ pub fn render_human(report: &LabReport) -> String {
         }
     }
     out.push('\n');
+
+    out.push_str("Parallel speedup (ADR-0007; serial vs par_map wall clock)\n");
+    out.push_str("---------------------------------------------------------\n");
+    if report.parallel.is_empty() {
+        out.push_str("  (none measured)\n");
+    }
+    for entry in &report.parallel {
+        for (side, verdict) in [("tuonelang", &entry.tuonelang), ("c", &entry.c)] {
+            match verdict {
+                crate::lab::parallel::SpeedupVerdict::Measured {
+                    serial_nanos,
+                    parallel_nanos,
+                } => {
+                    let ratio = verdict
+                        .speedup()
+                        .map_or_else(|| "n/a".to_string(), |r| format!("{r:.2}x"));
+                    out.push_str(&format!(
+                        "  {:<20} {side}: serial {serial_nanos} ns, parallel \
+                         {parallel_nanos} ns ({} workers) — ratio {ratio}\n",
+                        entry.label, entry.workers,
+                    ));
+                }
+                crate::lab::parallel::SpeedupVerdict::Skipped { reason } => {
+                    out.push_str(&format!(
+                        "  {:<20} {side}: skipped — {reason}\n",
+                        entry.label,
+                    ));
+                }
+            }
+        }
+    }
+    out.push('\n');
     out.push_str(
         "Note: figures are measurements on the environment above, not guarantees. \
          Unmeasured workloads report why, not a number.\n",
@@ -220,8 +259,8 @@ mod tests {
     fn new_report_carries_the_full_workload_catalog() {
         let report = LabReport::new(Environment::capture());
         assert_eq!(report.schema_version, SCHEMA_VERSION);
-        assert_eq!(report.runtime_workloads.len(), 9);
-        assert_eq!(report.supported_workload_count(), 8);
+        assert_eq!(report.runtime_workloads.len(), 10);
+        assert_eq!(report.supported_workload_count(), 9);
     }
 
     #[test]

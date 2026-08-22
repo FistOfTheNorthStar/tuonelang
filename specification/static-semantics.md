@@ -282,6 +282,7 @@ normal call checking — resolved per §2.4.
 | `fn read_byte(take fd: Int) -> Int` | Reads one byte from `fd`. Returns `0..=255`, or `-1` on end of input, or another negative value on host error. **Never traps.** |
 | `fn exit(take code: Int) -> Int` | Terminates the process with `code & 0xff` as the exit status. Declared as returning `Int` so it composes in expression position, but it **never returns**. |
 | `fn write_string(take fd: Int, in s: String) -> Int` | (ADR-0009) Writes the owned `String`'s bytes to `fd` — the `String` is lent read-only for the call, so no `String`→`Str` view is needed (Q-0012 stays deferred). Same contract as `write`: bytes written or a negative host-error value. **Never traps.** |
+| `fn par_map(take f: fn(take Int) -> Int, in tasks: Array[Int], take workers: Int) -> Array[Int]` | (ADR-0007) Applies the non-capturing function value `f` to every task on `workers` OS threads (round-robin: task `i` on thread `i % workers`; below 1 behaves as 1), joining every thread before returning, and yields the results **in task order**. Structured fork-join: nothing outlives the call, the tasks array is lent read-only, and only `Copy` values and disjoint result slots cross a thread boundary — no data race is expressible through it. Deterministic in its result whenever `f` is pure. **Never traps.** Spawning is an effect: a spec that could reach it is `R0007`. |
 
 **Pure string builtins (`std::str`)** — byte-level operations on the UTF-8
 buffer of a `Str` (a `slice` may split a multi-byte code point; that is the v0
@@ -380,6 +381,30 @@ to `Str` at the type level — type equality is exact, so mixing them is
 `String` and `Array[T]` remain **non-`Copy`** ([`ownership.md`](ownership.md)
 §2): a `take` argument moves them, and a `mut` argument requires a mutable
 place (`O0004` otherwise).
+
+**Hash-map builtins (`std::map`)** — the builtin `Map[K, V]` (ADR-0011). The
+type is generic and non-`Copy` (it owns a heap table); the v0 **operation
+surface** is `Map[Int, Int]` and `Map[Str, Int]` — the scalar keys whose
+equality and hash the language owns, with `Int` values. `K`/`V` are witnessed
+by the receiver exactly as the array element is; any other *determined* pair
+is a `T0001` naming the pair, and an undetermined `empty()` is `T0011`:
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn empty() -> Map[K, V]` | The empty map. `K`/`V` inferred from context. Never traps. |
+| `fn insert(mut m: Map[K, V], take k: K, take v: V) -> Option[V]` | Insert/overwrite `k → v`; the **previous** value comes back (`Some`) or `None` when `k` was absent. A fresh key appends to the insertion order; an overwrite keeps the key's position. Never traps. |
+| `fn get(in m: Map[K, V], take k: K) -> Option[V]` | The value for `k`, or `None`. Never traps. |
+| `fn contains_key(in m: Map[K, V], take k: K) -> Bool` | Is `k` present? Never traps. |
+| `fn remove(mut m: Map[K, V], take k: K) -> Option[V]` | Remove `k`, returning its value (`Some`) or `None`. The remaining entries keep their relative insertion order. Never traps. |
+| `fn len(in m: Map[K, V]) -> Int` | The entry count. Never traps. |
+| `fn keys(in m: Map[K, V]) -> Array[K]` | A **new** array of the keys in **insertion order** — deterministic and identical across runs and engines (the ADR-0011 rule; a program that needs sorted keys composes `std::collections::sorted_ascending`). Never traps. |
+
+Key equality is the scalar `==` (`Int` by value, `Str` by byte content); the
+bucket-placing hash is language-owned, fixed, unseeded, and **unobservable**
+(`abi.md` §Maps). **`Map == Map` is deferred**: structural equality over an
+unordered container needs a canonical comparison the v0 core does not define,
+so `==`/`!=` on map operands is a `T0006` "operator not supported" — specs
+compare observations (`get`/`len`/`keys`), the established heap-spec idiom.
 
 ### 3.8 First-class function values (`[EXPERIMENTAL]`, ADR-0008 Tier 1)
 

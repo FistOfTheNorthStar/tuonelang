@@ -210,6 +210,7 @@ types are fixed per op and verified (§7.1, `M0011`):
 | `ReadByte` | `Value fd: I64` | The byte read (`0..=255`), `-1` on end of input, or another negative value on host error. Never traps. |
 | `Exit` | `Value code: I64` | Nothing — the process terminates with `code & 0xff` as its exit status; `dest` is never observably written because control never continues. |
 | `WriteString` (ADR-0009) | `Value fd: I64`, `Borrow s: String` | Bytes written, or a negative value on host error. Never traps. The `String` is **lent read-only** for the statement — a `Borrow` place, exactly as an `in` call argument — so the effect consumes nothing and the caller drops the string where it always would. |
+| `ParMap` (ADR-0007) | `Value f: fn(take I64) -> I64`, `Value workers: I64`, `Borrow tasks: Array[I64]` | An `Array[I64]` of `f`'s results **in task order** — the one effect whose destination is not `I64`. Tasks distribute round-robin over `workers` OS threads (task `i` on thread `i % workers`; `workers < 1` behaves as 1); every thread joins before the statement completes (structured fork-join — nothing outlives it). The tasks array is **lent read-only**; the result is deterministic whenever `f` is pure. Never traps. |
 
 `Exit` is a **statement, not a terminator**, by choice: the surface builtin is
 declared `-> Int`, so the statement form (an effect with an `I64` destination)
@@ -232,8 +233,9 @@ signals — never a silent no-op and never a real effect. Effectful programs run
 **natively** (`tuo run`): since ADR-0006 Stage B both backends lower an
 `Effect` to a direct call to the matching runtime symbol (`tuo_rt_write`/
 `tuo_rt_read_byte`/`tuo_rt_exit`, `abi.md` "Effect symbols"). `WriteString`
-lands natively with **ADR-0009 Stage B**; until then both backends refuse it
-(they never mis-compile it).
+lands natively with **ADR-0009 Stage B**, and `ParMap` with **ADR-0007** —
+both backends lower it to `tuo_rt_par_map` (`abi.md` "Effect symbols"), the
+runtime's pthreads fork-join.
 
 ### 4.3 Heap mutations (`HeapMutOp`) — `[EXPERIMENTAL]`, ADR-0009 Stage A
 
@@ -252,9 +254,14 @@ fixed per op and verified (§7.1, `M0013`):
 | `Append` | `String` | `t: Str` | `()` | Append `t`'s bytes. Never traps. |
 | `Push` | `Array[I64]` | `v: I64` | `()` | Append the element `v`. Never traps. |
 | `Pop` | `Array[I64]` | — | `Option[I64]` | Remove and return the last element (`Some`), or `None` when empty. Never traps. |
+| `MapInsert` (ADR-0011) | `Map[K, V]` | `k: K`, `v: V` | `Option[V]` | Insert or overwrite `k → v`, producing the **previous** value (`Some`) or `None` when `k` was absent. A fresh key appends to the map's insertion order; an overwrite keeps the key's position. Never traps. |
+| `MapRemove` (ADR-0011) | `Map[K, V]` | `k: K` | `Option[V]` | Remove `k`, producing its value (`Some`) or `None`. The remaining entries keep their relative insertion order. Never traps. |
 
-`Pop` both mutates and produces a value, which is exactly why it is a
-statement-level mutator and not an rvalue: an rvalue must not mutate a place.
+`Pop` (and the map mutators, which follow it) both mutates and produces a
+value, which is exactly why they are statement-level mutators and not
+rvalues: an rvalue must not mutate a place. The map's `K`/`V` are read from
+the target place's actual `Map[K, V]` type, exactly as the array element is
+(the v0 checker admits `Map[Int, Int]` and `Map[Str, Int]`).
 The traps are *statement-level* deterministic aborts, the same source as
 trapping arithmetic (§5.3) and the `StrOp`/`HeapOp` traps — not an `Assert`.
 A `HeapMutate` is **pure computation** (growth is allocation, not I/O): the
@@ -443,6 +450,11 @@ verified (§7.1, `M0012`). Let `len(x)` be the byte/element length:
 | `ArrayEmpty` | — | — | `Array[I64]` | The empty array. Never traps. |
 | `ArrayLen` | `Array[I64]` | — | `I64` | `len(subject)`. Never traps. |
 | `ArrayGet` | `Array[I64]` | `i: I64` | `I64` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |
+| `MapEmpty` (ADR-0011) | — | — | `Map[K, V]` | The empty map. Never traps. |
+| `MapGet` (ADR-0011) | `Map[K, V]` | `k: K` | `Option[V]` | The value for `k` (`Some`) or `None`. Never traps. |
+| `MapContainsKey` (ADR-0011) | `Map[K, V]` | `k: K` | `Bool` | Is `k` present? Never traps. |
+| `MapLen` (ADR-0011) | `Map[K, V]` | — | `I64` | The entry count. Never traps. |
+| `MapKeys` (ADR-0011) | `Map[K, V]` | — | `Array[K]` | A new array of the keys in **insertion order** (a removed key's successors keep their relative order — the deterministic order ADR-0011 fixes). Never traps. |
 
 Like `StrOp`, the traps are *statement-level* deterministic aborts (§5.6's
 rationale applies unchanged), and like `String` itself the operations are

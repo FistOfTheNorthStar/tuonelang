@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym34)",
-        "fn_body(sym35)",
-        "fn_body(sym36)",
+        "fn_body(sym43)",
+        "fn_body(sym44)",
+        "fn_body(sym45)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym34)",
-        "fn_body(sym35)",
-        "fn_body(sym36)",
+        "fn_body(sym43)",
+        "fn_body(sym44)",
+        "fn_body(sym45)",
         "interface(file#0)",
-        "mir_of(sym34)",
+        "mir_of(sym43)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym34)",
-        "type_of(sym35)",
-        "type_of(sym36)"
+        "type_of(sym43)",
+        "type_of(sym44)",
+        "type_of(sym45)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym34)",
-        "fn_body(sym35)",
-        "fn_body(sym36)",
+        "fn_body(sym43)",
+        "fn_body(sym44)",
+        "fn_body(sym45)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:37"
+        "spec:46"
       ],
       "reexecuted_count": 1
     }
@@ -113,10 +113,10 @@
     },
     {
       "label": "indirect-calls",
-      "description": "a hot loop calling through a first-class function value (ADR-0008 Tier 1) \u2014 the indirect-call sibling of function-calls, measured against a C peer calling through a function pointer",
+      "description": "a hot loop calling through a first-class function value (ADR-0008 Tier 1) — the indirect-call sibling of function-calls, measured against a C peer calling through a function pointer",
       "support": {
         "support": "supported",
-        "source": "// indirect-calls \u2014 a hot loop calling through a first-class function VALUE\n// (ADR-0008 Tier 1), the indirect-call sibling of the `function-calls`\n// workload (which measures only direct calls). `step` is a\n// `fn(take Int, take Int) -> Int` value: `main` passes the top-level `add` by\n// name (the only way to obtain a function value in Tier 1), and `fold` invokes\n// it through the indirect-call path once per iteration. The equivalent C peer\n// (`benchmarks/runtime/programs/c/indirect-calls.c`) runs the identical loop\n// calling through a function pointer, so the comparison isolates the indirect\n// dispatch itself: same arithmetic, same iteration count, same exit.\nfn add(take a: Int, take b: Int) -> Int {\n    a + b\n}\n\n// Fold `step` over `reps` iterations, adding 1 each time. Every `step(acc, 1)`\n// is an indirect call through the function value \u2014 the operation being measured.\nfn fold(take reps: Int, take step: fn(take Int, take Int) -> Int) -> Int {\n    var acc = 0;\n    var i = 0;\n    while i < reps {\n        acc = step(acc, 1);\n        i = i + 1;\n    }\n    acc\n}\n\nfn main() -> Int {\n    // 2_000_000 indirect calls through `add`, each contributing 1, so\n    // acc = 2_000_000. Observable exit byte = 2_000_000 & 0xff = 128.\n    fold(2000000, add)\n}\n",
+        "source": "// indirect-calls — a hot loop calling through a first-class function VALUE\n// (ADR-0008 Tier 1), the indirect-call sibling of the `function-calls`\n// workload (which measures only direct calls). `step` is a\n// `fn(take Int, take Int) -> Int` value: `main` passes the top-level `add` by\n// name (the only way to obtain a function value in Tier 1), and `fold` invokes\n// it through the indirect-call path once per iteration. The equivalent C peer\n// (`benchmarks/runtime/programs/c/indirect-calls.c`) runs the identical loop\n// calling through a function pointer, so the comparison isolates the indirect\n// dispatch itself: same arithmetic, same iteration count, same exit.\nfn add(take a: Int, take b: Int) -> Int {\n    a + b\n}\n\n// Fold `step` over `reps` iterations, adding 1 each time. Every `step(acc, 1)`\n// is an indirect call through the function value — the operation being measured.\nfn fold(take reps: Int, take step: fn(take Int, take Int) -> Int) -> Int {\n    var acc = 0;\n    var i = 0;\n    while i < reps {\n        acc = step(acc, 1);\n        i = i + 1;\n    }\n    acc\n}\n\nfn main() -> Int {\n    // 2_000_000 indirect calls through `add`, each contributing 1, so\n    // acc = 2_000_000. Observable exit byte = 2_000_000 & 0xff = 128.\n    fold(2000000, add)\n}\n",
         "expected_exit": 128
       }
     },
@@ -152,8 +152,17 @@
       "description": "heap allocation and deallocation throughput over the ADR-0009 allocator core: a growable `Array[Int]` and an owned `String`, each built by repeated push/append (doubling growth) and freed at scope end, over many rounds",
       "support": {
         "support": "supported",
-        "source": "// allocation \u2014 heap allocation and deallocation throughput over the ADR-0009\n// allocator core (owned `String` + growable `Array[Int]`).\n//\n// Each round allocates two real heap buffers and frees them at scope end:\n//   * a growable `Array[Int]` filled 0..COUNT by repeated `push` (which grows\n//     the backing buffer by doubling \u2014 alloc-new + copy + free-old), then\n//     scanned with `len`/`get`; the sum of 0..COUNT is COUNT*(COUNT-1)/2;\n//   * an owned `String` built to COUNT bytes by repeated `push_byte` (the same\n//     growth path over the byte buffer), then measured with `len`.\n// A round's contribution is deterministic \u2014 array sum + string length \u2014 and the\n// loop runs it ROUNDS times so the workload really exercises allocate/grow/free\n// throughput (a leak would OOM; a double-free would abort). The observable\n// result is one round's contribution (reassigned, not accumulated, so the exit\n// stays a small documented byte): for COUNT = 16 the array sums to 120 and the\n// string is 16 bytes, so `main` returns 136 (exit byte 136).\n\nfn array_sum(take count: Int) -> Int {\n    var xs = std::array::empty();\n    var i = 0;\n    while i < count {\n        std::array::push(xs, i);\n        i = i + 1;\n    }\n    var total = 0;\n    var j = 0;\n    while j < std::array::len(xs) {\n        total = total + std::array::get(xs, j);\n        j = j + 1;\n    }\n    total\n}\n\nfn string_len(take count: Int) -> Int {\n    var s = std::string::empty();\n    var i = 0;\n    while i < count {\n        std::string::push_byte(s, 65);\n        i = i + 1;\n    }\n    std::string::len(s)\n}\n\nfn round(take count: Int) -> Int {\n    array_sum(count) + string_len(count)\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 2000 {\n        result = round(16);\n        r = r + 1;\n    }\n    result\n}\n",
+        "source": "// allocation — heap allocation and deallocation throughput over the ADR-0009\n// allocator core (owned `String` + growable `Array[Int]`).\n//\n// Each round allocates two real heap buffers and frees them at scope end:\n//   * a growable `Array[Int]` filled 0..COUNT by repeated `push` (which grows\n//     the backing buffer by doubling — alloc-new + copy + free-old), then\n//     scanned with `len`/`get`; the sum of 0..COUNT is COUNT*(COUNT-1)/2;\n//   * an owned `String` built to COUNT bytes by repeated `push_byte` (the same\n//     growth path over the byte buffer), then measured with `len`.\n// A round's contribution is deterministic — array sum + string length — and the\n// loop runs it ROUNDS times so the workload really exercises allocate/grow/free\n// throughput (a leak would OOM; a double-free would abort). The observable\n// result is one round's contribution (reassigned, not accumulated, so the exit\n// stays a small documented byte): for COUNT = 16 the array sums to 120 and the\n// string is 16 bytes, so `main` returns 136 (exit byte 136).\n\nfn array_sum(take count: Int) -> Int {\n    var xs = std::array::empty();\n    var i = 0;\n    while i < count {\n        std::array::push(xs, i);\n        i = i + 1;\n    }\n    var total = 0;\n    var j = 0;\n    while j < std::array::len(xs) {\n        total = total + std::array::get(xs, j);\n        j = j + 1;\n    }\n    total\n}\n\nfn string_len(take count: Int) -> Int {\n    var s = std::string::empty();\n    var i = 0;\n    while i < count {\n        std::string::push_byte(s, 65);\n        i = i + 1;\n    }\n    std::string::len(s)\n}\n\nfn round(take count: Int) -> Int {\n    array_sum(count) + string_len(count)\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 2000 {\n        result = round(16);\n        r = r + 1;\n    }\n    result\n}\n",
         "expected_exit": 136
+      }
+    },
+    {
+      "label": "map-lookup",
+      "description": "keyed insert/lookup/churn throughput over the ADR-0011 hash map `Map[Int, Int]`: 1000 inserts (doubling table growth), 1000 lookups summed modulo 1000, and 500 removals per round, over many rounds",
+      "support": {
+        "support": "supported",
+        "source": "// map-lookup — keyed insert/lookup/churn throughput over the ADR-0011 hash\n// map (`Map[Int, Int]`, the `tuo_rt_map_*` open-addressing table behind the\n// three-word header).\n//\n// One round: insert COUNT entries (key i → value 3·i, growing the table by\n// doubling through several thresholds), look every key back up summing the\n// values modulo 1000, then remove the first half (the order-preserving\n// removal path) and read the surviving entry count. A round's contribution is\n// deterministic: for COUNT = 1000 the lookup sum is 3·999·1000/2 = 1_498_500,\n// i.e. 500 after the running modulo, and 500 entries survive — 1000 total.\n// The loop repeats the round so the workload really exercises hash, probe,\n// growth, and removal throughput (a leak would OOM; a double-free would\n// abort); the observable result is one round's contribution (reassigned, not\n// accumulated): 1000, exit byte 1000 & 0xff = 232.\n\nfn round(take count: Int) -> Int {\n    var m = std::map::empty();\n    var i = 0;\n    while i < count {\n        let _ = std::map::insert(m, i, i * 3);\n        i = i + 1;\n    }\n    var hits = 0;\n    var j = 0;\n    while j < count {\n        let value = match std::map::get(m, j) {\n            Some { value } => value,\n            None => 0,\n        };\n        hits = (hits + value) % 1000;\n        j = j + 1;\n    }\n    var k = 0;\n    while k < count / 2 {\n        let _ = std::map::remove(m, k);\n        k = k + 1;\n    }\n    hits + std::map::len(m)\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 50 {\n        result = round(1000);\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 232
       }
     },
     {
@@ -183,7 +192,7 @@
       "workload": {
         "label": "startup",
         "peer": "go",
-        "peer_source": "// startup \u2014 the equivalent-semantics Go peer for the tuonelang `startup`\n// workload. A trivial program that starts and exits 0. The Go runtime's\n// scheduler/GC startup is part of what is measured \u2014 that is exactly the point\n// of an AOT-native peer that ships a runtime: the observable is the same (exit\n// 0), the startup cost is the language's own.\npackage main\n\nimport \"os\"\n\nfunc main() { os.Exit(0) }\n",
+        "peer_source": "// startup — the equivalent-semantics Go peer for the tuonelang `startup`\n// workload. A trivial program that starts and exits 0. The Go runtime's\n// scheduler/GC startup is part of what is measured — that is exactly the point\n// of an AOT-native peer that ships a runtime: the observable is the same (exit\n// 0), the startup cost is the language's own.\npackage main\n\nimport \"os\"\n\nfunc main() { os.Exit(0) }\n",
         "expected_exit": 0
       },
       "tuonelang_exit": 0,
@@ -209,7 +218,7 @@
       "workload": {
         "label": "integer-computation",
         "peer": "go",
-        "peer_source": "// integer-computation \u2014 the equivalent-semantics Go peer. Same tail-recursive\n// integer reduction as the C peer and the tuonelang program: sum(1..=1000) by\n// recursion = 500500; observable exit byte = 500500 & 0xff = 20.\npackage main\n\nimport \"os\"\n\nfunc sum(n, acc int32) int32 {\n\tif n == 0 {\n\t\treturn acc\n\t}\n\treturn sum(n-1, acc+n)\n}\n\nfunc main() { os.Exit(int(sum(1000, 0))) }\n",
+        "peer_source": "// integer-computation — the equivalent-semantics Go peer. Same tail-recursive\n// integer reduction as the C peer and the tuonelang program: sum(1..=1000) by\n// recursion = 500500; observable exit byte = 500500 & 0xff = 20.\npackage main\n\nimport \"os\"\n\nfunc sum(n, acc int32) int32 {\n\tif n == 0 {\n\t\treturn acc\n\t}\n\treturn sum(n-1, acc+n)\n}\n\nfunc main() { os.Exit(int(sum(1000, 0))) }\n",
         "expected_exit": 20
       },
       "tuonelang_exit": 20,
@@ -235,7 +244,7 @@
       "workload": {
         "label": "function-calls",
         "peer": "go",
-        "peer_source": "// function-calls \u2014 the equivalent-semantics Go peer. Same non-recursive call\n// tree as the C peer and the tuonelang program: g(3)+g(4)+g(5) where\n// g(n) = f(n)+f(n) and f(n) = n+1, giving 30.\npackage main\n\nimport \"os\"\n\nfunc f(n int32) int32 { return n + 1 }\nfunc g(n int32) int32 { return f(n) + f(n) }\n\nfunc main() { os.Exit(int(g(3) + g(4) + g(5))) }\n",
+        "peer_source": "// function-calls — the equivalent-semantics Go peer. Same non-recursive call\n// tree as the C peer and the tuonelang program: g(3)+g(4)+g(5) where\n// g(n) = f(n)+f(n) and f(n) = n+1, giving 30.\npackage main\n\nimport \"os\"\n\nfunc f(n int32) int32 { return n + 1 }\nfunc g(n int32) int32 { return f(n) + f(n) }\n\nfunc main() { os.Exit(int(g(3) + g(4) + g(5))) }\n",
         "expected_exit": 30
       },
       "tuonelang_exit": 30,
@@ -248,7 +257,7 @@
       "workload": {
         "label": "indirect-calls",
         "peer": "c",
-        "peer_source": "// indirect-calls \u2014 the equivalent-semantics C peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function pointer** rather than tuonelang's function value:\n// the same arithmetic (`acc += add(acc, 1)`-style step), the same 2,000,000\n// iterations, and the same observable exit (2_000_000 & 0xff = 128). This is the\n// indirect-call sibling of function-calls.c, which calls f/g directly.\nstatic int add(int a, int b) { return a + b; }\n\nstatic int fold(int reps, int (*step)(int, int)) {\n    int acc = 0;\n    for (int i = 0; i < reps; i++) {\n        acc = step(acc, 1);\n    }\n    return acc;\n}\n\nint main(void) {\n    // 2_000_000 indirect calls through the `add` function pointer; acc = 2_000_000,\n    // exit byte 2_000_000 & 0xff = 128.\n    return fold(2000000, add);\n}\n",
+        "peer_source": "// indirect-calls — the equivalent-semantics C peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function pointer** rather than tuonelang's function value:\n// the same arithmetic (`acc += add(acc, 1)`-style step), the same 2,000,000\n// iterations, and the same observable exit (2_000_000 & 0xff = 128). This is the\n// indirect-call sibling of function-calls.c, which calls f/g directly.\nstatic int add(int a, int b) { return a + b; }\n\nstatic int fold(int reps, int (*step)(int, int)) {\n    int acc = 0;\n    for (int i = 0; i < reps; i++) {\n        acc = step(acc, 1);\n    }\n    return acc;\n}\n\nint main(void) {\n    // 2_000_000 indirect calls through the `add` function pointer; acc = 2_000_000,\n    // exit byte 2_000_000 & 0xff = 128.\n    return fold(2000000, add);\n}\n",
         "expected_exit": 128
       },
       "tuonelang_exit": 128,
@@ -261,7 +270,7 @@
       "workload": {
         "label": "indirect-calls",
         "peer": "go",
-        "peer_source": "// indirect-calls \u2014 the equivalent-semantics Go peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function value** (Go's first-class func, the closest peer\n// to tuonelang's non-capturing function value and to C's function pointer): the\n// same arithmetic (`acc = step(acc, 1)`), the same 2,000,000 iterations, and the\n// same observable exit (2_000_000 & 0xff = 128). The indirect-call sibling of\n// function-calls.go, which calls f/g directly.\npackage main\n\nimport \"os\"\n\nfunc add(a, b int32) int32 { return a + b }\n\nfunc fold(reps int32, step func(int32, int32) int32) int32 {\n\tvar acc int32 = 0\n\tfor i := int32(0); i < reps; i++ {\n\t\tacc = step(acc, 1)\n\t}\n\treturn acc\n}\n\nfunc main() {\n\t// 2_000_000 indirect calls through the `add` function value; acc = 2_000_000,\n\t// exit byte 2_000_000 & 0xff = 128.\n\tos.Exit(int(fold(2000000, add)))\n}\n",
+        "peer_source": "// indirect-calls — the equivalent-semantics Go peer for the tuonelang\n// `indirect-calls` workload (ADR-0008 Tier 1). It runs the identical loop,\n// calling through a **function value** (Go's first-class func, the closest peer\n// to tuonelang's non-capturing function value and to C's function pointer): the\n// same arithmetic (`acc = step(acc, 1)`), the same 2,000,000 iterations, and the\n// same observable exit (2_000_000 & 0xff = 128). The indirect-call sibling of\n// function-calls.go, which calls f/g directly.\npackage main\n\nimport \"os\"\n\nfunc add(a, b int32) int32 { return a + b }\n\nfunc fold(reps int32, step func(int32, int32) int32) int32 {\n\tvar acc int32 = 0\n\tfor i := int32(0); i < reps; i++ {\n\t\tacc = step(acc, 1)\n\t}\n\treturn acc\n}\n\nfunc main() {\n\t// 2_000_000 indirect calls through the `add` function value; acc = 2_000_000,\n\t// exit byte 2_000_000 & 0xff = 128.\n\tos.Exit(int(fold(2000000, add)))\n}\n",
         "expected_exit": 128
       },
       "tuonelang_exit": 128,
@@ -287,7 +296,7 @@
       "workload": {
         "label": "recursion",
         "peer": "go",
-        "peer_source": "// recursion \u2014 the equivalent-semantics Go peer. Same naive tree recursion as\n// the C peer and the tuonelang program: fib(20) = 6765; observable exit byte =\n// 6765 & 0xff = 109.\npackage main\n\nimport \"os\"\n\nfunc fib(n int32) int32 {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}\n\nfunc main() { os.Exit(int(fib(20))) }\n",
+        "peer_source": "// recursion — the equivalent-semantics Go peer. Same naive tree recursion as\n// the C peer and the tuonelang program: fib(20) = 6765; observable exit byte =\n// 6765 & 0xff = 109.\npackage main\n\nimport \"os\"\n\nfunc fib(n int32) int32 {\n\tif n < 2 {\n\t\treturn n\n\t}\n\treturn fib(n-1) + fib(n-2)\n}\n\nfunc main() { os.Exit(int(fib(20))) }\n",
         "expected_exit": 109
       },
       "tuonelang_exit": 109,
@@ -313,7 +322,7 @@
       "workload": {
         "label": "collections",
         "peer": "go",
-        "peer_source": "// collections \u2014 the equivalent-semantics Go peer for the tuonelang\n// `collections` workload (ADR-0004 Stage 2's fixed-size array `[Int; 8]`). The\n// closest Go peer to a fixed inline array is a value-type `[8]int64` (not a\n// heap slice): the same bulk scan and indexed probes, the same 200 rounds. Each\n// round scans (3+1+4+1+5+9+2+6 = 31) and probes indices 0,3,7 (3+1+6 = 10), so\n// 200 \u00d7 41 = 8200; observable exit byte = 8200 & 0xff = 8.\npackage main\n\nimport \"os\"\n\nfunc lookup(table [8]int64, i int64) int64 { return table[i] }\n\nfunc scan(table [8]int64) int64 {\n\tvar total int64 = 0\n\tfor k := 0; k < 8; k++ {\n\t\ttotal += table[k]\n\t}\n\treturn total\n}\n\nfunc probe(table [8]int64) int64 {\n\treturn lookup(table, 0) + lookup(table, 3) + lookup(table, 7)\n}\n\nfunc main() {\n\ttable := [8]int64{3, 1, 4, 1, 5, 9, 2, 6}\n\tvar total int64 = 0\n\tfor round := 0; round < 200; round++ {\n\t\ttotal += scan(table) + probe(table)\n\t}\n\tos.Exit(int(total))\n}\n",
+        "peer_source": "// collections — the equivalent-semantics Go peer for the tuonelang\n// `collections` workload (ADR-0004 Stage 2's fixed-size array `[Int; 8]`). The\n// closest Go peer to a fixed inline array is a value-type `[8]int64` (not a\n// heap slice): the same bulk scan and indexed probes, the same 200 rounds. Each\n// round scans (3+1+4+1+5+9+2+6 = 31) and probes indices 0,3,7 (3+1+6 = 10), so\n// 200 × 41 = 8200; observable exit byte = 8200 & 0xff = 8.\npackage main\n\nimport \"os\"\n\nfunc lookup(table [8]int64, i int64) int64 { return table[i] }\n\nfunc scan(table [8]int64) int64 {\n\tvar total int64 = 0\n\tfor k := 0; k < 8; k++ {\n\t\ttotal += table[k]\n\t}\n\treturn total\n}\n\nfunc probe(table [8]int64) int64 {\n\treturn lookup(table, 0) + lookup(table, 3) + lookup(table, 7)\n}\n\nfunc main() {\n\ttable := [8]int64{3, 1, 4, 1, 5, 9, 2, 6}\n\tvar total int64 = 0\n\tfor round := 0; round < 200; round++ {\n\t\ttotal += scan(table) + probe(table)\n\t}\n\tos.Exit(int(total))\n}\n",
         "expected_exit": 8
       },
       "tuonelang_exit": 8,
@@ -339,7 +348,7 @@
       "workload": {
         "label": "string-processing",
         "peer": "go",
-        "peer_source": "// string-processing \u2014 the equivalent-semantics Go peer for the tuonelang\n// `string-processing` workload (ADR-0006's borrowed `Str`). Byte-level scanning\n// over a fixed request-log line, done the same way: count spaces (32) and\n// slashes (47), count ASCII digits, and compare two fixed slices against \"GET\"\n// and \"HTTP/1.1\". Go's []byte view of a string is the peer to tuonelang's byte\n// slicing over `Str`. Per round: 4 spaces + 3 slashes + 11 digits + 1 + 1 = 20;\n// 200 rounds \u00d7 20 = 4000; observable exit byte = 4000 & 0xff = 160.\npackage main\n\nimport \"os\"\n\nvar lineText = []byte(\"GET /users/42 HTTP/1.1 200 1532\")\n\nfunc countByte(text []byte, target byte) int {\n\tfound := 0\n\tfor i := 0; i < len(text); i++ {\n\t\tif text[i] == target {\n\t\t\tfound++\n\t\t}\n\t}\n\treturn found\n}\n\nfunc countDigits(text []byte) int {\n\tfound := 0\n\tfor i := 0; i < len(text); i++ {\n\t\tb := text[i]\n\t\tif b >= 48 && b <= 57 {\n\t\t\tfound++\n\t\t}\n\t}\n\treturn found\n}\n\nfunc sliceEquals(text []byte, start, end int, expect string) int {\n\tif end-start != len(expect) {\n\t\treturn 0\n\t}\n\tfor i := start; i < end; i++ {\n\t\tif text[i] != expect[i-start] {\n\t\t\treturn 0\n\t\t}\n\t}\n\treturn 1\n}\n\nfunc score(text []byte) int {\n\treturn countByte(text, 32) + countByte(text, 47) +\n\t\tcountDigits(text) + sliceEquals(text, 0, 3, \"GET\") +\n\t\tsliceEquals(text, 14, 22, \"HTTP/1.1\")\n}\n\nfunc main() {\n\ttotal := 0\n\tfor round := 0; round < 200; round++ {\n\t\ttotal += score(lineText)\n\t}\n\tos.Exit(total)\n}\n",
+        "peer_source": "// string-processing — the equivalent-semantics Go peer for the tuonelang\n// `string-processing` workload (ADR-0006's borrowed `Str`). Byte-level scanning\n// over a fixed request-log line, done the same way: count spaces (32) and\n// slashes (47), count ASCII digits, and compare two fixed slices against \"GET\"\n// and \"HTTP/1.1\". Go's []byte view of a string is the peer to tuonelang's byte\n// slicing over `Str`. Per round: 4 spaces + 3 slashes + 11 digits + 1 + 1 = 20;\n// 200 rounds × 20 = 4000; observable exit byte = 4000 & 0xff = 160.\npackage main\n\nimport \"os\"\n\nvar lineText = []byte(\"GET /users/42 HTTP/1.1 200 1532\")\n\nfunc countByte(text []byte, target byte) int {\n\tfound := 0\n\tfor i := 0; i < len(text); i++ {\n\t\tif text[i] == target {\n\t\t\tfound++\n\t\t}\n\t}\n\treturn found\n}\n\nfunc countDigits(text []byte) int {\n\tfound := 0\n\tfor i := 0; i < len(text); i++ {\n\t\tb := text[i]\n\t\tif b >= 48 && b <= 57 {\n\t\t\tfound++\n\t\t}\n\t}\n\treturn found\n}\n\nfunc sliceEquals(text []byte, start, end int, expect string) int {\n\tif end-start != len(expect) {\n\t\treturn 0\n\t}\n\tfor i := start; i < end; i++ {\n\t\tif text[i] != expect[i-start] {\n\t\t\treturn 0\n\t\t}\n\t}\n\treturn 1\n}\n\nfunc score(text []byte) int {\n\treturn countByte(text, 32) + countByte(text, 47) +\n\t\tcountDigits(text) + sliceEquals(text, 0, 3, \"GET\") +\n\t\tsliceEquals(text, 14, 22, \"HTTP/1.1\")\n}\n\nfunc main() {\n\ttotal := 0\n\tfor round := 0; round < 200; round++ {\n\t\ttotal += score(lineText)\n\t}\n\tos.Exit(total)\n}\n",
         "expected_exit": 160
       },
       "tuonelang_exit": 160,
@@ -352,7 +361,7 @@
       "workload": {
         "label": "allocation",
         "peer": "c",
-        "peer_source": "// allocation \u2014 the equivalent-semantics C peer for the tuonelang allocation\n// workload. Same computation the same way: a growable long-long vector filled\n// 0..count by push (doubling growth via realloc), summed; and a growable byte\n// buffer filled to `count` bytes the same way, measured by length. Each round's\n// buffers are freed at scope end; the round is repeated so the workload really\n// exercises malloc/realloc/free throughput. The observable result is one\n// round's contribution (reassigned, not accumulated), matching the tuonelang\n// program: for count = 16 the vector sums to 120 and the buffer is 16 bytes, so\n// main returns 136.\n\n#include <stdlib.h>\n#include <string.h>\n\nstatic long long array_sum(int count) {\n    long long *xs = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            xs = (long long *)realloc(xs, (size_t)cap * sizeof(long long));\n        }\n        xs[len++] = i;\n    }\n    long long total = 0;\n    for (long long j = 0; j < len; j++) {\n        total += xs[j];\n    }\n    free(xs);\n    return total;\n}\n\nstatic long long string_len(int count) {\n    unsigned char *s = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            s = (unsigned char *)realloc(s, (size_t)cap);\n        }\n        s[len++] = 65;\n    }\n    free(s);\n    return len;\n}\n\nstatic long long round_once(int count) {\n    return array_sum(count) + string_len(count);\n}\n\nint main(void) {\n    long long result = 0;\n    for (int r = 0; r < 2000; r++) {\n        result = round_once(16);\n    }\n    return (int)result;\n}\n",
+        "peer_source": "// allocation — the equivalent-semantics C peer for the tuonelang allocation\n// workload. Same computation the same way: a growable long-long vector filled\n// 0..count by push (doubling growth via realloc), summed; and a growable byte\n// buffer filled to `count` bytes the same way, measured by length. Each round's\n// buffers are freed at scope end; the round is repeated so the workload really\n// exercises malloc/realloc/free throughput. The observable result is one\n// round's contribution (reassigned, not accumulated), matching the tuonelang\n// program: for count = 16 the vector sums to 120 and the buffer is 16 bytes, so\n// main returns 136.\n\n#include <stdlib.h>\n#include <string.h>\n\nstatic long long array_sum(int count) {\n    long long *xs = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            xs = (long long *)realloc(xs, (size_t)cap * sizeof(long long));\n        }\n        xs[len++] = i;\n    }\n    long long total = 0;\n    for (long long j = 0; j < len; j++) {\n        total += xs[j];\n    }\n    free(xs);\n    return total;\n}\n\nstatic long long string_len(int count) {\n    unsigned char *s = NULL;\n    long long len = 0;\n    long long cap = 0;\n    for (int i = 0; i < count; i++) {\n        if (len == cap) {\n            cap = cap == 0 ? 1 : cap * 2;\n            s = (unsigned char *)realloc(s, (size_t)cap);\n        }\n        s[len++] = 65;\n    }\n    free(s);\n    return len;\n}\n\nstatic long long round_once(int count) {\n    return array_sum(count) + string_len(count);\n}\n\nint main(void) {\n    long long result = 0;\n    for (int r = 0; r < 2000; r++) {\n        result = round_once(16);\n    }\n    return (int)result;\n}\n",
         "expected_exit": 136
       },
       "tuonelang_exit": 136,
@@ -365,11 +374,52 @@
       "workload": {
         "label": "allocation",
         "peer": "go",
-        "peer_source": "// allocation \u2014 the equivalent-semantics Go peer for the tuonelang allocation\n// workload (ADR-0009's owned `String` and growable `Array[Int]`). Same\n// computation the same way: a growable int64 vector filled 0..count by push\n// with **explicit doubling growth** (mirroring the tuonelang program's and the C\n// peer's realloc doubling, rather than Go's built-in append heuristic, so the\n// three grow identically), summed; and a growable byte buffer filled to `count`\n// bytes the same way, measured by length. Go's GC reclaims each round's buffers\n// (the peer to tuonelang's drop-glue free and C's explicit free); the round is\n// repeated so the workload really exercises heap allocation/growth throughput.\n// The observable result is one round's contribution (reassigned, not\n// accumulated): for count = 16 the vector sums to 120 and the buffer is 16\n// bytes, so main returns 136.\npackage main\n\nimport \"os\"\n\nfunc arraySum(count int) int64 {\n\tvar xs []int64\n\tvar length int64 = 0\n\tvar cap64 int64 = 0\n\tfor i := 0; i < count; i++ {\n\t\tif length == cap64 {\n\t\t\tif cap64 == 0 {\n\t\t\t\tcap64 = 1\n\t\t\t} else {\n\t\t\t\tcap64 *= 2\n\t\t\t}\n\t\t\tgrown := make([]int64, cap64)\n\t\t\tcopy(grown, xs[:length])\n\t\t\txs = grown\n\t\t}\n\t\txs[length] = int64(i)\n\t\tlength++\n\t}\n\tvar total int64 = 0\n\tfor j := int64(0); j < length; j++ {\n\t\ttotal += xs[j]\n\t}\n\treturn total\n}\n\nfunc stringLen(count int) int64 {\n\tvar s []byte\n\tvar length int64 = 0\n\tvar cap64 int64 = 0\n\tfor i := 0; i < count; i++ {\n\t\tif length == cap64 {\n\t\t\tif cap64 == 0 {\n\t\t\t\tcap64 = 1\n\t\t\t} else {\n\t\t\t\tcap64 *= 2\n\t\t\t}\n\t\t\tgrown := make([]byte, cap64)\n\t\t\tcopy(grown, s[:length])\n\t\t\ts = grown\n\t\t}\n\t\ts[length] = 65\n\t\tlength++\n\t}\n\treturn length\n}\n\nfunc roundOnce(count int) int64 {\n\treturn arraySum(count) + stringLen(count)\n}\n\nfunc main() {\n\tvar result int64 = 0\n\tfor r := 0; r < 2000; r++ {\n\t\tresult = roundOnce(16)\n\t}\n\tos.Exit(int(result))\n}\n",
+        "peer_source": "// allocation — the equivalent-semantics Go peer for the tuonelang allocation\n// workload (ADR-0009's owned `String` and growable `Array[Int]`). Same\n// computation the same way: a growable int64 vector filled 0..count by push\n// with **explicit doubling growth** (mirroring the tuonelang program's and the C\n// peer's realloc doubling, rather than Go's built-in append heuristic, so the\n// three grow identically), summed; and a growable byte buffer filled to `count`\n// bytes the same way, measured by length. Go's GC reclaims each round's buffers\n// (the peer to tuonelang's drop-glue free and C's explicit free); the round is\n// repeated so the workload really exercises heap allocation/growth throughput.\n// The observable result is one round's contribution (reassigned, not\n// accumulated): for count = 16 the vector sums to 120 and the buffer is 16\n// bytes, so main returns 136.\npackage main\n\nimport \"os\"\n\nfunc arraySum(count int) int64 {\n\tvar xs []int64\n\tvar length int64 = 0\n\tvar cap64 int64 = 0\n\tfor i := 0; i < count; i++ {\n\t\tif length == cap64 {\n\t\t\tif cap64 == 0 {\n\t\t\t\tcap64 = 1\n\t\t\t} else {\n\t\t\t\tcap64 *= 2\n\t\t\t}\n\t\t\tgrown := make([]int64, cap64)\n\t\t\tcopy(grown, xs[:length])\n\t\t\txs = grown\n\t\t}\n\t\txs[length] = int64(i)\n\t\tlength++\n\t}\n\tvar total int64 = 0\n\tfor j := int64(0); j < length; j++ {\n\t\ttotal += xs[j]\n\t}\n\treturn total\n}\n\nfunc stringLen(count int) int64 {\n\tvar s []byte\n\tvar length int64 = 0\n\tvar cap64 int64 = 0\n\tfor i := 0; i < count; i++ {\n\t\tif length == cap64 {\n\t\t\tif cap64 == 0 {\n\t\t\t\tcap64 = 1\n\t\t\t} else {\n\t\t\t\tcap64 *= 2\n\t\t\t}\n\t\t\tgrown := make([]byte, cap64)\n\t\t\tcopy(grown, s[:length])\n\t\t\ts = grown\n\t\t}\n\t\ts[length] = 65\n\t\tlength++\n\t}\n\treturn length\n}\n\nfunc roundOnce(count int) int64 {\n\treturn arraySum(count) + stringLen(count)\n}\n\nfunc main() {\n\tvar result int64 = 0\n\tfor r := 0; r < 2000; r++ {\n\t\tresult = roundOnce(16)\n\t}\n\tos.Exit(int(result))\n}\n",
         "expected_exit": 136
       },
       "tuonelang_exit": 136,
       "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "map-lookup",
+        "peer": "c",
+        "peer_source": "// map-lookup — the equivalent-semantics C peer for the tuonelang map-lookup\n// workload (ADR-0011's `Map[Int, Int]`). Same computation the same way: an\n// open-addressing hash table (splitmix64-finalizer hash, linear probing,\n// doubling growth) receives `count` inserts (key i → 3·i), every key is\n// looked back up summing values modulo 1000, and the first half is removed\n// (tombstone deletion — the idiomatic C shape; the observable results agree\n// since the workload never iterates). One round contributes\n// 3·999·1000/2 % 1000 + 500 = 1000 for count = 1000; the round repeats and\n// the result is reassigned, not accumulated, so main returns 1000 & 0xff =\n// 232.\n\n#include <stdint.h>\n#include <stdlib.h>\n#include <string.h>\n\ntypedef struct {\n    int64_t *keys;\n    int64_t *values;\n    uint8_t *state; /* 0 empty, 1 live, 2 tombstone */\n    uint64_t cap;\n    uint64_t len;\n} table;\n\nstatic uint64_t mix(int64_t key) {\n    uint64_t x = (uint64_t)key;\n    x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ULL;\n    x ^= x >> 27; x *= 0x94d049bb133111ebULL;\n    x ^= x >> 31;\n    return x;\n}\n\nstatic void grow(table *t, uint64_t new_cap) {\n    int64_t *keys = malloc(new_cap * sizeof(int64_t));\n    int64_t *values = malloc(new_cap * sizeof(int64_t));\n    uint8_t *state = calloc(new_cap, 1);\n    for (uint64_t i = 0; i < t->cap; i++) {\n        if (t->state[i] != 1) continue;\n        uint64_t slot = mix(t->keys[i]) & (new_cap - 1);\n        while (state[slot] == 1) slot = (slot + 1) & (new_cap - 1);\n        keys[slot] = t->keys[i];\n        values[slot] = t->values[i];\n        state[slot] = 1;\n    }\n    free(t->keys);\n    free(t->values);\n    free(t->state);\n    t->keys = keys;\n    t->values = values;\n    t->state = state;\n    t->cap = new_cap;\n}\n\nstatic void insert(table *t, int64_t k, int64_t v) {\n    if (t->cap == 0 || 2 * (t->len + 1) > t->cap) grow(t, t->cap ? t->cap * 2 : 16);\n    uint64_t slot = mix(k) & (t->cap - 1);\n    while (t->state[slot] == 1) {\n        if (t->keys[slot] == k) {\n            t->values[slot] = v;\n            return;\n        }\n        slot = (slot + 1) & (t->cap - 1);\n    }\n    t->keys[slot] = k;\n    t->values[slot] = v;\n    t->state[slot] = 1;\n    t->len += 1;\n}\n\nstatic int64_t get(const table *t, int64_t k, int64_t missing) {\n    if (t->cap == 0) return missing;\n    uint64_t slot = mix(k) & (t->cap - 1);\n    while (t->state[slot] != 0) {\n        if (t->state[slot] == 1 && t->keys[slot] == k) return t->values[slot];\n        slot = (slot + 1) & (t->cap - 1);\n    }\n    return missing;\n}\n\nstatic void del(table *t, int64_t k) {\n    if (t->cap == 0) return;\n    uint64_t slot = mix(k) & (t->cap - 1);\n    while (t->state[slot] != 0) {\n        if (t->state[slot] == 1 && t->keys[slot] == k) {\n            t->state[slot] = 2;\n            t->len -= 1;\n            return;\n        }\n        slot = (slot + 1) & (t->cap - 1);\n    }\n}\n\nstatic long long round_once(long long count) {\n    table t = {0, 0, 0, 0, 0};\n    for (long long i = 0; i < count; i++) insert(&t, i, i * 3);\n    long long hits = 0;\n    for (long long j = 0; j < count; j++) hits = (hits + get(&t, j, 0)) % 1000;\n    for (long long k = 0; k < count / 2; k++) del(&t, k);\n    long long result = hits + (long long)t.len;\n    free(t.keys);\n    free(t.values);\n    free(t.state);\n    return result;\n}\n\nint main(void) {\n    long long result = 0;\n    for (int r = 0; r < 50; r++) {\n        result = round_once(1000);\n    }\n    return (int)result; /* 1000 & 0xff = 232 via the process exit byte */\n}\n",
+        "expected_exit": 232
+      },
+      "tuonelang_exit": 232,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "map-lookup",
+        "peer": "go",
+        "peer_source": "// map-lookup — the equivalent-semantics Go peer for the tuonelang map-lookup\n// workload (ADR-0011's `Map[Int, Int]`). Same computation the same way,\n// through Go's built-in map: `count` inserts (key i → 3·i), every key looked\n// back up summing values modulo 1000, then the first half deleted. The\n// workload never iterates the map, so Go's randomized iteration order is\n// irrelevant and the observable result agrees with the tuonelang and C\n// peers: one round contributes 3·999·1000/2 % 1000 + 500 = 1000 for\n// count = 1000; the round repeats and the result is reassigned, not\n// accumulated, so main exits 1000 & 0xff = 232.\npackage main\n\nimport \"os\"\n\nfunc round(count int64) int64 {\n\tm := make(map[int64]int64)\n\tfor i := int64(0); i < count; i++ {\n\t\tm[i] = i * 3\n\t}\n\tvar hits int64\n\tfor j := int64(0); j < count; j++ {\n\t\thits = (hits + m[j]) % 1000\n\t}\n\tfor k := int64(0); k < count/2; k++ {\n\t\tdelete(m, k)\n\t}\n\treturn hits + int64(len(m))\n}\n\nfunc main() {\n\tvar result int64\n\tfor r := 0; r < 50; r++ {\n\t\tresult = round(1000)\n\t}\n\tos.Exit(int(result & 0xff))\n}\n",
+        "expected_exit": 232
+      },
+      "tuonelang_exit": 232,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    }
+  ],
+  "parallel": [
+    {
+      "label": "parallel-reduction",
+      "workers": 4,
+      "expected_exit": 64,
+      "tuonelang": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      },
+      "c": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"
       }

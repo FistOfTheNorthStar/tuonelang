@@ -1,6 +1,7 @@
 # ADR-0007: The concurrency model
 
-- **Status:** proposed
+- **Status:** accepted (2026-08-22 — the model is resolved and landed:
+  structured fork-join over one primitive, `std::rt::par_map`; see Resolution)
 - **Date:** 2026-08-04
 - **Context:** Dogfooding v0 (see [`DOGFOODING.md`](../../DOGFOODING.md), finding
   **D-4**) built the [`examples/concurrent-worker`](../../examples/concurrent-worker/)
@@ -80,3 +81,84 @@
   against — a real speedup that disagrees with the model is a scheduling bug, and
   a "scales linearly" claim is inadmissible until the lab measures it against C.
   This ADR cannot reach "accepted" until that benchmark category exists.
+
+- **Resolution (2026-08-22) — the model, decided and landed.** The deferred
+  choice resolves to the narrowest sound model: **structured fork-join over
+  exactly one primitive**,
+
+  ```
+  std::rt::par_map(take f: fn(take Int) -> Int, in tasks: Array[Int],
+                   take workers: Int) -> Array[Int]
+  ```
+
+  — apply the non-capturing function value `f` (ADR-0008 Tier 1) to every
+  task, distributed **round-robin** over `workers` OS threads (task `i` on
+  thread `i % workers`), join every thread, and return the results **in task
+  order**. Each of the four recorded constraints is satisfied, and two of
+  them resolved by *construction* rather than by a checker extension:
+
+  1. **No data races, checked.** Nothing the primitive admits can race: the
+     only values that cross a thread boundary are a `Copy` code pointer, a
+     read-only borrowed `Array[Int]` (immutable for the whole call — the
+     caller is blocked inside it, and `in` forbids concurrent mutation by
+     construction), `Copy` `Int` tasks, and each thread's own disjoint
+     result slot. The `Send`/`Sync`-like discipline the constraint asked for
+     is expressed in the primitive's own `in`/`take` + non-capturing-`fn`
+     signature — the v0 rule is "only `Copy` values and an immutably lent
+     scalar buffer cross" — with no new ownership dimension needed. Widening
+     what may cross (shared state, `Shared` under contention, atomics) is a
+     future ADR's decision, and until one lands nothing else can cross at
+     all.
+  2. **Spawning is a typed effect.** `Builtin::RtParMap` is in
+     `Builtin::is_effect`, so a spec whose closure could reach it is `R0007`,
+     the spec sandbox and fuzz harness keep seeing total, effect-free stage
+     functions (the interpreter still executes **no** effect), and a
+     program's concurrency is visible in its types via the transitive
+     effect computation. MIR carries it as `EffectOp::ParMap` — the one
+     effect whose destination is an `Array[I64]` — verified under `M0011`
+     (`mir.md` §4.2); both backends lower it to the runtime's
+     `tuo_rt_par_map` (POSIX threads, `abi.md` §Effect symbols), linked like
+     every other shim (with `-pthread`).
+  3. **The deterministic scheduling model is the oracle — executed.**
+     `examples/concurrent-worker` now runs its pool live: `main` computes
+     the makespan through the pure spec-checked model AND through a real
+     `par_map` (one OS thread per worker, each running the model's own
+     `worker_load` over its round-robin partition — the primitive implements
+     exactly the partition the model predicts), and exits with the model's
+     answer (15) only when the live run agrees. A scheduling bug flips the
+     exit; the native dogfood test pins it on both backends.
+  4. **One obvious primitive.** `par_map` is the *only* way to start a
+     thread — no bare spawn, no detached handles, no channel menu. The
+     stdlib effect tier wraps it once (`std::sync::par_map`, pinned natively
+     by `par_map_runs_natively`); `std::sync`'s `lock`/`unlock` remain
+     honest `CONTRACT:` entries (shared-state locking is exactly what the
+     structured primitive deliberately does not admit), and the old `spawn`
+     contract is superseded — detached spawn is *deliberately absent*, not
+     pending.
+
+  Determinism: the result array is deterministic (task order, pure `f`), so
+  `tuo spec` reproducibility is untouched (specs cannot reach effects) and
+  the effectful shell's observable — the exit byte — is deterministic in
+  every committed program.
+
+- **Benchmark resolution:** the required category exists and measures. The
+  performance lab gained `lab::parallel` — the **parallel-speedup** category:
+  one CPU-bound reduction (`benchmarks/runtime/programs/parallel/`, four
+  committed programs: tuonelang serial + `par_map`, C serial + pthreads with
+  the same thread count, all exiting 64), measured through a host-injected
+  `TimedRunner` that builds first and times **only the binary's execution**
+  (with a warm-up run so first-exec host costs never pollute the figure). A
+  side is `Measured` only when its serial *and* parallel programs really ran
+  to the expected exit — raw nanoseconds recorded, the ratio derived at
+  render time, never a stored or promised figure — and the `LabReport`
+  carries the category (additively; the committed example records honest
+  skips). Core count is already part of the recorded environment
+  (`Environment::logical_cpus`). Pinned by `tuo-bench`'s unit tests,
+  `tuo-bench/tests/lab.rs` (committed programs equal embedded sources; both
+  tuonelang programs pass the real front end), and the live
+  `tuo-cli/tests/lab_command.rs::parallel_speedup_measures_live_through_the_real_cli`
+  (real `tuo build` + `cc -O2 -pthread`, both sides measured on a live
+  host; `--nocapture` prints the figures). The `networking` lab entry is
+  **not** this ADR's gate and stays honestly `Unsupported` — its missing
+  primitive is a socket-open *effect* (ADR-0006's amendment 2), a future
+  effect ADR.

@@ -53,6 +53,14 @@ module data_pipeline;
 // `String` producer (`label_for`) is viewed zero-copy by `Str` consumers
 // (`label_is`/`label_len`) natively.
 //
+// Keyed-aggregation oracle (ADR-0011). Since ADR-0011 landed the hash map,
+// the pipeline finally has its dictionary shape: `totals_by_category` folds
+// the whole batch into a `Map[Int, Int]` in ONE scan (where `total_for`
+// re-scans per category), and `main` cross-checks the two paths at runtime —
+// the exit byte survives only if the map's answer equals the record-struct
+// path's, natively. The specs pin the map path equal to the streaming fold
+// for every category and pin `keys`' first-seen order.
+//
 // Record encoding (a deliberately real serialization exercise):
 //
 //     record = category * 100000 + amount
@@ -317,15 +325,55 @@ fn label_len(in r: Record) -> Int {
     std::str::len(std::string::as_str(r.label))
 }
 
+// --- The keyed-aggregation oracle (ADR-0011) --------------------------------
+
+/// Total **every** category's spend in ONE scan of the batch, keyed by
+/// category in a real `Map[Int, Int]` — the dictionary shape this pipeline
+/// always wanted and previously faked by re-scanning the whole batch per
+/// category (`total_for` runs one pass per query; this runs one pass, full
+/// stop). Each record folds into its category's running total via
+/// `get`-then-`insert`.
+fn totals_by_category() -> Map[Int, Int] {
+    var totals = std::map::empty();
+    for packed in records() {
+        let c = category(packed);
+        let so_far = match std::map::get(totals, c) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(totals, c, so_far + amount(packed));
+    }
+    totals
+}
+
+/// One category's total, read out of the single-scan map — the ADR-0011
+/// oracle: the specs pin this equal to the streaming `total_for` and the
+/// record-struct path for every category, so the O(1)-lookup shape is proven
+/// against its linear-scan predecessors.
+fn total_from_map(take wanted: Int) -> Int {
+    let totals = totals_by_category();
+    match std::map::get(totals, wanted) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
 /// The query the program answers: total transport (category 2) spend. Computed
-/// through the record-struct path (`sum_records`): the batch is decoded into
-/// real `Record` structs with owned labels, filtered, and folded with a
-/// first-class `add_amount` value — so the native binary exercises ADR-0012's
-/// owned-element array for real. The specs pin it equal to the streaming
-/// `total_for` and the packed-`Int` collect path, so the exit byte is
-/// unchanged (400, i.e. 400 & 0xff = 144).
+/// through the record-struct path (`sum_records`, ADR-0012's oracle) **and**
+/// cross-checked at runtime against the keyed-aggregation map
+/// (`total_from_map`, ADR-0011's oracle): the exit byte stays 144 (400 & 0xff)
+/// only when the two independently-shaped paths agree natively — so `run`
+/// exercises the owned-element array, the recursive drop glue, a native
+/// indirect call, the ADR-0010 view composition, and the native hash table in
+/// one binary.
 fn main() -> Int {
-    sum_records(2)
+    let record_total = sum_records(2);
+    let map_total = total_from_map(2);
+    if record_total == map_total {
+        record_total
+    } else {
+        0
+    }
 }
 
 // --- Executable specs ------------------------------------------------------
@@ -432,6 +480,29 @@ spec "the record-struct path equals the packed-Int pipeline (ADR-0012 oracle)" {
     // The record-level subset has the same data-dependent size.
     then std::array::len(collect_records(2)) == count_for(2);
     then std::array::len(collect_records(9)) == 0;
+}
+
+spec "the keyed-aggregation map equals the streaming fold (ADR-0011 oracle)" {
+    // One scan into a Map[Int, Int] agrees with the per-category re-scans
+    // and with the record-struct path, for every category — the map oracle.
+    then total_from_map(2) == total_for(2);
+    then total_from_map(1) == total_for(1);
+    then total_from_map(3) == total_for(3);
+    then total_from_map(4) == total_for(4);
+    then total_from_map(2) == sum_records(2);
+    then total_from_map(9) == 0;
+    // Concrete totals, so the oracle is not merely self-consistent.
+    then total_from_map(2) == 400;
+    then total_from_map(3) == 560;
+    // The map holds exactly the four categories present, keyed in
+    // first-seen order (the deterministic `keys` contract).
+    let totals = totals_by_category();
+    then std::map::len(totals) == 4;
+    let ks = std::map::keys(totals);
+    then std::array::get(ks, 0) == 1;
+    then std::array::get(ks, 1) == 2;
+    then std::array::get(ks, 2) == 3;
+    then std::array::get(ks, 3) == 4;
 }
 
 spec main {

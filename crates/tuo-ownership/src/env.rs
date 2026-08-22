@@ -42,7 +42,12 @@ impl<'a> TypeEnv<'a> {
             | Ty::Float(_)
             | Ty::Fn(_)
             | Ty::Error => true,
-            Ty::String | Ty::Array(_) | Ty::Wrapper(..) | Ty::Param(_) | Ty::Var(_) => false,
+            Ty::String
+            | Ty::Array(_)
+            | Ty::Map(..)
+            | Ty::Wrapper(..)
+            | Ty::Param(_)
+            | Ty::Var(_) => false,
             Ty::Range(item) => self.is_copy_guarded(item, visiting),
             // A `[T; N]` owns no heap: like a tuple/struct of N identical
             // fields, it is `Copy` iff its element is — the length is
@@ -127,6 +132,10 @@ fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
                 .collect(),
         ),
         Ty::Array(item) => Ty::Array(Box::new(instantiate(item, params, args))),
+        Ty::Map(key, value) => Ty::Map(
+            Box::new(instantiate(key, params, args)),
+            Box::new(instantiate(value, params, args)),
+        ),
         Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(instantiate(item, params, args)), *n),
         Ty::Range(item) => Ty::Range(Box::new(instantiate(item, params, args))),
         Ty::Option(item) => Ty::Option(Box::new(instantiate(item, params, args))),

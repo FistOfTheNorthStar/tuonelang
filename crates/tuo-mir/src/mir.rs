@@ -337,6 +337,17 @@ pub enum EffectOp {
     /// statement, consumed by nothing. Never traps. (ADR-0009 Stage A;
     /// native lowering is Stage B.)
     WriteString,
+    /// `par_map(f: fn(take I64) -> I64, workers: I64, tasks: borrow
+    /// Array[I64]) -> Array[I64]` — apply the function value to every task
+    /// on `workers` OS threads (round-robin: task `i` on thread
+    /// `i % workers`; `workers < 1` behaves as 1), joining every thread
+    /// before the statement completes, and store the results **in task
+    /// order** into the `Array[I64]` destination (the one effect whose
+    /// destination is not `I64`). Argument order matches the lowering's
+    /// operands-then-borrow convention: the two by-value operands (`f`,
+    /// `workers`), then the borrowed tasks place. Deterministic in its
+    /// result whenever `f` is pure; never traps. (ADR-0007.)
+    ParMap,
 }
 
 impl EffectOp {
@@ -349,6 +360,7 @@ impl EffectOp {
             Self::ReadByte => "read_byte",
             Self::Exit => "exit",
             Self::WriteString => "write_string",
+            Self::ParMap => "par_map",
         }
     }
 
@@ -358,6 +370,7 @@ impl EffectOp {
         match self {
             Self::Write | Self::WriteString => 2,
             Self::ReadByte | Self::Exit => 1,
+            Self::ParMap => 3,
         }
     }
 }
@@ -384,10 +397,22 @@ pub enum HeapMutOp {
     /// statement-level mutator and not an rvalue: an rvalue must not
     /// mutate a place.
     Pop,
+    /// `insert(target: mut Map[K, V], k: K, v: V) -> Option[V]` — insert or
+    /// overwrite `k → v`, producing the **previous** value for `k` (`Some`)
+    /// or `None` when `k` was absent (ADR-0011). A fresh key appends to the
+    /// map's insertion order; an overwrite keeps the key's position. Never
+    /// traps. Like [`HeapMutOp::Pop`], it both mutates and produces — hence
+    /// a statement-level mutator.
+    MapInsert,
+    /// `remove(target: mut Map[K, V], k: K) -> Option[V]` — remove `k`,
+    /// producing its value (`Some`) or `None` when absent (ADR-0011). The
+    /// remaining entries keep their relative insertion order. Never traps.
+    MapRemove,
 }
 
 impl HeapMutOp {
-    /// The stable lowercase name (`push_byte`, `append`, `push`, `pop`).
+    /// The stable lowercase name (`push_byte`, `append`, `push`, `pop`,
+    /// `map_insert`, `map_remove`).
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
@@ -395,6 +420,8 @@ impl HeapMutOp {
             Self::Append => "append",
             Self::Push => "push",
             Self::Pop => "pop",
+            Self::MapInsert => "map_insert",
+            Self::MapRemove => "map_remove",
         }
     }
 
@@ -402,8 +429,9 @@ impl HeapMutOp {
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::PushByte | Self::Append | Self::Push => 1,
+            Self::PushByte | Self::Append | Self::Push | Self::MapRemove => 1,
             Self::Pop => 0,
+            Self::MapInsert => 2,
         }
     }
 }
@@ -562,6 +590,20 @@ pub enum HeapOp {
     /// `get(subject: Array[I64], i: I64) -> I64` — the element at `i`.
     /// **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`.
     ArrayGet,
+    /// `empty() -> Map[K, V]` — the empty hash map (ADR-0011). Never traps.
+    MapEmpty,
+    /// `get(subject: Map[K, V], k: K) -> Option[V]` — the value for `k`
+    /// (`Some`) or `None`. Never traps.
+    MapGet,
+    /// `contains_key(subject: Map[K, V], k: K) -> Bool` — is `k` present?
+    /// Never traps.
+    MapContainsKey,
+    /// `len(subject: Map[K, V]) -> I64` — the entry count. Never traps.
+    MapLen,
+    /// `keys(subject: Map[K, V]) -> Array[K]` — a new array of the keys in
+    /// **insertion order** (the deterministic order ADR-0011 fixes; a
+    /// removed key's successors keep their relative order). Never traps.
+    MapKeys,
 }
 
 impl HeapOp {
@@ -580,6 +622,11 @@ impl HeapOp {
             Self::ArrayEmpty => "array_empty",
             Self::ArrayLen => "array_len",
             Self::ArrayGet => "array_get",
+            Self::MapEmpty => "map_empty",
+            Self::MapGet => "map_get",
+            Self::MapContainsKey => "map_contains_key",
+            Self::MapLen => "map_len",
+            Self::MapKeys => "map_keys",
         }
     }
 
@@ -596,6 +643,10 @@ impl HeapOp {
                 | Self::StringAsStr
                 | Self::ArrayLen
                 | Self::ArrayGet
+                | Self::MapGet
+                | Self::MapContainsKey
+                | Self::MapLen
+                | Self::MapKeys
         )
     }
 
@@ -607,8 +658,15 @@ impl HeapOp {
             | Self::StringLen
             | Self::StringAsStr
             | Self::ArrayEmpty
-            | Self::ArrayLen => 0,
-            Self::StringFromStr | Self::StringByteAt | Self::ArrayGet => 1,
+            | Self::ArrayLen
+            | Self::MapEmpty
+            | Self::MapLen
+            | Self::MapKeys => 0,
+            Self::StringFromStr
+            | Self::StringByteAt
+            | Self::ArrayGet
+            | Self::MapGet
+            | Self::MapContainsKey => 1,
             Self::StringConcat | Self::StringSlice => 2,
         }
     }

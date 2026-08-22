@@ -38,6 +38,19 @@ pub enum Builtin {
     /// for the call); returns bytes written, or a negative value on host
     /// error. Never traps. **Effectful.** (ADR-0009.)
     RtWriteString,
+    /// `std::rt::par_map(take f: fn(take Int) -> Int, in tasks: Array[Int],
+    /// take workers: Int) -> Array[Int]` — apply the non-capturing function
+    /// value `f` to every task, distributing the tasks round-robin over
+    /// `workers` OS threads (task `i` runs on thread `i % workers`; a
+    /// `workers` below 1 is treated as 1), and return the results **in task
+    /// order**. The call joins every thread before returning (structured
+    /// fork-join — nothing outlives the call), and the only values that
+    /// cross a thread boundary are the `Copy` code pointer, `Copy` `Int`
+    /// tasks read from a shared read-only buffer, and each thread's own
+    /// disjoint result slot — so no data race is expressible through it
+    /// (ADR-0007). Deterministic in its result whenever `f` is pure. Never
+    /// traps. **Effectful** (spawning is a typed effect).
+    RtParMap,
     /// `std::str::len(in s: Str) -> Int` — the byte length of `s`. Pure;
     /// never traps.
     StrLen,
@@ -106,6 +119,35 @@ pub enum Builtin {
     /// element at `i`; traps `IndexOutOfBounds` when `i < 0` or
     /// `i >= len(xs)`. Pure. (ADR-0009.)
     ArrayGet,
+    /// `std::map::empty() -> Map[K, V]` — a new empty hash map. The key and
+    /// value types are witnessed by context (an undetermined pair is
+    /// `T0011`); the v0 surface supports `Map[Int, Int]` and
+    /// `Map[Str, Int]`. Pure; never traps. (ADR-0011.)
+    MapEmpty,
+    /// `std::map::insert(mut m: Map[K, V], take k: K, take v: V) ->
+    /// Option[V]` — insert/overwrite `k → v`, returning the **previous**
+    /// value for `k` (`Some`) or `None` if `k` was absent. Pure; never
+    /// traps. (ADR-0011.)
+    MapInsert,
+    /// `std::map::get(in m: Map[K, V], take k: K) -> Option[V]` — the value
+    /// for `k`, or `None`. Pure; never traps. (ADR-0011.)
+    MapGet,
+    /// `std::map::contains_key(in m: Map[K, V], take k: K) -> Bool` — is
+    /// `k` present? Pure; never traps. (ADR-0011.)
+    MapContainsKey,
+    /// `std::map::remove(mut m: Map[K, V], take k: K) -> Option[V]` —
+    /// remove `k`, returning its value (`Some`) or `None`. The remaining
+    /// entries keep their relative insertion order. Pure; never traps.
+    /// (ADR-0011.)
+    MapRemove,
+    /// `std::map::len(in m: Map[K, V]) -> Int` — the entry count. Pure;
+    /// never traps. (ADR-0011.)
+    MapLen,
+    /// `std::map::keys(in m: Map[K, V]) -> Array[K]` — a **new** array of
+    /// the map's keys in **insertion order** (the deterministic order the
+    /// ADR requires; `remove` preserves the relative order of the rest).
+    /// Pure; never traps. (ADR-0011.)
+    MapKeys,
 }
 
 /// How one builtin parameter receives its argument (the surface
@@ -124,11 +166,12 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 29] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
         Self::RtWriteString,
+        Self::RtParMap,
         Self::StrLen,
         Self::StrByteAt,
         Self::StrSlice,
@@ -146,13 +189,24 @@ impl Builtin {
         Self::ArrayPop,
         Self::ArrayLen,
         Self::ArrayGet,
+        Self::MapEmpty,
+        Self::MapInsert,
+        Self::MapGet,
+        Self::MapContainsKey,
+        Self::MapRemove,
+        Self::MapLen,
+        Self::MapKeys,
     ];
 
     /// The path of the module the builtin lives in.
     #[must_use]
     pub const fn module_path(self) -> &'static [&'static str] {
         match self {
-            Self::RtWrite | Self::RtReadByte | Self::RtExit | Self::RtWriteString => &["std", "rt"],
+            Self::RtWrite
+            | Self::RtReadByte
+            | Self::RtExit
+            | Self::RtWriteString
+            | Self::RtParMap => &["std", "rt"],
             Self::StrLen | Self::StrByteAt | Self::StrSlice => &["std", "str"],
             Self::StringEmpty
             | Self::StringFromStr
@@ -168,6 +222,13 @@ impl Builtin {
             | Self::ArrayPop
             | Self::ArrayLen
             | Self::ArrayGet => &["std", "array"],
+            Self::MapEmpty
+            | Self::MapInsert
+            | Self::MapGet
+            | Self::MapContainsKey
+            | Self::MapRemove
+            | Self::MapLen
+            | Self::MapKeys => &["std", "map"],
         }
     }
 
@@ -179,10 +240,11 @@ impl Builtin {
             Self::RtReadByte => "read_byte",
             Self::RtExit => "exit",
             Self::RtWriteString => "write_string",
-            Self::StrLen | Self::StringLen | Self::ArrayLen => "len",
+            Self::RtParMap => "par_map",
+            Self::StrLen | Self::StringLen | Self::ArrayLen | Self::MapLen => "len",
             Self::StrByteAt | Self::StringByteAt => "byte_at",
             Self::StrSlice | Self::StringSlice => "slice",
-            Self::StringEmpty | Self::ArrayEmpty => "empty",
+            Self::StringEmpty | Self::ArrayEmpty | Self::MapEmpty => "empty",
             Self::StringFromStr => "from_str",
             Self::StringPushByte => "push_byte",
             Self::StringAppend => "append",
@@ -190,7 +252,11 @@ impl Builtin {
             Self::StringAsStr => "as_str",
             Self::ArrayPush => "push",
             Self::ArrayPop => "pop",
-            Self::ArrayGet => "get",
+            Self::ArrayGet | Self::MapGet => "get",
+            Self::MapInsert => "insert",
+            Self::MapContainsKey => "contains_key",
+            Self::MapRemove => "remove",
+            Self::MapKeys => "keys",
         }
     }
 
@@ -202,6 +268,7 @@ impl Builtin {
             Self::RtReadByte => "std::rt::read_byte",
             Self::RtExit => "std::rt::exit",
             Self::RtWriteString => "std::rt::write_string",
+            Self::RtParMap => "std::rt::par_map",
             Self::StrLen => "std::str::len",
             Self::StrByteAt => "std::str::byte_at",
             Self::StrSlice => "std::str::slice",
@@ -219,6 +286,13 @@ impl Builtin {
             Self::ArrayPop => "std::array::pop",
             Self::ArrayLen => "std::array::len",
             Self::ArrayGet => "std::array::get",
+            Self::MapEmpty => "std::map::empty",
+            Self::MapInsert => "std::map::insert",
+            Self::MapGet => "std::map::get",
+            Self::MapContainsKey => "std::map::contains_key",
+            Self::MapRemove => "std::map::remove",
+            Self::MapLen => "std::map::len",
+            Self::MapKeys => "std::map::keys",
         }
     }
 
@@ -230,7 +304,7 @@ impl Builtin {
     pub const fn is_effect(self) -> bool {
         matches!(
             self,
-            Self::RtWrite | Self::RtReadByte | Self::RtExit | Self::RtWriteString
+            Self::RtWrite | Self::RtReadByte | Self::RtExit | Self::RtWriteString | Self::RtParMap
         )
     }
 
@@ -242,6 +316,7 @@ impl Builtin {
             Self::RtWrite => &[Take, In],
             Self::RtReadByte | Self::RtExit => &[Take],
             Self::RtWriteString => &[Take, In],
+            Self::RtParMap => &[Take, In, Take],
             Self::StrLen => &[In],
             Self::StrByteAt => &[In, Take],
             Self::StrSlice => &[In, Take, Take],
@@ -255,6 +330,11 @@ impl Builtin {
             Self::StringSlice => &[In, Take, Take],
             Self::ArrayPush => &[Mut, Take],
             Self::ArrayPop => &[Mut],
+            Self::MapEmpty => &[],
+            Self::MapInsert => &[Mut, Take, Take],
+            Self::MapGet | Self::MapContainsKey => &[In, Take],
+            Self::MapRemove => &[Mut, Take],
+            Self::MapLen | Self::MapKeys => &[In],
         }
     }
 }

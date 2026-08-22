@@ -1,0 +1,52 @@
+// parallel-reduction (parallel) — the identical CPU-bound reduction as the
+// serial baseline, with the four chunk sums computed by `std::rt::par_map`
+// on four OS threads (ADR-0007's structured fork-join) and folded. Same
+// `busy`, same chunks, same arithmetic, same exit byte (64) — only the
+// thread count differs, so the wall-clock ratio against the serial program
+// is a like-for-like parallel speedup.
+
+fn workers() -> Int {
+    4
+}
+
+fn chunk_size() -> Int {
+    60000
+}
+
+fn busy(take seed: Int) -> Int {
+    var x = seed;
+    var k = 0;
+    while k < 40 {
+        x = (x * 31 + seed + k) % 1048576;
+        k = k + 1;
+    }
+    x
+}
+
+fn chunk_sum(take w: Int) -> Int {
+    var total = 0;
+    var i = w * chunk_size();
+    let end = (w + 1) * chunk_size();
+    while i < end {
+        total = (total + busy(i)) % 1048576;
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> Int {
+    var ids = std::array::empty();
+    var w = 0;
+    while w < workers() {
+        std::array::push(ids, w);
+        w = w + 1;
+    }
+    let sums = std::rt::par_map(chunk_sum, ids, workers());
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(sums) {
+        total = total + std::array::get(sums, i);
+        i = i + 1;
+    }
+    total
+}

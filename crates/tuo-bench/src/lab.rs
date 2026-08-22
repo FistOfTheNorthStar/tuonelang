@@ -43,6 +43,7 @@
 pub mod compare;
 pub mod compiler;
 pub mod env;
+pub mod parallel;
 pub mod report;
 pub mod runtime;
 pub mod timing;

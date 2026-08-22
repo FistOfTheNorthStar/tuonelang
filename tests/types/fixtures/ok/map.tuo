@@ -1,0 +1,68 @@
+// ADR-0011: the v0 map surface type-checks over its two supported key/value
+// pairs — `Map[Int, Int]` and `Map[Str, Int]` — with `K`/`V` witnessed by the
+// receiver argument, exactly as the ADR-0012 array element is.
+
+fn int_map_ops() -> Int {
+    var m = std::map::empty();
+    let previous = std::map::insert(m, 1, 10);
+    let looked_up = std::map::get(m, 1);
+    let missing = std::map::get(m, 2);
+    let count = std::map::len(m);
+    let there = std::map::contains_key(m, 1);
+    let removed = std::map::remove(m, 1);
+    let ks = std::map::keys(m);
+    let first = match looked_up {
+        Some { value } => value,
+        None => 0,
+    };
+    let _ = previous;
+    let _ = missing;
+    let _ = there;
+    let _ = removed;
+    let _ = ks;
+    count + first
+}
+
+fn str_map_ops() -> Int {
+    var routes = std::map::empty();
+    let previous = std::map::insert(routes, "/health", 200);
+    let looked_up = std::map::get(routes, "/health");
+    let ks = std::map::keys(routes);
+    let first_key = std::array::get(ks, 0);
+    let _ = previous;
+    let _ = looked_up;
+    std::str::len(first_key) + std::map::len(routes)
+}
+
+// An annotated empty is enough evidence on its own.
+fn annotated_empty() -> Int {
+    let m: Map[Int, Int] = std::map::empty();
+    std::map::len(m)
+}
+
+// A map moves like any non-`Copy` value; `take` passes ownership.
+fn consume(take m: Map[Int, Int]) -> Int {
+    std::map::len(m)
+}
+
+fn move_it() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 4, 5);
+    consume(m)
+}
+
+spec int_map_ops {
+    then int_map_ops() == 11;
+}
+
+spec str_map_ops {
+    then str_map_ops() == 8;
+}
+
+spec annotated_empty {
+    then annotated_empty() == 0;
+}
+
+spec move_it {
+    then move_it() == 1;
+}

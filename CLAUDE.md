@@ -166,11 +166,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   a heap-owning element is a recursive **deep copy** and drop is recursive
   per-element glue matching the interpreter's clone/drop, with
   `std::string::as_str` lowered as a zero-copy two-word view (ADR-0010 Stage
-  B); and — since ADR-0008 Tier 1 — **first-class (non-capturing) function
+  B); — since ADR-0008 Tier 1 — **first-class (non-capturing) function
   values**: a bare top-level `fn` name is a `Const::Fn` `Copy` code pointer of
-  type `fn(mode T, …) -> R` (ABI v5, `layout_of(Ty::Fn)` a pointer), called
+  type `fn(mode T, …) -> R` (`layout_of(Ty::Fn)` a pointer), called
   indirectly through `Callee::Indirect` with the identical direct-call ABI
-  (sret + borrow args included), pinned three-way — and *refuse* — never
+  (sret + borrow args included), pinned three-way; — since ADR-0011 — the
+  **hash map** `Map[Int, Int]`/`Map[Str, Int]` (the same three-word header
+  over dense insertion-ordered entries; every op beyond `len`/`empty` lowers
+  to the linked `tuo_rt_map_*` shim, whose hidden open-addressing index uses
+  the vector-pinned splitmix64/FNV-1a hashes — unobservable, since `keys` is
+  insertion order — ABI v6); and — since ADR-0007 — the one concurrency
+  primitive `std::rt::par_map` (structured fork-join over POSIX threads via
+  `tuo_rt_par_map`, a typed effect) — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
@@ -285,23 +292,32 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: of the nine runtime
-  workloads exactly eight (**startup, integer-computation, function-calls,
+  honesty rule the prompt demands is enforced structurally: of the ten runtime
+  workloads exactly nine (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
   over a fixed request-log line with its C peer, — since ADR-0009's
   allocator core landed — **allocation**, a bounded allocate/grow/free loop over
   a growable `Array[Int]` and an owned `String` with its `malloc`/`realloc`/`free`
-  C peer, same doubling growth, and — since ADR-0008 Tier 1's function values
+  C peer, same doubling growth, — since ADR-0008 Tier 1's function values
   landed — **indirect-calls**, a hot loop calling through a `fn` value with a C
-  peer calling through a function pointer, same iteration count and exit) carry a
+  peer calling through a function pointer, same iteration count and exit, and —
+  since ADR-0011's hash map landed — **map-lookup**, an insert-1000/lookup-1000/
+  remove-500 churn over `Map[Int, Int]` with open-addressing C and built-in-map
+  Go peers) carry a
   real program and are `Support::Supported`, while only **networking** is
   `Support::Unsupported` with the *exact reason* the v0 core cannot express it (no
   socket-open effect) and emits **no number** — the entry becomes measurable the
   moment the feature lands, with no other change (exactly how `collections`,
-  `string-processing`, and `allocation` flipped, and how `indirect-calls` was
-  added). The compiler
+  `string-processing`, `allocation`, and `map-lookup` flipped or were added).
+  Since ADR-0007, the lab also owns the **parallel-speedup category**
+  (`lab::parallel`): one CPU-bound reduction committed four ways (tuonelang
+  serial + `par_map`, C serial + pthreads, same thread count, same exit byte),
+  measured through a host-injected `TimedRunner` that builds first and times
+  only the binary's execution (warm-up run first), `Measured` only when a
+  side's serial *and* parallel runs hit the expected exit — raw nanoseconds
+  recorded, the ratio derived at render time, never promised. The compiler
   lab's cold stages measure the aggregate/loop program
   (`lab::compiler::COLD_AGGREGATE`, acceptance test-pinned) so the ADR-0004
   lowering's compile cost is tracked too. Cross-language
@@ -396,6 +412,15 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   spec-pinned equal to both packed-`Int` paths — so the native binary exercises
   the owned-element deep-copy `get`, the recursive drop glue, and the ADR-0010
   `String`→`Str` composition (`label_is`/`label_len` over `as_str`) for real.
+  Since ADR-0011 landed the hash map, `data-pipeline` also carries the
+  **keyed-aggregation oracle** — `totals_by_category` folds the whole batch
+  into a `Map[Int, Int]` in one scan, spec-pinned equal to the per-category
+  re-scans, and `main` cross-checks the map path against the record path at
+  runtime; and since ADR-0007 landed structured fork-join,
+  `concurrent-worker` **runs its pool live** — `main` computes the makespan
+  through the pure scheduling model AND through a real `std::rt::par_map`
+  (one OS thread per worker running the model's own `worker_load`), exiting
+  15 only when the two agree — the model as the pool's runtime oracle.
   Since ADR-0006 landed the
   effect boundary, `http-service` **runs natively too**: its request-line
   parsing is pure `std::str` byte scanning (spec-checked) under a thin
@@ -404,11 +429,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   report through `std::io::println`, consuming the stdlib's `std::io` module
   as input (`src/std_io.tuo`, a verbatim copy pinned byte-for-byte against
   the catalog). What still cannot run (a socket accept-loop needs a socket
-  effect; a worker pool needs concurrency) keeps its **pure decision core**
-  written in the runnable subset — which really runs and is spec-checked —
-  while the effectful shell is a documented `CONTRACT:` tier naming the
-  missing primitive, exactly as `tuo-stdlib` splits its tiers; nothing
-  advertises behavior the compiler cannot perform. The examples are kept
+  effect; a dynamically-drained shared work queue needs shared state across
+  threads, which the structured primitive deliberately does not admit) keeps
+  its **pure decision core** written in the runnable subset — which really
+  runs and is spec-checked — while the effectful shell is a documented
+  `CONTRACT:` tier naming the missing primitive, exactly as `tuo-stdlib`
+  splits its tiers; nothing advertises behavior the compiler cannot perform. The examples are kept
   honest by `tuo-cli/tests/dogfood_examples.rs`, which drives the **real**
   `tuo` binary over every one (`check` accepts it, `test` runs its specs to
   `0 failed`, each runnable program `run`s/`build`s to the exact documented
@@ -433,14 +459,27 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   deferred), `ADR-0008` (first-class functions — **Tier 1 accepted and landed**:
   non-capturing function values and the generic higher-order stdlib combinators,
   having added its named `indirect-calls` workload; **Tier 2 capturing closures
-  deferred** to a future ADR), and `ADR-0007` (the concurrency model), the last
-  still `proposed` and naming the performance-lab workload (`networking`) it must
-  unblock before it can be accepted. The successor ADRs the dogfooding chain
-  produced — `ADR-0010` (the `String`→`Str` view) and `ADR-0012` (generic
-  `Array[T]` element types) — are both since **accepted and landed** (all
-  stages, including ADR-0010's Stage C stdlib payoff and ADR-0012's
+  deferred** to a future ADR), and `ADR-0007` (the concurrency model — since
+  **accepted and landed**: the deferred model resolved to structured fork-join
+  over the one primitive `std::rt::par_map` (a typed effect; non-capturing
+  function values over `Copy` tasks, round-robin, join-before-return, so no
+  data race is expressible by construction), `concurrent-worker` now runs its
+  pool **live** with the spec-checked scheduling model as the runtime oracle
+  (exit 15 survives only when the live run agrees), and the gating
+  **parallel-speedup** benchmark category landed (`lab::parallel`, serial vs
+  `par_map` wall clock with a same-thread-count pthreads C peer); the
+  `networking` lab entry stays honestly unsupported — its missing primitive is
+  a socket-open *effect*, a future ADR). The successor ADRs the dogfooding
+  chain produced — `ADR-0010` (the `String`→`Str` view) and `ADR-0012`
+  (generic `Array[T]` element types) — are both since **accepted and landed**
+  (all stages, including ADR-0010's Stage C stdlib payoff and ADR-0012's
   owned-element increment, combinator instantiations, and the record-struct
-  oracle above); `ADR-0011` (the hash map) remains `proposed`. Resolved `examples/**/tdg.lock` files embed
+  oracle above), and `ADR-0011` (the hash map) is since **accepted and
+  landed** too (all three stages: `Ty::Map` with the `Map[Int, Int]`/
+  `Map[Str, Int]` surface, insertion-ordered reference semantics, the native
+  `tuo_rt_map_*` table on both backends at ABI v6, `std::collections::counts`,
+  data-pipeline's keyed-aggregation oracle, and its gating `map-lookup`
+  workload). **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
   machine-absolute dependency paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -677,17 +716,23 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   arrays they fold and pass a named top-level `fn` by value, joined since
   ADR-0012 by their `String`-element instantiations
   `fold_strings`/`map_into_strings`/`filter_into_strings` with the non-`Copy`
-  modes that element demands), an **effect
+  modes that element demands, and, since ADR-0011, `counts` — the frequency
+  table over the builtin `Map[Int, Int]`, spec'd through the map's own
+  observables), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
-  over `std::rt::exit`, and — since ADR-0009 — `std::io::read_line`, which builds
-  an owned `String` from the bytes `std::rt::read_byte` yields — real tuonelang
+  over `std::rt::exit`, — since ADR-0009 — `std::io::read_line`, which builds
+  an owned `String` from the bytes `std::rt::read_byte` yields, and — since
+  ADR-0007 — `std::sync::par_map`, the structured fork-join wrapper over
+  `std::rt::par_map` — real tuonelang
   implementations that run natively but can carry **no** spec, since `R0007`
   keeps the spec sandbox pure; each is marked `EFFECT:` and names the native CLI
   test that pins it), and a
   **contract tier** (the effectful entry points whose primitive does not exist
-  yet — `read`/`now`/`lock`/`arg_count` a file/clock/thread/argv primitive —
+  yet — `read`/`now`/`lock`/`arg_count` a file/clock/lock/argv primitive —
   given as exact signatures + documented contracts marked `CONTRACT:`,
-  with **no** executable spec so nothing claims to run that cannot). The promise
+  with **no** executable spec so nothing claims to run that cannot; the old
+  `spawn` contract is gone — detached spawn is deliberately absent, not
+  pending, per ADR-0007's structured model). The promise
   is enforced, not asserted: `tuo-cli/tests/stdlib.rs` really compiles every
   module (alone and together) with zero errors, runs every shipped spec to
   green with **no skips** (a skipped spec would mean a dishonest, unrunnable

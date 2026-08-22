@@ -424,6 +424,23 @@ impl Verifier<'_> {
             EffectOp::Write => vec![(true, Ty::int()), (true, Ty::Str)],
             EffectOp::ReadByte | EffectOp::Exit => vec![(true, Ty::int())],
             EffectOp::WriteString => vec![(true, Ty::int()), (false, Ty::String)],
+            // ADR-0007: the two by-value operands (the `fn(take I64) -> I64`
+            // task function, the worker count) then the borrowed tasks array,
+            // matching the lowering's operands-then-borrow convention.
+            EffectOp::ParMap => vec![
+                (
+                    true,
+                    Ty::Fn(Box::new(tuo_types::FnTy {
+                        params: vec![tuo_types::FnParam {
+                            mode: tuo_types::ParamMode::Take,
+                            ty: Ty::int(),
+                        }],
+                        ret: Ty::int(),
+                    })),
+                ),
+                (true, Ty::int()),
+                (false, Ty::Array(Box::new(Ty::int()))),
+            ],
         };
         for (position, (arg, (want_value, want_ty))) in args.iter().zip(&expected).enumerate() {
             let ty = match (arg, want_value) {
@@ -458,13 +475,19 @@ impl Verifier<'_> {
                 );
             }
         }
+        // Every effect's destination is `I64` except `par_map`, whose
+        // results materialize as an `Array[I64]` (ADR-0007).
+        let want_dest = match op {
+            EffectOp::ParMap => Ty::Array(Box::new(Ty::int())),
+            _ => Ty::int(),
+        };
         if let Some(ty) = self.place_ty(dest)
-            && !types_agree(&ty, &Ty::int())
+            && !types_agree(&ty, &want_dest)
         {
             self.error(
                 code::EFFECT,
                 format!(
-                    "fn `{name}`: bb{block} stores effect `{}` into a non-`I64` destination",
+                    "fn `{name}`: bb{block} stores effect `{}` into a wrong-typed destination",
                     op.name()
                 ),
             );
@@ -497,6 +520,16 @@ impl Verifier<'_> {
             _ => Ty::int(),
         };
         let elem_array = Ty::Array(Box::new(elem.clone()));
+        // The map's key/value pair is likewise generic (ADR-0011): read it
+        // from the target place's actual `Ty::Map(k, v)`.
+        let (map_key, map_value) = match op {
+            HeapMutOp::MapInsert | HeapMutOp::MapRemove => self
+                .place_ty(target)
+                .and_then(|ty| map_pair(&ty))
+                .unwrap_or_else(|| (Ty::int(), Ty::int())),
+            _ => (Ty::int(), Ty::int()),
+        };
+        let kv_map = Ty::Map(Box::new(map_key.clone()), Box::new(map_value.clone()));
         let (target_ty, operand_tys, result): (Ty, Vec<Ty>, Ty) = match op {
             HeapMutOp::PushByte => (Ty::String, vec![Ty::int()], Ty::Unit),
             HeapMutOp::Append => (Ty::String, vec![Ty::Str], Ty::Unit),
@@ -505,6 +538,16 @@ impl Verifier<'_> {
                 elem_array.clone(),
                 Vec::new(),
                 Ty::Option(Box::new(elem.clone())),
+            ),
+            HeapMutOp::MapInsert => (
+                kv_map.clone(),
+                vec![map_key.clone(), map_value.clone()],
+                Ty::Option(Box::new(map_value.clone())),
+            ),
+            HeapMutOp::MapRemove => (
+                kv_map.clone(),
+                vec![map_key.clone()],
+                Ty::Option(Box::new(map_value.clone())),
             ),
         };
         if let Some(ty) = self.place_ty(target)
@@ -873,27 +916,44 @@ impl Verifier<'_> {
                 .and_then(|ty| array_element(&ty))
                 .unwrap_or_else(Ty::int)
         };
+        // The map's key/value pair is likewise generic (ADR-0011): read it
+        // from the subject place for the reading ops, the dest for `empty`.
+        let subject_kv = || {
+            subject
+                .and_then(|place| self.place_ty(place))
+                .and_then(|ty| map_pair(&ty))
+                .unwrap_or_else(|| (Ty::int(), Ty::int()))
+        };
         let subject_ty: Option<Ty> = match op {
             HeapOp::StringLen
             | HeapOp::StringByteAt
             | HeapOp::StringSlice
             | HeapOp::StringAsStr => Some(Ty::String),
             HeapOp::ArrayLen | HeapOp::ArrayGet => Some(Ty::Array(Box::new(subject_elem()))),
+            HeapOp::MapGet | HeapOp::MapContainsKey | HeapOp::MapLen | HeapOp::MapKeys => {
+                let (key, value) = subject_kv();
+                Some(Ty::Map(Box::new(key), Box::new(value)))
+            }
             HeapOp::StringEmpty
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
-            | HeapOp::ArrayEmpty => None,
+            | HeapOp::ArrayEmpty
+            | HeapOp::MapEmpty => None,
         };
         let operand_tys: Vec<Ty> = match op {
             HeapOp::StringEmpty
             | HeapOp::StringLen
             | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
-            | HeapOp::ArrayLen => Vec::new(),
+            | HeapOp::ArrayLen
+            | HeapOp::MapEmpty
+            | HeapOp::MapLen
+            | HeapOp::MapKeys => Vec::new(),
             HeapOp::StringFromStr => vec![Ty::Str],
             HeapOp::StringConcat => vec![Ty::Str, Ty::Str],
             HeapOp::StringByteAt | HeapOp::ArrayGet => vec![Ty::int()],
             HeapOp::StringSlice => vec![Ty::int(), Ty::int()],
+            HeapOp::MapGet | HeapOp::MapContainsKey => vec![subject_kv().0],
         };
         let result: Ty = match op {
             HeapOp::StringEmpty
@@ -901,7 +961,9 @@ impl Verifier<'_> {
             | HeapOp::StringConcat
             | HeapOp::StringSlice => Ty::String,
             HeapOp::StringAsStr => Ty::Str,
-            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen => Ty::int(),
+            HeapOp::StringLen | HeapOp::StringByteAt | HeapOp::ArrayLen | HeapOp::MapLen => {
+                Ty::int()
+            }
             // `get` returns the element type, read from the subject array.
             HeapOp::ArrayGet => subject_elem(),
             // `empty` produces `Array[T]`; the element is read from the dest.
@@ -910,6 +972,17 @@ impl Verifier<'_> {
                     .and_then(|ty| array_element(&ty))
                     .unwrap_or_else(Ty::int),
             )),
+            // `empty` produces `Map[K, V]`; the pair is read from the dest.
+            HeapOp::MapEmpty => {
+                let (key, value) = self
+                    .place_ty(dest)
+                    .and_then(|ty| map_pair(&ty))
+                    .unwrap_or_else(|| (Ty::int(), Ty::int()));
+                Ty::Map(Box::new(key), Box::new(value))
+            }
+            HeapOp::MapGet => Ty::Option(Box::new(subject_kv().1)),
+            HeapOp::MapContainsKey => Ty::Bool,
+            HeapOp::MapKeys => Ty::Array(Box::new(subject_kv().0)),
         };
         match (subject, &subject_ty) {
             (None, None) => {}
@@ -1591,6 +1664,16 @@ fn types_agree(a: &Ty, b: &Ty) -> bool {
 fn array_element(ty: &Ty) -> Option<Ty> {
     match ty {
         Ty::Array(item) => Some((**item).clone()),
+        _ => None,
+    }
+}
+
+/// The key/value pair of a `Map[K, V]` (ADR-0011), or `None` for any other
+/// type. Used to validate the generic map ops against the map place's actual
+/// pair rather than a hardcoded `Int`.
+fn map_pair(ty: &Ty) -> Option<(Ty, Ty)> {
+    match ty {
+        Ty::Map(key, value) => Some(((**key).clone(), (**value).clone())),
         _ => None,
     }
 }

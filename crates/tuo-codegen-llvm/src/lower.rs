@@ -120,7 +120,8 @@ use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, IntType};
 use inkwell::values::{
-    BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue, PointerValue,
+    BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue, IntValue,
+    PointerValue,
 };
 
 use tuo_codegen::CodegenError;
@@ -132,7 +133,7 @@ use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
-use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
 use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
@@ -249,7 +250,7 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
 /// set and the three-way differential stays consistent. `Str` is not heap-owning.
 fn ty_owns_heap(ty: &Ty, types: &TypeckResult) -> bool {
     match ty {
-        Ty::String | Ty::Array(_) | Ty::Wrapper(..) => true,
+        Ty::String | Ty::Array(_) | Ty::Map(..) | Ty::Wrapper(..) => true,
         Ty::Struct(symbol, targs) => types.struct_shape(*symbol).is_some_and(|shape| {
             shape_field_owns_heap(&shape.fields, &shape.type_params, targs, types)
         }),
@@ -893,8 +894,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Storage::Aggregate(_)
         );
 
-        let mut arg_values: Vec<inkwell::values::BasicMetadataValueEnum<'ctx>> =
-            Vec::with_capacity(args.len() + 1);
+        let mut arg_values: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len() + 1);
 
         // sret out-pointer, if the callee returns an aggregate.
         let sret = if ret_is_aggregate {
@@ -2397,6 +2397,50 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 self.builder.position_at_end(dead);
                 Ok(())
             }
+            // `par_map(f, workers, borrow tasks)` (ADR-0007): read the tasks
+            // array's `{ptr, len}` from the borrowed header, pass the code
+            // pointer, count, and worker count to the runtime's fork-join
+            // shim, and let it write the fresh `Array[Int]` header straight
+            // into the destination.
+            EffectOp::ParMap => {
+                let [f, workers, tasks] = args else {
+                    return Err(CodegenError::backend("par_map expects exactly 3 arguments"));
+                };
+                let f = self.lower_operand(&value_arg(f)?)?;
+                let workers = self.lower_operand(&value_arg(workers)?)?;
+                let header = match tasks {
+                    Arg::Borrow(place) => self.borrow_address(place)?,
+                    Arg::Value(_) | Arg::BorrowMut(_) => {
+                        return Err(CodegenError::backend(
+                            "par_map's tasks argument must be an `in` borrow",
+                        ));
+                    }
+                };
+                let ptr = self
+                    .builder
+                    .build_load(self.ptr_ty, header, "pm_tasks_ptr")
+                    .map_err(builder_err("loading the tasks data pointer"))?;
+                let len_addr = self.byte_gep(header, HDR_LEN_OFFSET)?;
+                let len = self
+                    .builder
+                    .build_load(self.ctx.i64_type(), len_addr, "pm_tasks_len")
+                    .map_err(builder_err("loading the tasks length"))?;
+                let dest_addr = self.aggregate_dest_address(dest)?;
+                self.builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[
+                            f.into(),
+                            ptr.into(),
+                            len.into(),
+                            workers.into(),
+                            dest_addr.into(),
+                        ],
+                        "",
+                    )
+                    .map_err(builder_err("calling the par_map effect"))?;
+                Ok(())
+            }
         }
     }
 
@@ -2425,6 +2469,21 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             EffectOp::WriteString => (
                 effect::WRITE_SYMBOL,
                 i64_ty.fn_type(&[i64_ty.into(), self.ptr_ty.into(), i64_ty.into()], false),
+            ),
+            // `par_map(f, tasks_ptr, n, workers, out_hdr)` — void; the result
+            // array header is written through the out pointer (ADR-0007).
+            EffectOp::ParMap => (
+                effect::PAR_MAP_SYMBOL,
+                self.ctx.void_type().fn_type(
+                    &[
+                        self.ptr_ty.into(),
+                        self.ptr_ty.into(),
+                        i64_ty.into(),
+                        i64_ty.into(),
+                        self.ptr_ty.into(),
+                    ],
+                    false,
+                ),
             ),
         };
         if let Some(existing) = self.module.get_function(name) {
@@ -2598,6 +2657,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 require_native_array_element(&element, self.types)?;
                 Ok(self.layout(&element)?.stride())
             }
+            // A map's entry stride is fixed by its key kind (ADR-0011): the
+            // dense entries the `tuo_rt_map_*` shim maintains.
+            Ty::Map(key, _) => Ok(map_entry_stride(&key)),
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -2659,6 +2721,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         match self.place_type(place) {
             Ty::String => Ok(1),
             Ty::Array(element) => Ok(self.layout(&element)?.align),
+            Ty::Map(..) => Ok(8),
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -2689,10 +2752,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         args: &[Operand],
     ) -> Result<(), CodegenError> {
         match op {
-            HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
+            HeapOp::StringEmpty | HeapOp::ArrayEmpty | HeapOp::MapEmpty => {
                 // Refuse a wrapper-containing array element up front (wrapper
                 // values are not lowered anywhere) so no native path
-                // half-builds an unsupported array.
+                // half-builds an unsupported array. (A map's key/value pair is
+                // already pinned to the v0 surface by the type checker.)
                 if let Ty::Array(element) = self.place_type(dest) {
                     require_native_array_element(&element, self.types)?;
                 }
@@ -2778,10 +2842,152 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     .map_err(builder_err("storing the view length"))?;
                 Ok(())
             }
+            HeapOp::MapGet => {
+                // `get(in Map, k) -> Option[Int]`: the shim probes the table
+                // into a `{found, value}` out buffer; the Option destination
+                // is materialized from it (ADR-0011).
+                let subject = subject
+                    .ok_or_else(|| CodegenError::backend("map_get is missing its Map subject"))?;
+                let header = self.header_address(subject)?;
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(subject)?;
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("map_get is missing its key"))?;
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![header.into()];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp.into());
+                    call_args.push(kn.into());
+                } else {
+                    call_args.push(self.lower_operand(key)?.into());
+                }
+                call_args.push(out.into());
+                let symbol = if key_is_str {
+                    map::MAP_STR_GET_SYMBOL
+                } else {
+                    map::MAP_INT_GET_SYMBOL
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                self.write_option_int_dest(dest, out)
+            }
+            HeapOp::MapKeys => {
+                // `keys(in Map) -> Array[K]`: the shim allocates the fresh
+                // keys buffer and writes the three-word array header straight
+                // into the destination (insertion order, ADR-0011).
+                let subject = subject
+                    .ok_or_else(|| CodegenError::backend("map_keys is missing its Map subject"))?;
+                let header = self.header_address(subject)?;
+                let dest_addr = self.aggregate_dest_address(dest)?;
+                let symbol = if self.map_key_is_str(subject)? {
+                    map::MAP_STR_KEYS_SYMBOL
+                } else {
+                    map::MAP_INT_KEYS_SYMBOL
+                };
+                self.call_map_shim(symbol, &[header.into(), dest_addr.into()])
+            }
             _ => Err(CodegenError::backend(
                 "a non-aggregate heap op reached `lower_heap_op_aggregate`",
             )),
         }
+    }
+
+    /// The `Str`-vs-`Int` key kind of a map place (ADR-0011): decides which
+    /// `tuo_rt_map_*` symbol family a lowering calls.
+    fn map_key_is_str(&self, place: &Place) -> Result<bool, CodegenError> {
+        match self.place_type(place) {
+            Ty::Map(key, _) => Ok(matches!(*key, Ty::Str)),
+            other => Err(CodegenError::backend(format!(
+                "a map operation targeted a non-map place: {other:?}"
+            ))),
+        }
+    }
+
+    /// A fresh two-word `{found, value}` out buffer for the map shim calls.
+    fn map_out_addr(&mut self) -> Result<PointerValue<'ctx>, CodegenError> {
+        self.builder
+            .build_alloca(self.ctx.i64_type().array_type(2), "map_out")
+            .map_err(builder_err("allocating the map out buffer"))
+    }
+
+    /// Declare (idempotently) and call a `tuo_rt_map_*` shim function: the
+    /// signature is derived from the argument values (pointers and `i64`s),
+    /// and every shim returns void — results come back through the out
+    /// buffer or a written header.
+    fn call_map_shim(
+        &mut self,
+        symbol: &str,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> Result<(), CodegenError> {
+        let function = match self.module.get_function(symbol) {
+            Some(existing) => existing,
+            None => {
+                let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = args
+                    .iter()
+                    .map(|arg| {
+                        if arg.is_pointer_value() {
+                            self.ptr_ty.into()
+                        } else {
+                            self.ctx.i64_type().into()
+                        }
+                    })
+                    .collect();
+                let fn_type = self.ctx.void_type().fn_type(&param_types, false);
+                self.module
+                    .add_function(symbol, fn_type, Some(Linkage::External))
+            }
+        };
+        self.builder
+            .build_call(function, args, "map_shim")
+            .map_err(builder_err("calling the map runtime"))?;
+        Ok(())
+    }
+
+    /// Materialize an `Option[Int]` destination from a map shim's two-word
+    /// `{found, value}` out buffer: tag = `1 - found` (`Some` is variant 0,
+    /// `None` variant 1), payload = the value word (deterministically zero
+    /// when absent, so no branch is needed).
+    fn write_option_int_dest(
+        &mut self,
+        dest: &Place,
+        out: PointerValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let dest_ty = self.place_type(dest);
+        let dest_base = self.aggregate_dest_address(dest)?;
+        let i64_ty = self.ctx.i64_type();
+        let found = self
+            .builder
+            .build_load(i64_ty, out, "map_found")
+            .map_err(builder_err("loading the map found flag"))?
+            .into_int_value();
+        let value_addr = self.byte_gep(out, 8)?;
+        let value = self
+            .builder
+            .build_load(i64_ty, value_addr, "map_value")
+            .map_err(builder_err("loading the map value"))?
+            .into_int_value();
+        let one = i64_ty.const_int(1, false);
+        let tag64 = self
+            .builder
+            .build_int_sub(one, found, "map_tag64")
+            .map_err(builder_err("computing the Option tag"))?;
+        let tag = self
+            .builder
+            .build_int_truncate(tag64, self.ctx.i32_type(), "map_tag")
+            .map_err(builder_err("narrowing the Option tag"))?;
+        self.builder
+            .build_store(dest_base, tag)
+            .map_err(builder_err("storing the Option tag"))?;
+        let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
+            .map_err(|error| self.layout_error(error))?;
+        let payload_offset = *payload_offsets
+            .first()
+            .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
+        let payload_addr = self.byte_gep(dest_base, payload_offset)?;
+        self.builder
+            .build_store(payload_addr, value)
+            .map_err(builder_err("storing the Option payload"))?;
+        Ok(())
     }
 
     /// Build an owned `String` in `dest` from `count` bytes at `src`: alloc
@@ -2811,7 +3017,51 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         let header = self.header_address(subject)?;
         let (ptr, len, _cap) = self.load_header(header)?;
         match op {
-            HeapOp::StringLen | HeapOp::ArrayLen => Ok(len.into()),
+            HeapOp::StringLen | HeapOp::ArrayLen | HeapOp::MapLen => Ok(len.into()),
+            HeapOp::MapContainsKey => {
+                // `contains_key` is `get` with the value discarded: probe via
+                // the shim's out buffer and produce the `found` word as Bool.
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(subject)?;
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("map_contains_key is missing its key"))?;
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![header.into()];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp.into());
+                    call_args.push(kn.into());
+                } else {
+                    call_args.push(self.lower_operand(key)?.into());
+                }
+                call_args.push(out.into());
+                let symbol = if key_is_str {
+                    map::MAP_STR_GET_SYMBOL
+                } else {
+                    map::MAP_INT_GET_SYMBOL
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                let found = self
+                    .builder
+                    .build_load(self.ctx.i64_type(), out, "map_found")
+                    .map_err(builder_err("loading the map found flag"))?
+                    .into_int_value();
+                let truthy = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::NE,
+                        found,
+                        self.ctx.i64_type().const_zero(),
+                        "map_contains",
+                    )
+                    .map_err(builder_err("testing the map found flag"))?;
+                // Bool storage is i8, matching every other Bool producer.
+                Ok(self
+                    .builder
+                    .build_int_z_extend(truthy, self.ctx.i8_type(), "map_contains_i8")
+                    .map_err(builder_err("widening the contains verdict"))?
+                    .into())
+            }
             HeapOp::StringByteAt => {
                 let index = self.heap_index_arg(args)?;
                 let oob = self
@@ -2943,6 +3193,42 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 Ok(())
             }
             HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+            HeapMutOp::MapInsert | HeapMutOp::MapRemove => {
+                // The whole table transition lives in the `tuo_rt_map_*` shim
+                // (ADR-0011): pass the header, the key (and value for insert),
+                // and a two-word out buffer `{found, previous}`, then
+                // materialize the `Option[Int]` destination from it.
+                let header = self.header_address(target)?;
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(target)?;
+                let insert = matches!(op, HeapMutOp::MapInsert);
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("a map mutator is missing its key"))?;
+                let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![header.into()];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp.into());
+                    call_args.push(kn.into());
+                } else {
+                    call_args.push(self.lower_operand(key)?.into());
+                }
+                if insert {
+                    let value = args.get(1).ok_or_else(|| {
+                        CodegenError::backend("a map insert is missing its value")
+                    })?;
+                    call_args.push(self.lower_operand(value)?.into());
+                }
+                call_args.push(out.into());
+                let symbol = match (insert, key_is_str) {
+                    (true, false) => map::MAP_INT_INSERT_SYMBOL,
+                    (true, true) => map::MAP_STR_INSERT_SYMBOL,
+                    (false, false) => map::MAP_INT_REMOVE_SYMBOL,
+                    (false, true) => map::MAP_STR_REMOVE_SYMBOL,
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                self.write_option_int_dest(dest, out)
+            }
         }
     }
 
@@ -3255,6 +3541,20 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 Ok(())
             }
+            Ty::Map(key, _) => match glue {
+                // A map cannot be an array element (the checker's ADR-0011
+                // surface refuses it), so the deep-copy fixup can never reach
+                // one; refusing keeps the walk honest if that ever changes.
+                HeapGlue::DeepFixup => Err(CodegenError::backend(
+                    "deep-copy fixup reached a Map value (maps are not array elements in v0)",
+                )),
+                // The whole block (index + entries) is freed by the shim,
+                // which alone knows the internal layout (ADR-0011).
+                HeapGlue::DropInPlace => {
+                    let stride = self.ctx.i64_type().const_int(map_entry_stride(key), false);
+                    self.call_map_shim(map::MAP_DROP_SYMBOL, &[addr.into(), stride.into()])
+                }
+            },
             Ty::Enum(..) | Ty::Option(_) | Ty::Result(..) => self.emit_variant_glue(ty, addr, glue),
             Ty::FixedArray(element, count) => {
                 let stride = self.layout(element)?.stride();
@@ -3936,7 +4236,21 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
             | HeapOp::StringSlice
             | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
+            | HeapOp::MapEmpty
+            | HeapOp::MapGet
+            | HeapOp::MapKeys
     )
+}
+
+/// The dense-entry stride of a map's table, fixed by its key kind
+/// (ADR-0011): `{key, value}` two words for an `Int` key, `{ptr, len, value}`
+/// three words for a `Str` key. Mirrors `tuo_runtime::map`'s constants.
+fn map_entry_stride(key: &Ty) -> u64 {
+    if matches!(key, Ty::Str) {
+        map::STR_ENTRY_STRIDE
+    } else {
+        map::INT_ENTRY_STRIDE
+    }
 }
 
 /// The exported symbol name of a MIR function, from its stable symbol id.

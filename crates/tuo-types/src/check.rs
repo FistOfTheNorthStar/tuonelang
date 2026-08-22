@@ -243,10 +243,28 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
 /// these `Int` shapes are never the type a widened call is checked against.
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
     let int_array = || Ty::Array(Box::new(Ty::int()));
+    let int_map = || Ty::Map(Box::new(Ty::int()), Box::new(Ty::int()));
     match builtin {
         Builtin::RtWrite => (vec![Ty::int(), Ty::Str], Ty::int()),
         Builtin::RtReadByte | Builtin::RtExit => (vec![Ty::int()], Ty::int()),
         Builtin::RtWriteString => (vec![Ty::int(), Ty::String], Ty::int()),
+        // ADR-0007: the structured fork-join primitive. The task function is
+        // a non-capturing `fn(take Int) -> Int` value (ADR-0008 Tier 1) — the
+        // only callable that may cross a thread boundary in v0.
+        Builtin::RtParMap => (
+            vec![
+                Ty::Fn(Box::new(FnTy {
+                    params: vec![FnParam {
+                        mode: ParamMode::Take,
+                        ty: Ty::int(),
+                    }],
+                    ret: Ty::int(),
+                })),
+                Ty::Array(Box::new(Ty::int())),
+                Ty::int(),
+            ],
+            Ty::Array(Box::new(Ty::int())),
+        ),
         Builtin::StrLen => (vec![Ty::Str], Ty::int()),
         Builtin::StrByteAt => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::StrSlice => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::Str),
@@ -264,6 +282,19 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::ArrayPop => (vec![int_array()], Ty::Option(Box::new(Ty::int()))),
         Builtin::ArrayLen => (vec![int_array()], Ty::int()),
         Builtin::ArrayGet => (vec![int_array(), Ty::int()], Ty::int()),
+        // The `std::map` builtins are key/value-parametric (ADR-0011) and are
+        // checked by `check_map_builtin_call`; these monomorphic shapes are
+        // only the installed seed, exactly like the `Array[Int]` entries above.
+        Builtin::MapEmpty => (Vec::new(), int_map()),
+        Builtin::MapInsert => (
+            vec![int_map(), Ty::int(), Ty::int()],
+            Ty::Option(Box::new(Ty::int())),
+        ),
+        Builtin::MapGet => (vec![int_map(), Ty::int()], Ty::Option(Box::new(Ty::int()))),
+        Builtin::MapContainsKey => (vec![int_map(), Ty::int()], Ty::Bool),
+        Builtin::MapRemove => (vec![int_map(), Ty::int()], Ty::Option(Box::new(Ty::int()))),
+        Builtin::MapLen => (vec![int_map()], Ty::int()),
+        Builtin::MapKeys => (vec![int_map()], Ty::Array(Box::new(Ty::int()))),
     }
 }
 
@@ -674,6 +705,18 @@ impl<'a> Checker<'a> {
                 return Some(Ty::Array(Box::new(
                     args.into_iter().next().unwrap_or(Ty::Error),
                 )));
+            }
+            // `Map[K, V]` — the builtin hash map (ADR-0011). The type takes
+            // any two arguments; the v0 *operation* surface is checked per
+            // call (`check_map_builtin_call`).
+            "Map" => {
+                if !self.check_type_arity("Map", 2, args.len(), span) {
+                    return Some(Ty::Error);
+                }
+                let mut args = args.into_iter();
+                let key = args.next().unwrap_or(Ty::Error);
+                let value = args.next().unwrap_or(Ty::Error);
+                return Some(Ty::Map(Box::new(key), Box::new(value)));
             }
             _ => return None,
         };
@@ -1824,6 +1867,15 @@ impl<'a> Checker<'a> {
             }
             "==" | "!=" => {
                 self.expect_ty(lhs, rhs, rhs_span);
+                // `Map == Map` is deferred (ADR-0011): structural equality
+                // over an unordered container needs a canonical comparison
+                // the v0 core does not define — specs compare observations
+                // (`get`/`len`/`keys`) instead. Refused here so no engine
+                // invents an order-sensitive stand-in.
+                let applied = self.icx.apply(lhs);
+                if matches!(applied, Ty::Map(..)) {
+                    self.unsupported_op(op, &applied, span);
+                }
                 Ty::Bool
             }
             "<" | "<=" | ">" | ">=" => {
@@ -2327,6 +2379,125 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Check a call to one of the key/value-parametric `std::map` builtins
+    /// (ADR-0011). `K` and `V` are witnessed by the receiver argument (fresh
+    /// vars solved from context for `empty()`); the v0 operation surface is
+    /// `Map[Int, Int]` and `Map[Str, Int]` — any other *determined* pair is
+    /// a `T0001` (an undetermined `empty()` is `T0011` "type annotation
+    /// needed", reported by the ordinary unsolved-variable path). Returns
+    /// `None` for non-map builtins.
+    fn check_map_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        args: &[Expr<'_>],
+        span: Span,
+    ) -> Option<Ty> {
+        let int = Ty::int();
+        match builtin {
+            Builtin::MapEmpty => {
+                // `empty() -> Map[K, V]`; K/V are fresh vars solved from context.
+                self.check_args(&[], args, span);
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                Some(Ty::Map(Box::new(key), Box::new(value)))
+            }
+            Builtin::MapInsert => {
+                // `insert(mut Map[K, V], K, V) -> Option[V]`.
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                self.check_args(&[map, key.clone(), value.clone()], args, span);
+                self.reject_unsupported_map_pair(&key, &value, span);
+                Some(Ty::Option(Box::new(value)))
+            }
+            Builtin::MapGet => {
+                // `get(in Map[K, V], K) -> Option[V]`.
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                self.check_args(&[map, key.clone()], args, span);
+                self.reject_unsupported_map_pair(&key, &value, span);
+                Some(Ty::Option(Box::new(value)))
+            }
+            Builtin::MapContainsKey => {
+                // `contains_key(in Map[K, V], K) -> Bool`.
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                self.check_args(&[map, key.clone()], args, span);
+                self.reject_unsupported_map_pair(&key, &value, span);
+                Some(Ty::Bool)
+            }
+            Builtin::MapRemove => {
+                // `remove(mut Map[K, V], K) -> Option[V]`.
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                self.check_args(&[map, key.clone()], args, span);
+                self.reject_unsupported_map_pair(&key, &value, span);
+                Some(Ty::Option(Box::new(value)))
+            }
+            Builtin::MapLen => {
+                // `len(in Map[K, V]) -> Int`; the count, always `Int`.
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key), Box::new(value));
+                self.check_args(&[map], args, span);
+                Some(int)
+            }
+            Builtin::MapKeys => {
+                // `keys(in Map[K, V]) -> Array[K]` (insertion order).
+                let key = self.fresh(span);
+                let value = self.fresh(span);
+                let map = Ty::Map(Box::new(key.clone()), Box::new(value.clone()));
+                self.check_args(&[map], args, span);
+                self.reject_unsupported_map_pair(&key, &value, span);
+                Some(Ty::Array(Box::new(key)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Refuse a `Map[K, V]` whose key/value pair is outside the v0 operation
+    /// surface (ADR-0011) with a `T0001`. The supported pairs are exactly
+    /// `Map[Int, Int]` and `Map[Str, Int]` — the scalar keys whose equality
+    /// and hash the language owns, with `Int` values. An unsolved/`Error`
+    /// component is left alone (an undetermined `empty()` is `T0011`,
+    /// reported by the unsolved-variable path).
+    fn reject_unsupported_map_pair(&mut self, key: &Ty, value: &Ty, span: Span) {
+        let key = self.icx.apply(key);
+        let value = self.icx.apply(value);
+        let undetermined = |ty: &Ty| matches!(ty, Ty::Var(_) | Ty::Error | Ty::Never);
+        if undetermined(&key) || undetermined(&value) {
+            return;
+        }
+        let key_ok = matches!(key, Ty::Str) || key == Ty::int();
+        let value_ok = value == Ty::int();
+        if key_ok && value_ok {
+            return;
+        }
+        let key_text = self.render(&key);
+        let value_text = self.render(&value);
+        let rendered = format!("Map[{key_text}, {value_text}]");
+        self.push(
+            Diagnostic::error(
+                code(1),
+                format!("`{rendered}` is not supported in v0"),
+                span,
+            )
+            .with_primary_label(format!(
+                "the v0 map operation surface is `Map[Int, Int]` and `Map[Str, Int]`, \
+                     not `{rendered}`"
+            ))
+            .with_help(
+                "user key types await the trait system's `Hash`/`Eq`, and non-`Int` \
+                     values are a later additive increment (ADR-0011); use an `Int` or \
+                     `Str` key with an `Int` value",
+            )
+            .with_actual(StructuredValue::Type(rendered)),
+        );
+    }
+
     /// Refuse an `Array[T]` whose element type `T` is outside the v0-supported
     /// set (ADR-0012 Stage A) with a `T0001`. The supported set is the scalars
     /// `Int`/`Bool`/`Str`/`String` and user structs/enums whose fields are
@@ -2449,6 +2620,11 @@ impl<'a> Checker<'a> {
                     // `builtin_signature`, which cannot spell a type variable.
                     if let Some(builtin) = self.resolution.builtin(symbol) {
                         if let Some(ret) = self.check_array_builtin_call(builtin, &args, span) {
+                            return ret;
+                        }
+                        // The `std::map` builtins are key/value-parametric the
+                        // same way (ADR-0011).
+                        if let Some(ret) = self.check_map_builtin_call(builtin, &args, span) {
                             return ret;
                         }
                     }

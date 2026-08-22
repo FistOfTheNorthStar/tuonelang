@@ -30,7 +30,7 @@ use crate::symbol::{Reference, SpecTarget, Symbol, SymbolKind};
 /// plus the builtin `Array` type constructor.
 const BUILTIN_TYPES: &[&str] = &[
     "I8", "I16", "I32", "I64", "Isize", "U8", "U16", "U32", "U64", "Usize", "F32", "F64", "Int",
-    "Float", "Bool", "Char", "String", "Str", "Array",
+    "Float", "Bool", "Char", "String", "Str", "Array", "Map",
 ];
 
 /// Is `name` a builtin type name (resolved silently, without a symbol)?

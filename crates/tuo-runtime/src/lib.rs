@@ -56,6 +56,7 @@
 pub mod abi;
 pub mod alloc;
 pub mod effect;
+pub mod map;
 
 use std::process::abort;
 

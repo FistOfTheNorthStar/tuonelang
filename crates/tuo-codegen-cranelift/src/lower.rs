@@ -137,7 +137,7 @@ use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
-use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect};
+use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
 use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
@@ -273,7 +273,7 @@ fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
 /// `Array[Str]` needs neither.
 fn ty_owns_heap(ty: &Ty, types: &TypeckResult) -> bool {
     match ty {
-        Ty::String | Ty::Array(_) | Ty::Wrapper(..) => true,
+        Ty::String | Ty::Array(_) | Ty::Map(..) | Ty::Wrapper(..) => true,
         Ty::Struct(symbol, targs) => types.struct_shape(*symbol).is_some_and(|shape| {
             shape_field_owns_heap(&shape.fields, &shape.type_params, targs, types)
         }),
@@ -2312,6 +2312,44 @@ impl<'a> Lowering<'a> {
                 self.builder.seal_block(dead);
                 Ok(())
             }
+            // `par_map(f, workers, borrow tasks)` (ADR-0007): read the tasks
+            // array's `{ptr, len}` from the borrowed header, pass the code
+            // pointer, count, and worker count to the runtime's fork-join
+            // shim, and let it write the fresh `Array[Int]` header straight
+            // into the destination.
+            EffectOp::ParMap => {
+                let [f, workers, tasks] = args else {
+                    return Err(CodegenError::backend("par_map expects exactly 3 arguments"));
+                };
+                let f = self.lower_operand(&value_arg(f)?)?;
+                let workers = self.lower_operand(&value_arg(workers)?)?;
+                let header = match tasks {
+                    Arg::Borrow(place) => self.borrow_address(place)?,
+                    Arg::Value(_) | Arg::BorrowMut(_) => {
+                        return Err(CodegenError::backend(
+                            "par_map's tasks argument must be an `in` borrow",
+                        ));
+                    }
+                };
+                let ptr = self.builder.ins().load(
+                    self.pointer_type,
+                    MemFlags::trusted(),
+                    header,
+                    HDR_PTR_OFFSET,
+                );
+                let len = self.builder.ins().load(
+                    types::I64,
+                    MemFlags::trusted(),
+                    header,
+                    HDR_LEN_OFFSET,
+                );
+                let dest_addr = self.aggregate_dest_address(dest)?;
+                let func_ref = self.effect_func_ref(op);
+                self.builder
+                    .ins()
+                    .call(func_ref, &[f, ptr, len, workers, dest_addr]);
+                Ok(())
+            }
         }
     }
 
@@ -2347,6 +2385,16 @@ impl<'a> Lowering<'a> {
                 signature.params.push(AbiParam::new(types::I64));
                 signature.returns.push(AbiParam::new(types::I64));
                 effect::WRITE_SYMBOL
+            }
+            // `par_map(f, tasks_ptr, n, workers, out_hdr)` — void; the result
+            // array header is written through the out pointer (ADR-0007).
+            EffectOp::ParMap => {
+                signature.params.push(AbiParam::new(self.pointer_type)); // f
+                signature.params.push(AbiParam::new(self.pointer_type)); // tasks
+                signature.params.push(AbiParam::new(types::I64)); // n
+                signature.params.push(AbiParam::new(types::I64)); // workers
+                signature.params.push(AbiParam::new(self.pointer_type)); // out
+                effect::PAR_MAP_SYMBOL
             }
         };
         let id = self
@@ -2492,6 +2540,9 @@ impl<'a> Lowering<'a> {
                 i64::try_from(self.layout(&element)?.stride())
                     .map_err(|_| CodegenError::backend("array element stride exceeds i64"))
             }
+            // A map's entry stride is fixed by its key kind (ADR-0011): the
+            // dense entries the `tuo_rt_map_*` shim maintains.
+            Ty::Map(key, _) => Ok(map_entry_stride(&key)),
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -2505,6 +2556,7 @@ impl<'a> Lowering<'a> {
             Ty::String => Ok(1),
             Ty::Array(element) => i64::try_from(self.layout(&element)?.align)
                 .map_err(|_| CodegenError::backend("array element align exceeds i64")),
+            Ty::Map(..) => Ok(8),
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -2524,11 +2576,13 @@ impl<'a> Lowering<'a> {
         args: &[Operand],
     ) -> Result<(), CodegenError> {
         match op {
-            HeapOp::StringEmpty | HeapOp::ArrayEmpty => {
+            HeapOp::StringEmpty | HeapOp::ArrayEmpty | HeapOp::MapEmpty => {
                 // `{ptr = sentinel, len = 0, cap = 0}` — never dereferenced,
                 // never freed. For an array, refuse a wrapper-containing
                 // element up front (wrapper values are not lowered anywhere)
-                // so no native path half-builds an unsupported array.
+                // so no native path half-builds an unsupported array. (A map's
+                // key/value pair is already pinned to the v0 surface by the
+                // type checker.)
                 if let Ty::Array(element) = self.place_type(dest) {
                     require_native_array_element(&element, self.types)?;
                 }
@@ -2618,10 +2672,127 @@ impl<'a> Lowering<'a> {
                     .store(MemFlags::trusted(), len, base, STR_LEN_OFFSET);
                 Ok(())
             }
+            HeapOp::MapGet => {
+                // `get(in Map, k) -> Option[Int]`: the shim probes the table
+                // into a `{found, value}` out buffer; the Option destination
+                // is materialized from it (ADR-0011).
+                let subject = subject
+                    .ok_or_else(|| CodegenError::backend("map_get is missing its Map subject"))?;
+                let header = self.header_address(subject)?;
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(subject)?;
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("map_get is missing its key"))?;
+                let mut call_args = vec![header];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp);
+                    call_args.push(kn);
+                } else {
+                    call_args.push(self.lower_operand(key)?);
+                }
+                call_args.push(out);
+                let symbol = if key_is_str {
+                    map::MAP_STR_GET_SYMBOL
+                } else {
+                    map::MAP_INT_GET_SYMBOL
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                self.write_option_int_dest(dest, out)
+            }
+            HeapOp::MapKeys => {
+                // `keys(in Map) -> Array[K]`: the shim allocates the fresh
+                // keys buffer and writes the three-word array header straight
+                // into the destination (insertion order, ADR-0011).
+                let subject = subject
+                    .ok_or_else(|| CodegenError::backend("map_keys is missing its Map subject"))?;
+                let header = self.header_address(subject)?;
+                let dest_addr = self.aggregate_dest_address(dest)?;
+                let symbol = if self.map_key_is_str(subject)? {
+                    map::MAP_STR_KEYS_SYMBOL
+                } else {
+                    map::MAP_INT_KEYS_SYMBOL
+                };
+                self.call_map_shim(symbol, &[header, dest_addr])
+            }
             _ => Err(CodegenError::backend(
                 "a non-aggregate heap op reached `lower_heap_op_aggregate`",
             )),
         }
+    }
+
+    /// The `Str`-vs-`Int` key kind of a map place (ADR-0011): decides which
+    /// `tuo_rt_map_*` symbol family a lowering calls.
+    fn map_key_is_str(&self, place: &Place) -> Result<bool, CodegenError> {
+        match self.place_type(place) {
+            Ty::Map(key, _) => Ok(matches!(*key, Ty::Str)),
+            other => Err(CodegenError::backend(format!(
+                "a map operation targeted a non-map place: {other:?}"
+            ))),
+        }
+    }
+
+    /// A fresh two-word `{found, value}` out buffer for the map shim calls,
+    /// as a stack address.
+    fn map_out_addr(&mut self) -> Result<ClifValue, CodegenError> {
+        let slot = self.new_temp_slot(Layout::words(2))?;
+        Ok(self.builder.ins().stack_addr(self.pointer_type, slot, 0))
+    }
+
+    /// Declare (idempotently) and call a `tuo_rt_map_*` shim function: every
+    /// parameter is pointer-width (headers, keys, byte pointers, lengths,
+    /// values, out buffers all pass as one register each), and every shim
+    /// returns void — results come back through the out buffer or a written
+    /// header.
+    fn call_map_shim(&mut self, symbol: &str, args: &[ClifValue]) -> Result<(), CodegenError> {
+        let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
+        for _ in args {
+            signature.params.push(AbiParam::new(self.pointer_type));
+        }
+        let id = self
+            .module
+            .declare_function(symbol, Linkage::Import, &signature)
+            .map_err(|error| {
+                CodegenError::backend(format!("declaring the map runtime symbol: {error}"))
+            })?;
+        let func_ref = self.module.declare_func_in_func(id, self.builder.func);
+        self.builder.ins().call(func_ref, args);
+        Ok(())
+    }
+
+    /// Materialize an `Option[Int]` destination from a map shim's two-word
+    /// `{found, value}` out buffer: tag = `1 - found` (`Some` is variant 0,
+    /// `None` variant 1), payload = the value word (deterministically zero
+    /// when absent, so no branch is needed).
+    fn write_option_int_dest(&mut self, dest: &Place, out: ClifValue) -> Result<(), CodegenError> {
+        let dest_ty = self.place_type(dest);
+        let dest_base = self.aggregate_dest_address(dest)?;
+        let found = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), out, 0);
+        let value = self
+            .builder
+            .ins()
+            .load(types::I64, MemFlags::trusted(), out, 8);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let tag64 = self.builder.ins().isub(one, found);
+        let tag = self.builder.ins().ireduce(types::I32, tag64);
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), tag, dest_base, 0);
+        let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
+            .map_err(|error| self.layout_error(error))?;
+        let payload_offset = *payload_offsets
+            .first()
+            .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
+        let payload_offset = i32::try_from(payload_offset)
+            .map_err(|_| CodegenError::backend("Option payload offset exceeds i32"))?;
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), value, dest_base, payload_offset);
+        Ok(())
     }
 
     /// Build an owned `String` in `dest` from `count` bytes at `src`: alloc
@@ -2659,7 +2830,36 @@ impl<'a> Lowering<'a> {
         let header = self.header_address(subject)?;
         let (ptr, len, _cap) = self.load_header(header);
         match op {
-            HeapOp::StringLen | HeapOp::ArrayLen => Ok(len),
+            HeapOp::StringLen | HeapOp::ArrayLen | HeapOp::MapLen => Ok(len),
+            HeapOp::MapContainsKey => {
+                // `contains_key` is `get` with the value discarded: probe via
+                // the shim's out buffer and produce the `found` word as Bool.
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(subject)?;
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("map_contains_key is missing its key"))?;
+                let mut call_args = vec![header];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp);
+                    call_args.push(kn);
+                } else {
+                    call_args.push(self.lower_operand(key)?);
+                }
+                call_args.push(out);
+                let symbol = if key_is_str {
+                    map::MAP_STR_GET_SYMBOL
+                } else {
+                    map::MAP_INT_GET_SYMBOL
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                let found = self
+                    .builder
+                    .ins()
+                    .load(types::I64, MemFlags::trusted(), out, 0);
+                Ok(self.builder.ins().icmp_imm(IntCC::NotEqual, found, 0))
+            }
             HeapOp::StringByteAt => {
                 let index = self.heap_index_arg(args)?;
                 let oob = self
@@ -2845,6 +3045,42 @@ impl<'a> Lowering<'a> {
                 self.write_unit_dest(dest)
             }
             HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+            HeapMutOp::MapInsert | HeapMutOp::MapRemove => {
+                // The whole table transition lives in the `tuo_rt_map_*` shim
+                // (ADR-0011): pass the header, the key (and value for insert),
+                // and a two-word out buffer `{found, previous}`, then
+                // materialize the `Option[Int]` destination from it.
+                let header = self.header_address(target)?;
+                let out = self.map_out_addr()?;
+                let key_is_str = self.map_key_is_str(target)?;
+                let insert = matches!(op, HeapMutOp::MapInsert);
+                let key = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("a map mutator is missing its key"))?;
+                let mut call_args = vec![header];
+                if key_is_str {
+                    let (kp, kn) = self.str_operand_parts(key)?;
+                    call_args.push(kp);
+                    call_args.push(kn);
+                } else {
+                    call_args.push(self.lower_operand(key)?);
+                }
+                if insert {
+                    let value = args.get(1).ok_or_else(|| {
+                        CodegenError::backend("a map insert is missing its value")
+                    })?;
+                    call_args.push(self.lower_operand(value)?);
+                }
+                call_args.push(out);
+                let symbol = match (insert, key_is_str) {
+                    (true, false) => map::MAP_INT_INSERT_SYMBOL,
+                    (true, true) => map::MAP_STR_INSERT_SYMBOL,
+                    (false, false) => map::MAP_INT_REMOVE_SYMBOL,
+                    (false, true) => map::MAP_STR_REMOVE_SYMBOL,
+                };
+                self.call_map_shim(symbol, &call_args)?;
+                self.write_option_int_dest(dest, out)
+            }
         }
     }
 
@@ -3100,6 +3336,20 @@ impl<'a> Lowering<'a> {
                 }
                 Ok(())
             }
+            Ty::Map(key, _) => match glue {
+                // A map cannot be an array element (the checker's ADR-0011
+                // surface refuses it), so the deep-copy fixup can never reach
+                // one; refusing keeps the walk honest if that ever changes.
+                HeapGlue::DeepFixup => Err(CodegenError::backend(
+                    "deep-copy fixup reached a Map value (maps are not array elements in v0)",
+                )),
+                // The whole block (index + entries) is freed by the shim,
+                // which alone knows the internal layout (ADR-0011).
+                HeapGlue::DropInPlace => {
+                    let stride = self.builder.ins().iconst(types::I64, map_entry_stride(key));
+                    self.call_map_shim(map::MAP_DROP_SYMBOL, &[addr, stride])
+                }
+            },
             Ty::Enum(..) | Ty::Option(_) | Ty::Result(..) => self.emit_variant_glue(ty, addr, glue),
             Ty::FixedArray(element, count) => {
                 let stride = i64::try_from(self.layout(element)?.stride())
@@ -3688,7 +3938,27 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
             | HeapOp::StringSlice
             | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
+            | HeapOp::MapEmpty
+            | HeapOp::MapGet
+            | HeapOp::MapKeys
     )
+}
+
+/// The dense-entry stride of a map's table, fixed by its key kind
+/// (ADR-0011): `{key, value}` two words for an `Int` key, `{ptr, len, value}`
+/// three words for a `Str` key. Mirrors `tuo_runtime::map`'s constants.
+fn map_entry_stride(key: &Ty) -> i64 {
+    if matches!(key, Ty::Str) {
+        #[expect(clippy::cast_possible_wrap, reason = "the stride constant is tiny")]
+        {
+            map::STR_ENTRY_STRIDE as i64
+        }
+    } else {
+        #[expect(clippy::cast_possible_wrap, reason = "the stride constant is tiny")]
+        {
+            map::INT_ENTRY_STRIDE as i64
+        }
+    }
 }
 
 /// The inclusive `(min, max)` bounds of an integer kind, as `i64` (the widest
