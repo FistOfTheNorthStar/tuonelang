@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym43)",
-        "fn_body(sym44)",
-        "fn_body(sym45)",
+        "fn_body(sym49)",
+        "fn_body(sym50)",
+        "fn_body(sym51)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym43)",
-        "fn_body(sym44)",
-        "fn_body(sym45)",
+        "fn_body(sym49)",
+        "fn_body(sym50)",
+        "fn_body(sym51)",
         "interface(file#0)",
-        "mir_of(sym43)",
+        "mir_of(sym49)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym43)",
-        "type_of(sym44)",
-        "type_of(sym45)"
+        "type_of(sym49)",
+        "type_of(sym50)",
+        "type_of(sym51)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym43)",
-        "fn_body(sym44)",
-        "fn_body(sym45)",
+        "fn_body(sym49)",
+        "fn_body(sym50)",
+        "fn_body(sym51)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:46"
+        "spec:52"
       ],
       "reexecuted_count": 1
     }
@@ -166,11 +166,20 @@
       }
     },
     {
+      "label": "file-io",
+      "description": "effect-crossing throughput over the ADR-0013 OS boundary: per round, open/write/close a 240-byte scratch file, reopen and read it back byte-at-a-time through the read_byte seam, and remove it — the deferred ADR-0006 effect-crossing benchmark, measured against a C peer making the identical open/write/read/close/unlink calls",
+      "support": {
+        "support": "supported",
+        "source": "// The file-io workload (ADR-0013): effect-crossing throughput over the OS\n// boundary. Each round opens a scratch file for write, writes 15 sixteen-byte\n// chunks (240 bytes), closes it, reopens it for read, reads it back\n// byte-at-a-time (240 crossings of the read_byte seam), closes it, and\n// removes it — so every ADR-0013 file primitive and the ADR-0006 descriptor\n// seam are on the hot path. The C peer performs the identical sequence with\n// open/write/read/close/unlink.\n//\n// round(15) returns the byte count read back, 240; main runs 200 rounds and\n// returns the last round's count. Observable exit byte: 240 & 0xff = 240.\n\nfn round(take chunks: Int) -> Int {\n    let path = \"file-io-bench.tmp\";\n    let fd = std::rt::open(path, 1);\n    if fd < 0 {\n        return 0 - 1;\n    }\n    var i = 0;\n    while i < chunks {\n        std::rt::write(fd, \"0123456789abcdef\");\n        i = i + 1;\n    }\n    std::rt::close(fd);\n    let rfd = std::rt::open(path, 0);\n    if rfd < 0 {\n        return 0 - 2;\n    }\n    var count = 0;\n    var done = false;\n    while !done {\n        let b = std::rt::read_byte(rfd);\n        if b < 0 {\n            done = true;\n        } else {\n            count = count + 1;\n        }\n    }\n    std::rt::close(rfd);\n    std::rt::remove_file(path);\n    count\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 200 {\n        result = round(15);\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 240
+      }
+    },
+    {
       "label": "networking",
       "description": "a basic socket round-trip",
       "support": {
         "support": "unsupported",
-        "reason": "ADR-0006's effect seam covers already-open descriptors only (std::rt::write/read_byte) plus process exit; no socket-open effect primitive exists (no socket/bind/listen/accept/connect), so no program can create a connection (ADR-0006, amendment 2). Awaits ADR-0007 or a successor effect ADR."
+        "reason": "the effect seam covers descriptors, process exit, and — since ADR-0013 — the clock, argv, and file open/close/remove; but no socket-open effect primitive exists (no socket/bind/listen/accept/connect), so no program can create a connection (ADR-0006, amendment 2). Awaits a successor effect ADR."
       }
     }
   ],
@@ -404,6 +413,32 @@
         "expected_exit": 232
       },
       "tuonelang_exit": 232,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "file-io",
+        "peer": "c",
+        "peer_source": "/* The C peer of file-io.tuo: the identical open/write/read/close/unlink\n * sequence — 200 rounds of writing 15 sixteen-byte chunks and reading the\n * 240 bytes back one byte per read(2) call, matching the tuonelang program's\n * byte-at-a-time effect crossings. Exit byte: 240. */\n#include <fcntl.h>\n#include <unistd.h>\n\nstatic long long round_trip(long long chunks) {\n    const char *path = \"file-io-bench.tmp\";\n    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);\n    if (fd < 0) {\n        return -1;\n    }\n    for (long long i = 0; i < chunks; i++) {\n        write(fd, \"0123456789abcdef\", 16);\n    }\n    close(fd);\n    int rfd = open(path, O_RDONLY);\n    if (rfd < 0) {\n        return -2;\n    }\n    long long count = 0;\n    unsigned char byte;\n    while (read(rfd, &byte, 1) == 1) {\n        count++;\n    }\n    close(rfd);\n    unlink(path);\n    return count;\n}\n\nint main(void) {\n    long long result = 0;\n    for (long long r = 0; r < 200; r++) {\n        result = round_trip(15);\n    }\n    return (int)(result & 0xff);\n}\n",
+        "expected_exit": 240
+      },
+      "tuonelang_exit": 240,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "file-io",
+        "peer": "go",
+        "peer_source": "// file-io — the equivalent-semantics Go peer for the tuonelang file-io\n// workload (ADR-0013's OS effect boundary). The identical sequence: per\n// round, open/create/truncate a scratch file, write 15 sixteen-byte chunks\n// (240 bytes), close it, reopen it for read, read it back **one byte per\n// Read call** (mirroring the tuonelang program's byte-at-a-time read_byte\n// crossings and the C peer's one-byte read(2) loop), close it, and remove\n// it. The observable result is one round's byte count (reassigned, not\n// accumulated): 240, the exit byte.\npackage main\n\nimport \"os\"\n\nfunc roundTrip(chunks int64) int64 {\n\tpath := \"file-io-bench.tmp\"\n\tf, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)\n\tif err != nil {\n\t\treturn -1\n\t}\n\tchunk := []byte(\"0123456789abcdef\")\n\tfor i := int64(0); i < chunks; i++ {\n\t\tf.Write(chunk)\n\t}\n\tf.Close()\n\tr, err := os.Open(path)\n\tif err != nil {\n\t\treturn -2\n\t}\n\tvar count int64 = 0\n\tb := make([]byte, 1)\n\tfor {\n\t\tn, _ := r.Read(b)\n\t\tif n != 1 {\n\t\t\tbreak\n\t\t}\n\t\tcount++\n\t}\n\tr.Close()\n\tos.Remove(path)\n\treturn count\n}\n\nfunc main() {\n\tvar result int64 = 0\n\tfor r := int64(0); r < 200; r++ {\n\t\tresult = roundTrip(15)\n\t}\n\tos.Exit(int(result & 0xff))\n}\n",
+        "expected_exit": 240
+      },
+      "tuonelang_exit": 240,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

@@ -30,15 +30,18 @@
 //!   models of a lock or latch), which runs and whose specs run;
 //! * an **effect tier** — real tuonelang implementations over the `std::rt`
 //!   effect primitives (`std::io::print`/`println`/`read_line`,
-//!   `std::process::exit`). These compile and run natively, but `R0007` makes
-//!   an effectful spec impossible, so each is marked `EFFECT:` in its doc and
-//!   pinned by a named native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of
-//!   a spec (`read_line` builds an owned `String` from the bytes
+//!   `std::process::exit`/`arg_count`/`arg`, `std::sync::par_map`,
+//!   `std::time::now`, and the whole `std::fs` disk tier
+//!   `read`/`write`/`exists`/`remove` — the last three groups real since
+//!   ADR-0013 landed the clock, argv, and file open/close/remove primitives).
+//!   These compile and run natively, but `R0007` makes an effectful spec
+//!   impossible, so each is marked `EFFECT:` in its doc and pinned by a named
+//!   native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of a spec
+//!   (`read_line` builds an owned `String` from the bytes
 //!   `std::rt::read_byte` yields — real since ADR-0009 landed the allocator);
 //!   and
 //! * a **contract tier** — the effectful entry points whose primitive does not
-//!   exist yet (`std::fs::read` a file-open primitive; `std::time::now` a
-//!   clock; `std::sync::lock` threads; `std::process::arg_count` argv), given
+//!   exist yet (`std::sync::lock`/`unlock` shared state across threads), given
 //!   as exact signatures with documented contracts and **no** executable spec,
 //!   each marked `CONTRACT:` in its doc so no reader — human or machine — is
 //!   misled into thinking it runs today. When the missing primitive lands, a
@@ -93,8 +96,9 @@ pub const MATH: Module = Module {
 /// `std::str` — string algorithms over the byte-level `Str`/`String` builtins:
 /// search (`index_of_byte`/`find`/`contains`/`starts_with`/`ends_with`/
 /// `count`), trimming (`trim`), ASCII case/classification (`to_upper`/
-/// `to_lower`/`is_digit`/`is_space`), and the integer⇄decimal-text conversions
-/// (`parse_int`/`to_string`). Entirely executable.
+/// `to_lower`/`is_digit`/`is_space`), and the number⇄decimal-text conversions
+/// (`parse_int`/`to_string`, `parse_float`/`float_to_string`). Entirely
+/// executable.
 pub const STR: Module = Module {
     path: "std::str",
     name: "std/str.tuo",
@@ -111,22 +115,25 @@ pub const IO: Module = Module {
 };
 
 /// `std::fs` — the file-system error vocabulary and path helpers (executable),
-/// and the disk-operation contract.
+/// and the real disk operations `read`/`write`/`exists`/`remove` over the
+/// ADR-0013 primitives (effect tier).
 pub const FS: Module = Module {
     path: "std::fs",
     name: "std/fs.tuo",
     source: include_str!("std/fs.tuo"),
 };
 
-/// `std::time` — `Duration` arithmetic (executable) and the clock contract.
+/// `std::time` — `Duration` arithmetic, rendering, and `elapsed` (executable),
+/// and the real `now` over `std::rt::now_nanos` (effect tier, ADR-0013).
 pub const TIME: Module = Module {
     path: "std::time",
     name: "std/time.tuo",
     source: include_str!("std/time.tuo"),
 };
 
-/// `std::process` — `ExitStatus` reasoning (executable), the real `exit` over
-/// `std::rt::exit` (effect tier), and the `arg_count` contract.
+/// `std::process` — `ExitStatus` reasoning (executable), and the real `exit`,
+/// `arg_count`, and `arg` over the `std::rt` primitives (effect tier;
+/// argv since ADR-0013).
 pub const PROCESS: Module = Module {
     path: "std::process",
     name: "std/process.tuo",

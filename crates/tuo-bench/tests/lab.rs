@@ -143,10 +143,11 @@ fn honesty_rules_hold_over_the_catalog() {
     // The v0 story: the four scalar-core workloads plus the fixed-array
     // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
     // string-processing workload (ADR-0006), the allocator-core allocation
-    // workload (ADR-0009), and the function-value indirect-calls workload
-    // (ADR-0008 Tier 1) run; only networking is honestly recorded as
-    // not-yet-expressible.
-    assert_eq!(supported, 9);
+    // workload (ADR-0009), the function-value indirect-calls workload
+    // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011), and the
+    // OS-boundary file-io workload (ADR-0013) run; only networking is
+    // honestly recorded as not-yet-expressible.
+    assert_eq!(supported, 10);
     assert_eq!(unsupported, 1);
 }
 
@@ -183,11 +184,6 @@ fn committed_example_report_is_valid_and_regenerable() {
     let path = repo_root().join("benchmarks/runtime/results/example-report.json");
     let committed = LabReport::from_json(&read(&path)).expect("example report parses");
 
-    // Schema + catalog invariants.
-    assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
-    assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 9);
-
     // The deterministic edit scenarios regenerate identically.
     let fresh_edits = vec![
         measure_edit(Edit::NoOpCheck),
@@ -196,6 +192,43 @@ fn committed_example_report_is_valid_and_regenerable() {
         measure_edit(Edit::SingleSpec),
         measure_edit(Edit::AffectedSpecVerify),
     ];
+
+    // Set `TUO_BLESS=1` to rewrite the committed example's deterministic
+    // parts (the workload catalog, the edit scenarios, and the skipped
+    // comparison entries) after verifying an intentional change — a new
+    // workload, an updated reason — the same convention as the MIR opt
+    // goldens. The environment block is illustrative and never re-derived.
+    if std::env::var_os("TUO_BLESS").is_some() {
+        let mut blessed = committed.clone();
+        blessed.runtime_workloads = workloads();
+        blessed.edit_scenarios = fresh_edits.clone();
+        blessed.comparisons = workloads()
+            .iter()
+            .filter(|w| w.is_supported())
+            .flat_map(|w| {
+                let Support::Supported { expected_exit, .. } = w.support else {
+                    unreachable!("filtered to supported");
+                };
+                tuo_bench::lab::compare::comparisons_for(w)
+                    .into_iter()
+                    .map(move |comparison| ComparisonEntry {
+                        workload: comparison,
+                        tuonelang_exit: Some(expected_exit),
+                        peer: Verdict::Skipped {
+                            reason: "example report: no live toolchain; run the lab locally \
+                                     to measure"
+                                .to_string(),
+                        },
+                    })
+            })
+            .collect();
+        std::fs::write(&path, blessed.to_json_pretty().expect("serialize"))
+            .expect("example report is writable");
+    }
+    let committed = LabReport::from_json(&read(&path)).expect("example report parses");
+    assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
+    assert_eq!(committed.runtime_workloads, workloads());
+    assert_eq!(committed.supported_workload_count(), 10);
     assert_eq!(
         committed.edit_scenarios, fresh_edits,
         "example report's edit scenarios are stale; regenerate the example"
@@ -203,8 +236,8 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set,
-    // once per peer language — 8 supported workloads × 2 peers (C and Go) = 16.
-    assert_eq!(committed.comparisons.len(), 18);
+    // once per peer language — 10 supported workloads × 2 peers (C and Go) = 20.
+    assert_eq!(committed.comparisons.len(), 20);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -218,8 +251,8 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Go)
         .count();
-    assert_eq!(c_count, 9, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 9, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 10, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 10, "every supported workload has a Go peer entry");
 
     // Round-trip.
     let reserialized = committed.to_json_pretty().expect("serialize");

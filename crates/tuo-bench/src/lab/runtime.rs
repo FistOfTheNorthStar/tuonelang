@@ -201,15 +201,27 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // surviving entries, so main returns 1000; exit byte 1000 & 0xff = 232.
             232,
         ),
+        RuntimeWorkload::supported(
+            "file-io",
+            "effect-crossing throughput over the ADR-0013 OS boundary: per round, \
+             open/write/close a 240-byte scratch file, reopen and read it back \
+             byte-at-a-time through the read_byte seam, and remove it — the \
+             deferred ADR-0006 effect-crossing benchmark, measured against a C \
+             peer making the identical open/write/read/close/unlink calls",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/file-io.tuo"),
+            // 200 rounds of round(15); each round's count (reassigned, not
+            // accumulated) is 15 chunks × 16 bytes = 240; exit byte 240.
+            240,
+        ),
         // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "networking",
             "a basic socket round-trip",
-            "ADR-0006's effect seam covers already-open descriptors only \
-             (std::rt::write/read_byte) plus process exit; no socket-open effect \
-             primitive exists (no socket/bind/listen/accept/connect), so no program \
-             can create a connection (ADR-0006, amendment 2). Awaits ADR-0007 or a \
-             successor effect ADR.",
+            "the effect seam covers descriptors, process exit, and — since \
+             ADR-0013 — the clock, argv, and file open/close/remove; but no \
+             socket-open effect primitive exists (no \
+             socket/bind/listen/accept/connect), so no program can create a \
+             connection (ADR-0006, amendment 2). Awaits a successor effect ADR.",
         ),
     ]
 }
@@ -289,6 +301,7 @@ mod tests {
             "indirect-calls",
             "recursion",
             "map-lookup",
+            "file-io",
             "networking",
         ] {
             assert!(labels.contains(&required), "missing workload `{required}`");
@@ -319,8 +332,8 @@ mod tests {
         // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
         // string-processing workload (ADR-0006), the allocator-core allocation
         // workload (ADR-0009), the function-value indirect-calls workload
-        // (ADR-0008 Tier 1), and the hash-map map-lookup workload (ADR-0011),
-        // and no more.
+        // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011), and
+        // the OS-boundary file-io workload (ADR-0013), and no more.
         assert_eq!(
             supported,
             vec![
@@ -333,6 +346,7 @@ mod tests {
                 "string-processing".to_string(),
                 "allocation".to_string(),
                 "map-lookup".to_string(),
+                "file-io".to_string(),
             ]
         );
     }
@@ -353,7 +367,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 9, "only the nine supported workloads run");
+        assert_eq!(results.len(), 10, "only the ten supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

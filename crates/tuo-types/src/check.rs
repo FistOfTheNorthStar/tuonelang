@@ -265,6 +265,14 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
             ],
             Ty::Array(Box::new(Ty::int())),
         ),
+        // ADR-0013: the OS effect boundary — clock, argv, and file
+        // open/close/remove. All scalar-or-`Str` in, `Int` out; errors are
+        // negative return values, never traps.
+        Builtin::RtNowNanos | Builtin::RtArgCount => (Vec::new(), Ty::int()),
+        Builtin::RtArgByte => (vec![Ty::int(), Ty::int()], Ty::int()),
+        Builtin::RtOpen => (vec![Ty::Str, Ty::int()], Ty::int()),
+        Builtin::RtClose => (vec![Ty::int()], Ty::int()),
+        Builtin::RtRemoveFile => (vec![Ty::Str], Ty::int()),
         Builtin::StrLen => (vec![Ty::Str], Ty::int()),
         Builtin::StrByteAt => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::StrSlice => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::Str),

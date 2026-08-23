@@ -1,0 +1,51 @@
+// The file-io workload (ADR-0013): effect-crossing throughput over the OS
+// boundary. Each round opens a scratch file for write, writes 15 sixteen-byte
+// chunks (240 bytes), closes it, reopens it for read, reads it back
+// byte-at-a-time (240 crossings of the read_byte seam), closes it, and
+// removes it — so every ADR-0013 file primitive and the ADR-0006 descriptor
+// seam are on the hot path. The C peer performs the identical sequence with
+// open/write/read/close/unlink.
+//
+// round(15) returns the byte count read back, 240; main runs 200 rounds and
+// returns the last round's count. Observable exit byte: 240 & 0xff = 240.
+
+fn round(take chunks: Int) -> Int {
+    let path = "file-io-bench.tmp";
+    let fd = std::rt::open(path, 1);
+    if fd < 0 {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < chunks {
+        std::rt::write(fd, "0123456789abcdef");
+        i = i + 1;
+    }
+    std::rt::close(fd);
+    let rfd = std::rt::open(path, 0);
+    if rfd < 0 {
+        return 0 - 2;
+    }
+    var count = 0;
+    var done = false;
+    while !done {
+        let b = std::rt::read_byte(rfd);
+        if b < 0 {
+            done = true;
+        } else {
+            count = count + 1;
+        }
+    }
+    std::rt::close(rfd);
+    std::rt::remove_file(path);
+    count
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 200 {
+        result = round(15);
+        r = r + 1;
+    }
+    result
+}

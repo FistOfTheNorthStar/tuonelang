@@ -348,6 +348,30 @@ pub enum EffectOp {
     /// `workers`), then the borrowed tasks place. Deterministic in its
     /// result whenever `f` is pure; never traps. (ADR-0007.)
     ParMap,
+    /// `now_nanos() -> I64` — the monotonic clock, in nanoseconds since an
+    /// arbitrary process-local epoch; only differences are meaningful.
+    /// Never traps. (ADR-0013.)
+    NowNanos,
+    /// `arg_count() -> I64` — the number of process arguments, including
+    /// the program name (argv\[0\]). Never traps. (ADR-0013.)
+    ArgCount,
+    /// `arg_byte(i: I64, j: I64) -> I64` — byte `j` (`0..=255`) of process
+    /// argument `i`, or `-1` when `i` is out of range or `j` is past that
+    /// argument's end. Never traps. (ADR-0013.)
+    ArgByte,
+    /// `open(path: Str, mode: I64) -> I64` — open the file at `path`; the
+    /// result is a file descriptor (`>= 0`), `-2` when the path does not
+    /// exist, or another negative value on host error (an unknown `mode`
+    /// included). Modes: `0` read, `1` write (create + truncate), `2`
+    /// append (create). Never traps. (ADR-0013.)
+    Open,
+    /// `close(fd: I64) -> I64` — close `fd`; `0` on success, negative on
+    /// host error. Never traps. (ADR-0013.)
+    Close,
+    /// `remove_file(path: Str) -> I64` — remove the file at `path`; `0` on
+    /// success, `-2` when it does not exist, another negative value on
+    /// other host errors. Never traps. (ADR-0013.)
+    RemoveFile,
 }
 
 impl EffectOp {
@@ -361,6 +385,12 @@ impl EffectOp {
             Self::Exit => "exit",
             Self::WriteString => "write_string",
             Self::ParMap => "par_map",
+            Self::NowNanos => "now_nanos",
+            Self::ArgCount => "arg_count",
+            Self::ArgByte => "arg_byte",
+            Self::Open => "open",
+            Self::Close => "close",
+            Self::RemoveFile => "remove_file",
         }
     }
 
@@ -368,8 +398,9 @@ impl EffectOp {
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::Write | Self::WriteString => 2,
-            Self::ReadByte | Self::Exit => 1,
+            Self::NowNanos | Self::ArgCount => 0,
+            Self::ReadByte | Self::Exit | Self::Close | Self::RemoveFile => 1,
+            Self::Write | Self::WriteString | Self::ArgByte | Self::Open => 2,
             Self::ParMap => 3,
         }
     }

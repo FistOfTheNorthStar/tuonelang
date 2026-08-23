@@ -4,13 +4,11 @@
 //   pure reasoning over it (success, failure, the code itself).
 //
 //   Effect tier — `exit`, implemented in tuonelang over the `std::rt::exit`
-//   effect primitive (ADR-0006). It compiles and runs natively, but an
-//   effectful function can never appear in a spec (`R0007`), so it is pinned
-//   by a native CLI test instead and marked `EFFECT:`.
-//
-//   Contract tier — inspecting the OS process (`arg_count`): `std::rt` exposes
-//   no argv primitive, so this stays an exact signature with a documented
-//   contract and no executable spec, marked `CONTRACT:`.
+//   effect primitive (ADR-0006), and — since ADR-0013 landed the argv
+//   primitives — `arg_count` and `arg`, over `std::rt::arg_count` and
+//   `std::rt::arg_byte`. They compile and run natively, but an effectful
+//   function can never appear in a spec (`R0007`), so each is pinned by a
+//   native CLI test instead and marked `EFFECT:`.
 //
 // One exit-status model — a wrapped integer code — used everywhere.
 
@@ -69,8 +67,7 @@ pub fn is_success(in status: ExitStatus) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Process control — the EFFECT tier (`exit`) and the CONTRACT tier
-// (`arg_count`).
+// Process control — the EFFECT tier (`exit`, `arg_count`, `arg`).
 // ----------------------------------------------------------------------------
 
 /// EFFECT (executable and effectful): terminate the current process with
@@ -92,18 +89,50 @@ pub fn exit(in status: ExitStatus) -> ExitStatus {
     status
 }
 
-/// CONTRACT (not executable in v0): the number of command-line arguments.
+/// EFFECT (executable and effectful): the number of command-line arguments,
+/// **including** the program name (argv\[0\]) — so a program invoked with no
+/// arguments sees 1.
 ///
-/// `std::rt` exposes no argv effect primitive (ADR-0006 landed descriptor
-/// I/O and process exit only), so this stays a contract until one exists.
+/// Implemented over the `std::rt::arg_count` effect primitive (ADR-0013).
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
 /// // let n = std::process::arg_count();
 /// ```
 pub fn arg_count() -> Int {
-    // Contract placeholder.
-    0
+    std::rt::arg_count()
+}
+
+/// EFFECT (executable and effectful): command-line argument `i` as an owned
+/// `String` (index 0 is the program name). An out-of-range `i` yields the
+/// empty string — indistinguishable from a genuinely empty argument, so
+/// check `arg_count` first.
+///
+/// Built byte-by-byte from the `std::rt::arg_byte` effect primitive
+/// (ADR-0013), exactly as `std::io::read_line` builds a line from
+/// `std::rt::read_byte`. Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let first = std::process::arg(1);
+/// ```
+pub fn arg(take i: Int) -> String {
+    var out = std::string::empty();
+    var j = 0;
+    var done = false;
+    while !done {
+        let b = std::rt::arg_byte(i, j);
+        if b < 0 {
+            done = true;
+        } else {
+            std::string::push_byte(out, b);
+            j = j + 1;
+        }
+    }
+    out
 }
 
 // ----------------------------------------------------------------------------

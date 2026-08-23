@@ -2441,6 +2441,85 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     .map_err(builder_err("calling the par_map effect"))?;
                 Ok(())
             }
+            // ADR-0013: the OS-boundary effects. Nullary clock/argv-count
+            // queries, the two-index argv byte read, and the file
+            // open/close/remove calls — every one a plain call whose `I64`
+            // result lands in `dest`; a `Str` path passes as `{ptr, len}`
+            // exactly as `write`'s text does.
+            EffectOp::NowNanos | EffectOp::ArgCount => {
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[], "rt_os_query")
+                    .map_err(builder_err("calling an OS-boundary effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::ArgByte => {
+                let [i, j] = args else {
+                    return Err(CodegenError::backend(
+                        "arg_byte expects exactly 2 arguments",
+                    ));
+                };
+                let i = self.lower_operand(&value_arg(i)?)?;
+                let j = self.lower_operand(&value_arg(j)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[i.into(), j.into()],
+                        "rt_arg_byte",
+                    )
+                    .map_err(builder_err("calling the arg_byte effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::Open => {
+                let [path, mode] = args else {
+                    return Err(CodegenError::backend("open expects exactly 2 arguments"));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(path)?)?;
+                let mode = self.lower_operand(&value_arg(mode)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[ptr.into(), len.into(), mode.into()],
+                        "rt_open",
+                    )
+                    .map_err(builder_err("calling the open effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::Close => {
+                let [fd] = args else {
+                    return Err(CodegenError::backend("close expects exactly 1 argument"));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[fd.into()], "rt_close")
+                    .map_err(builder_err("calling the close effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::RemoveFile => {
+                let [path] = args else {
+                    return Err(CodegenError::backend(
+                        "remove_file expects exactly 1 argument",
+                    ));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(path)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[ptr.into(), len.into()],
+                        "rt_remove_file",
+                    )
+                    .map_err(builder_err("calling the remove_file effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
         }
     }
 
@@ -2484,6 +2563,25 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     ],
                     false,
                 ),
+            ),
+            // ADR-0013: the OS-boundary effect symbols.
+            EffectOp::NowNanos => (effect::NOW_NANOS_SYMBOL, i64_ty.fn_type(&[], false)),
+            EffectOp::ArgCount => (effect::ARG_COUNT_SYMBOL, i64_ty.fn_type(&[], false)),
+            EffectOp::ArgByte => (
+                effect::ARG_BYTE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::Open => (
+                effect::OPEN_SYMBOL,
+                i64_ty.fn_type(&[self.ptr_ty.into(), i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::Close => (
+                effect::CLOSE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::RemoveFile => (
+                effect::REMOVE_FILE_SYMBOL,
+                i64_ty.fn_type(&[self.ptr_ty.into(), i64_ty.into()], false),
             ),
         };
         if let Some(existing) = self.module.get_function(name) {

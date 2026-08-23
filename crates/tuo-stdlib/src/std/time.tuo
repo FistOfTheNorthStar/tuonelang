@@ -3,17 +3,16 @@
 // Two honestly separated tiers, like the rest of the effectful standard
 // library:
 //
-//   Executable tier — `Duration`, a plain span of nanoseconds, and its pure
-//   arithmetic. Constructing and combining durations is ordinary computation;
-//   it runs, and its specs run.
+//   Executable tier — `Duration`, a plain span of nanoseconds, its pure
+//   arithmetic, its rendering (`render`), and — since ADR-0013 — `elapsed`
+//   (pure subtraction over two instants). Ordinary computation: it runs, and
+//   its specs run.
 //
-//   Contract tier — reading the clock (`now`, `elapsed`). Observing real time
-//   is an *effect*, and ADR-0006's effect seam covers only descriptor I/O
-//   (`std::rt::write`/`read_byte`) and process exit — `std::rt` exposes no
-//   time-source primitive. So the clock entry points below are exact
-//   signatures with documented contracts and **no** executable spec — they are
-//   marked `CONTRACT:` and cannot run today. The reference interpreter remains
-//   the source of truth for everything that does run.
+//   Effect tier — reading the clock (`now`), implemented over the
+//   `std::rt::now_nanos` effect primitive ADR-0013 landed. It compiles and
+//   runs natively, but an effectful function can never appear in a spec
+//   (`R0007`), so it is pinned by a native CLI test instead and marked
+//   `EFFECT:`.
 
 module std::time;
 
@@ -110,12 +109,70 @@ pub fn lt(in a: Duration, in b: Duration) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Instant — a monotonic timestamp. Contract tier.
-//
-// An `Instant` is an opaque point on the monotonic clock. It is a value type,
-// so it type-checks, but *reading* the clock needs a time-source effect
-// primitive `std::rt` does not expose, so `now` and `elapsed` are contracts,
-// not executable code.
+// Rendering — the one human-readable spelling of a duration. Executable tier.
+// ----------------------------------------------------------------------------
+
+/// This duration as text in the **coarsest exact unit**: `"2s"`, `"1500ms"`,
+/// `"250us"`, `"37ns"` — whole seconds render as seconds, else whole
+/// milliseconds, else whole microseconds, else nanoseconds; zero is `"0s"`
+/// and a negative duration carries a leading `-`. One rendering, never a
+/// choice of formats. (The single unrepresentable input is the minimum `Int`
+/// duration, whose negation overflows and traps — the language's ordinary
+/// overflow contract.)
+///
+/// # Example
+/// ```tuo
+/// let s = std::time::render(std::time::from_millis(1500)); // "1500ms"
+/// ```
+pub fn render(in d: Duration) -> String {
+    if d.nanos == 0 {
+        return std::string::from_str("0s");
+    }
+    var out = std::string::empty();
+    var m = d.nanos;
+    if m < 0 {
+        std::string::append(out, "-");
+        m = 0 - m;
+    }
+    if m % 1000000000 == 0 {
+        append_digits(out, m / 1000000000);
+        std::string::append(out, "s");
+    } else if m % 1000000 == 0 {
+        append_digits(out, m / 1000000);
+        std::string::append(out, "ms");
+    } else if m % 1000 == 0 {
+        append_digits(out, m / 1000);
+        std::string::append(out, "us");
+    } else {
+        append_digits(out, m);
+        std::string::append(out, "ns");
+    }
+    out
+}
+
+// Append the decimal digits of the non-negative `n` to `s`. Private helper:
+// the module must stand alone, so it cannot reuse `std::str::to_string`.
+fn append_digits(mut s: String, take n: Int) {
+    if n == 0 {
+        std::string::push_byte(s, 48);
+        return;
+    }
+    var digits = std::array::empty();
+    var m = n;
+    while m > 0 {
+        std::array::push(digits, m % 10);
+        m = m / 10;
+    }
+    var i = std::array::len(digits) - 1;
+    while i >= 0 {
+        std::string::push_byte(s, 48 + std::array::get(digits, i));
+        i = i - 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Instant — a monotonic timestamp. `now` is the effect tier; `elapsed` is
+// pure arithmetic over two instants (ADR-0013 made both real).
 // ----------------------------------------------------------------------------
 
 /// A point on the monotonic clock, as nanoseconds since an unspecified epoch.
@@ -123,33 +180,47 @@ pub struct Instant {
     nanos: Int,
 }
 
-/// CONTRACT (not executable in v0): the current monotonic instant.
-///
-/// Reading the clock is an effect; `std::rt` exposes no time-source
-/// primitive, so this signature is the stable contract and does not run yet.
-/// Every caller obtains an `Instant` here and measures spans with `elapsed`.
-pub fn now() -> Instant {
-    // Contract placeholder. When a clock effect primitive lands this returns
-    // the real monotonic clock; the signature will not change.
-    Instant { nanos: 0 }
-}
-
-/// CONTRACT (not executable in v0): the duration from `earlier` to `later`.
-///
-/// Pure given two instants (this body *is* executable), but its only real
-/// source of instants is `now`, which is a contract — so `elapsed` is documented
-/// alongside the contract tier and left unspecced until the clock exists.
+/// An instant at `n` nanoseconds on the monotonic clock's arbitrary scale.
+/// The pure constructor the specs (and any simulation) use; real time comes
+/// from `now`.
 ///
 /// # Example
 /// ```tuo
-/// // let span = std::time::elapsed(start, std::time::now());
+/// let t = std::time::instant_at(100);
+/// ```
+pub fn instant_at(take n: Int) -> Instant {
+    Instant { nanos: n }
+}
+
+/// EFFECT (executable and effectful): the current monotonic instant.
+///
+/// Implemented over the `std::rt::now_nanos` effect primitive (ADR-0013):
+/// nanoseconds on a monotonic clock whose epoch is arbitrary, so only
+/// differences — `elapsed(earlier, later)` — are meaningful. Effectful, so
+/// no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let start = std::time::now();
+/// ```
+pub fn now() -> Instant {
+    Instant { nanos: std::rt::now_nanos() }
+}
+
+/// The duration from `earlier` to `later` — pure subtraction over two
+/// instants (negative when `later` precedes `earlier`).
+///
+/// # Example
+/// ```tuo
+/// let span = std::time::elapsed(std::time::instant_at(100), std::time::instant_at(350));
 /// ```
 pub fn elapsed(in earlier: Instant, in later: Instant) -> Duration {
     Duration { nanos: later.nanos - earlier.nanos }
 }
 
 // ----------------------------------------------------------------------------
-// Specs — executable tier only. The clock contracts stay unspecced.
+// Specs — executable tier only. The clock effect stays unspecced (R0007).
 // ----------------------------------------------------------------------------
 
 spec from_nanos {
@@ -174,4 +245,24 @@ spec add {
 spec lt {
     then lt(from_millis(1), from_secs(1));
     then !lt(from_secs(1), from_millis(1));
+}
+
+spec render {
+    then render(zero()) == std::string::from_str("0s");
+    then render(from_secs(2)) == std::string::from_str("2s");
+    then render(from_millis(1500)) == std::string::from_str("1500ms");
+    then render(from_nanos(250000)) == std::string::from_str("250us");
+    then render(from_nanos(37)) == std::string::from_str("37ns");
+    then render(from_millis(0 - 1500)) == std::string::from_str("-1500ms");
+    then render(from_millis(1000)) == std::string::from_str("1s");
+}
+
+spec instant_at {
+    then as_nanos(elapsed(instant_at(0), instant_at(75))) == 75;
+}
+
+spec elapsed {
+    then as_nanos(elapsed(instant_at(100), instant_at(350))) == 250;
+    then as_nanos(elapsed(instant_at(350), instant_at(100))) == 0 - 250;
+    then as_millis(elapsed(instant_at(0), instant_at(2000000))) == 2;
 }

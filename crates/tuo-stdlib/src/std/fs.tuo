@@ -3,12 +3,13 @@
 //   Executable tier — the error vocabulary (`FsError`) and pure classification
 //   over it, plus pure path helpers that are just string reasoning.
 //
-//   Contract tier — the operations that actually touch the disk (`read`,
-//   `write`, `exists`, `remove`). ADR-0006's effect seam covers only
-//   already-open descriptors (`std::rt::write`/`read_byte`) and process exit;
-//   `std::rt` exposes no file-open/stat/remove primitive, so these stay exact
-//   signatures with documented contracts and no executable spec, marked
-//   `CONTRACT:`.
+//   Effect tier — the operations that actually touch the disk (`read`,
+//   `write`, `exists`, `remove`), implemented in tuonelang over the ADR-0013
+//   effect primitives (`std::rt::open`/`close`/`remove_file`) composed with
+//   ADR-0006's descriptor I/O (`std::rt::read_byte`/`write`). They compile
+//   and run natively, but an effectful function can never appear in a spec
+//   (`R0007`), so each is pinned by a native CLI test instead and marked
+//   `EFFECT:`.
 //
 // One file-error type; one obvious open/read/write shape.
 
@@ -94,56 +95,126 @@ pub fn is_empty_path(in path: Str) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Disk operations — the CONTRACT tier.
+// Disk operations — the EFFECT tier (ADR-0013).
 //
-// Each returns `Result[T, FsError]`. The bodies are type-satisfying
-// placeholders; the real implementations land when `std::rt` gains a
-// file-open effect primitive, and these signatures will not change.
+// Each returns `Result[T, FsError]`; the primitives' negative host codes map
+// to the error vocabulary through one private classifier.
 // ----------------------------------------------------------------------------
 
-/// CONTRACT (not executable in v0): read the whole file at `path` as a string.
+// Classify a negative host code from an ADR-0013 primitive: `-2` is the
+// missing path, anything else the undistinguished host error.
+fn error_from_host(take outcome: Int) -> FsError {
+    if outcome == 0 - 2 {
+        FsError::NotFound
+    } else {
+        FsError::Other
+    }
+}
+
+/// EFFECT (executable and effectful): read the whole file at `path` as an
+/// owned `String` (the bytes as stored; UTF-8 by convention, unvalidated).
+///
+/// Opens with `std::rt::open` read mode, accumulates `std::rt::read_byte`
+/// bytes exactly as `std::io::read_line` does, and closes the descriptor. A
+/// missing path is `Err(NotFound)`; a mid-read host error is `Err(Other)`,
+/// never a silently truncated `Ok`. Effectful, so no spec (`R0007`); pinned
+/// by the native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
 /// // let text = std::fs::read("notes.txt");
 /// ```
-pub fn read(in path: Str) -> Result[Str, FsError] {
-    // Contract placeholder: the real implementation reads the file.
-    Ok { value: "" }
+pub fn read(in path: Str) -> Result[String, FsError] {
+    let fd = std::rt::open(path, 0);
+    if fd < 0 {
+        return Err { error: error_from_host(fd) };
+    }
+    var out = std::string::empty();
+    var done = false;
+    var failed = false;
+    while !done {
+        let b = std::rt::read_byte(fd);
+        if b == 0 - 1 {
+            done = true;
+        } else if b < 0 {
+            done = true;
+            failed = true;
+        } else {
+            std::string::push_byte(out, b);
+        }
+    }
+    std::rt::close(fd);
+    if failed {
+        return Err { error: FsError::Other };
+    }
+    Ok { value: out }
 }
 
-/// CONTRACT (not executable in v0): write `contents` to the file at `path`,
-/// creating or truncating it. Returns the number of bytes written.
+/// EFFECT (executable and effectful): write `contents` to the file at
+/// `path`, creating or truncating it. Returns the number of bytes written.
+///
+/// Opens with `std::rt::open` write mode, writes through `std::rt::write`,
+/// and closes the descriptor. Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
 /// // let _ = std::fs::write("notes.txt", "hello");
 /// ```
 pub fn write(in path: Str, in contents: Str) -> Result[Int, FsError] {
-    // Contract placeholder.
-    Ok { value: 0 }
+    let fd = std::rt::open(path, 1);
+    if fd < 0 {
+        return Err { error: error_from_host(fd) };
+    }
+    let wrote = std::rt::write(fd, contents);
+    std::rt::close(fd);
+    if wrote < 0 {
+        return Err { error: FsError::Other };
+    }
+    Ok { value: wrote }
 }
 
-/// CONTRACT (not executable in v0): does a file or directory exist at `path`?
+/// EFFECT (executable and effectful): does a file exist at `path`?
+///
+/// Asks by opening for read: a descriptor means `Ok(true)` (closed at once),
+/// the not-found code means `Ok(false)`, and any other host refusal —
+/// permission included — is `Err(Other)`, never a false "no". Effectful, so
+/// no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
 /// // let there = std::fs::exists("notes.txt");
 /// ```
 pub fn exists(in path: Str) -> Result[Bool, FsError] {
-    // Contract placeholder.
-    Ok { value: false }
+    let fd = std::rt::open(path, 0);
+    if fd >= 0 {
+        std::rt::close(fd);
+        return Ok { value: true };
+    }
+    if fd == 0 - 2 {
+        return Ok { value: false };
+    }
+    Err { error: FsError::Other }
 }
 
-/// CONTRACT (not executable in v0): remove the file at `path`.
+/// EFFECT (executable and effectful): remove the file at `path`. Returns
+/// `Ok(0)` on success; a missing path is `Err(NotFound)`.
+///
+/// Implemented over the `std::rt::remove_file` effect primitive (ADR-0013).
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
 /// // let _ = std::fs::remove("notes.txt");
 /// ```
 pub fn remove(in path: Str) -> Result[Int, FsError] {
-    // Contract placeholder.
-    Ok { value: 0 }
+    let outcome = std::rt::remove_file(path);
+    if outcome == 0 {
+        return Ok { value: 0 };
+    }
+    Err { error: error_from_host(outcome) }
 }
 
 // ----------------------------------------------------------------------------

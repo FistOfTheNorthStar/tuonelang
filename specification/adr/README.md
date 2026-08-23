@@ -61,6 +61,7 @@ the replacement, preserving the decision history.
 | [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | accepted |
 | [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | accepted |
 | [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | accepted |
+| [ADR-0013](ADR-0013-os-effect-boundary.md) | The OS effect boundary — clock, argv, and files | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -109,5 +110,15 @@ landed it as a typed effect through both backends' pthreads runtime,
 turned `concurrent-worker` into a live pool whose exit survives only if the
 run agrees with the spec-checked scheduling model, and added the gating
 **parallel-speedup** benchmark category (serial vs `par_map` wall clock with
-a same-thread-count C peer). **No ADR remains `proposed`**; the `networking`
-lab entry stays honestly unsupported pending a socket-open effect ADR.
+a same-thread-count C peer).
+
+**ADR-0013** has since been accepted as well (2026-08-23): the OS effect
+boundary — six further `std::rt` primitives (`now_nanos`, `arg_count`,
+`arg_byte`, `open`, `close`, `remove_file`, ABI v7) that made
+`std::time::now`, `std::process::arg_count`/`arg`, and the whole `std::fs`
+disk tier real EFFECT-tier code, and landed the gating **`file-io`** lab
+workload (with C and Go peers) — the effect-crossing benchmark ADR-0006's
+acceptance had deferred to exactly this ADR. Of the eleven runtime workloads,
+ten now measure, leaving only `networking`. **No ADR remains `proposed`**;
+the `networking` lab entry stays honestly unsupported pending a socket-open
+effect ADR.

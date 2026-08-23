@@ -74,6 +74,32 @@ fn run_program_with_stdin(
     child.wait_with_output().expect("the program completes")
 }
 
+/// Compile `source` to an executable with `tuo build` and return its path,
+/// so a test can run it with real command-line arguments and a chosen
+/// working directory (which `tuo run` does not forward).
+fn build_program(dir: &Path, name: &str, source: &str, release: bool) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, source).expect("program is writable");
+    let exe = dir.join(format!("{name}.exe"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("build");
+    if release {
+        command.arg("--release");
+    }
+    let output = command
+        .arg("-o")
+        .arg(&exe)
+        .arg(&path)
+        .output()
+        .expect("the tuo binary runs");
+    assert!(
+        output.status.success(),
+        "build succeeds; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    exe
+}
+
 /// The backend a `release` flag selects, for failure messages.
 fn backend_name(release: bool) -> &'static str {
     if release { "llvm" } else { "cranelift" }
@@ -177,6 +203,117 @@ fn read_byte_echoes_piped_stdin_and_reports_eof() {
             eof.status.code(),
             Some(255),
             "{which}: EOF is -1, whose exit byte is 255"
+        );
+    }
+}
+
+/// `std::rt::now_nanos()` (ADR-0013) is positive and monotonic: two reads in
+/// sequence never go backwards — on both backends. (The clock's actual value
+/// is non-deterministic, so monotonicity and positivity are the only honest
+/// native assertions.)
+#[test]
+fn now_nanos_is_positive_and_monotonic() {
+    let dir = workspace("now_nanos");
+    let source = "fn main() -> Int {\n    let a = std::rt::now_nanos();\n    \
+                  let b = std::rt::now_nanos();\n    \
+                  if b >= a {\n        if a > 0 { 0 } else { 2 }\n    } else { 1 }\n}\n";
+    for release in [false, true] {
+        let output = run_program(&dir, "clock.tuo", source, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the monotonic clock is positive and never goes backwards; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `std::rt::arg_count()`/`arg_byte(i, j)` (ADR-0013) see the real command
+/// line: the count includes the program name, `arg_byte` reads an argument's
+/// bytes, and both out-of-range indexes report `-1` — on both backends. Runs
+/// the built executable directly, since `tuo run` forwards no arguments.
+#[test]
+fn arg_count_and_arg_byte_read_the_real_command_line() {
+    let dir = workspace("argv");
+    let count_src = "fn main() -> Int {\n    std::rt::arg_count()\n}\n";
+    let byte_src = "fn main() -> Int {\n    \
+                    if std::rt::arg_byte(9, 0) != 0 - 1 { return 1; }\n    \
+                    if std::rt::arg_byte(1, 9) != 0 - 1 { return 2; }\n    \
+                    std::rt::arg_byte(1, 2)\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let count_exe = build_program(&dir, &format!("argc_{which}.tuo"), count_src, release);
+        let bare = Command::new(&count_exe).output().expect("the exe runs");
+        assert_eq!(
+            bare.status.code(),
+            Some(1),
+            "{which}: with no arguments, argc is 1 (the program name)"
+        );
+        let with_args = Command::new(&count_exe)
+            .args(["alpha", "beta", "gamma"])
+            .output()
+            .expect("the exe runs");
+        assert_eq!(
+            with_args.status.code(),
+            Some(4),
+            "{which}: three arguments plus the program name is 4"
+        );
+        let byte_exe = build_program(&dir, &format!("argb_{which}.tuo"), byte_src, release);
+        let output = Command::new(&byte_exe)
+            .arg("xyz")
+            .output()
+            .expect("the exe runs");
+        assert_eq!(
+            output.status.code(),
+            Some(122),
+            "{which}: byte 2 of argument 1 (\"xyz\") is 'z' (122); out-of-range reads are -1"
+        );
+    }
+}
+
+/// The ADR-0013 file primitives round-trip for real: `open` write mode
+/// creates and truncates, `write` puts bytes in, `open` append mode extends,
+/// `open` read mode plus `read_byte` gets the exact bytes back with `-1` at
+/// EOF, `close` succeeds, `remove_file` deletes (a second open reports `-2`
+/// not-found) — on both backends, in a scratch working directory.
+#[test]
+fn file_open_write_read_append_remove_roundtrip() {
+    let dir = workspace("file_roundtrip");
+    let source = "fn main() -> Int {\n    \
+        let path = \"roundtrip.tmp\";\n    \
+        let fd = std::rt::open(path, 1);\n    \
+        if fd < 0 { return 10; }\n    \
+        if std::rt::write(fd, \"hi\") != 2 { return 11; }\n    \
+        if std::rt::close(fd) != 0 { return 12; }\n    \
+        let afd = std::rt::open(path, 2);\n    \
+        if afd < 0 { return 13; }\n    \
+        if std::rt::write(afd, \"!\") != 1 { return 14; }\n    \
+        if std::rt::close(afd) != 0 { return 15; }\n    \
+        let rfd = std::rt::open(path, 0);\n    \
+        if rfd < 0 { return 16; }\n    \
+        if std::rt::read_byte(rfd) != 104 { return 17; }\n    \
+        if std::rt::read_byte(rfd) != 105 { return 18; }\n    \
+        if std::rt::read_byte(rfd) != 33 { return 19; }\n    \
+        if std::rt::read_byte(rfd) != 0 - 1 { return 20; }\n    \
+        if std::rt::close(rfd) != 0 { return 21; }\n    \
+        if std::rt::remove_file(path) != 0 { return 22; }\n    \
+        if std::rt::open(path, 0) != 0 - 2 { return 23; }\n    \
+        if std::rt::remove_file(path) != 0 - 2 { return 24; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let exe = build_program(&dir, &format!("files_{which}.tuo"), source, release);
+        let output = Command::new(&exe)
+            .current_dir(&dir)
+            .output()
+            .expect("the exe runs");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full write/append/read/remove roundtrip succeeds \
+             (a nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }
