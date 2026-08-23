@@ -1,0 +1,42 @@
+module else_if_owned_result;
+
+// Regression: an `else if` chain is a nested `if` *expression* in the else
+// arm (not a block), so its result temporary used to land in the enclosing
+// scope and derail the branch-merge state when the produced value owns heap —
+// the function was skipped by MIR lowering ("initialization state diverged")
+// despite passing the whole front end. The fix scopes bare-expression else
+// arms exactly like blocks. This fixture chains twice at an owned `String`
+// result and must agree across interpreter == Cranelift == LLVM.
+
+fn pick(take c: Int) -> String {
+    if c == 1 {
+        std::string::from_str("one")
+    } else if c == 2 {
+        std::string::from_str("two")
+    } else if c == 3 {
+        std::string::from_str("three")
+    } else {
+        std::string::from_str("other")
+    }
+}
+
+fn len_of(take c: Int) -> Int {
+    let s = pick(c);
+    std::string::len(s)
+}
+
+fn main() -> Int {
+    // 3 + 3 + 5 + 5 = 16; each arm's String is built, measured, and dropped.
+    len_of(1) + len_of(2) + len_of(3) + len_of(9)
+}
+
+spec pick {
+    then std::string::as_str(pick(1)) == "one";
+    then std::string::as_str(pick(2)) == "two";
+    then std::string::as_str(pick(3)) == "three";
+    then std::string::as_str(pick(9)) == "other";
+}
+
+spec main {
+    then main() == 16;
+}

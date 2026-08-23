@@ -8,6 +8,6 @@ bb0:
 fn main() -> I64 {
     let _0: I64;
 bb0:
-    _0 = call const fn sym34(const 2_i64, const 3_i64)
+    _0 = call const fn sym43(const 2_i64, const 3_i64)
     return copy _0
 }

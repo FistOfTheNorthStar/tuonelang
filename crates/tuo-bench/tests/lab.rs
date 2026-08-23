@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use tuo_bench::lab::compare::{PeerLanguage, Verdict, comparison_for, comparison_for_peer};
 use tuo_bench::lab::compiler::{self, ColdStage, Edit, measure_cold, measure_edit};
 use tuo_bench::lab::env::Environment;
+use tuo_bench::lab::parallel;
 use tuo_bench::lab::report::{ComparisonEntry, LabReport, render_human};
 use tuo_bench::lab::runtime::{Support, workloads};
 use tuo_bench::lab::timing::SystemClock;
@@ -145,7 +146,7 @@ fn honesty_rules_hold_over_the_catalog() {
     // workload (ADR-0009), and the function-value indirect-calls workload
     // (ADR-0008 Tier 1) run; only networking is honestly recorded as
     // not-yet-expressible.
-    assert_eq!(supported, 8);
+    assert_eq!(supported, 9);
     assert_eq!(unsupported, 1);
 }
 
@@ -185,7 +186,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     // Schema + catalog invariants.
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 8);
+    assert_eq!(committed.supported_workload_count(), 9);
 
     // The deterministic edit scenarios regenerate identically.
     let fresh_edits = vec![
@@ -203,7 +204,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set,
     // once per peer language — 8 supported workloads × 2 peers (C and Go) = 16.
-    assert_eq!(committed.comparisons.len(), 16);
+    assert_eq!(committed.comparisons.len(), 18);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -217,8 +218,8 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Go)
         .count();
-    assert_eq!(c_count, 8, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 8, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 9, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 9, "every supported workload has a Go peer entry");
 
     // Round-trip.
     let reserialized = committed.to_json_pretty().expect("serialize");
@@ -305,4 +306,59 @@ fn measured_lab_report_prints_under_nocapture() {
         .collect();
 
     println!("\n{}", render_human(&report));
+}
+
+/// ADR-0007: the parallel-speedup category's four committed programs equal
+/// the embedded sources, its tuonelang programs pass the real front end, and
+/// the committed example report carries the category (skipped — no live
+/// toolchain in an example).
+#[test]
+fn parallel_speedup_category_is_committed_and_checkable() {
+    let root = repo_root();
+    let all = parallel::workloads();
+    assert_eq!(all.len(), 1, "one parallel workload today");
+    let workload = &all[0];
+    let dir = root.join("benchmarks/runtime/programs/parallel");
+    for (file, embedded) in [
+        ("parallel-reduction-serial.tuo", &workload.serial_source),
+        ("parallel-reduction.tuo", &workload.parallel_source),
+        ("parallel-reduction-serial.c", &workload.c_serial_source),
+        ("parallel-reduction.c", &workload.c_parallel_source),
+    ] {
+        assert_eq!(
+            &read(&dir.join(file)),
+            embedded,
+            "{file} drifted from the embedded source"
+        );
+    }
+    // Both tuonelang programs pass the real front end (the parallel one is
+    // effectful in `main`, which `check` accepts — only specs must be pure).
+    for source in [&workload.serial_source, &workload.parallel_source] {
+        let mut map = SourceMap::new();
+        let file = map.intern_file("parallel.tuo");
+        let id = map
+            .add_source(file, source.as_str())
+            .expect("parallel source fits");
+        let result = check_sources(&map, &[id]);
+        assert!(
+            !result.has_errors(),
+            "a parallel program must pass the front end, diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert!(source.contains("fn main"));
+    }
+    // The committed example report records the category, honestly skipped.
+    let committed = LabReport::from_json(&read(
+        &root.join("benchmarks/runtime/results/example-report.json"),
+    ))
+    .expect("the committed example report parses");
+    assert_eq!(committed.parallel.len(), 1);
+    assert!(matches!(
+        committed.parallel[0].tuonelang,
+        parallel::SpeedupVerdict::Skipped { .. }
+    ));
+    assert!(matches!(
+        committed.parallel[0].c,
+        parallel::SpeedupVerdict::Skipped { .. }
+    ));
 }

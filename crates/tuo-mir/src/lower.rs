@@ -1785,15 +1785,21 @@ impl FnLower<'_> {
                     rvalue: Rvalue::StrOp { op, args: operands },
                 }
             }
-            Builtin::RtWrite | Builtin::RtReadByte | Builtin::RtExit | Builtin::RtWriteString => {
+            Builtin::RtWrite
+            | Builtin::RtReadByte
+            | Builtin::RtExit
+            | Builtin::RtWriteString
+            | Builtin::RtParMap => {
                 let op = match builtin {
                     Builtin::RtWrite => EffectOp::Write,
                     Builtin::RtReadByte => EffectOp::ReadByte,
                     Builtin::RtExit => EffectOp::Exit,
+                    Builtin::RtParMap => EffectOp::ParMap,
                     _ => EffectOp::WriteString,
                 };
                 // Effect arguments are call-style: operands pass by value,
-                // and `write_string`'s `String` is a read-only borrow.
+                // and `write_string`'s `String` (and `par_map`'s tasks
+                // array) is a read-only borrow, appended after the operands.
                 let mut effect_args: Vec<Arg> = operands.into_iter().map(Arg::Value).collect();
                 if let Some(place) = first_borrow {
                     effect_args.push(Arg::Borrow(place));
@@ -1813,7 +1819,12 @@ impl FnLower<'_> {
             | Builtin::StringAsStr
             | Builtin::ArrayEmpty
             | Builtin::ArrayLen
-            | Builtin::ArrayGet => {
+            | Builtin::ArrayGet
+            | Builtin::MapEmpty
+            | Builtin::MapGet
+            | Builtin::MapContainsKey
+            | Builtin::MapLen
+            | Builtin::MapKeys => {
                 let op = match builtin {
                     Builtin::StringEmpty => HeapOp::StringEmpty,
                     Builtin::StringFromStr => HeapOp::StringFromStr,
@@ -1824,6 +1835,11 @@ impl FnLower<'_> {
                     Builtin::StringAsStr => HeapOp::StringAsStr,
                     Builtin::ArrayEmpty => HeapOp::ArrayEmpty,
                     Builtin::ArrayLen => HeapOp::ArrayLen,
+                    Builtin::MapEmpty => HeapOp::MapEmpty,
+                    Builtin::MapGet => HeapOp::MapGet,
+                    Builtin::MapContainsKey => HeapOp::MapContainsKey,
+                    Builtin::MapLen => HeapOp::MapLen,
+                    Builtin::MapKeys => HeapOp::MapKeys,
                     _ => HeapOp::ArrayGet,
                 };
                 Statement::Assign {
@@ -1838,11 +1854,15 @@ impl FnLower<'_> {
             Builtin::StringPushByte
             | Builtin::StringAppend
             | Builtin::ArrayPush
-            | Builtin::ArrayPop => {
+            | Builtin::ArrayPop
+            | Builtin::MapInsert
+            | Builtin::MapRemove => {
                 let op = match builtin {
                     Builtin::StringPushByte => HeapMutOp::PushByte,
                     Builtin::StringAppend => HeapMutOp::Append,
                     Builtin::ArrayPush => HeapMutOp::Push,
+                    Builtin::MapInsert => HeapMutOp::MapInsert,
+                    Builtin::MapRemove => HeapMutOp::MapRemove,
                     _ => HeapMutOp::Pop,
                 };
                 let target = first_mut
@@ -2053,11 +2073,32 @@ impl FnLower<'_> {
         self.restore(&before);
         self.switch_to(else_block);
         let else_value = match els {
-            Some(els) => self.expr(els)?,
+            // The else arm is a bare expression (an `else if` chain is a
+            // nested `if` expression, not a block), so it gets its own scope:
+            // otherwise a temporary the arm creates — e.g. the nested `if`'s
+            // result slot — lands in the enclosing scope and the merge states
+            // disagree (initialized on one path, absent on the other).
+            Some(els) => self.scoped_value(els, &ty)?,
             None => Some(Value::Operand(Operand::Const(Const::Unit))),
         };
         states.extend(self.close_branch(else_value, &ty, result, &mut join)?);
         self.join_branches(states, join, result)
+    }
+
+    /// Lower a branch-arm expression inside its own scope, mirroring
+    /// [`Self::block`]'s tail handling: the value escapes as an operand
+    /// before the scope's drops run, so temporaries the arm creates never
+    /// leak into the branch-merge state.
+    fn scoped_value(&mut self, expr: &Expr, ty: &Ty) -> Lowered {
+        self.push_scope();
+        let Some(value) = self.expr(expr)? else {
+            self.discard_scope();
+            return Ok(None);
+        };
+        let operand = self.use_value(value, ty);
+        let operand = self.escape_operand(operand, ty, expr.span)?;
+        self.end_scope()?;
+        Ok(Some(Value::Operand(operand)))
     }
 
     fn while_expr(&mut self, cond: &Expr, body: &Block) -> Lowered {
@@ -3159,7 +3200,7 @@ fn contains_error(ty: &Ty) -> bool {
         | Ty::Range(item)
         | Ty::Option(item)
         | Ty::Wrapper(_, item) => contains_error(item),
-        Ty::Result(ok, err) => contains_error(ok) || contains_error(err),
+        Ty::Result(ok, err) | Ty::Map(ok, err) => contains_error(ok) || contains_error(err),
         Ty::Struct(_, args) | Ty::Enum(_, args) => args.iter().any(contains_error),
         Ty::Fn(fn_ty) => {
             fn_ty.params.iter().any(|param| contains_error(&param.ty)) || contains_error(&fn_ty.ret)

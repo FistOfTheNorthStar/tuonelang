@@ -1,0 +1,43 @@
+module map_churn;
+
+// ADR-0011 Stage B leak-proxy: a bounded insert/remove churn loop that
+// crosses the table's growth threshold repeatedly. Every inserted entry is
+// later removed or dropped with the map; a double-free aborts (breaking the
+// agreed exit) and a leak is measurable with an external tool — the churn
+// completing to the same total on interpreter == Cranelift == LLVM is the
+// in-CI evidence.
+
+fn churn(take rounds: Int) -> Int {
+    var m = std::map::empty();
+    var total = 0;
+    var i = 0;
+    while i < rounds {
+        let _ = std::map::insert(m, i, i * 2);
+        // Keep a sliding window of at most 8 live entries.
+        if i >= 8 {
+            total = total + match std::map::remove(m, i - 8) {
+                Some { value } => value,
+                None => 0,
+            };
+        }
+        i = i + 1;
+    }
+    total + std::map::len(m)
+}
+
+fn main() -> Int {
+    // Removed entries carry 2*(0..=91): sum = 2 * 92*91/2 = 8372; plus the 8
+    // survivors in the map's final len. 8372 + 8 = 8380; 8380 & 0xff = 188.
+    churn(100)
+}
+
+spec churn {
+    then churn(0) == 0;
+    then churn(1) == 1;
+    then churn(9) == 8 + 0; // one removal (key 0, value 0), 8 live
+    then churn(100) == 8380;
+}
+
+spec main {
+    then main() == 8380;
+}

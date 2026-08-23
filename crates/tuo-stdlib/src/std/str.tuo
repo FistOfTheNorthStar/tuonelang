@@ -774,22 +774,23 @@ spec is_digit {
     then !is_digit(97);
 }
 
-// `to_upper`/`to_lower`/`to_string` return an owned `String`, and v0 has no
-// `String`→`Str` view (Q-0012 is deferred), so their specs compare against a
-// `String` built with `std::string::from_str`, never a bare `Str` literal.
+// `to_upper`/`to_lower`/`to_string` return an owned `String`; each spec views
+// the result through `std::string::as_str` (ADR-0010) and compares against a
+// bare `Str` literal, so the assertion reads as the resulting text — the
+// composition Stage C of that ADR names.
 
 spec to_upper {
-    then to_upper("Hi!") == std::string::from_str("HI!");
-    then to_upper("abc") == std::string::from_str("ABC");
-    then to_upper("ABC") == std::string::from_str("ABC");
-    then to_upper("a1z") == std::string::from_str("A1Z");
+    then std::string::as_str(to_upper("Hi!")) == "HI!";
+    then std::string::as_str(to_upper("abc")) == "ABC";
+    then std::string::as_str(to_upper("ABC")) == "ABC";
+    then std::string::as_str(to_upper("a1z")) == "A1Z";
 }
 
 spec to_lower {
-    then to_lower("Hi!") == std::string::from_str("hi!");
-    then to_lower("ABC") == std::string::from_str("abc");
-    then to_lower("abc") == std::string::from_str("abc");
-    then to_lower("A1Z") == std::string::from_str("a1z");
+    then std::string::as_str(to_lower("Hi!")) == "hi!";
+    then std::string::as_str(to_lower("ABC")) == "abc";
+    then std::string::as_str(to_lower("abc")) == "abc";
+    then std::string::as_str(to_lower("A1Z")) == "a1z";
 }
 
 // The builder layer: build a `String` piece by piece, then read it in-block with
@@ -834,15 +835,14 @@ spec parse_int {
 }
 
 spec to_string {
-    then to_string(0) == std::string::from_str("0");
-    then to_string(123) == std::string::from_str("123");
-    then to_string(0 - 42) == std::string::from_str("-42");
-    then to_string(7) == std::string::from_str("7");
-    // Structural round-trip: the digits `to_string` emits parse back with a
-    // `Str` literal of the same text (v0 has no `String`→`Str` view to close
-    // the loop through the owned buffer directly).
-    then or(parse_int("9876"), 0 - 1) == 9876;
-    then or(parse_int("-500"), 0) == 0 - 500;
+    then std::string::as_str(to_string(0)) == "0";
+    then std::string::as_str(to_string(123)) == "123";
+    then std::string::as_str(to_string(0 - 42)) == "-42";
+    then std::string::as_str(to_string(7)) == "7";
+    // The round-trip closes through the owned buffer itself (ADR-0010): the
+    // digits `to_string` emits parse straight back through the `as_str` view.
+    then or(parse_int(std::string::as_str(to_string(9876))), 0 - 1) == 9876;
+    then or(parse_int(std::string::as_str(to_string(0 - 500))), 0) == 0 - 500;
     then std::string::byte_at(to_string(9876), 0) == 57; // '9'
     then std::string::len(to_string(9876)) == 4;
 }

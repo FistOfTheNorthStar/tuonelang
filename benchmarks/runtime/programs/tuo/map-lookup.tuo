@@ -1,0 +1,49 @@
+// map-lookup — keyed insert/lookup/churn throughput over the ADR-0011 hash
+// map (`Map[Int, Int]`, the `tuo_rt_map_*` open-addressing table behind the
+// three-word header).
+//
+// One round: insert COUNT entries (key i → value 3·i, growing the table by
+// doubling through several thresholds), look every key back up summing the
+// values modulo 1000, then remove the first half (the order-preserving
+// removal path) and read the surviving entry count. A round's contribution is
+// deterministic: for COUNT = 1000 the lookup sum is 3·999·1000/2 = 1_498_500,
+// i.e. 500 after the running modulo, and 500 entries survive — 1000 total.
+// The loop repeats the round so the workload really exercises hash, probe,
+// growth, and removal throughput (a leak would OOM; a double-free would
+// abort); the observable result is one round's contribution (reassigned, not
+// accumulated): 1000, exit byte 1000 & 0xff = 232.
+
+fn round(take count: Int) -> Int {
+    var m = std::map::empty();
+    var i = 0;
+    while i < count {
+        let _ = std::map::insert(m, i, i * 3);
+        i = i + 1;
+    }
+    var hits = 0;
+    var j = 0;
+    while j < count {
+        let value = match std::map::get(m, j) {
+            Some { value } => value,
+            None => 0,
+        };
+        hits = (hits + value) % 1000;
+        j = j + 1;
+    }
+    var k = 0;
+    while k < count / 2 {
+        let _ = std::map::remove(m, k);
+        k = k + 1;
+    }
+    hits + std::map::len(m)
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 50 {
+        result = round(1000);
+        r = r + 1;
+    }
+    result
+}

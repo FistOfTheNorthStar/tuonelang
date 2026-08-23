@@ -1,0 +1,6 @@
+T0001@355..383 `Map[Bool, I64]` is not supported in v0 | actual type `Map[Bool, I64]`
+T0001@498..548 `Map[I64, String]` is not supported in v0 | actual type `Map[I64, String]`
+T0001@844..849 mismatched types | expected type `I64` | actual type `Str`
+T0011@990..1007 type annotation needed
+T0011@990..1007 type annotation needed
+T0006@1177..1183 operator `==` is not supported for type `Map[I64, I64]` | actual type `Map[I64, I64]`

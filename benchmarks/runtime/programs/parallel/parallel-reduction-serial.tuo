@@ -1,0 +1,47 @@
+// parallel-reduction (serial baseline) — the CPU-bound reduction the
+// parallel-speedup category measures, computed on ONE thread. Four chunks of
+// 60000 seeds each run `busy` (40 rounds of range-bounded integer mixing —
+// every intermediate stays far below the overflow trap) and the chunk sums
+// fold into one total. The parallel sibling computes the identical chunks
+// through `std::rt::par_map` on four threads; both exit with the same
+// documented byte, so a wall-clock ratio between them is a like-for-like
+// speedup. Exit byte: 64.
+
+fn workers() -> Int {
+    4
+}
+
+fn chunk_size() -> Int {
+    60000
+}
+
+fn busy(take seed: Int) -> Int {
+    var x = seed;
+    var k = 0;
+    while k < 40 {
+        x = (x * 31 + seed + k) % 1048576;
+        k = k + 1;
+    }
+    x
+}
+
+fn chunk_sum(take w: Int) -> Int {
+    var total = 0;
+    var i = w * chunk_size();
+    let end = (w + 1) * chunk_size();
+    while i < end {
+        total = (total + busy(i)) % 1048576;
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> Int {
+    var total = 0;
+    var w = 0;
+    while w < workers() {
+        total = total + chunk_sum(w);
+        w = w + 1;
+    }
+    total
+}

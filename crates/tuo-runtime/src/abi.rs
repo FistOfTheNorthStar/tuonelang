@@ -59,7 +59,13 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// single code pointer (pointer-width, `Copy`), where it previously had none
 /// (`layout_of` returned a [`LayoutError`]). A previously unlayoutable type
 /// gaining a layout is a layout-affecting change, so the version bumps.
-pub const ABI_VERSION: u32 = 5;
+///
+/// `6` — the map type (`Ty::Map`, ADR-0011) gains a layout: the three-word
+/// `{ptr, len, cap}` header over the dense entries buffer, plus the
+/// `tuo_rt_map_*` runtime symbols (see [`crate::map`]) that own every table
+/// internal (the hash index never appears in the header). A new heap layout
+/// is layout-affecting, so the version bumps.
+pub const ABI_VERSION: u32 = 6;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -207,6 +213,13 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
         Ty::String => Ok(Layout::words(3)),   // (ptr, len, cap)
         Ty::Str => Ok(Layout::words(2)),      // (ptr, len)
         Ty::Array(_) => Ok(Layout::words(3)), // (ptr, len, cap)
+        // The map header (ADR-0011): the same three-word `{ptr, len, cap}`
+        // shape — `ptr` → the dense entries buffer (insertion order), `len` =
+        // live entry count, `cap` = entry capacity. The hash *index* is an
+        // internal allocation owned entirely by the `tuo_rt_map_*` shim (see
+        // `crate::map`); it never appears in the header, so its layout is not
+        // part of the ABI a backend consults.
+        Ty::Map(..) => Ok(Layout::words(3)), // (ptr, len, cap)
 
         // Memory wrappers: a single (non-null) pointer each.
         Ty::Wrapper(WrapperKind::Box | WrapperKind::Shared | WrapperKind::Weak, _) => {
@@ -457,12 +470,22 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_five() {
+    fn the_abi_is_version_six() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
-        // allocator seam, the runtime surface), never silently. Version 5
-        // gave `Ty::Fn` a pointer layout (ADR-0008 Tier 1).
-        assert_eq!(ABI_VERSION, 5);
+        // allocator seam, the runtime surface), never silently. Version 6
+        // gave `Ty::Map` its three-word header layout and the `tuo_rt_map_*`
+        // runtime symbols (ADR-0011).
+        assert_eq!(ABI_VERSION, 6);
+    }
+
+    #[test]
+    fn map_header_is_three_words() {
+        let t = &TypeckResult::default();
+        let map = Ty::Map(Box::new(Ty::int()), Box::new(Ty::int()));
+        assert_eq!(layout_of(&map, t).unwrap(), Layout::words(3));
+        let str_map = Ty::Map(Box::new(Ty::Str), Box::new(Ty::int()));
+        assert_eq!(layout_of(&str_map, t).unwrap(), Layout::words(3));
     }
 
     #[test]

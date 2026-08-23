@@ -342,6 +342,7 @@ fn the_effect_tier_is_exactly_io_writes_reads_and_process_exit() {
             "std::io::println".to_string(),
             "std::io::read_line".to_string(),
             "std::process::exit".to_string(),
+            "std::sync::par_map".to_string(),
         ]
     );
 }
@@ -449,6 +450,52 @@ fn main() -> Int {
             String::from_utf8_lossy(&output.stdout),
             "hi\n",
             "{which}: the printed bytes must land on stdout, exactly"
+        );
+    }
+}
+
+/// `std::sync::par_map(square, [1..=6], 3)` really forks, computes, and joins
+/// on real OS threads, returning the squares in task order: the summed result
+/// is `main`'s exit status. Both backends. This is the native pin
+/// `std::sync`'s `EFFECT:` doc names (ADR-0007).
+#[test]
+fn par_map_runs_natively() {
+    let dir = native_workspace("par_map");
+    let caller = "\
+module caller;
+
+import std::sync;
+
+fn square(take x: Int) -> Int {
+    x * x
+}
+
+fn main() -> Int {
+    var tasks = std::array::empty();
+    var i = 1;
+    while i <= 6 {
+        std::array::push(tasks, i);
+        i = i + 1;
+    }
+    let results = std::sync::par_map(square, tasks, 3);
+    var total = 0;
+    var j = 0;
+    while j < std::array::len(results) {
+        total = total + std::array::get(results, j);
+        j = j + 1;
+    }
+    total
+}
+";
+    for release in [false, true] {
+        let output = run_with_module(&dir, tuo_stdlib::SYNC, caller, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(91),
+            "{which}: par_map(square, [1..6], 3) sums to 1+4+9+16+25+36 = 91 \
+             in task order; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
     }
 }

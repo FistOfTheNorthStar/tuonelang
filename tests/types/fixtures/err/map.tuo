@@ -1,0 +1,37 @@
+// ADR-0011 error rules: an unsupported key/value pair is a plain `T0001`
+// naming the pair, a mismatched key on a witnessed map is an ordinary type
+// error, an undetermined `empty()` is `T0011` "type annotation needed", and
+// `Map == Map` is deferred (a type error).
+
+fn bool_keys() -> Int {
+    var m: Map[Bool, Int] = std::map::empty();
+    let _ = std::map::insert(m, true, 1);
+    std::map::len(m)
+}
+
+fn string_values() -> Int {
+    var m: Map[Int, String] = std::map::empty();
+    let _ = std::map::insert(m, 1, std::string::from_str("x"));
+    std::map::len(m)
+}
+
+fn mismatched_key() -> Int {
+    // The first insert witnesses `Map[Int, Int]`; a `Str` key is then an
+    // ordinary element mismatch, not a monomorphic hardcoding.
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 1, 10);
+    let _ = std::map::insert(m, "one", 10);
+    std::map::len(m)
+}
+
+fn undetermined() -> Int {
+    // No key/value evidence anywhere: `T0011` type annotation needed.
+    let m = std::map::empty();
+    let _ = m;
+    0
+}
+
+fn map_equality(in a: Map[Int, Int], in b: Map[Int, Int]) -> Bool {
+    // Structural map equality is deferred in v0 (like `Map` ordering).
+    a == b
+}

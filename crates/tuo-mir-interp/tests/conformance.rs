@@ -990,6 +990,42 @@ fn string_as_str_views_the_whole_string() {
 }
 
 #[test]
+fn map_reference_semantics_are_insertion_ordered() {
+    // ADR-0011: the interpreter is the map's semantic oracle — an
+    // insertion-ordered association list. Overwrite returns the previous
+    // value and keeps the key's position; `remove` returns the removed value
+    // and preserves the relative order of the rest; `keys` lists insertion
+    // order; a miss is `None` (observed via a sentinel here).
+    let src = r#"
+        fn drill() -> Int {
+            var m = std::map::empty();
+            let _ = std::map::insert(m, 3, 30);
+            let _ = std::map::insert(m, 1, 10);
+            let _ = std::map::insert(m, 2, 20);
+            let prev = match std::map::insert(m, 1, 11) {
+                Some { value } => value,
+                None => 0 - 1,
+            };
+            let removed = match std::map::remove(m, 3) {
+                Some { value } => value,
+                None => 0 - 1,
+            };
+            let miss = match std::map::get(m, 9) {
+                Some { value } => value,
+                None => 7,
+            };
+            let ks = std::map::keys(m);
+            // After removing 3: insertion order is [1, 2].
+            let k0 = std::array::get(ks, 0);
+            let k1 = std::array::get(ks, 1);
+            // 10 + 30 + 7 + 1*100 + 2*10 + 2 = 169
+            prev + removed + miss + k0 * 100 + k1 * 10 + std::map::len(m)
+        }
+    "#;
+    assert_eq!(value(src, "drill", vec![]), int(169));
+}
+
+#[test]
 fn string_slice_may_split_a_code_point_byte_level() {
     // Byte-level slicing: "héllo" bytes are [h, 0xC3, 0xA9, l, l, o]; slicing
     // [1, 2) yields the single 0xC3 byte (not valid UTF-8 alone).

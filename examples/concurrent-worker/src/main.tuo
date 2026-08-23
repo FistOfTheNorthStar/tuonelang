@@ -1,55 +1,101 @@
 module concurrent_worker;
 
-// concurrent-worker — a concurrent worker pool, dogfooded against the limits of
-// v0.
+// concurrent-worker — a concurrent worker pool, dogfooded first against the
+// limits of v0 and now against ADR-0007's structured concurrency.
 //
-// v0 has no concurrency: no threads, no tasks, no channels, no shared mutable
-// state across workers — ADR-0006's effect boundary covers descriptor I/O and
-// process exit only, with no spawn/join/channel primitive (see DOGFOODING.md
-// and ADR-0007). What a worker pool actually *decides*, though — how work is
-// partitioned across N workers, how long a batch takes given per-task costs,
-// and whether the partition is balanced — is pure arithmetic over the schedule.
-// So, exactly as the http-service example does, this splits into:
-//
-//   * an EXECUTABLE TIER — the deterministic scheduling model: round-robin
+//   * the EXECUTABLE TIER — the deterministic scheduling model: round-robin
 //     assignment, per-worker load, the makespan (finish time of the slowest
 //     worker), and speedup versus a single worker. Runnable scalar core,
-//     spec-checked, and `main` executes; and
+//     spec-checked; and
 //
-//   * a CONTRACT TIER — the actual parallel execution (spawn workers, hand out
-//     tasks over a channel, join results), given as `CONTRACT:` comments only,
-//     because v0 cannot run any of it. Each names the capability the language
-//     must gain (tracked in ADR-0007) before this becomes a running pool.
+//   * the LIVE POOL (since ADR-0007): `std::rt::par_map` runs the model's own
+//     `worker_load` **as the task function, one OS thread per worker** —
+//     round-robin is both what the model predicts and what the primitive
+//     implements, so the model IS the pool's scheduling oracle. `main`
+//     computes the makespan twice — once through the pure model, once by
+//     folding the live pool's per-worker results — and exits with the model's
+//     answer only when the live run agrees (the ADR's "the deterministic
+//     scheduling model is the oracle" constraint, executed literally). The
+//     spec sandbox stays pure (spawning is an effect, `R0007`), so the live
+//     path is pinned by the native dogfood test, not a spec.
+//
+// What still cannot run — a *shared* work queue with dynamic stealing, or any
+// shared mutable state across workers — remains a documented CONTRACT below,
+// blocked on an ADR admitting shared state across threads.
 //
 // The task batch: eight tasks whose costs (in abstract time units) are the
 // accessors `cost0`..`cost7`. Workers pull them round-robin: worker w handles
 // task i whenever `i % worker_count == w`.
 
-fn worker_count() -> Int { 3 }
-fn task_count() -> Int { 8 }
+fn worker_count() -> Int {
+    3
+}
+fn task_count() -> Int {
+    8
+}
 
 // Per-task costs — a real scheduler's input. Uneven on purpose, so balance and
 // makespan are non-trivial.
-fn cost0() -> Int { 5 }
-fn cost1() -> Int { 2 }
-fn cost2() -> Int { 8 }
-fn cost3() -> Int { 3 }
-fn cost4() -> Int { 6 }
-fn cost5() -> Int { 1 }
-fn cost6() -> Int { 4 }
-fn cost7() -> Int { 7 }
+fn cost0() -> Int {
+    5
+}
+fn cost1() -> Int {
+    2
+}
+fn cost2() -> Int {
+    8
+}
+fn cost3() -> Int {
+    3
+}
+fn cost4() -> Int {
+    6
+}
+fn cost5() -> Int {
+    1
+}
+fn cost6() -> Int {
+    4
+}
+fn cost7() -> Int {
+    7
+}
 
 /// The cost of task `i` (0-based). A single point where the batch is defined.
 fn cost_of(take i: Int) -> Int {
-    if i == 0 { cost0() }
-    else { if i == 1 { cost1() }
-    else { if i == 2 { cost2() }
-    else { if i == 3 { cost3() }
-    else { if i == 4 { cost4() }
-    else { if i == 5 { cost5() }
-    else { if i == 6 { cost6() }
-    else { if i == 7 { cost7() }
-    else { 0 } } } } } } } }
+    if i == 0 {
+        cost0()
+    } else {
+        if i == 1 {
+            cost1()
+        } else {
+            if i == 2 {
+                cost2()
+            } else {
+                if i == 3 {
+                    cost3()
+                } else {
+                    if i == 4 {
+                        cost4()
+                    } else {
+                        if i == 5 {
+                            cost5()
+                        } else {
+                            if i == 6 {
+                                cost6()
+                            } else {
+                                if i == 7 {
+                                    cost7()
+                                } else {
+                                    0
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Round-robin owner of task `i`: worker `i % worker_count`.
@@ -83,7 +129,11 @@ fn makespan_from(take worker: Int, take best: Int) -> Int {
         best
     } else {
         let load = worker_load(worker);
-        let next = if load > best { load } else { best };
+        let next = if load > best {
+            load
+        } else {
+            best
+        };
         makespan_from(worker + 1, next)
     }
 }
@@ -123,37 +173,67 @@ fn imbalance() -> Int {
     makespan() - serial_cost() / worker_count()
 }
 
-fn main() -> Int {
-    makespan()
+// --- The live pool (ADR-0007) -----------------------------------------------
+
+/// Every worker id, `0..worker_count`, as the live pool's task list.
+fn worker_ids() -> Array[Int] {
+    var ids = std::array::empty();
+    var w = 0;
+    while w < worker_count() {
+        std::array::push(ids, w);
+        w = w + 1;
+    }
+    ids
 }
 
-// --- CONTRACT TIER: the concurrent execution v0 cannot run -----------------
+/// The live pool's makespan: run `worker_load` for every worker id through
+/// `std::rt::par_map` — one OS thread per worker, each computing its own
+/// round-robin partition's total, joined before the fold — and take the max.
+/// EFFECTFUL (spawning is a typed effect), so no spec reaches it; the native
+/// dogfood test pins it against the model.
+fn live_makespan() -> Int {
+    let loads = std::rt::par_map(worker_load, worker_ids(), worker_count());
+    var best = 0;
+    var i = 0;
+    while i < std::array::len(loads) {
+        let load = std::array::get(loads, i);
+        if load > best {
+            best = load;
+        }
+        i = i + 1;
+    }
+    best
+}
+
+/// Exit with the model's makespan **only if the live parallel run agrees** —
+/// the scheduling model acting as the pool's correctness oracle, at runtime.
+fn main() -> Int {
+    let predicted = makespan();
+    let live = live_makespan();
+    if predicted == live {
+        predicted
+    } else {
+        0
+    }
+}
+
+// --- CONTRACT TIER: what structured fork-join deliberately does not admit ---
 //
-// The scheduling model above decides everything a pool needs to; what remains
-// is running the tasks in parallel, which v0 cannot express. Given as contracts
-// only. Each blocks on a capability tracked in ADR-0007 "Concurrency model and
-// the effect boundary".
-//
-// CONTRACT spawn_pool(workers: Int) -> Pool
-//   Start `workers` OS/green threads, each looping: pull a task, run it, push
-//   the result. BLOCKED ON: a concurrency primitive (threads/tasks) — v0 has no
-//   way to start a second thread of control — and a shared work queue, which
-//   needs both a heap collection and a synchronization type (the Shared/atomics
-//   story is unspecified for v0).
+// ADR-0007's primitive is structured: workers share nothing mutable and
+// nothing outlives the call. A pool with a *shared, dynamically-drained* work
+// queue needs shared mutable state across threads, which stays out of v0 by
+// design. Given as contracts only, blocked on a future ADR admitting shared
+// state (the Shared/atomics story):
 //
 // CONTRACT submit(pool: Pool, task: Task) -> Unit
-//   Enqueue a task onto the shared queue. BLOCKED ON: a channel/queue type
-//   (heap + synchronization) and a first-class Task value (a function value or
-//   closure — v0 has neither, see DOGFOODING.md).
+//   Enqueue a task onto a shared queue workers drain dynamically. BLOCKED ON:
+//   a synchronized channel/queue type — dynamic stealing changes *which*
+//   worker runs a task (the round-robin model pins it statically).
 //
-// CONTRACT join(pool: Pool) -> Results
-//   Wait for all workers to drain the queue and collect their results. BLOCKED
-//   ON: the concurrency primitive above plus a collection type to hold results.
-//
-// Note: the DETERMINISTIC model here is not merely a stand-in. A real pool's
-// observable performance (makespan, speedup, balance) is exactly what this
-// computes; when concurrency lands, the executable tier becomes the pool's
-// own scheduling oracle, checked against the live run.
+// CONTRACT join_detached(pool: Pool) -> Results
+//   Wait on workers that outlive the spawning call. BLOCKED ON: detached
+//   spawn — deliberately absent; ADR-0007 chose structured fork-join so
+//   nothing can dangle.
 
 // --- Executable specs for the scheduling model -----------------------------
 
@@ -201,6 +281,7 @@ spec imbalance {
     then imbalance() == 3;
 }
 
-spec main {
-    then main() == 15;
-}
+// `main` is effectful since the live pool landed (spawning is a typed
+// effect), so no spec reaches it — exactly like http-service's printing
+// `main`. Its exit byte (15, the model's makespan, surviving the live
+// cross-check) is pinned by the native dogfood test instead.

@@ -37,6 +37,17 @@ pub const READ_BYTE_SYMBOL: &str = "tuo_rt_read_byte";
 /// Unlike the other two it **never returns**.
 pub const EXIT_SYMBOL: &str = "tuo_rt_exit";
 
+/// The name of the C-ABI symbol generated code calls for `std::rt::par_map`
+/// (ADR-0007): `void tuo_rt_par_map(long long f, const long long *tasks,
+/// long long n, long long workers, long long *out_hdr)` — apply the task
+/// function (a tuonelang `fn(take Int) -> Int` code pointer, whose native
+/// ABI is exactly C's `long long (*)(long long)`) to every task on
+/// `workers` POSIX threads (round-robin: task `i` on thread `i % workers`;
+/// `workers < 1` behaves as 1, and never more threads than tasks), join
+/// them all, and write a fresh `Array[Int]` header of the results in task
+/// order into `out_hdr`. Structured fork-join: nothing outlives the call.
+pub const PAR_MAP_SYMBOL: &str = "tuo_rt_par_map";
+
 /// The value [`WRITE_SYMBOL`] returns on a host write error (after retrying
 /// `EINTR`). A successful write returns the total byte count instead.
 pub const WRITE_ERROR: i64 = -1;
@@ -113,7 +124,78 @@ pub fn effect_runtime_c_source() -> String {
          \n\
          _Noreturn void {EXIT_SYMBOL}(long long code) {{\n\
          \x20   _exit((int)(code & 0xff));\n\
-         }}\n"
+         }}\n\
+         \n\
+         /* ADR-0007: structured fork-join over POSIX threads. Task i runs on\n\
+         \x20  thread i % workers (the round-robin partition the scheduling\n\
+         \x20  model predicts); every thread writes only its own disjoint\n\
+         \x20  result slots and is joined before the function returns. */\n\
+         #include <pthread.h>\n\
+         #include <stdint.h>\n\
+         \n\
+         extern void *tuo_rt_alloc(unsigned long long size, unsigned long long align);\n\
+         \n\
+         typedef long long (*tuo_rt_task_fn)(long long);\n\
+         \n\
+         typedef struct {{\n\
+         \x20   tuo_rt_task_fn task;\n\
+         \x20   const long long *tasks;\n\
+         \x20   long long *results;\n\
+         \x20   long long count;\n\
+         \x20   long long workers;\n\
+         \x20   long long worker;\n\
+         }} tuo_rt_par_ctx;\n\
+         \n\
+         static void *tuo_rt_par_worker(void *arg) {{\n\
+         \x20   tuo_rt_par_ctx *ctx = (tuo_rt_par_ctx *)arg;\n\
+         \x20   for (long long i = ctx->worker; i < ctx->count; i += ctx->workers) {{\n\
+         \x20       ctx->results[i] = ctx->task(ctx->tasks[i]);\n\
+         \x20   }}\n\
+         \x20   return 0;\n\
+         }}\n\
+         \n\
+         void {PAR_MAP_SYMBOL}(long long f, const long long *tasks, long long n,\n\
+         \x20                  long long workers, long long *out_hdr) {{\n\
+         \x20   if (n <= 0) {{\n\
+         \x20       out_hdr[0] = {sentinel};\n\
+         \x20       out_hdr[1] = 0;\n\
+         \x20       out_hdr[2] = 0;\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         \x20   if (workers < 1) workers = 1;\n\
+         \x20   if (workers > n) workers = n;\n\
+         \x20   long long *results =\n\
+         \x20       (long long *)tuo_rt_alloc((unsigned long long)n * 8, 8);\n\
+         \x20   tuo_rt_par_ctx ctx[64];\n\
+         \x20   pthread_t threads[64];\n\
+         \x20   char started[64];\n\
+         \x20   if (workers > 64) workers = 64;\n\
+         \x20   for (long long w = 0; w < workers; w++) {{\n\
+         \x20       ctx[w].task = (tuo_rt_task_fn)f;\n\
+         \x20       ctx[w].tasks = tasks;\n\
+         \x20       ctx[w].results = results;\n\
+         \x20       ctx[w].count = n;\n\
+         \x20       ctx[w].workers = workers;\n\
+         \x20       ctx[w].worker = w;\n\
+         \x20   }}\n\
+         \x20   for (long long w = 1; w < workers; w++) {{\n\
+         \x20       started[w] = pthread_create(&threads[w], 0, tuo_rt_par_worker, &ctx[w]) == 0;\n\
+         \x20       if (!started[w]) {{\n\
+         \x20           /* Could not start a thread: run that partition inline\n\
+         \x20              instead — the result is identical, only less\n\
+         \x20              parallel. */\n\
+         \x20           tuo_rt_par_worker(&ctx[w]);\n\
+         \x20       }}\n\
+         \x20   }}\n\
+         \x20   tuo_rt_par_worker(&ctx[0]);\n\
+         \x20   for (long long w = 1; w < workers; w++) {{\n\
+         \x20       if (started[w]) pthread_join(threads[w], 0);\n\
+         \x20   }}\n\
+         \x20   out_hdr[0] = (long long)results;\n\
+         \x20   out_hdr[1] = n;\n\
+         \x20   out_hdr[2] = n;\n\
+         }}\n",
+        sentinel = crate::alloc::ZERO_SIZE_SENTINEL,
     )
 }
 

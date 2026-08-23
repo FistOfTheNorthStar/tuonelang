@@ -203,6 +203,11 @@ pub enum Ty {
     Tuple(Vec<Ty>),
     /// `Array[T]` — the builtin homogeneous array, indexed by `Usize`.
     Array(Box<Ty>),
+    /// `Map[K, V]` — the builtin hash map (ADR-0011). The type is generic;
+    /// the v0 *operation* surface is monomorphic over `(Int, Int)` and
+    /// `(Str, Int)`, exactly as `Array`'s ops were `Int`-monomorphic under
+    /// ADR-0009. Non-`Copy` (it owns a heap table).
+    Map(Box<Ty>, Box<Ty>),
     /// `[T; N]` — the inline fixed-length array; `N` elements of `T`,
     /// length part of the type. Distinct from `Array[T]`, the growable
     /// heap sequence. (ADR-0004 Stage 2.)
@@ -275,6 +280,11 @@ impl Ty {
                 format!("({})", inner.join(", "))
             }
             Self::Array(item) => format!("Array[{}]", item.render(resolution)),
+            Self::Map(key, value) => format!(
+                "Map[{}, {}]",
+                key.render(resolution),
+                value.render(resolution)
+            ),
             Self::FixedArray(elem, n) => format!("[{}; {n}]", elem.render(resolution)),
             Self::Range(item) => format!("Range[{}]", item.render(resolution)),
             Self::Fn(fn_ty) => {

@@ -196,8 +196,8 @@ fn main_may_be_effectful_without_any_diagnostic() {
     assert!(types.is_effectful(function(&resolution, "main")));
     assert_eq!(
         types.effectful_functions().count(),
-        5,
-        "the four `std::rt` effect builtins (ADR-0006's three plus ADR-0009's \
-         `write_string`) plus `main`"
+        6,
+        "the five `std::rt` effect builtins (ADR-0006's three plus ADR-0009's \
+         `write_string` plus ADR-0007's `par_map`) plus `main`"
     );
 }

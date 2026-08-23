@@ -1,6 +1,6 @@
 # ADR-0011: The hash map — a keyed associative container
 
-- **Status:** proposed
+- **Status:** accepted (2026-08-22 — all three stages landed; see Resolution)
 - **Date:** 2026-08-19
 - **Context:** tuonelang has **no associative container**. The runnable core
   grew a growable `Array[Int]` (ADR-0009) and generic higher-order combinators
@@ -208,3 +208,59 @@
   lands first, `Map[Str, Int]` composes cleanly with `String`-derived `Str` keys;
   if not, keys come from `Str` literals or copied `String`s, which is enough to
   ship.
+
+- **Resolution (2026-08-22) — all three stages landed; the ADR is accepted:**
+  - **Stage A.** `Ty::Map(K, V)` (non-`Copy`) joined the type core with the
+    monomorphic `std::map` builtin surface exactly as decided — `empty`,
+    `insert`, `get`, `contains_key`, `remove`, `len`, `keys` over
+    `Map[Int, Int]` and `Map[Str, Int]`, receiver-witnessed `K`/`V`, `T0001`
+    for any other determined pair, `T0011` for an undetermined `empty()`, and
+    `Map == Map` refused (`T0006`) rather than given an order-sensitive
+    stand-in. MIR gained `HeapOp::{MapEmpty, MapGet, MapContainsKey, MapLen,
+    MapKeys}` and `HeapMutOp::{MapInsert, MapRemove}` (verified under
+    `M0012`/`M0013`, `mir.md` §5.7/§4.3); the optimizer's existing
+    never-fold/never-eliminate rules cover them via the shared `HeapOp`/
+    `HeapMutate` arms. The **reference interpreter models the map as its
+    observable contract** — an insertion-ordered association list — which
+    resolved the determinism question *more strongly* than the proposal's
+    bucket-order sketch: `keys` is **insertion order**, `remove` preserves
+    the relative order of the rest, an overwrite keeps its position, so no
+    observable depends on the hash at all. Pinned by
+    `tests/types/fixtures/{ok,err}/map.tuo` (+ snapshot),
+    `crates/tuo-mir-interp/tests/conformance.rs`
+    (`map_reference_semantics_are_insertion_ordered`).
+  - **Stage B.** `abi.md` §Maps specifies the layout: the same three-word
+    `{ptr, len, cap}` header as `String`/`Array` over **dense
+    insertion-ordered entries** (`{k, v}` stride 16 for `Int` keys;
+    `{ptr, len, v}` stride 24 for `Str` keys), with the open-addressing hash
+    index hidden *inside* the same allocation and owned entirely by the
+    `tuo_rt_map_*` C runtime shim (`tuo_runtime::map`) — so both backends
+    lower every map operation to the one shim (mirroring the
+    `tuo_rt_alloc` seam) and cannot drift from each other, while `len`/
+    `empty` lower inline as header reads/stores. The hash is the fixed,
+    unseeded pair the decision named — splitmix64-finalizer for `Int`,
+    FNV-1a for `Str` bytes — vector-pinned in Rust and constant-pinned in
+    the C source; `abi::ABI_VERSION` bumped to **6**. Pinned by the
+    three-way fixtures `map_int_ops`/`map_str_ops`/`map_churn`
+    (interpreter == Cranelift == LLVM,
+    `map_operations_agree_across_all_three_engines`) — the churn fixture
+    crosses the growth threshold repeatedly with a sliding remove window —
+    and the churn binary measured at **0 leaked bytes** under macOS `leaks`
+    (a measurement, not a CI promise).
+  - **Stage C.** The stdlib payoff: `std::collections::counts` (the
+    frequency table — the `group_by` shapes holding an `Array` per key await
+    non-`Int` values, as scoped) with specs over the map's own observables;
+    the dogfood oracle in `examples/data-pipeline` — `totals_by_category`
+    folds the whole batch into a `Map[Int, Int]` in ONE scan, spec-pinned
+    equal to the streaming per-category re-scans and the record-struct path,
+    and `main` **cross-checks the map path against the record path at
+    runtime** (exit 144 only when they agree, natively); and the
+    **`map-lookup`** performance-lab workload (insert-1000 / lookup-1000 /
+    remove-500 churn, exit byte 232) with committed C *and Go* peers,
+    measured through the same lab machinery as every other workload
+    (`Support::Supported`, the tenth catalog entry, ninth supported).
+    Pinned by `crates/tuo-cli/tests/stdlib.rs`, the data-pipeline specs in
+    `dogfood_examples.rs`, and the lab suites (`tuo-bench/tests/lab.rs`,
+    `tuo-cli/tests/lab_command.rs`).
+
+  The acceptance condition — `map-lookup` committed and measured — is met.

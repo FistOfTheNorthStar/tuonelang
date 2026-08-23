@@ -55,12 +55,12 @@ the replacement, preserving the decision history.
 | [ADR-0003](ADR-0003-ownership-model.md) | The v0 ownership model | accepted |
 | [ADR-0004](ADR-0004-aggregates-in-the-runnable-core.md) | Aggregates and iteration in the runnable core | accepted |
 | [ADR-0006](ADR-0006-effect-boundary-and-strings.md) | The effect boundary and runtime strings | accepted |
-| [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | proposed |
+| [ADR-0007](ADR-0007-concurrency-model.md) | The concurrency model | accepted |
 | [ADR-0008](ADR-0008-first-class-functions.md) | First-class functions | accepted (Tier 1; Tier 2 closures deferred) |
 | [ADR-0009](ADR-0009-allocator-core.md) | The allocator core — owned `String` and growable `Array` | accepted |
-| [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | proposed (Stages A/B landed) |
-| [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | proposed |
-| [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | proposed (Stages A/B/C landed, owned elements native) |
+| [ADR-0010](ADR-0010-string-to-str-view.md) | The `String` → `Str` borrowing view (Q-0012) | accepted |
+| [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | accepted |
+| [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -73,24 +73,41 @@ ADR-0008 landed **Tier 1** — non-capturing first-class function values and the
 generic higher-order stdlib combinators — with **Tier 2 capturing closures
 explicitly deferred** to a future ADR increment. ADR-0009 is the allocator ADR
 that ADR-0006's first amendment promised — it landed the owned `String` and
-growable `Array[Int]`. Of the nine runtime workloads, eight now measure, leaving
-only `networking`.
+growable `Array[Int]`. Of the ten runtime workloads, nine now measure —
+`map-lookup` joined with ADR-0011 — leaving only `networking`; the
+parallel-speedup category (ADR-0007) measures alongside them.
 
-Four ADRs remain `proposed`, each pending its staged spec/fixtures/benchmark:
-**ADR-0007** (concurrency — its performance-lab entry is `networking`);
-**ADR-0010** (the `String`→`Str` borrowing view that resolves the long-deferred
-Q-0012, unblocking the stdlib's `String`-producer / `Str`-consumer composition —
-its Stage B native zero-copy lowering has since landed and is three-way
-differential-pinned; only the Stage C stdlib payoff remains); **ADR-0011** (the
-hash map — the largest remaining Go-parity gap, gated on a new `map-lookup` lab
-workload); and **ADR-0012** (generic `Array[T]` element types — widening the
-ADR-0009 array builtins from `Int` to a defined element set, so
-`Array[String]`/`Array[Str]`/`Array[struct]` become expressible; its
-owned-element native increment has since landed — deep-copy `get` and recursive
-drop glue on both backends — so `std::str::split`/`join` run natively, leaving
-only the ADR-0008 combinator instantiations and the dogfood oracle before
-acceptance). ADR-0010, ADR-0011, and ADR-0012 are
-independent of the (still-absent) trait system, and all ride the same
+**ADR-0010** and **ADR-0012** have since been accepted together (2026-08-21):
+ADR-0010 (the `String`→`Str` borrowing view that resolves the long-deferred
+Q-0012) landed all three stages — the borrow rule, the three-way-pinned native
+zero-copy lowering, and the Stage C stdlib payoff (the
+`to_upper`/`to_lower`/`to_string` specs compare `as_str(…) == "<literal>"`, and
+`data-pipeline` composes a `String` producer into `Str` consumers natively) —
+and ADR-0012 (generic `Array[T]` element types — widening the ADR-0009 array
+builtins from `Int` to a defined element set) landed its full staging: the
+checker widening, native lowering including the owned-element increment
+(deep-copy `get` + recursive drop glue on both backends, so
+`std::str::split`/`join` run natively), the ADR-0008 combinators'
+`String`/struct instantiations, and the dogfood oracle (`data-pipeline` holding
+parsed records in an `Array[Record]`, spec-pinned equal to its packed-`Int`
+predecessor). Neither needed a trait system: both ride the same
 monomorphic-builtin machinery ADR-0009 used for `Array[Int]` — ADR-0012 is that
 machinery's element-surface widening, explicitly **not** user-written generics
-(`fn f[T]`, generic structs), which stay deferred under Q-0010.)
+(`fn f[T]`, generic structs), which stay deferred under Q-0010.
+
+**ADR-0011** and **ADR-0007** have since been accepted as well (2026-08-22):
+ADR-0011 (the hash map) landed all three stages — `Ty::Map` with the
+monomorphic `Map[Int, Int]`/`Map[Str, Int]` surface, the insertion-ordered
+reference semantics, the native `tuo_rt_map_*` table on both backends (ABI
+v6, vector-pinned FNV-1a/splitmix64), `std::collections::counts`, the
+data-pipeline keyed-aggregation oracle, and the gating `map-lookup` lab
+workload with C and Go peers — and ADR-0007 (the concurrency model) resolved
+its deferred decision to **structured fork-join over one primitive**
+(`std::rt::par_map`: non-capturing function values over `Copy` tasks,
+round-robin, join-before-return — no data race expressible by construction),
+landed it as a typed effect through both backends' pthreads runtime,
+turned `concurrent-worker` into a live pool whose exit survives only if the
+run agrees with the spec-checked scheduling model, and added the gating
+**parallel-speedup** benchmark category (serial vs `par_map` wall clock with
+a same-thread-count C peer). **No ADR remains `proposed`**; the `networking`
+lab entry stays honestly unsupported pending a socket-open effect ADR.

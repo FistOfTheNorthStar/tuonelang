@@ -344,6 +344,26 @@ fn owned_array_elements_agree_across_all_three_engines() {
     for name in [
         "array_owned_string_elements.tuo", // Array[String]: deep-copy get + Option drop glue
         "array_owned_struct_elements.tuo", // Array[Rec{String,Int}]: per-field deep copy/drop
+        "else_if_owned_result.tuo", // else-if chain producing String: scoped bare-expression arm
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// ADR-0011 Stage B: the hash map. The interpreter's insertion-ordered
+/// reference table and both backends' `tuo_rt_map_*` open-addressing table
+/// must agree on every observable — insert/overwrite previous values, hit
+/// and miss lookups, `len`, `keys` in insertion order, order-preserving
+/// `remove`, `contains_key` — for both key kinds (`Int` mixed by the
+/// splitmix64 finalizer, `Str` hashed by FNV-1a over its bytes), and the
+/// churn fixture crosses the growth threshold repeatedly so every entry
+/// frees exactly once (a double-free aborts, breaking the agreed exit).
+#[test]
+fn map_operations_agree_across_all_three_engines() {
+    for name in [
+        "map_int_ops.tuo", // Map[Int, Int]: the whole surface on one map
+        "map_str_ops.tuo", // Map[Str, Int]: byte-hashed borrowed keys
+        "map_churn.tuo",   // growth + sliding-window remove churn (leak proxy)
     ] {
         assert_three_way_agreement(name);
     }

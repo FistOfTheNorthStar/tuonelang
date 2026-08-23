@@ -25,6 +25,7 @@ use tuo_bench::lab::compare::{
     ComparisonRunner, PeerLanguage, PeerRun, Verdict, comparison_for, comparison_for_peer,
     run_comparison,
 };
+use tuo_bench::lab::parallel::{self, SpeedupVerdict, TimedRunner};
 use tuo_bench::lab::runtime::{NativeRunner, run_supported, workloads};
 
 /// A scratch path unique to this test process and a label, so concurrent tests
@@ -188,11 +189,11 @@ fn supported_workloads_run_natively_and_match() {
     let results = run_supported(&TuoRunNativeRunner);
     assert_eq!(
         results.len(),
-        8,
-        "exactly the eight supported workloads run (the scalar core plus the \
+        9,
+        "exactly the nine supported workloads run (the scalar core plus the \
          fixed-array collections workload, the borrowed-Str string-processing \
-         workload, the allocator-core allocation workload, and the \
-         function-value indirect-calls workload)"
+         workload, the allocator-core allocation workload, the function-value \
+         indirect-calls workload, and the hash-map map-lookup workload)"
     );
     for (label, outcome) in results {
         let outcome = outcome.unwrap_or_else(|e| panic!("workload `{label}` failed to run: {e}"));
@@ -248,7 +249,7 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     }
     // Either the toolchain was present (comparisons measured) or it was not
     // (all skipped) — but every supported workload was accounted for.
-    assert_eq!(measured + skipped, 8);
+    assert_eq!(measured + skipped, 9);
     // On CI and dev machines `cc` is present, so we expect real measurements;
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {
@@ -303,8 +304,152 @@ fn go_comparison_agrees_where_the_toolchain_exists() {
             }
         }
     }
-    assert_eq!(measured + skipped, 8);
+    assert_eq!(measured + skipped, 9);
     if measured == 0 {
         eprintln!("note: no Go toolchain found; all Go comparisons recorded as skipped");
+    }
+}
+
+/// The real timed runner for the parallel-speedup category (ADR-0007): build
+/// the program to a binary first (`tuo build` / `cc -O2 -pthread`), then time
+/// **only the binary's execution** — compilation never pollutes the figure.
+struct BuildThenTimeRunner;
+
+impl BuildThenTimeRunner {
+    fn time_binary(exe_path: &std::path::Path) -> Result<(i32, u128), String> {
+        // Warm-up run first: a freshly written binary's first execution pays
+        // one-time host costs (page-cache fill; on macOS, Gatekeeper's
+        // first-exec scan) that would swamp the figure. The timed run is the
+        // second execution — same binary, same result, no first-run tax.
+        let warmup = Command::new(exe_path)
+            .output()
+            .map_err(|e| format!("running the binary (warm-up): {e}"))?;
+        let warmup_exit = warmup
+            .status
+            .code()
+            .ok_or_else(|| "process terminated by signal".to_string())?;
+        let started = std::time::Instant::now();
+        let run = Command::new(exe_path)
+            .output()
+            .map_err(|e| format!("running the binary: {e}"))?;
+        let nanos = started.elapsed().as_nanos();
+        let exit = run
+            .status
+            .code()
+            .ok_or_else(|| "process terminated by signal".to_string())?;
+        if exit != warmup_exit {
+            return Err(format!(
+                "non-deterministic exit: warm-up {warmup_exit}, timed {exit}"
+            ));
+        }
+        Ok((exit, nanos))
+    }
+}
+
+impl TimedRunner for BuildThenTimeRunner {
+    fn run_tuonelang(&self, source: &str) -> Result<(i32, u128), String> {
+        let src_path = scratch("par-tuo", "tuo");
+        let exe_path = scratch("par-tuo", "out");
+        std::fs::write(&src_path, source).map_err(|e| format!("writing source: {e}"))?;
+        let build = Command::new(env!("CARGO_BIN_EXE_tuo"))
+            .arg("build")
+            .arg("-o")
+            .arg(&exe_path)
+            .arg(&src_path)
+            .output()
+            .map_err(|e| format!("running `tuo build`: {e}"))?;
+        let _ = std::fs::remove_file(&src_path);
+        if !build.status.success() {
+            return Err(format!(
+                "tuo build failed: {}",
+                String::from_utf8_lossy(&build.stderr)
+            ));
+        }
+        let result = Self::time_binary(&exe_path);
+        let _ = std::fs::remove_file(&exe_path);
+        result
+    }
+
+    fn run_c(&self, source: &str) -> Result<(i32, u128), String> {
+        let src_path = scratch("par-c", "c");
+        let exe_path = scratch("par-c", "out");
+        std::fs::write(&src_path, source).map_err(|e| format!("writing C source: {e}"))?;
+        let compile = Command::new("cc")
+            .arg("-O2")
+            .arg("-pthread")
+            .arg(&src_path)
+            .arg("-o")
+            .arg(&exe_path)
+            .output()
+            .map_err(|e| format!("no C compiler available: {e}"))?;
+        let _ = std::fs::remove_file(&src_path);
+        if !compile.status.success() {
+            return Err(format!(
+                "C compile failed: {}",
+                String::from_utf8_lossy(&compile.stderr)
+            ));
+        }
+        let result = Self::time_binary(&exe_path);
+        let _ = std::fs::remove_file(&exe_path);
+        result
+    }
+}
+
+/// ADR-0007's benchmark category, live: the tuonelang serial and `par_map`
+/// programs really build and run to the same exit through the real CLI, so
+/// the tuonelang side is `Measured` (raw wall-clock recorded, the ratio
+/// derived — a measurement, never a promise); the C side is `Measured` where
+/// the toolchain exists and an honest skip where it does not. Run with
+/// `--nocapture` to see the measured figures.
+#[test]
+fn parallel_speedup_measures_live_through_the_real_cli() {
+    let results = parallel::measure(&BuildThenTimeRunner);
+    assert_eq!(results.len(), 1);
+    let entry = &results[0];
+    match &entry.tuonelang {
+        SpeedupVerdict::Measured {
+            serial_nanos,
+            parallel_nanos,
+        } => {
+            #[expect(clippy::print_stdout, reason = "measurement output under --nocapture")]
+            {
+                let ratio = entry
+                    .tuonelang
+                    .speedup()
+                    .map_or_else(|| "n/a".to_string(), |r| format!("{r:.2}x"));
+                println!(
+                    "parallel-reduction (tuonelang, {} workers): serial {serial_nanos} ns, \
+                     parallel {parallel_nanos} ns, ratio {ratio}",
+                    entry.workers
+                );
+            }
+        }
+        SpeedupVerdict::Skipped { reason } => {
+            panic!("the tuonelang pair must measure on a host with the real CLI: {reason}")
+        }
+    }
+    match &entry.c {
+        SpeedupVerdict::Measured {
+            serial_nanos,
+            parallel_nanos,
+        } => {
+            #[expect(clippy::print_stdout, reason = "measurement output under --nocapture")]
+            {
+                let ratio = entry
+                    .c
+                    .speedup()
+                    .map_or_else(|| "n/a".to_string(), |r| format!("{r:.2}x"));
+                println!(
+                    "parallel-reduction (C, {} workers): serial {serial_nanos} ns, \
+                     parallel {parallel_nanos} ns, ratio {ratio}",
+                    entry.workers
+                );
+            }
+        }
+        // No C toolchain: an honest recorded skip, exactly like the other
+        // cross-language comparisons.
+        SpeedupVerdict::Skipped { reason } => {
+            assert!(!reason.trim().is_empty());
+        }
     }
 }

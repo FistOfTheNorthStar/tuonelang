@@ -190,6 +190,17 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // returns 136; observable exit byte = 136.
             136,
         ),
+        RuntimeWorkload::supported(
+            "map-lookup",
+            "keyed insert/lookup/churn throughput over the ADR-0011 hash map \
+             `Map[Int, Int]`: 1000 inserts (doubling table growth), 1000 lookups \
+             summed modulo 1000, and 500 removals per round, over many rounds",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/map-lookup.tuo"),
+            // 50 rounds of round(1000); each round's contribution (reassigned, not
+            // accumulated) is the lookup sum 3*999*1000/2 % 1000 = 500 plus the 500
+            // surviving entries, so main returns 1000; exit byte 1000 & 0xff = 232.
+            232,
+        ),
         // --- Unsupported: no program exists, and none is faked. ---
         RuntimeWorkload::unsupported(
             "networking",
@@ -277,6 +288,7 @@ mod tests {
             "function-calls",
             "indirect-calls",
             "recursion",
+            "map-lookup",
             "networking",
         ] {
             assert!(labels.contains(&required), "missing workload `{required}`");
@@ -306,8 +318,9 @@ mod tests {
         // Precisely the four scalar-core workloads plus the fixed-array
         // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
         // string-processing workload (ADR-0006), the allocator-core allocation
-        // workload (ADR-0009), and the function-value indirect-calls workload
-        // (ADR-0008 Tier 1), and no more.
+        // workload (ADR-0009), the function-value indirect-calls workload
+        // (ADR-0008 Tier 1), and the hash-map map-lookup workload (ADR-0011),
+        // and no more.
         assert_eq!(
             supported,
             vec![
@@ -319,6 +332,7 @@ mod tests {
                 "collections".to_string(),
                 "string-processing".to_string(),
                 "allocation".to_string(),
+                "map-lookup".to_string(),
             ]
         );
     }
@@ -339,7 +353,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 8, "only the eight supported workloads run");
+        assert_eq!(results.len(), 9, "only the nine supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

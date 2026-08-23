@@ -1,9 +1,11 @@
 # ADR-0012: Generic `Array[T]` element types — widening the monomorphic builtin surface
 
-- **Status:** proposed (Stages A/B/C landed, including the owned-element native
-  increment — deep-copy `get` + recursive drop glue on both backends; the
-  ADR-0008 combinator instantiations and the dogfood oracle remain before
-  acceptance)
+- **Status:** accepted (2026-08-21 — Stages A/B/C landed, including the
+  owned-element native increment (deep-copy `get` + recursive drop glue on both
+  backends), the ADR-0008 combinators' `String`/struct instantiations, and the
+  dogfood oracle (`data-pipeline` holding parsed records in an `Array[Record]`,
+  spec-pinned equal to its packed-`Int` predecessor); see the staging section's
+  closing note)
 - **Date:** 2026-08-19
 - **Context:** tuonelang's growable `Array` is **generic in its type but
   monomorphic in its operations**. ADR-0009 landed `Ty::Array(Box<Ty>)` — the
@@ -340,11 +342,34 @@
     heap-spec idiom. `split`'s result is an owned-element array; since the
     owned-element increment landed it **runs natively on both backends**
     (`stdlib_split_and_join_run_natively`), and `join` consumes the
-    natively-lowered `Array[Str]`. **Still open before this ADR can be
-    accepted:** the ADR-0008
-    combinators' `String`/struct instantiations, and the dogfood oracle
-    (`data-pipeline` holding parsed records in an `Array[struct]`, spec-pinned
-    equal to its packed-`Int` predecessor).
+    natively-lowered `Array[Str]`.
+  - **Acceptance close-out (2026-08-21) — the last two gates landed.**
+    *Combinator instantiations:* `std::collections` gained the three
+    `String`-element forms the ADR names — `fold_strings`, `map_into_strings`,
+    `filter_into_strings` — the same ADR-0008 shapes spelled per element type
+    (no user generics until Q-0010), with the modes the non-`Copy` element
+    demands (read-only roles borrow `in String`; the transform takes
+    ownership), each spec'd over real owned-element arrays through the
+    `nth_is`/`as_str` observation idiom and enforced by the stdlib three-tier
+    test. The **struct** instantiation lives where the concrete struct does:
+    `examples/data-pipeline`'s `fold_records` folds an `Array[Record]` through
+    an `in Record` function-value step — and runs natively. *Dogfood oracle:*
+    `data-pipeline` now decodes its packed batch into `Record { category,
+    amount, label: String }` structs held in a growable `Array[Record]`,
+    filters and folds at the record level, and routes `main` through that
+    path — spec-pinned equal to the streaming packed-`Int` fold and the
+    packed-`Int` collect path for every category, same exit byte (144), pinned
+    natively by `dogfood_examples.rs` and leak-checked at 0 bytes (a
+    measurement, not a CI promise). Writing the oracle also surfaced (and
+    fixed) a real lowering bug the widened element set made reachable: an
+    `else if` chain producing a heap-owning value — the bare-expression else
+    arm is a nested `if` *expression*, whose result temporary landed in the
+    enclosing scope and derailed the branch-merge state, so the whole function
+    was skipped by MIR lowering despite a clean front end. Bare-expression
+    arms are now scoped exactly like blocks (`FnLower::scoped_value` in
+    `tuo-mir`), pinned three-way by the `else_if_owned_result.tuo` fixture.
+    With every stage and both gates landed, the acceptance condition is met
+    and this ADR is **accepted**.
 
 - **Benchmark consideration:** this ADR adds no *new* performance-lab workload of
   its own — it widens an existing capability rather than adding a new runtime
