@@ -441,6 +441,12 @@ impl Verifier<'_> {
                 (true, Ty::int()),
                 (false, Ty::Array(Box::new(Ty::int()))),
             ],
+            // ADR-0013: the OS-boundary effects — all by-value operands.
+            EffectOp::NowNanos | EffectOp::ArgCount => Vec::new(),
+            EffectOp::ArgByte => vec![(true, Ty::int()), (true, Ty::int())],
+            EffectOp::Open => vec![(true, Ty::Str), (true, Ty::int())],
+            EffectOp::Close => vec![(true, Ty::int())],
+            EffectOp::RemoveFile => vec![(true, Ty::Str)],
         };
         for (position, (arg, (want_value, want_ty))) in args.iter().zip(&expected).enumerate() {
             let ty = match (arg, want_value) {

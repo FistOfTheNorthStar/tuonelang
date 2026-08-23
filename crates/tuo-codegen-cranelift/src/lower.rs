@@ -2350,6 +2350,63 @@ impl<'a> Lowering<'a> {
                     .call(func_ref, &[f, ptr, len, workers, dest_addr]);
                 Ok(())
             }
+            // ADR-0013: the OS-boundary effects. Nullary clock/argv-count
+            // queries, the two-index argv byte read, and the file
+            // open/close/remove calls — every one a plain call whose `I64`
+            // result lands in `dest`; a `Str` path passes as `{ptr, len}`
+            // exactly as `write`'s text does.
+            EffectOp::NowNanos | EffectOp::ArgCount => {
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::ArgByte => {
+                let [i, j] = args else {
+                    return Err(CodegenError::backend(
+                        "arg_byte expects exactly 2 arguments",
+                    ));
+                };
+                let i = self.lower_operand(&value_arg(i)?)?;
+                let j = self.lower_operand(&value_arg(j)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[i, j]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::Open => {
+                let [path, mode] = args else {
+                    return Err(CodegenError::backend("open expects exactly 2 arguments"));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(path)?)?;
+                let mode = self.lower_operand(&value_arg(mode)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[ptr, len, mode]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::Close => {
+                let [fd] = args else {
+                    return Err(CodegenError::backend("close expects exactly 1 argument"));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[fd]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::RemoveFile => {
+                let [path] = args else {
+                    return Err(CodegenError::backend(
+                        "remove_file expects exactly 1 argument",
+                    ));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(path)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[ptr, len]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
         }
     }
 
@@ -2395,6 +2452,39 @@ impl<'a> Lowering<'a> {
                 signature.params.push(AbiParam::new(types::I64)); // workers
                 signature.params.push(AbiParam::new(self.pointer_type)); // out
                 effect::PAR_MAP_SYMBOL
+            }
+            // ADR-0013: the OS-boundary effect symbols.
+            EffectOp::NowNanos => {
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::NOW_NANOS_SYMBOL
+            }
+            EffectOp::ArgCount => {
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::ARG_COUNT_SYMBOL
+            }
+            EffectOp::ArgByte => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::ARG_BYTE_SYMBOL
+            }
+            EffectOp::Open => {
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::OPEN_SYMBOL
+            }
+            EffectOp::Close => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CLOSE_SYMBOL
+            }
+            EffectOp::RemoveFile => {
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::REMOVE_FILE_SYMBOL
             }
         };
         let id = self

@@ -239,6 +239,101 @@ pub fn ok(in res: Result[Int, Str]) -> Option[Int] {
 }
 
 // ----------------------------------------------------------------------------
+// Error chains — context wrapping over error values.
+//
+// v0 has no traits, so there is no error *interface*; the honest concrete
+// model is a **chain of messages**: an error chain is an `Array[String]`
+// holding the root cause first and each wrapped layer of context after it.
+// `error_wrap` is the analog of Go's `fmt.Errorf("context: %w", err)`,
+// `error_is` of `errors.Is` over sentinel messages, `error_root` of
+// unwrapping to the cause, and `error_message` renders the conventional
+// `"outer: inner: root"` text. One model, not a second spelling — a typed
+// error enum (like `std::fs::FsError`) is still the right shape for a fixed
+// vocabulary; the chain is for carrying *context* across call layers.
+// ----------------------------------------------------------------------------
+
+/// A new error chain whose root cause is `msg`.
+///
+/// # Example
+/// ```tuo
+/// let e = std::core::error_new("connection refused");
+/// ```
+pub fn error_new(in msg: Str) -> Array[String] {
+    var chain = std::array::empty();
+    std::array::push(chain, std::string::from_str(msg));
+    chain
+}
+
+/// The chain with the context `context` wrapped around it — the outermost
+/// layer. The root stays first; rendering and `error_root` are unaffected.
+///
+/// # Example
+/// ```tuo
+/// let e = std::core::error_wrap(std::core::error_new("no such host"), "fetch users");
+/// ```
+pub fn error_wrap(take chain: Array[String], in context: Str) -> Array[String] {
+    var out = chain;
+    std::array::push(out, std::string::from_str(context));
+    out
+}
+
+/// Does any layer of the chain equal `target`? The `errors.Is` analog: match
+/// a sentinel by its exact message, at any wrapping depth.
+///
+/// # Example
+/// ```tuo
+/// let e = std::core::error_wrap(std::core::error_new("not found"), "load config");
+/// let b = std::core::error_is(e, "not found"); // true
+/// ```
+pub fn error_is(in chain: Array[String], in target: Str) -> Bool {
+    var i = 0;
+    while i < std::array::len(chain) {
+        let message = std::array::get(chain, i);
+        if std::string::as_str(message) == target {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+/// The chain's root cause — the innermost message. An empty chain (which no
+/// constructor here produces) yields the empty string.
+///
+/// # Example
+/// ```tuo
+/// let root = std::core::error_root(std::core::error_new("no such host")); // "no such host"
+/// ```
+pub fn error_root(in chain: Array[String]) -> String {
+    if std::array::len(chain) == 0 {
+        return std::string::empty();
+    }
+    std::array::get(chain, 0)
+}
+
+/// The chain rendered outermost-first with `": "` between layers:
+/// `"fetch users: no such host"`. A single-layer chain is just its message.
+///
+/// # Example
+/// ```tuo
+/// let e = std::core::error_wrap(std::core::error_new("no such host"), "fetch users");
+/// let text = std::core::error_message(e); // "fetch users: no such host"
+/// ```
+pub fn error_message(in chain: Array[String]) -> String {
+    var out = std::string::empty();
+    var i = std::array::len(chain) - 1;
+    while i >= 0 {
+        let message = std::array::get(chain, i);
+        std::string::append(out, std::string::as_str(message));
+        if i > 0 {
+            std::string::append(out, ": ");
+        }
+        i = i - 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
 // Specs — every one runs through the reference interpreter.
 //
 // Equality in v0 is defined on scalars (Int, Bool, Str), so specs extract a
@@ -321,4 +416,35 @@ spec ok_or {
 spec ok {
     then unwrap_or(ok(Ok { value: 3 }), 0) == 3;
     then unwrap_or(ok(Err { error: "no" }), 0) == 0;
+}
+
+spec error_new {
+    then std::array::len(error_new("boom")) == 1;
+    then std::string::as_str(error_root(error_new("boom"))) == "boom";
+    then std::string::as_str(error_message(error_new("boom"))) == "boom";
+}
+
+spec error_wrap {
+    then std::array::len(error_wrap(error_new("io"), "load config")) == 2;
+    then std::string::as_str(error_root(error_wrap(error_new("io"), "load config"))) == "io";
+    then std::array::len(error_wrap(error_wrap(error_new("io"), "load config"), "start")) == 3;
+}
+
+spec error_is {
+    then error_is(error_new("not found"), "not found");
+    then error_is(error_wrap(error_new("not found"), "load config"), "not found");
+    then error_is(error_wrap(error_new("not found"), "load config"), "load config");
+    then !error_is(error_new("not found"), "timeout");
+    then !error_is(error_wrap(error_new("not found"), "load config"), "load");
+}
+
+spec error_root {
+    then std::string::as_str(error_root(error_new("root"))) == "root";
+    then std::string::as_str(error_root(error_wrap(error_new("root"), "outer"))) == "root";
+}
+
+spec error_message {
+    then std::string::as_str(error_message(error_new("no such host"))) == "no such host";
+    then std::string::as_str(error_message(error_wrap(error_new("no such host"), "fetch users"))) == "fetch users: no such host";
+    then std::string::as_str(error_message(error_wrap(error_wrap(error_new("a"), "b"), "c"))) == "c: b: a";
 }

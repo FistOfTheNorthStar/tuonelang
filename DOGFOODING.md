@@ -95,8 +95,12 @@ comments only — see finding D-3. Since ADR-0006 landed, request-line parsing
 partition of eight uneven tasks across three workers, per-worker load, the
 **makespan** (finish time of the slowest worker = 15), **speedup** (floored 2×),
 and **imbalance** (3 units). These are a pool's actual observable performance
-figures, computed exactly. Threads/channels/task values are `CONTRACT:` only —
-see finding D-4.
+figures, computed exactly. At the time of the exercise threads/channels/task
+values were `CONTRACT:` only — see finding D-4. Since ADR-0007 landed
+structured fork-join, the pool **runs live**: `main` computes the makespan
+through the model *and* through a real `std::rt::par_map`, exiting 15 only
+when the two agree. A dynamically-drained shared queue (channels) still awaits
+a shared-state ADR.
 
 ---
 
@@ -241,9 +245,13 @@ Dogfooding re-derived several stdlib functions by hand because the shipped
   ADR-0006**), the single biggest blocker to any of these five programs
   becoming a *deployable* application. ADR-0006 has since landed: `println`,
   `print`, and `exit` are now real, natively-running implementations over the
-  `std::rt` effect primitives (the stdlib's `EFFECT:` tier), while
-  `read_line`/`now`/`lock` remain contract-tier, each naming the primitive it
-  still awaits (owned `String`; a clock; threads).
+  `std::rt` effect primitives (the stdlib's `EFFECT:` tier). `read_line`
+  followed when ADR-0009 landed the owned `String`, structured spawning
+  (`par_map`) when ADR-0007 resolved the concurrency model, and `now` — plus
+  argv (`arg_count`/`arg`) and the whole `std::fs` disk tier — when ADR-0013
+  landed the OS effect boundary (clock, argv, file open/close/remove). Of the
+  entry points this exercise named, only `lock` remains contract-tier,
+  awaiting shared state across threads.
 
 ### 6. Runtime performance
 

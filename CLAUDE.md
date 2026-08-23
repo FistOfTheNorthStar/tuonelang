@@ -175,9 +175,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   over dense insertion-ordered entries; every op beyond `len`/`empty` lowers
   to the linked `tuo_rt_map_*` shim, whose hidden open-addressing index uses
   the vector-pinned splitmix64/FNV-1a hashes — unobservable, since `keys` is
-  insertion order — ABI v6); and — since ADR-0007 — the one concurrency
+  insertion order — ABI v6); — since ADR-0007 — the one concurrency
   primitive `std::rt::par_map` (structured fork-join over POSIX threads via
-  `tuo_rt_par_map`, a typed effect) — and *refuse* — never
+  `tuo_rt_par_map`, a typed effect); and — since ADR-0013 — the **OS effect
+  boundary**: the six further `std::rt` primitives `now_nanos` (the
+  monotonic clock), `arg_count`/`arg_byte` (argv, captured by the runtime
+  before `main`), and `open`/`close`/`remove_file` (files, composing with
+  the ADR-0006 descriptor seam — ABI v7) — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
@@ -292,8 +296,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: of the ten runtime
-  workloads exactly nine (**startup, integer-computation, function-calls,
+  honesty rule the prompt demands is enforced structurally: of the eleven runtime
+  workloads exactly ten (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
@@ -302,15 +306,19 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   a growable `Array[Int]` and an owned `String` with its `malloc`/`realloc`/`free`
   C peer, same doubling growth, — since ADR-0008 Tier 1's function values
   landed — **indirect-calls**, a hot loop calling through a `fn` value with a C
-  peer calling through a function pointer, same iteration count and exit, and —
+  peer calling through a function pointer, same iteration count and exit, —
   since ADR-0011's hash map landed — **map-lookup**, an insert-1000/lookup-1000/
   remove-500 churn over `Map[Int, Int]` with open-addressing C and built-in-map
-  Go peers) carry a
+  Go peers, and — since ADR-0013's OS boundary landed — **file-io**, per round
+  an open/write/close of a 240-byte scratch file, a byte-at-a-time read-back,
+  and a remove, with C and Go peers making the identical calls — the deferred
+  ADR-0006 effect-crossing benchmark) carry a
   real program and are `Support::Supported`, while only **networking** is
   `Support::Unsupported` with the *exact reason* the v0 core cannot express it (no
   socket-open effect) and emits **no number** — the entry becomes measurable the
   moment the feature lands, with no other change (exactly how `collections`,
-  `string-processing`, `allocation`, and `map-lookup` flipped or were added).
+  `string-processing`, `allocation`, `map-lookup`, and `file-io` flipped or
+  were added).
   Since ADR-0007, the lab also owns the **parallel-speedup category**
   (`lab::parallel`): one CPU-bound reduction committed four ways (tuonelang
   serial + `par_map`, C serial + pthreads, same thread count, same exit byte),
@@ -694,9 +702,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   into three honest tiers — executable, effect, and contract — it never
   advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
-  compiler machinery, layer 90): each of the eight initial modules — `std::core`,
-  `std::collections`, `std::io`, `std::fs`, `std::time`, `std::process`,
-  `std::sync`, `std::test` — is a `.tuo` source file under `src/std/`, embedded
+  compiler machinery, layer 90): each of the ten modules — `std::core`,
+  `std::collections`, `std::math`, `std::str`, `std::io`, `std::fs`,
+  `std::time`, `std::process`, `std::sync`, `std::test` — is a `.tuo` source
+  file under `src/std/`, embedded
   via `include_str!` and exposed as `Module { path, name, source }`
   (`MODULES`, `module(path)`), so any host loads them into its own `SourceMap`
   and runs its own pipeline. Every public API carries an exact signature, a doc
@@ -718,18 +727,28 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `fold_strings`/`map_into_strings`/`filter_into_strings` with the non-`Copy`
   modes that element demands, and, since ADR-0011, `counts` — the frequency
   table over the builtin `Map[Int, Int]`, spec'd through the map's own
-  observables), an **effect
+  observables, and, since ADR-0013, the rest of the `strconv` layer —
+  `std::str::parse_float`/`float_to_string`, honest about binary-`Float`
+  precision — the `std::core` **error chains** (`error_new`/`error_wrap`/
+  `error_is`/`error_root`/`error_message`, the concrete `Array[String]`
+  context-wrapping model — v0 has no traits, so no error interface is
+  pretended), `std::time::render` (the one duration spelling) and the now-pure
+  `elapsed`/`instant_at`), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
   over `std::rt::exit`, — since ADR-0009 — `std::io::read_line`, which builds
-  an owned `String` from the bytes `std::rt::read_byte` yields, and — since
+  an owned `String` from the bytes `std::rt::read_byte` yields, — since
   ADR-0007 — `std::sync::par_map`, the structured fork-join wrapper over
-  `std::rt::par_map` — real tuonelang
+  `std::rt::par_map`, and — since ADR-0013 — `std::time::now` over
+  `now_nanos`, `std::process::arg_count`/`arg` over the argv primitives, and
+  the whole `std::fs` disk tier `read`/`write`/`exists`/`remove` over
+  `open`/`close`/`remove_file` composed with the descriptor seam — real
+  tuonelang
   implementations that run natively but can carry **no** spec, since `R0007`
   keeps the spec sandbox pure; each is marked `EFFECT:` and names the native CLI
   test that pins it), and a
   **contract tier** (the effectful entry points whose primitive does not exist
-  yet — `read`/`now`/`lock`/`arg_count` a file/clock/lock/argv primitive —
-  given as exact signatures + documented contracts marked `CONTRACT:`,
+  yet — now only `std::sync::lock`/`unlock`, awaiting shared state across
+  threads — given as exact signatures + documented contracts marked `CONTRACT:`,
   with **no** executable spec so nothing claims to run that cannot; the old
   `spawn` contract is gone — detached spawn is deliberately absent, not
   pending, per ADR-0007's structured model). The promise
@@ -740,7 +759,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   textually per public function (pure ⇒ spec'd; `EFFECT:` ⇒ no spec + a named
   native test; `CONTRACT:` ⇒ no spec), and proves the effect tier natively on
   both backends (`println` prints `hi\n` exactly; `exit` really exits with the
-  status's code), and
+  status's code; `now` never runs backwards; `arg`/`arg_count` read a real
+  command line; the `std::fs` roundtrip really touches the disk), and
   `tuo-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
   benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
   plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by

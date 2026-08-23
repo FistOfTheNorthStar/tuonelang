@@ -65,7 +65,13 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `tuo_rt_map_*` runtime symbols (see [`crate::map`]) that own every table
 /// internal (the hash index never appears in the header). A new heap layout
 /// is layout-affecting, so the version bumps.
-pub const ABI_VERSION: u32 = 6;
+///
+/// `7` — adds the OS-boundary effect symbols (ADR-0013: `tuo_rt_now_nanos`,
+/// `tuo_rt_arg_count`, `tuo_rt_arg_byte`, `tuo_rt_open`, `tuo_rt_close`,
+/// `tuo_rt_remove_file`; see [`crate::effect`]), and the runtime now captures
+/// `argc`/`argv` before `main` via a platform initializer. No layout changed;
+/// the bump reflects the new load-bearing runtime symbols, exactly as `3` did.
+pub const ABI_VERSION: u32 = 7;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -470,13 +476,13 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_six() {
+    fn the_abi_is_version_seven() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
-        // allocator seam, the runtime surface), never silently. Version 6
-        // gave `Ty::Map` its three-word header layout and the `tuo_rt_map_*`
-        // runtime symbols (ADR-0011).
-        assert_eq!(ABI_VERSION, 6);
+        // allocator seam, the runtime surface), never silently. Version 7
+        // added the ADR-0013 OS-boundary effect symbols (clock, argv, file
+        // open/close/remove) and the runtime's argv capture.
+        assert_eq!(ABI_VERSION, 7);
     }
 
     #[test]

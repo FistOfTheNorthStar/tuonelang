@@ -13,13 +13,16 @@ compiler actually accepts and executes — nothing aspirational.
 > `std::str` byte operations, the **owned heap types** — an owned `String` and
 > a growable `Array[Int]` that allocate and free real memory (`std::string`/
 > `std::array`; since ADR-0009) — the `std::rt` host effects
-> (`write`/`read_byte`/`write_string`/`exit` — native only; the spec sandbox
+> (`write`/`read_byte`/`write_string`/`exit`, the ADR-0007 `par_map`
+> fork-join, and — since ADR-0013 — `now_nanos`/`arg_count`/`arg_byte`/
+> `open`/`close`/`remove_file`, the clock, argv, and file boundary — native
+> only; the spec sandbox
 > stays pure, but heap ops *are* pure, so a spec may build strings and arrays) —
 > and, since ADR-0008 Tier 1, **first-class (non-capturing) function values**: a
 > bare top-level `fn` name is a `Copy` code pointer of type `fn(mode T, …) -> R`,
 > called indirectly, which powers the generic higher-order `std::collections`
-> combinators. **Capturing closures** (Tier 2) and concurrency (ADR-0007) are
-> tracked ADRs and are not in v0.
+> combinators. **Capturing closures** (Tier 2) remain a tracked ADR and are
+> not in v0.
 > Anything outside the core is **refused with a clear error, never mis-compiled**.
 
 ---
@@ -571,6 +574,19 @@ pub fn ok_or(in res: Result[Int, Str], take fallback: Int) -> Int
 pub fn ok(in res: Result[Int, Str]) -> Option[Int]
 ```
 
+**Error chains** (context wrapping; v0 has no traits, so the honest concrete
+model is a chain of messages — an `Array[String]`, root cause first):
+
+```tuo
+pub fn error_new(in msg: Str) -> Array[String]          // a chain with one root
+pub fn error_wrap(take chain: Array[String], in context: Str) -> Array[String]
+                                                        // fmt.Errorf("%w") analog
+pub fn error_is(in chain: Array[String], in target: Str) -> Bool
+                                                        // errors.Is analog (sentinel message)
+pub fn error_root(in chain: Array[String]) -> String    // the innermost cause
+pub fn error_message(in chain: Array[String]) -> String // "outer: inner: root"
+```
+
 ### `std::collections`
 
 Executable: `Pair[A, B]` with `pair`, `first`, `second`, `swap`; range helpers
@@ -605,10 +621,10 @@ primitive exists) and a contract tier (where it does not):
 | Module | Executable today | `EFFECT:` (runs natively, no spec) | `CONTRACT:` (not yet runnable) |
 |--------|------------------|------------------------------------|-------------------------------|
 | `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`), `read_line` → `Result[String, IoError]` (reads bytes via `std::rt::read_byte` into an owned `String`) | — |
-| `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | — | `read`, `write`, `exists`, `remove` (no file primitive) |
-| `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`) | `arg_count` (no argv primitive) |
-| `std::sync` | `Once`/`LockState` pure state models | — | `lock`, `unlock`, `spawn` (no threads) |
-| `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …) | — | `Instant`, `now`, `elapsed` (no clock primitive) |
+| `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | `read` → `Result[String, FsError]`, `write`, `exists`, `remove` (over the ADR-0013 `open`/`close`/`remove_file` primitives + the descriptor seam) | — |
+| `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`); `arg_count`, `arg(i)` → `String` (over the ADR-0013 argv primitives) | — |
+| `std::sync` | `Once`/`LockState` pure state models | `par_map` (structured fork-join over `std::rt::par_map`, ADR-0007) | `lock`, `unlock` (no shared state across threads) |
+| `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …), `render` → `String`, `instant_at`, `elapsed` | `now` (over `std::rt::now_nanos`, ADR-0013) | — |
 
 A real program printing through the stdlib (compile the `std::io` module
 source alongside your own — the stdlib is consumed as input):
@@ -698,10 +714,11 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Owned `String`, growable `Array[Int]` (`std::string`/`std::array`, allocate/free) | ✅ | ✅ | ✅ |
 | First-class (non-capturing) function values `fn(mode T, …) -> R`, indirect calls | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values, `Array[T]` ops for non-`Int` `T` | declared / refused | ❌ | ❌ refused |
+| `std::rt::now_nanos`/`arg_count`/`arg_byte`/`open`/`close`/`remove_file` (ADR-0013: clock, argv, files) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::sync::par_map` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
-| Filesystem, clock, argv, threads, sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
+| Shared state across threads (locks, channels), sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
 
 "Refused" means a clear `Unsupported` error naming the construct, pointing you
 back to the interpreter as the reference — never silent mis-compilation.

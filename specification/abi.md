@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `5` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `7` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -465,6 +465,55 @@ Adding these symbols was an additive change (a new runtime surface, no layout
 altered); the commit that landed them bumped `ABI_VERSION` to `3` per the
 versioning rule, together with the tests that pin their behavior
 (`tuo-runtime`'s `effect` module tests and `tuo-cli/tests/effects_native.rs`).
+
+## OS-boundary effect symbols (ADR-0013)
+
+ADR-0013 extends the same seam with six further C-ABI symbols — the clock,
+argv, and file open/close/remove — implemented in the same effect shim and
+linked into every built binary. Every one returns `long long`, never traps,
+and reports errors as negative values:
+
+```c
+long long tuo_rt_now_nanos(void);      /* monotonic clock, ns since an arbitrary epoch */
+long long tuo_rt_arg_count(void);      /* process argument count, argv[0] included */
+long long tuo_rt_arg_byte(long long i, long long j);
+                                       /* byte j of argument i; -1 out of range */
+long long tuo_rt_open(const unsigned char *ptr, unsigned long long len, long long mode);
+                                       /* fd >= 0; -2 not found; -1 other host error */
+long long tuo_rt_close(long long fd);  /* 0 on success; -1 on host error */
+long long tuo_rt_remove_file(const unsigned char *ptr, unsigned long long len);
+                                       /* 0 on success; -2 not found; -1 other */
+```
+
+- `tuo_rt_now_nanos` reads `CLOCK_MONOTONIC` and returns whole nanoseconds
+  since an arbitrary process-local epoch — only differences are meaningful.
+  On the (practically unreachable) host failure it returns `0`.
+- `tuo_rt_arg_count`/`tuo_rt_arg_byte` expose the process arguments the
+  runtime **captures before `main` runs** via a platform initializer
+  (`crt_externs.h` on macOS; an ELF constructor receiving `argc`/`argv` on
+  glibc). `arg_byte` returns byte `j` (`0..=255`) of argument `i`, or `-1`
+  when `i` is out of range or `j` is past that argument's end — the same
+  "no more bytes" convention as `tuo_rt_read_byte`'s EOF.
+- `tuo_rt_open` opens the file whose path is the `len` bytes at `ptr` (a
+  `Str` passed as its `{ptr, len}` pair, exactly as `tuo_rt_write`'s text
+  is). Modes: `0` read (`O_RDONLY`), `1` write (`O_WRONLY|O_CREAT|O_TRUNC`,
+  mode `0644`), `2` append (`O_WRONLY|O_CREAT|O_APPEND`). It retries
+  `EINTR` and returns the descriptor (`>= 0`), `-2` when the path does not
+  exist, or `-1` on any other host error — an unknown mode and a path over
+  the shim's bounded NUL-termination buffer (4096 bytes) included. The
+  returned descriptor is exactly what `tuo_rt_write`/`tuo_rt_read_byte`
+  accept, so file I/O is the composition of `open` with the ADR-0006
+  descriptor seam; there is deliberately no separate whole-file primitive.
+- `tuo_rt_close` closes the descriptor: `0` on success, `-1` on host error.
+- `tuo_rt_remove_file` unlinks the path (same `{ptr, len}` convention and
+  bounded buffer): `0` on success, `-2` when it does not exist, `-1`
+  otherwise.
+
+Adding these symbols (and the argv capture) was again additive — no layout
+changed — and the commit that landed them bumped `ABI_VERSION` to `7`,
+together with the tests that pin their behavior (`tuo-runtime`'s `effect`
+module tests, `tuo-cli/tests/effects_native.rs`, and the `std::fs`/
+`std::time`/`std::process` native pins in `tuo-cli/tests/stdlib.rs`).
 
 ## Memory allocation boundary
 

@@ -1789,12 +1789,24 @@ impl FnLower<'_> {
             | Builtin::RtReadByte
             | Builtin::RtExit
             | Builtin::RtWriteString
-            | Builtin::RtParMap => {
+            | Builtin::RtParMap
+            | Builtin::RtNowNanos
+            | Builtin::RtArgCount
+            | Builtin::RtArgByte
+            | Builtin::RtOpen
+            | Builtin::RtClose
+            | Builtin::RtRemoveFile => {
                 let op = match builtin {
                     Builtin::RtWrite => EffectOp::Write,
                     Builtin::RtReadByte => EffectOp::ReadByte,
                     Builtin::RtExit => EffectOp::Exit,
                     Builtin::RtParMap => EffectOp::ParMap,
+                    Builtin::RtNowNanos => EffectOp::NowNanos,
+                    Builtin::RtArgCount => EffectOp::ArgCount,
+                    Builtin::RtArgByte => EffectOp::ArgByte,
+                    Builtin::RtOpen => EffectOp::Open,
+                    Builtin::RtClose => EffectOp::Close,
+                    Builtin::RtRemoveFile => EffectOp::RemoveFile,
                     _ => EffectOp::WriteString,
                 };
                 // Effect arguments are call-style: operands pass by value,

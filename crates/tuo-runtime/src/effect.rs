@@ -48,6 +48,48 @@ pub const EXIT_SYMBOL: &str = "tuo_rt_exit";
 /// order into `out_hdr`. Structured fork-join: nothing outlives the call.
 pub const PAR_MAP_SYMBOL: &str = "tuo_rt_par_map";
 
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::now_nanos` (ADR-0013): `long long tuo_rt_now_nanos(void)` — the
+/// monotonic clock (`CLOCK_MONOTONIC`) in nanoseconds since an arbitrary
+/// process-local epoch. Only differences are meaningful. On the (practically
+/// unreachable) host failure it returns `0` rather than trapping.
+pub const NOW_NANOS_SYMBOL: &str = "tuo_rt_now_nanos";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::arg_count` (ADR-0013): `long long tuo_rt_arg_count(void)` — the
+/// number of process arguments including the program name. The runtime
+/// captures `argc`/`argv` before `main` runs via the platform's initializer
+/// mechanism (`crt_externs.h` on macOS, a constructor receiving `argc`/`argv`
+/// on glibc).
+pub const ARG_COUNT_SYMBOL: &str = "tuo_rt_arg_count";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::arg_byte`
+/// (ADR-0013): `long long tuo_rt_arg_byte(long long i, long long j)` — byte
+/// `j` (`0..=255`) of process argument `i`, or [`ARG_MISSING`] when `i` is
+/// out of range or `j` is past that argument's end.
+pub const ARG_BYTE_SYMBOL: &str = "tuo_rt_arg_byte";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::open`
+/// (ADR-0013): `long long tuo_rt_open(const unsigned char *ptr, unsigned
+/// long long len, long long mode)` — open the file whose path is the `len`
+/// bytes at `ptr`; a file descriptor (`>= 0`) on success,
+/// [`FILE_NOT_FOUND`] when the path does not exist, [`FILE_ERROR`] on any
+/// other host error (an unknown `mode` or an over-long path included).
+/// Modes: `0` read, `1` write (create + truncate), `2` append (create).
+pub const OPEN_SYMBOL: &str = "tuo_rt_open";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::close`
+/// (ADR-0013): `long long tuo_rt_close(long long fd)` — `0` on success,
+/// [`FILE_ERROR`] on host error.
+pub const CLOSE_SYMBOL: &str = "tuo_rt_close";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::remove_file` (ADR-0013): `long long tuo_rt_remove_file(const
+/// unsigned char *ptr, unsigned long long len)` — `0` on success,
+/// [`FILE_NOT_FOUND`] when the path does not exist, [`FILE_ERROR`] on any
+/// other host error.
+pub const REMOVE_FILE_SYMBOL: &str = "tuo_rt_remove_file";
+
 /// The value [`WRITE_SYMBOL`] returns on a host write error (after retrying
 /// `EINTR`). A successful write returns the total byte count instead.
 pub const WRITE_ERROR: i64 = -1;
@@ -60,6 +102,20 @@ pub const READ_EOF: i64 = -1;
 /// two apart, exactly as `specification/abi.md` specifies ("another negative
 /// value on host error").
 pub const READ_ERROR: i64 = -2;
+
+/// The value [`ARG_BYTE_SYMBOL`] returns for an out-of-range argument index
+/// or a byte index past the argument's end (ADR-0013) — the same
+/// "no more bytes" convention as [`READ_EOF`].
+pub const ARG_MISSING: i64 = -1;
+
+/// The value [`OPEN_SYMBOL`] and [`REMOVE_FILE_SYMBOL`] return when the
+/// path does not exist (ADR-0013). Distinct from [`FILE_ERROR`] so a
+/// program can classify a missing file without `errno`.
+pub const FILE_NOT_FOUND: i64 = -2;
+
+/// The value the ADR-0013 file symbols return on any other host error
+/// (an unknown open mode and an over-long path included).
+pub const FILE_ERROR: i64 = -1;
 
 /// The process exit status `tuo_rt_exit(code)` terminates with: the low byte
 /// of `code`, exactly the truncation a normal `main` return undergoes on the
@@ -194,6 +250,87 @@ pub fn effect_runtime_c_source() -> String {
          \x20   out_hdr[0] = (long long)results;\n\
          \x20   out_hdr[1] = n;\n\
          \x20   out_hdr[2] = n;\n\
+         }}\n\
+         \n\
+         /* ADR-0013: the OS effect boundary — clock, argv, and files. */\n\
+         #include <fcntl.h>\n\
+         #include <string.h>\n\
+         #include <time.h>\n\
+         \n\
+         long long {NOW_NANOS_SYMBOL}(void) {{\n\
+         \x20   struct timespec ts;\n\
+         \x20   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;\n\
+         \x20   return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;\n\
+         }}\n\
+         \n\
+         /* The process arguments, captured before `main` runs: macOS exposes\n\
+         \x20  them via crt_externs.h; glibc passes them to an ELF constructor. */\n\
+         static int tuo_rt_argc = 0;\n\
+         static char **tuo_rt_argv = 0;\n\
+         \n\
+         #if defined(__APPLE__)\n\
+         #include <crt_externs.h>\n\
+         __attribute__((constructor)) static void tuo_rt_capture_args(void) {{\n\
+         \x20   tuo_rt_argc = *_NSGetArgc();\n\
+         \x20   tuo_rt_argv = *_NSGetArgv();\n\
+         }}\n\
+         #else\n\
+         __attribute__((constructor)) static void tuo_rt_capture_args(int argc,\n\
+         \x20                                                         char **argv) {{\n\
+         \x20   tuo_rt_argc = argc;\n\
+         \x20   tuo_rt_argv = argv;\n\
+         }}\n\
+         #endif\n\
+         \n\
+         long long {ARG_COUNT_SYMBOL}(void) {{\n\
+         \x20   return (long long)tuo_rt_argc;\n\
+         }}\n\
+         \n\
+         long long {ARG_BYTE_SYMBOL}(long long i, long long j) {{\n\
+         \x20   if (i < 0 || i >= (long long)tuo_rt_argc || j < 0) return {ARG_MISSING};\n\
+         \x20   const char *arg = tuo_rt_argv[i];\n\
+         \x20   unsigned long long len = strlen(arg);\n\
+         \x20   if ((unsigned long long)j >= len) return {ARG_MISSING};\n\
+         \x20   return (long long)(unsigned char)arg[j];\n\
+         }}\n\
+         \n\
+         /* A `Str` path is not NUL-terminated; copy it into a bounded buffer.\n\
+         \x20  An over-long path is a host error ({FILE_ERROR}), never a trap. */\n\
+         static int tuo_rt_path_copy(char *dst, unsigned long long cap,\n\
+         \x20                        const unsigned char *ptr, unsigned long long len) {{\n\
+         \x20   if (len >= cap) return 0;\n\
+         \x20   memcpy(dst, ptr, len);\n\
+         \x20   dst[len] = 0;\n\
+         \x20   return 1;\n\
+         }}\n\
+         \n\
+         long long {OPEN_SYMBOL}(const unsigned char *ptr, unsigned long long len,\n\
+         \x20                    long long mode) {{\n\
+         \x20   char path[4096];\n\
+         \x20   int flags;\n\
+         \x20   if (!tuo_rt_path_copy(path, sizeof(path), ptr, len)) return {FILE_ERROR};\n\
+         \x20   if (mode == 0) flags = O_RDONLY;\n\
+         \x20   else if (mode == 1) flags = O_WRONLY | O_CREAT | O_TRUNC;\n\
+         \x20   else if (mode == 2) flags = O_WRONLY | O_CREAT | O_APPEND;\n\
+         \x20   else return {FILE_ERROR};\n\
+         \x20   for (;;) {{\n\
+         \x20       int fd = open(path, flags, 0644);\n\
+         \x20       if (fd >= 0) return (long long)fd;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return errno == ENOENT ? {FILE_NOT_FOUND} : {FILE_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {CLOSE_SYMBOL}(long long fd) {{\n\
+         \x20   return close((int)fd) == 0 ? 0 : {FILE_ERROR};\n\
+         }}\n\
+         \n\
+         long long {REMOVE_FILE_SYMBOL}(const unsigned char *ptr,\n\
+         \x20                           unsigned long long len) {{\n\
+         \x20   char path[4096];\n\
+         \x20   if (!tuo_rt_path_copy(path, sizeof(path), ptr, len)) return {FILE_ERROR};\n\
+         \x20   if (unlink(path) == 0) return 0;\n\
+         \x20   return errno == ENOENT ? {FILE_NOT_FOUND} : {FILE_ERROR};\n\
          }}\n",
         sentinel = crate::alloc::ZERO_SIZE_SENTINEL,
     )
@@ -202,8 +339,9 @@ pub fn effect_runtime_c_source() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        EXIT_SYMBOL, READ_BYTE_SYMBOL, READ_EOF, READ_ERROR, WRITE_ERROR, WRITE_SYMBOL,
-        effect_runtime_c_source, exit_status_of,
+        ARG_BYTE_SYMBOL, ARG_COUNT_SYMBOL, ARG_MISSING, CLOSE_SYMBOL, EXIT_SYMBOL, FILE_ERROR,
+        FILE_NOT_FOUND, NOW_NANOS_SYMBOL, OPEN_SYMBOL, READ_BYTE_SYMBOL, READ_EOF, READ_ERROR,
+        REMOVE_FILE_SYMBOL, WRITE_ERROR, WRITE_SYMBOL, effect_runtime_c_source, exit_status_of,
     };
 
     #[test]
@@ -245,5 +383,40 @@ mod tests {
         // Exit truncates exactly as `exit_status_of` does, via `_exit`.
         assert!(source.contains("_exit((int)(code & 0xff));"));
         assert_eq!(exit_status_of(0x1_07), 7);
+    }
+
+    #[test]
+    fn the_c_source_defines_the_os_boundary_symbols_and_matches_the_policy() {
+        let source = effect_runtime_c_source();
+        // The six ADR-0013 C-ABI signatures, exactly as `specification/abi.md`
+        // fixes them.
+        assert!(source.contains(&format!("long long {NOW_NANOS_SYMBOL}(void)")));
+        assert!(source.contains(&format!("long long {ARG_COUNT_SYMBOL}(void)")));
+        assert!(source.contains(&format!(
+            "long long {ARG_BYTE_SYMBOL}(long long i, long long j)"
+        )));
+        assert!(source.contains(&format!(
+            "long long {OPEN_SYMBOL}(const unsigned char *ptr, unsigned long long len"
+        )));
+        assert!(source.contains(&format!("long long {CLOSE_SYMBOL}(long long fd)")));
+        assert!(source.contains(&format!(
+            "long long {REMOVE_FILE_SYMBOL}(const unsigned char *ptr"
+        )));
+        // The monotonic clock, argv capture before `main`, and the error
+        // vocabulary the policy consts fix.
+        assert!(source.contains("clock_gettime(CLOCK_MONOTONIC, &ts)"));
+        assert!(source.contains("__attribute__((constructor))"));
+        assert!(source.contains(&format!(
+            "if ((unsigned long long)j >= len) return {ARG_MISSING};"
+        )));
+        assert!(source.contains(&format!(
+            "return errno == ENOENT ? {FILE_NOT_FOUND} : {FILE_ERROR};"
+        )));
+        // Not-found and generic errors stay distinguishable, and every code
+        // sits outside the byte range so no real value collides with one.
+        assert_ne!(FILE_NOT_FOUND, FILE_ERROR);
+        for value in [ARG_MISSING, FILE_NOT_FOUND, FILE_ERROR] {
+            assert!(value < 0, "{value} must sit outside the byte range");
+        }
     }
 }

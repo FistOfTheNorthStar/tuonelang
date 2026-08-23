@@ -51,6 +51,34 @@ pub enum Builtin {
     /// (ADR-0007). Deterministic in its result whenever `f` is pure. Never
     /// traps. **Effectful** (spawning is a typed effect).
     RtParMap,
+    /// `std::rt::now_nanos() -> Int` — the monotonic clock, in nanoseconds
+    /// since an arbitrary process-local epoch; only differences are
+    /// meaningful. Never traps. **Effectful** (non-deterministic).
+    /// (ADR-0013.)
+    RtNowNanos,
+    /// `std::rt::arg_count() -> Int` — the number of process arguments,
+    /// including the program name (argv\[0\]). Never traps. **Effectful.**
+    /// (ADR-0013.)
+    RtArgCount,
+    /// `std::rt::arg_byte(take i: Int, take j: Int) -> Int` — byte `j`
+    /// (`0..=255`) of process argument `i`, or `-1` when `i` is out of
+    /// range or `j` is past that argument's end. Never traps.
+    /// **Effectful.** (ADR-0013.)
+    RtArgByte,
+    /// `std::rt::open(in path: Str, take mode: Int) -> Int` — open the file
+    /// at `path`; returns a file descriptor (`>= 0`), `-2` when the path
+    /// does not exist, or another negative value on host error (an unknown
+    /// `mode` included). Modes: `0` read, `1` write (create + truncate),
+    /// `2` append (create). Never traps. **Effectful.** (ADR-0013.)
+    RtOpen,
+    /// `std::rt::close(take fd: Int) -> Int` — close `fd`; `0` on success,
+    /// negative on host error. Never traps. **Effectful.** (ADR-0013.)
+    RtClose,
+    /// `std::rt::remove_file(in path: Str) -> Int` — remove the file at
+    /// `path`; `0` on success, `-2` when it does not exist, another
+    /// negative value on other host errors. Never traps. **Effectful.**
+    /// (ADR-0013.)
+    RtRemoveFile,
     /// `std::str::len(in s: Str) -> Int` — the byte length of `s`. Pure;
     /// never traps.
     StrLen,
@@ -166,12 +194,18 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 29] = [
+    pub const ALL: [Self; 35] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
         Self::RtWriteString,
         Self::RtParMap,
+        Self::RtNowNanos,
+        Self::RtArgCount,
+        Self::RtArgByte,
+        Self::RtOpen,
+        Self::RtClose,
+        Self::RtRemoveFile,
         Self::StrLen,
         Self::StrByteAt,
         Self::StrSlice,
@@ -206,7 +240,13 @@ impl Builtin {
             | Self::RtReadByte
             | Self::RtExit
             | Self::RtWriteString
-            | Self::RtParMap => &["std", "rt"],
+            | Self::RtParMap
+            | Self::RtNowNanos
+            | Self::RtArgCount
+            | Self::RtArgByte
+            | Self::RtOpen
+            | Self::RtClose
+            | Self::RtRemoveFile => &["std", "rt"],
             Self::StrLen | Self::StrByteAt | Self::StrSlice => &["std", "str"],
             Self::StringEmpty
             | Self::StringFromStr
@@ -241,6 +281,12 @@ impl Builtin {
             Self::RtExit => "exit",
             Self::RtWriteString => "write_string",
             Self::RtParMap => "par_map",
+            Self::RtNowNanos => "now_nanos",
+            Self::RtArgCount => "arg_count",
+            Self::RtArgByte => "arg_byte",
+            Self::RtOpen => "open",
+            Self::RtClose => "close",
+            Self::RtRemoveFile => "remove_file",
             Self::StrLen | Self::StringLen | Self::ArrayLen | Self::MapLen => "len",
             Self::StrByteAt | Self::StringByteAt => "byte_at",
             Self::StrSlice | Self::StringSlice => "slice",
@@ -269,6 +315,12 @@ impl Builtin {
             Self::RtExit => "std::rt::exit",
             Self::RtWriteString => "std::rt::write_string",
             Self::RtParMap => "std::rt::par_map",
+            Self::RtNowNanos => "std::rt::now_nanos",
+            Self::RtArgCount => "std::rt::arg_count",
+            Self::RtArgByte => "std::rt::arg_byte",
+            Self::RtOpen => "std::rt::open",
+            Self::RtClose => "std::rt::close",
+            Self::RtRemoveFile => "std::rt::remove_file",
             Self::StrLen => "std::str::len",
             Self::StrByteAt => "std::str::byte_at",
             Self::StrSlice => "std::str::slice",
@@ -304,7 +356,17 @@ impl Builtin {
     pub const fn is_effect(self) -> bool {
         matches!(
             self,
-            Self::RtWrite | Self::RtReadByte | Self::RtExit | Self::RtWriteString | Self::RtParMap
+            Self::RtWrite
+                | Self::RtReadByte
+                | Self::RtExit
+                | Self::RtWriteString
+                | Self::RtParMap
+                | Self::RtNowNanos
+                | Self::RtArgCount
+                | Self::RtArgByte
+                | Self::RtOpen
+                | Self::RtClose
+                | Self::RtRemoveFile
         )
     }
 
@@ -317,6 +379,11 @@ impl Builtin {
             Self::RtReadByte | Self::RtExit => &[Take],
             Self::RtWriteString => &[Take, In],
             Self::RtParMap => &[Take, In, Take],
+            Self::RtNowNanos | Self::RtArgCount => &[],
+            Self::RtArgByte => &[Take, Take],
+            Self::RtOpen => &[In, Take],
+            Self::RtClose => &[Take],
+            Self::RtRemoveFile => &[In],
             Self::StrLen => &[In],
             Self::StrByteAt => &[In, Take],
             Self::StrSlice => &[In, Take, Take],

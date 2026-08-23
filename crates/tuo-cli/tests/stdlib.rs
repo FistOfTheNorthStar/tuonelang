@@ -320,10 +320,13 @@ fn the_three_tier_rule_holds_for_every_public_function() {
 }
 
 #[test]
-fn the_effect_tier_is_exactly_io_writes_reads_and_process_exit() {
+fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
     // ADR-0006 landed descriptor writes/reads and process exit; ADR-0009 landed
     // the allocator, which lets `read_line` accumulate the bytes `read_byte`
-    // yields into an owned `String`. The effect tier must list exactly the
+    // yields into an owned `String`; ADR-0007 landed structured fork-join; and
+    // ADR-0013 landed the clock, argv, and file open/close/remove primitives,
+    // which made the whole of `std::fs`'s disk tier, `std::process`'s argv
+    // pair, and `std::time::now` real. The effect tier must list exactly the
     // functions those primitives can implement — no more (an over-claim) and no
     // fewer (a stale contract).
     let mut effect_fns = Vec::new();
@@ -338,11 +341,18 @@ fn the_effect_tier_is_exactly_io_writes_reads_and_process_exit() {
     assert_eq!(
         effect_fns,
         vec![
+            "std::fs::exists".to_string(),
+            "std::fs::read".to_string(),
+            "std::fs::remove".to_string(),
+            "std::fs::write".to_string(),
             "std::io::print".to_string(),
             "std::io::println".to_string(),
             "std::io::read_line".to_string(),
+            "std::process::arg".to_string(),
+            "std::process::arg_count".to_string(),
             "std::process::exit".to_string(),
             "std::sync::par_map".to_string(),
+            "std::time::now".to_string(),
         ]
     );
 }
@@ -638,6 +648,190 @@ fn main() -> Int {
             output.status.code(),
             Some(200),
             "{which}: empty stdin is Err {{ IoError::Eof }} (200 + code 0); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// Write a stdlib module plus a caller program into `dir` and `tuo build`
+/// them into an executable, returning its path — so a test can run it with
+/// real command-line arguments and a chosen working directory (which
+/// `tuo run` does not forward).
+fn build_with_module(
+    dir: &Path,
+    module: tuo_stdlib::Module,
+    caller: &str,
+    release: bool,
+) -> PathBuf {
+    let module_path = dir.join(module.name.replace('/', "_"));
+    std::fs::write(&module_path, module.source).expect("module source is writable");
+    let caller_path = dir.join("caller.tuo");
+    std::fs::write(&caller_path, caller).expect("caller source is writable");
+    let exe = dir.join("caller.exe");
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("build");
+    if release {
+        command.arg("--release");
+    }
+    let output = command
+        .arg("-o")
+        .arg(&exe)
+        .arg(&module_path)
+        .arg(&caller_path)
+        .output()
+        .expect("the tuo binary runs");
+    assert!(
+        output.status.success(),
+        "build succeeds; stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    exe
+}
+
+/// `std::time::now()` really reads the monotonic clock (ADR-0013): two
+/// instants in sequence give a non-negative `elapsed`, and `render` turns it
+/// into text `main` prints. Both backends. This is the native pin
+/// `std::time`'s `EFFECT:` doc names.
+#[test]
+fn stdlib_time_now_really_reads_the_clock_natively() {
+    let dir = native_workspace("time_now");
+    let caller = "\
+module caller;
+
+import std::time;
+
+fn main() -> Int {
+    let start = std::time::now();
+    let stop = std::time::now();
+    let span = std::time::elapsed(start, stop);
+    if std::time::as_nanos(span) < 0 {
+        return 1;
+    }
+    if std::time::lt(span, std::time::zero()) {
+        return 2;
+    }
+    std::rt::write_string(1, std::time::render(std::time::zero()));
+    0
+}
+";
+    for release in [false, true] {
+        let output = run_with_module(&dir, tuo_stdlib::TIME, caller, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the clock never runs backwards between two now() reads; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "0s",
+            "{which}: render(zero()) prints its canonical spelling"
+        );
+    }
+}
+
+/// `std::process::arg_count()`/`arg(i)` really see the command line
+/// (ADR-0013): the built executable, run with `["tuo", "lang"]`, reports 3
+/// arguments and echoes argument 2 back through `write_string`. Both
+/// backends. This is the native pin `std::process`'s argv `EFFECT:` docs
+/// name.
+#[test]
+fn stdlib_process_args_really_read_the_command_line_natively() {
+    let caller = "\
+module caller;
+
+import std::process;
+
+fn main() -> Int {
+    std::rt::write_string(1, std::process::arg(2));
+    std::process::arg_count()
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("process_args_{which}"));
+        let exe = build_with_module(&dir, tuo_stdlib::PROCESS, caller, release);
+        let output = Command::new(&exe)
+            .args(["tuo", "lang"])
+            .output()
+            .expect("the exe runs");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "lang",
+            "{which}: arg(2) is the second real argument"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "{which}: two arguments plus the program name is 3; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The whole `std::fs` disk tier really touches the disk (ADR-0013): `write`
+/// creates the file, `exists` sees it, `read` gets the exact bytes back,
+/// `remove` deletes it, and afterwards `exists` is false and `read` is
+/// `Err(NotFound)`. Both backends, in a scratch working directory. This is
+/// the native pin `std::fs`'s `EFFECT:` docs name.
+#[test]
+fn stdlib_fs_write_read_exists_remove_really_touch_the_disk_natively() {
+    let caller = "\
+module caller;
+
+import std::fs;
+
+fn main() -> Int {
+    let path = \"stdlib_fs.tmp\";
+    match std::fs::exists(path) {
+        Ok { value } => if value { return 10; },
+        Err { error } => { return 11; },
+    }
+    match std::fs::write(path, \"hi!\") {
+        Ok { value } => if value != 3 { return 12; },
+        Err { error } => { return 13; },
+    }
+    match std::fs::exists(path) {
+        Ok { value } => if !value { return 14; },
+        Err { error } => { return 15; },
+    }
+    match std::fs::read(path) {
+        Ok { value } => {
+            if std::string::len(value) != 3 { return 16; }
+            if std::string::byte_at(value, 0) != 104 { return 17; }
+            if std::string::byte_at(value, 2) != 33 { return 18; }
+        },
+        Err { error } => { return 19; },
+    }
+    match std::fs::remove(path) {
+        Ok { value } => {},
+        Err { error } => { return 20; },
+    }
+    match std::fs::exists(path) {
+        Ok { value } => if value { return 21; },
+        Err { error } => { return 22; },
+    }
+    match std::fs::read(path) {
+        Ok { value } => { return 23; },
+        Err { error } => if !std::fs::is_not_found(error) { return 24; },
+    }
+    0
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("fs_roundtrip_{which}"));
+        let exe = build_with_module(&dir, tuo_stdlib::FS, caller, release);
+        let output = Command::new(&exe)
+            .current_dir(&dir)
+            .output()
+            .expect("the exe runs");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full fs write/exists/read/remove roundtrip succeeds \
+             (a nonzero status names the failing step); stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
