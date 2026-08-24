@@ -217,6 +217,17 @@ types are fixed per op and verified (§7.1, `M0011`):
 | `Open` (ADR-0013) | `Value path: Str`, `Value mode: I64` | A file descriptor (`>= 0`), `-2` when the path does not exist, or another negative value on host error (an unknown mode included). Modes: `0` read, `1` write (create + truncate), `2` append (create). Never traps. |
 | `Close` (ADR-0013) | `Value fd: I64` | `0` on success, negative on host error. Never traps. |
 | `RemoveFile` (ADR-0013) | `Value path: Str` | `0` on success, `-2` when the path does not exist, another negative value on other host errors. Never traps. |
+| `Listen` (ADR-0014) | `Value port: I64` | A listening IPv4 TCP descriptor bound to `127.0.0.1:port` (`0` = ephemeral), or a negative value on host error. Never traps. |
+| `BoundPort` (ADR-0014) | `Value fd: I64` | The local port the listening descriptor is bound to, or a negative value on host error. Never traps. |
+| `Accept` (ADR-0014) | `Value fd: I64` | A connected descriptor (`>= 0`) or a negative value on host error. Blocks until a connection arrives. Never traps. |
+| `Connect` (ADR-0014) | `Value host: Str`, `Value port: I64` | A connected descriptor to the numeric IPv4 `host:port` (`>= 0`), or a negative value on host error. Never traps. |
+| `ChanNew` (ADR-0015) | — | A process-lived channel handle (`>= 0`), or `-1` on registry exhaustion. Never traps. |
+| `ChanSend` (ADR-0015) | `Value ch: I64`, `Value v: I64` | `0` on success; `-1` on an invalid handle, a closed channel, or a negative `v` (refused so `ChanRecv`'s `-1` stays unambiguous). Never traps. |
+| `ChanRecv` (ADR-0015) | `Value ch: I64` | The oldest value (blocking until one is available), or `-1` once the channel is closed and drained (or the handle is invalid). Never traps. |
+| `ChanClose` (ADR-0015) | `Value ch: I64` | `0` on success (idempotent), `-1` on an invalid handle. Wakes every blocked receiver. Never traps. |
+| `MutexNew` (ADR-0015) | — | A process-lived mutex handle (`>= 0`), or `-1` on registry exhaustion. Never traps. |
+| `MutexLock` (ADR-0015) | `Value m: I64` | `0` on success (blocking until acquired), `-1` on an invalid handle or an error-checked relock. Never traps. |
+| `MutexUnlock` (ADR-0015) | `Value m: I64` | `0` on success, `-1` on an invalid handle or when the caller does not hold it. Never traps. |
 
 `Exit` is a **statement, not a terminator**, by choice: the surface builtin is
 declared `-> Int`, so the statement form (an effect with an `I64` destination)
@@ -245,7 +256,12 @@ runtime's pthreads fork-join. The six ADR-0013 OS-boundary ops lower to their
 matching `tuo_rt_now_nanos`/`tuo_rt_arg_count`/`tuo_rt_arg_byte`/`tuo_rt_open`/
 `tuo_rt_close`/`tuo_rt_remove_file` symbols (`abi.md` "OS-boundary effect
 symbols"); a `Str` path passes as its `{ptr, len}` pair exactly as `Write`'s
-text does.
+text does. The four ADR-0014 socket ops lower to
+`tuo_rt_listen`/`tuo_rt_bound_port`/`tuo_rt_accept`/`tuo_rt_connect` (`abi.md`
+"Socket effect symbols"), and the seven ADR-0015 channel/mutex ops to
+`tuo_rt_chan_new`/`send`/`recv`/`close` and
+`tuo_rt_mutex_new`/`lock`/`unlock` (`abi.md` "Channel and mutex symbols") —
+all plain scalar calls on the same seam.
 
 ### 4.3 Heap mutations (`HeapMutOp`) — `[EXPERIMENTAL]`, ADR-0009 Stage A
 
@@ -264,6 +280,7 @@ fixed per op and verified (§7.1, `M0013`):
 | `Append` | `String` | `t: Str` | `()` | Append `t`'s bytes. Never traps. |
 | `Push` | `Array[I64]` | `v: I64` | `()` | Append the element `v`. Never traps. |
 | `Pop` | `Array[I64]` | — | `Option[I64]` | Remove and return the last element (`Some`), or `None` when empty. Never traps. |
+| `Set` (ADR-0016) | `Array[T]` | `i: I64`, `v: T` | `()` | Overwrite the element at `i` with `v` in place, dropping the previous element's owned buffers first. **Traps `IndexOutOfBounds`** on the `get` bounds (`i < 0` or `i >= len`) — `set` never grows the array. |
 | `MapInsert` (ADR-0011) | `Map[K, V]` | `k: K`, `v: V` | `Option[V]` | Insert or overwrite `k → v`, producing the **previous** value (`Some`) or `None` when `k` was absent. A fresh key appends to the map's insertion order; an overwrite keeps the key's position. Never traps. |
 | `MapRemove` (ADR-0011) | `Map[K, V]` | `k: K` | `Option[V]` | Remove `k`, producing its value (`Some`) or `None`. The remaining entries keep their relative insertion order. Never traps. |
 

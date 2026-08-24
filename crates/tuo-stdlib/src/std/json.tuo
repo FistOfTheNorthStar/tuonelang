@@ -1,0 +1,931 @@
+// std::json — JSON decoding, navigation, and rendering (ADR-0016).
+//
+// Entirely EXECUTABLE tier: parsing is pure computation, so every public
+// function runs in the spec sandbox and carries specs.
+//
+// A parsed document is an **index arena**, not a recursive type (v0's
+// recursion boundary, `T0016`, deliberately excludes those until a successor
+// ADR): parallel arrays in depth-first pre-order, one entry per node. A node
+// is named by its `Int` index; `parse` returns the arena and the root is
+// node 0. Kinds: 0 null, 1 false, 2 true, 3 number, 4 string, 5 array,
+// 6 object.
+//
+// Honest limits, documented rather than fudged:
+//   * numbers are IEEE `Float` (binary, like every JSON library over
+//     doubles); integers beyond 2^53 lose precision;
+//   * `\uXXXX` escapes are a parse error naming the byte (decoding them is
+//     a later additive increment); the byte escapes `\" \\ \/ \b \f \n \r
+//     \t` are decoded;
+//   * `render` re-emits what `parse` produced (decode → inspect → re-emit;
+//     building a document from scratch is a later increment): integral
+//     numbers render as integers, fractional ones with up to six fractional
+//     digits (trailing zeros trimmed) — exact for the integral range, not
+//     shortest-roundtrip;
+//   * object member order is preserved (the arena is insertion-ordered;
+//     there is no `Map[Str, Json]` in v0), and duplicate keys are kept as
+//     written — `member` finds the first.
+
+module std::json;
+
+// ----------------------------------------------------------------------------
+// Kinds — the node vocabulary.
+// ----------------------------------------------------------------------------
+
+/// The kind tag of a `null` node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_null(); // 0
+/// ```
+pub fn kind_null() -> Int {
+    0
+}
+
+/// The kind tag of a `false` node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_false(); // 1
+/// ```
+pub fn kind_false() -> Int {
+    1
+}
+
+/// The kind tag of a `true` node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_true(); // 2
+/// ```
+pub fn kind_true() -> Int {
+    2
+}
+
+/// The kind tag of a number node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_number(); // 3
+/// ```
+pub fn kind_number() -> Int {
+    3
+}
+
+/// The kind tag of a string node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_string(); // 4
+/// ```
+pub fn kind_string() -> Int {
+    4
+}
+
+/// The kind tag of an array node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_array(); // 5
+/// ```
+pub fn kind_array() -> Int {
+    5
+}
+
+/// The kind tag of an object node.
+///
+/// # Example
+/// ```tuo
+/// let k = std::json::kind_object(); // 6
+/// ```
+pub fn kind_object() -> Int {
+    6
+}
+
+// ----------------------------------------------------------------------------
+// The arena.
+// ----------------------------------------------------------------------------
+
+/// A parsed JSON document: an index arena in depth-first pre-order. Nodes
+/// are `Int` indices; the root is node 0. Fields are private — read through
+/// the accessors, which are the module's stable surface.
+pub struct Json {
+    kinds: Array[Int],
+    nums: Array[Float],
+    texts: Array[String],
+    keys: Array[String],
+    firsts: Array[Int],
+    nexts: Array[Int],
+}
+
+/// The root node of a parsed document — always 0.
+///
+/// # Example
+/// ```tuo
+/// let r = std::json::root(); // 0
+/// ```
+pub fn root() -> Int {
+    0
+}
+
+/// How many nodes the document holds.
+///
+/// # Example
+/// ```tuo
+/// // let n = std::json::node_count(d);
+/// ```
+pub fn node_count(in d: Json) -> Int {
+    std::array::len(d.kinds)
+}
+
+/// The kind tag of `node` (see the `kind_*` accessors), or -1 for an
+/// out-of-range index.
+///
+/// # Example
+/// ```tuo
+/// // let k = std::json::kind_of(d, std::json::root());
+/// ```
+pub fn kind_of(in d: Json, take node: Int) -> Int {
+    if node < 0 || node >= std::array::len(d.kinds) {
+        return 0 - 1;
+    }
+    std::array::get(d.kinds, node)
+}
+
+/// The numeric value of a number node (0.0 for any other kind).
+///
+/// # Example
+/// ```tuo
+/// // let x = std::json::num_of(d, node);
+/// ```
+pub fn num_of(in d: Json, take node: Int) -> Float {
+    if kind_of(d, node) != kind_number() {
+        return 0.0;
+    }
+    std::array::get(d.nums, node)
+}
+
+/// The decoded text of a string node ("" for any other kind), as a fresh
+/// owned `String`.
+///
+/// # Example
+/// ```tuo
+/// // let name = std::json::text_of(d, node);
+/// ```
+pub fn text_of(in d: Json, take node: Int) -> String {
+    if kind_of(d, node) != kind_string() {
+        return std::string::empty();
+    }
+    std::array::get(d.texts, node)
+}
+
+/// The member key under which `node` sits in its parent object ("" when the
+/// parent is not an object), as a fresh owned `String`.
+///
+/// # Example
+/// ```tuo
+/// // let key = std::json::key_of(d, node);
+/// ```
+pub fn key_of(in d: Json, take node: Int) -> String {
+    if node < 0 || node >= std::array::len(d.keys) {
+        return std::string::empty();
+    }
+    std::array::get(d.keys, node)
+}
+
+/// The first child of an array/object node, or -1 when it has none (or the
+/// node is not a container).
+///
+/// # Example
+/// ```tuo
+/// // let child = std::json::first_child(d, node);
+/// ```
+pub fn first_child(in d: Json, take node: Int) -> Int {
+    if node < 0 || node >= std::array::len(d.firsts) {
+        return 0 - 1;
+    }
+    std::array::get(d.firsts, node)
+}
+
+/// The next sibling of `node`, or -1 at the end of its parent's children.
+///
+/// # Example
+/// ```tuo
+/// // let sibling = std::json::next_sibling(d, node);
+/// ```
+pub fn next_sibling(in d: Json, take node: Int) -> Int {
+    if node < 0 || node >= std::array::len(d.nexts) {
+        return 0 - 1;
+    }
+    std::array::get(d.nexts, node)
+}
+
+/// How many direct children a container node has (0 for scalars).
+///
+/// # Example
+/// ```tuo
+/// // let n = std::json::child_count(d, node);
+/// ```
+pub fn child_count(in d: Json, take node: Int) -> Int {
+    var count = 0;
+    var child = first_child(d, node);
+    while child >= 0 {
+        count = count + 1;
+        child = next_sibling(d, child);
+    }
+    count
+}
+
+/// The child of an object node stored under `key`, or -1 when absent (or
+/// the node is not an object). Duplicate keys resolve to the first, in
+/// document order.
+///
+/// # Example
+/// ```tuo
+/// // let id = std::json::member(d, std::json::root(), "id");
+/// ```
+pub fn member(in d: Json, take node: Int, in key: Str) -> Int {
+    if kind_of(d, node) != kind_object() {
+        return 0 - 1;
+    }
+    var child = first_child(d, node);
+    while child >= 0 {
+        let candidate = key_of(d, child);
+        if std::string::as_str(candidate) == key {
+            return child;
+        }
+        child = next_sibling(d, child);
+    }
+    0 - 1
+}
+
+// ----------------------------------------------------------------------------
+// Parsing — a recursive-descent parser over the raw bytes.
+//
+// Internal error convention: a scanning/parsing helper returns the position
+// *after* what it consumed, or `-2 - error_position` on failure (always
+// <= -2, so it never collides with a real position). `parse` decodes that
+// into the public error message.
+// ----------------------------------------------------------------------------
+
+// Encode a parse failure at `pos`.
+fn fail(take pos: Int) -> Int {
+    0 - 2 - pos
+}
+
+// Recover the failing position from an encoded failure.
+fn fail_pos(take encoded: Int) -> Int {
+    0 - 2 - encoded
+}
+
+// Skip JSON whitespace (space, tab, CR, LF) from `pos`.
+fn skip_ws(in s: Str, take pos: Int) -> Int {
+    var p = pos;
+    var done = false;
+    while !done {
+        if p >= std::str::len(s) {
+            done = true;
+        } else {
+            let b = std::str::byte_at(s, p);
+            if b == 32 || b == 9 || b == 13 || b == 10 {
+                p = p + 1;
+            } else {
+                done = true;
+            }
+        }
+    }
+    p
+}
+
+// Does the literal `lit` appear at `pos`?
+fn lit_at(in s: Str, take pos: Int, in lit: Str) -> Bool {
+    let n = std::str::len(lit);
+    if pos + n > std::str::len(s) {
+        return false;
+    }
+    std::str::slice(s, pos, pos + n) == lit
+}
+
+// Scan a string token from its opening quote at `pos`; return the position
+// after the closing quote, or a failure. Validates escapes (`\uXXXX` is a
+// documented parse error).
+fn string_end(in s: Str, take pos: Int) -> Int {
+    var p = pos + 1;
+    var result = 0;
+    var done = false;
+    while !done {
+        if p >= std::str::len(s) {
+            result = fail(p);
+            done = true;
+        } else {
+            let b = std::str::byte_at(s, p);
+            if b == 34 {
+                result = p + 1;
+                done = true;
+            } else if b == 92 {
+                if p + 1 >= std::str::len(s) {
+                    result = fail(p);
+                    done = true;
+                } else {
+                    let e = std::str::byte_at(s, p + 1);
+                    if e == 34 || e == 92 || e == 47 || e == 98 || e == 102 || e == 110 || e == 114 || e == 116 {
+                        p = p + 2;
+                    } else {
+                        // `\uXXXX` and every unknown escape: a parse error
+                        // at the escape byte.
+                        result = fail(p);
+                        done = true;
+                    }
+                }
+            } else if b < 32 {
+                // A raw control byte inside a string is invalid JSON.
+                result = fail(p);
+                done = true;
+            } else {
+                p = p + 1;
+            }
+        }
+    }
+    result
+}
+
+// Decode the escapes of the string span `[a, b)` (the bytes between the
+// quotes, already validated by `string_end`) into a fresh owned `String`.
+fn string_value(in s: Str, take a: Int, take b: Int) -> String {
+    var out = std::string::empty();
+    var p = a;
+    while p < b {
+        let byte = std::str::byte_at(s, p);
+        if byte == 92 {
+            let e = std::str::byte_at(s, p + 1);
+            if e == 98 {
+                std::string::push_byte(out, 8);
+            } else if e == 102 {
+                std::string::push_byte(out, 12);
+            } else if e == 110 {
+                std::string::push_byte(out, 10);
+            } else if e == 114 {
+                std::string::push_byte(out, 13);
+            } else if e == 116 {
+                std::string::push_byte(out, 9);
+            } else {
+                // `\"`, `\\`, `\/` decode to the byte itself.
+                std::string::push_byte(out, e);
+            }
+            p = p + 2;
+        } else {
+            std::string::push_byte(out, byte);
+            p = p + 1;
+        }
+    }
+    out
+}
+
+// Is `b` an ASCII digit?
+fn is_digit(take b: Int) -> Bool {
+    b >= 48 && b <= 57
+}
+
+// Scan a number token from `pos`; return the position after it, or a
+// failure. Grammar: `-? digits (. digits)? ([eE] [+-]? digits)?` (leading
+// zeros are accepted leniently).
+fn number_end(in s: Str, take pos: Int) -> Int {
+    var p = pos;
+    let n = std::str::len(s);
+    if p < n && std::str::byte_at(s, p) == 45 {
+        p = p + 1;
+    }
+    if p >= n || !is_digit(std::str::byte_at(s, p)) {
+        return fail(p);
+    }
+    while p < n && is_digit(std::str::byte_at(s, p)) {
+        p = p + 1;
+    }
+    if p < n && std::str::byte_at(s, p) == 46 {
+        p = p + 1;
+        if p >= n || !is_digit(std::str::byte_at(s, p)) {
+            return fail(p);
+        }
+        while p < n && is_digit(std::str::byte_at(s, p)) {
+            p = p + 1;
+        }
+    }
+    if p < n && (std::str::byte_at(s, p) == 101 || std::str::byte_at(s, p) == 69) {
+        p = p + 1;
+        if p < n && (std::str::byte_at(s, p) == 43 || std::str::byte_at(s, p) == 45) {
+            p = p + 1;
+        }
+        if p >= n || !is_digit(std::str::byte_at(s, p)) {
+            return fail(p);
+        }
+        while p < n && is_digit(std::str::byte_at(s, p)) {
+            p = p + 1;
+        }
+    }
+    p
+}
+
+// The value of the validated number span `[a, b)`. Accumulates in binary
+// `Float` (the documented precision), with the exponent clamped far past
+// IEEE range so extreme inputs saturate to infinity/zero instead of looping.
+fn number_value(in s: Str, take a: Int, take b: Int) -> Float {
+    var p = a;
+    var negative = false;
+    if std::str::byte_at(s, p) == 45 {
+        negative = true;
+        p = p + 1;
+    }
+    var mantissa = 0.0;
+    while p < b && is_digit(std::str::byte_at(s, p)) {
+        mantissa = mantissa * 10.0 + ((std::str::byte_at(s, p) - 48) as Float);
+        p = p + 1;
+    }
+    var scale = 0;
+    if p < b && std::str::byte_at(s, p) == 46 {
+        p = p + 1;
+        while p < b && is_digit(std::str::byte_at(s, p)) {
+            mantissa = mantissa * 10.0 + ((std::str::byte_at(s, p) - 48) as Float);
+            scale = scale - 1;
+            p = p + 1;
+        }
+    }
+    var exponent = 0;
+    if p < b && (std::str::byte_at(s, p) == 101 || std::str::byte_at(s, p) == 69) {
+        p = p + 1;
+        var exp_negative = false;
+        if std::str::byte_at(s, p) == 43 {
+            p = p + 1;
+        } else if std::str::byte_at(s, p) == 45 {
+            exp_negative = true;
+            p = p + 1;
+        }
+        while p < b && is_digit(std::str::byte_at(s, p)) {
+            if exponent < 1000 {
+                exponent = exponent * 10 + (std::str::byte_at(s, p) - 48);
+            }
+            p = p + 1;
+        }
+        if exp_negative {
+            exponent = 0 - exponent;
+        }
+    }
+    var power = exponent + scale;
+    var value = mantissa;
+    while power > 0 {
+        value = value * 10.0;
+        power = power - 1;
+    }
+    while power < 0 {
+        value = value / 10.0;
+        power = power + 1;
+    }
+    if negative {
+        0.0 - value
+    } else {
+        value
+    }
+}
+
+// Append one node to every arena column, returning nothing (the node's
+// index is `node_count` before the call).
+fn push_node(mut d: Json, take kind: Int, take num: Float, take text: String) {
+    std::array::push(d.kinds, kind);
+    std::array::push(d.nums, num);
+    std::array::push(d.texts, text);
+    std::array::push(d.keys, std::string::empty());
+    std::array::push(d.firsts, 0 - 1);
+    std::array::push(d.nexts, 0 - 1);
+}
+
+// Parse one value at `pos`, appending its subtree to the arena; return the
+// position after it, or a failure.
+fn parse_value(mut d: Json, in s: Str, take pos: Int) -> Int {
+    let p = skip_ws(s, pos);
+    if p >= std::str::len(s) {
+        return fail(p);
+    }
+    let b = std::str::byte_at(s, p);
+    if b == 110 {
+        if !lit_at(s, p, "null") {
+            return fail(p);
+        }
+        push_node(d, kind_null(), 0.0, std::string::empty());
+        p + 4
+    } else if b == 116 {
+        if !lit_at(s, p, "true") {
+            return fail(p);
+        }
+        push_node(d, kind_true(), 0.0, std::string::empty());
+        p + 4
+    } else if b == 102 {
+        if !lit_at(s, p, "false") {
+            return fail(p);
+        }
+        push_node(d, kind_false(), 0.0, std::string::empty());
+        p + 5
+    } else if b == 34 {
+        let e = string_end(s, p);
+        if e < 0 {
+            return e;
+        }
+        push_node(d, kind_string(), 0.0, string_value(s, p + 1, e - 1));
+        e
+    } else if b == 91 {
+        parse_array(d, s, p)
+    } else if b == 123 {
+        parse_object(d, s, p)
+    } else if b == 45 || is_digit(b) {
+        let e = number_end(s, p);
+        if e < 0 {
+            return e;
+        }
+        push_node(d, kind_number(), number_value(s, p, e), std::string::empty());
+        e
+    } else {
+        fail(p)
+    }
+}
+
+// Parse an array from its `[` at `pos`.
+fn parse_array(mut d: Json, in s: Str, take pos: Int) -> Int {
+    let parent = std::array::len(d.kinds);
+    push_node(d, kind_array(), 0.0, std::string::empty());
+    var p = skip_ws(s, pos + 1);
+    if p < std::str::len(s) && std::str::byte_at(s, p) == 93 {
+        return p + 1;
+    }
+    var prev = 0 - 1;
+    var done = false;
+    var result = 0;
+    while !done {
+        let child = std::array::len(d.kinds);
+        let after = parse_value(d, s, p);
+        if after < 0 {
+            result = after;
+            done = true;
+        } else {
+            if prev < 0 {
+                std::array::set(d.firsts, parent, child);
+            } else {
+                std::array::set(d.nexts, prev, child);
+            }
+            prev = child;
+            p = skip_ws(s, after);
+            if p >= std::str::len(s) {
+                result = fail(p);
+                done = true;
+            } else {
+                let c = std::str::byte_at(s, p);
+                if c == 44 {
+                    p = p + 1;
+                } else if c == 93 {
+                    result = p + 1;
+                    done = true;
+                } else {
+                    result = fail(p);
+                    done = true;
+                }
+            }
+        }
+    }
+    result
+}
+
+// Parse an object from its `{` at `pos`.
+fn parse_object(mut d: Json, in s: Str, take pos: Int) -> Int {
+    let parent = std::array::len(d.kinds);
+    push_node(d, kind_object(), 0.0, std::string::empty());
+    var p = skip_ws(s, pos + 1);
+    if p < std::str::len(s) && std::str::byte_at(s, p) == 125 {
+        return p + 1;
+    }
+    var prev = 0 - 1;
+    var done = false;
+    var result = 0;
+    while !done {
+        p = skip_ws(s, p);
+        if p >= std::str::len(s) || std::str::byte_at(s, p) != 34 {
+            result = fail(p);
+            done = true;
+        } else {
+            let key_start = p;
+            let key_end = string_end(s, p);
+            if key_end < 0 {
+                result = key_end;
+                done = true;
+            } else {
+                p = skip_ws(s, key_end);
+                if p >= std::str::len(s) || std::str::byte_at(s, p) != 58 {
+                    result = fail(p);
+                    done = true;
+                } else {
+                    let child = std::array::len(d.kinds);
+                    let after = parse_value(d, s, p + 1);
+                    if after < 0 {
+                        result = after;
+                        done = true;
+                    } else {
+                        // The key `String` is built only on the success
+                        // path, so its move into the arena is unconditional
+                        // (no hidden drop flags — `O0008`).
+                        let key = string_value(s, key_start + 1, key_end - 1);
+                        std::array::set(d.keys, child, key);
+                        if prev < 0 {
+                            std::array::set(d.firsts, parent, child);
+                        } else {
+                            std::array::set(d.nexts, prev, child);
+                        }
+                        prev = child;
+                        p = skip_ws(s, after);
+                        if p >= std::str::len(s) {
+                            result = fail(p);
+                            done = true;
+                        } else {
+                            let c = std::str::byte_at(s, p);
+                            if c == 44 {
+                                p = p + 1;
+                            } else if c == 125 {
+                                result = p + 1;
+                                done = true;
+                            } else {
+                                result = fail(p);
+                                done = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+// Append the decimal digits of the non-negative `n` to `out`. (Private —
+// modules are independent, so this mirrors `std::str::to_string` locally,
+// the `std::time` precedent.)
+fn append_digits(mut out: String, take n: Int) {
+    if n >= 10 {
+        append_digits(out, n / 10);
+    }
+    std::string::push_byte(out, 48 + n % 10);
+}
+
+/// Parse `text` as one JSON document. `Ok` carries the arena; `Err` carries
+/// a message naming the byte offset of the first error ("invalid JSON at
+/// byte N"). Trailing content after the document is an error too.
+///
+/// # Example
+/// ```tuo
+/// let d = std::json::parse("{\"id\": 7}");
+/// ```
+pub fn parse(in text: Str) -> Result[Json, String] {
+    var d = Json { kinds: std::array::empty(), nums: std::array::empty(), texts: std::array::empty(), keys: std::array::empty(), firsts: std::array::empty(), nexts: std::array::empty() };
+    let after = parse_value(d, text, 0);
+    if after < 0 {
+        var message = std::string::from_str("invalid JSON at byte ");
+        append_digits(message, fail_pos(after));
+        return Err { error: message };
+    }
+    let end = skip_ws(text, after);
+    if end != std::str::len(text) {
+        var message = std::string::from_str("invalid JSON at byte ");
+        append_digits(message, end);
+        return Err { error: message };
+    }
+    Ok { value: d }
+}
+
+// ----------------------------------------------------------------------------
+// Rendering — re-emit a parsed document as canonical text.
+// ----------------------------------------------------------------------------
+
+// Append `text`'s bytes to `out` as a JSON string token, escaping `"`,
+// `\`, and the control bytes `\n`/`\r`/`\t` (other bytes pass through
+// unchanged — the documented v0 escape set).
+fn append_string_token(mut out: String, in text: String) {
+    std::string::push_byte(out, 34);
+    var i = 0;
+    while i < std::string::len(text) {
+        let b = std::string::byte_at(text, i);
+        if b == 34 || b == 92 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, b);
+        } else if b == 10 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 110);
+        } else if b == 13 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 114);
+        } else if b == 9 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 116);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    std::string::push_byte(out, 34);
+}
+
+// Append `x` to `out`: integral values as integers, fractional ones with up
+// to six fractional digits (trailing zeros trimmed) — exact for integers,
+// documented fixed-point otherwise. A non-finite value (unreachable from
+// `parse`) renders as `null`.
+fn append_number(mut out: String, take x: Float) {
+    if x != x || (x != 0.0 && x / 2.0 == x) {
+        std::string::append(out, "null");
+        return;
+    }
+    var v = x;
+    if v < 0.0 {
+        std::string::push_byte(out, 45);
+        v = 0.0 - v;
+    }
+    let whole = v as Int;
+    append_digits(out, whole);
+    var frac = v - (whole as Float);
+    if frac > 0.0 {
+        // Scale to six digits, round half-up, and trim trailing zeros.
+        var scaled = ((frac * 1000000.0) + 0.5) as Int;
+        if scaled >= 1000000 {
+            scaled = 999999;
+        }
+        if scaled > 0 {
+            var digits = 6;
+            while digits > 0 && scaled % 10 == 0 {
+                scaled = scaled / 10;
+                digits = digits - 1;
+            }
+            std::string::push_byte(out, 46);
+            var place = 1;
+            var k = 1;
+            while k < digits {
+                place = place * 10;
+                k = k + 1;
+            }
+            while place > 0 {
+                std::string::push_byte(out, 48 + (scaled / place) % 10);
+                place = place / 10;
+            }
+        }
+    }
+}
+
+// Append the rendering of `node` (and its subtree) to `out`.
+fn append_node(mut out: String, in d: Json, take node: Int) {
+    let kind = kind_of(d, node);
+    if kind == kind_null() {
+        std::string::append(out, "null");
+    } else if kind == kind_false() {
+        std::string::append(out, "false");
+    } else if kind == kind_true() {
+        std::string::append(out, "true");
+    } else if kind == kind_number() {
+        append_number(out, num_of(d, node));
+    } else if kind == kind_string() {
+        let text = text_of(d, node);
+        append_string_token(out, text);
+    } else if kind == kind_array() {
+        std::string::push_byte(out, 91);
+        var child = first_child(d, node);
+        while child >= 0 {
+            append_node(out, d, child);
+            child = next_sibling(d, child);
+            if child >= 0 {
+                std::string::push_byte(out, 44);
+            }
+        }
+        std::string::push_byte(out, 93);
+    } else {
+        std::string::push_byte(out, 123);
+        var child = first_child(d, node);
+        while child >= 0 {
+            let key = key_of(d, child);
+            append_string_token(out, key);
+            std::string::push_byte(out, 58);
+            append_node(out, d, child);
+            child = next_sibling(d, child);
+            if child >= 0 {
+                std::string::push_byte(out, 44);
+            }
+        }
+        std::string::push_byte(out, 125);
+    }
+}
+
+/// Render the whole document as compact JSON text (no whitespace), member
+/// order preserved.
+///
+/// # Example
+/// ```tuo
+/// // let text = std::json::render(d);
+/// ```
+pub fn render(in d: Json) -> String {
+    var out = std::string::empty();
+    if node_count(d) > 0 {
+        append_node(out, d, root());
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs.
+// ----------------------------------------------------------------------------
+
+// A helper so specs can reach inside a parse result without effects.
+fn parsed(in text: Str) -> Json {
+    match std::json::parse(text) {
+        Ok { value } => value,
+        Err { error } => Json { kinds: std::array::empty(), nums: std::array::empty(), texts: std::array::empty(), keys: std::array::empty(), firsts: std::array::empty(), nexts: std::array::empty() },
+    }
+}
+
+fn parse_fails(in text: Str) -> Bool {
+    match std::json::parse(text) {
+        Ok { value } => false,
+        Err { error } => true,
+    }
+}
+
+fn render_of(in text: Str) -> String {
+    let d = parsed(text);
+    render(d)
+}
+
+spec "scalars parse to their kinds" {
+    then kind_of(parsed("null"), root()) == kind_null();
+    then kind_of(parsed("true"), root()) == kind_true();
+    then kind_of(parsed("false"), root()) == kind_false();
+    then kind_of(parsed("42"), root()) == kind_number();
+    then kind_of(parsed("\"hi\""), root()) == kind_string();
+    then kind_of(parsed(" [1] "), root()) == kind_array();
+    then kind_of(parsed("{}"), root()) == kind_object();
+}
+
+spec "numbers decode as Float" {
+    then num_of(parsed("42"), root()) == 42.0;
+    then num_of(parsed("-7"), root()) == 0.0 - 7.0;
+    then num_of(parsed("2.25"), root()) == 2.25;
+    then num_of(parsed("1e3"), root()) == 1000.0;
+    then num_of(parsed("-1.5e2"), root()) == 0.0 - 150.0;
+}
+
+spec "strings decode their escapes" {
+    then std::string::as_str(text_of(parsed("\"hi\""), root())) == "hi";
+    then std::string::len(text_of(parsed("\"a\\nb\""), root())) == 3;
+    then std::string::byte_at(text_of(parsed("\"a\\nb\""), root()), 1) == 10;
+    then std::string::as_str(text_of(parsed("\"q\\\"q\""), root())) == "q\"q";
+}
+
+spec "the arena counts its nodes" {
+    then node_count(parsed("null")) == 1;
+    then node_count(parsed("[1, 2, 3]")) == 4;
+    then node_count(parsed("{\"a\": [true]}")) == 3;
+}
+
+spec "arrays link their children in order" {
+    then child_count(parsed("[1, 2, 3]"), root()) == 3;
+    then child_count(parsed("[]"), root()) == 0;
+    then num_of(parsed("[1, 2, 3]"), first_child(parsed("[1, 2, 3]"), root())) == 1.0;
+    then num_of(parsed("[1, 2, 3]"), next_sibling(parsed("[1, 2, 3]"), first_child(parsed("[1, 2, 3]"), root()))) == 2.0;
+    then next_sibling(parsed("[7]"), first_child(parsed("[7]"), root())) == 0 - 1;
+    then kind_of(parsed("[[1], 2]"), first_child(parsed("[[1], 2]"), root())) == kind_array();
+}
+
+spec "objects find members by key" {
+    then num_of(parsed("{\"id\": 7, \"n\": 2}"), member(parsed("{\"id\": 7, \"n\": 2}"), root(), "id")) == 7.0;
+    then num_of(parsed("{\"id\": 7, \"n\": 2}"), member(parsed("{\"id\": 7, \"n\": 2}"), root(), "n")) == 2.0;
+    then member(parsed("{\"id\": 7}"), root(), "missing") == 0 - 1;
+    then std::string::as_str(key_of(parsed("{\"id\": 7}"), first_child(parsed("{\"id\": 7}"), root()))) == "id";
+}
+
+spec "nesting navigates" {
+    then child_count(parsed("{\"xs\": [1, 2], \"o\": {\"y\": true}}"), root()) == 2;
+    then child_count(parsed("{\"xs\": [1, 2]}"), member(parsed("{\"xs\": [1, 2]}"), root(), "xs")) == 2;
+    then kind_of(parsed("{\"o\": {\"y\": true}}"), member(parsed("{\"o\": {\"y\": true}}"), member(parsed("{\"o\": {\"y\": true}}"), root(), "o"), "y")) == kind_true();
+}
+
+spec "malformed input is a positioned error" {
+    then parse_fails("");
+    then parse_fails("nul");
+    then parse_fails("[1, 2");
+    then parse_fails("{\"a\" 1}");
+    then parse_fails("\"\\u0041\"");
+    then parse_fails("1 2");
+    then !parse_fails(" [ ] ");
+    then std::string::as_str(match std::json::parse("nul") {
+        Ok { value } => std::string::empty(),
+        Err { error } => error,
+    }) == "invalid JSON at byte 0";
+}
+
+spec "render re-emits canonically" {
+    then std::string::as_str(render_of("null")) == "null";
+    then std::string::as_str(render_of(" [ 1 , 2 ] ")) == "[1,2]";
+    then std::string::as_str(render_of("{\"a\": true, \"b\": [1.5, \"x\"]}")) == "{\"a\":true,\"b\":[1.5,\"x\"]}";
+    then std::string::as_str(render_of("-7")) == "-7";
+    then std::string::as_str(render_of("2.25")) == "2.25";
+}
+
+spec "parse of render is a fixed point" {
+    then std::string::as_str(render(parsed(std::string::as_str(render_of("{\"a\": [1, {\"b\": null}]}"))))) == "{\"a\":[1,{\"b\":null}]}";
+}

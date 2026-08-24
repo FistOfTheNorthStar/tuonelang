@@ -1,0 +1,44 @@
+// The channels workload (ADR-0015): synchronization-crossing throughput over
+// the channel primitives. One channel is created up front (handles are
+// process-lived); each round sends 500 values through it and receives all
+// 500 back, so every iteration crosses the runtime's locked FIFO twice —
+// single-threaded on purpose, so the number isolates the crossing cost
+// itself (the parallel lab category already measures threading). The C peer
+// makes the identical locked crossings through a mutex-and-condvar FIFO; the
+// Go peer uses its native buffered channel — the direct Go-parity
+// comparison.
+//
+// round(ch, 500) returns the count received, 500; main runs 200 rounds and
+// returns the last round's count. Observable exit byte: 500 & 0xff = 244.
+
+fn round(take ch: Int, take n: Int) -> Int {
+    var i = 0;
+    while i < n {
+        if std::rt::chan_send(ch, i) != 0 {
+            return 0 - 1;
+        }
+        i = i + 1;
+    }
+    var count = 0;
+    while count < n {
+        if std::rt::chan_recv(ch) < 0 {
+            return 0 - 2;
+        }
+        count = count + 1;
+    }
+    count
+}
+
+fn main() -> Int {
+    let ch = std::rt::chan_new();
+    if ch < 0 {
+        return 1;
+    }
+    var result = 0;
+    var r = 0;
+    while r < 200 {
+        result = round(ch, 500);
+        r = r + 1;
+    }
+    result
+}

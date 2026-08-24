@@ -1,0 +1,18 @@
+// ADR-0016: `Float` joins the growable-array element set — an 8-byte scalar
+// element stored and loaded at its own register width (`F64`), with `set`
+// overwriting in place. Sums 1.5 + 2.25 + 4.0 after overwriting the middle
+// element, casts saturating to Int: 7.75 as Int = 7.
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 1.5);
+    std::array::push(xs, 9.0);
+    std::array::push(xs, 4.0);
+    std::array::set(xs, 1, 2.25);
+    var total = 0.0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total as Int
+}

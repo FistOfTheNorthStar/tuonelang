@@ -62,6 +62,9 @@ the replacement, preserving the decision history.
 | [ADR-0011](ADR-0011-hash-map.md) | The hash map — a keyed associative container | accepted |
 | [ADR-0012](ADR-0012-generic-array-elements.md) | Generic `Array[T]` element types — widening the monomorphic builtin surface | accepted |
 | [ADR-0013](ADR-0013-os-effect-boundary.md) | The OS effect boundary — clock, argv, and files | accepted |
+| [ADR-0014](ADR-0014-socket-effects.md) | Socket effects — the network joins the descriptor seam | accepted |
+| [ADR-0015](ADR-0015-channels-and-mutexes.md) | Channels and mutexes — communication joins the effect seam | accepted |
+| [ADR-0016](ADR-0016-json-and-the-data-increment.md) | `std::json` and the data increment — Float elements, indexed writes, and the recursion boundary | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -118,7 +121,24 @@ boundary — six further `std::rt` primitives (`now_nanos`, `arg_count`,
 `std::time::now`, `std::process::arg_count`/`arg`, and the whole `std::fs`
 disk tier real EFFECT-tier code, and landed the gating **`file-io`** lab
 workload (with C and Go peers) — the effect-crossing benchmark ADR-0006's
-acceptance had deferred to exactly this ADR. Of the eleven runtime workloads,
-ten now measure, leaving only `networking`. **No ADR remains `proposed`**;
-the `networking` lab entry stays honestly unsupported pending a socket-open
-effect ADR.
+acceptance had deferred to exactly this ADR.
+
+**ADR-0014, ADR-0015, and ADR-0016** were accepted together (2026-08-24) as
+the Go-parity closing sweep. ADR-0014 (socket effects, ABI v8) added
+`listen`/`bound_port`/`accept`/`connect` on the descriptor seam, the
+`std::net` module, http-service's live loopback `serve_once` (replacing its
+last CONTRACT), and flipped the lab's `networking` entry — the catalog's
+final `Unsupported` — to measured. ADR-0015 (channels and mutexes, ABI v9)
+added `chan_new`/`send`/`recv`/`close` and `mutex_new`/`lock`/`unlock` as
+runtime-owned handles preserving ADR-0007's no-data-race property, **emptied
+the stdlib's contract tier** (`std::sync` channels and handle-based
+`lock`/`unlock` are real, pinned emptiness), gave `concurrent-worker` its
+dynamically-drained shared work queue, and landed the gating `channels`
+workload (whose Go peer is Go's native `chan`). ADR-0016 (the data
+increment) closed the recursive-declaration compiler-hang hole with the
+`T0016` recursion boundary, admitted `Float` array elements, added
+`std::array::set` (the indexed write), and shipped `std::json` — decode,
+navigate, render over an index arena, entirely spec-checked and natively
+pinned — with the gating `json-parse` workload (whose Go peer is
+`encoding/json`). Of the thirteen runtime workloads, **all thirteen now
+measure**. **No ADR remains `proposed`.**

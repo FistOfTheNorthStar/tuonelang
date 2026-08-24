@@ -1,0 +1,125 @@
+// std::net — TCP sockets (ADR-0014).
+//
+//   Executable tier — pure classification of the primitives' outcomes.
+//
+//   Effect tier — the operations that actually touch the network: `listen`,
+//   `bound_port`, `accept`, `connect`, and `close`, thin wrappers over the
+//   ADR-0014 effect primitives. A connected descriptor moves bytes through
+//   the same seam files do — `std::rt::write` / `std::rt::read_byte` — so
+//   there is deliberately no separate send/receive pair. They compile and
+//   run natively, but an effectful function can never appear in a spec
+//   (`R0007`), so each is pinned by a native CLI test instead and marked
+//   `EFFECT:`.
+//
+// IPv4 TCP only; `listen` binds loopback; `connect` takes a numeric address.
+
+module std::net;
+
+// ----------------------------------------------------------------------------
+// Outcome classification — executable tier.
+// ----------------------------------------------------------------------------
+
+/// Did a socket operation yield a usable descriptor?
+///
+/// Every ADR-0014 primitive returns a descriptor (`>= 0`) or a negative host
+/// error; this is the one branch every socket program takes.
+///
+/// # Example
+/// ```tuo
+/// let ok = std::net::is_descriptor(3); // true
+/// ```
+pub fn is_descriptor(take outcome: Int) -> Bool {
+    outcome >= 0
+}
+
+// ----------------------------------------------------------------------------
+// Socket operations — the EFFECT tier (ADR-0014).
+// ----------------------------------------------------------------------------
+
+/// EFFECT (executable and effectful): create an IPv4 TCP socket bound to
+/// `127.0.0.1:port` and listening. Returns the listening descriptor
+/// (`>= 0`) or a negative value on host error.
+///
+/// Port `0` asks the host for an ephemeral port — pair with `bound_port` to
+/// learn which. Effectful, so no spec (`R0007`); pinned by the native CLI
+/// tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let listener = std::net::listen(0);
+/// ```
+pub fn listen(take port: Int) -> Int {
+    std::rt::listen(port)
+}
+
+/// EFFECT (executable and effectful): the local port a listening descriptor
+/// is actually bound to, or a negative value on host error.
+///
+/// Exists so `listen(0)` is usable — programs and tests never hard-code a
+/// port. Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let port = std::net::bound_port(listener);
+/// ```
+pub fn bound_port(take fd: Int) -> Int {
+    std::rt::bound_port(fd)
+}
+
+/// EFFECT (executable and effectful): accept one pending connection on a
+/// listening descriptor. Returns the connected descriptor (`>= 0`) or a
+/// negative value on host error. Blocks until a connection arrives.
+///
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let conn = std::net::accept(listener);
+/// ```
+pub fn accept(take fd: Int) -> Int {
+    std::rt::accept(fd)
+}
+
+/// EFFECT (executable and effectful): open a TCP connection to `host:port`.
+/// Returns the connected descriptor (`>= 0`) or a negative value on host
+/// error.
+///
+/// `host` is a numeric IPv4 address (`"127.0.0.1"`) — name resolution is
+/// deliberately absent in v0. Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let conn = std::net::connect("127.0.0.1", port);
+/// ```
+pub fn connect(in host: Str, take port: Int) -> Int {
+    std::rt::connect(host, port)
+}
+
+/// EFFECT (executable and effectful): close a socket descriptor. `0` on
+/// success, negative on host error.
+///
+/// A socket is a descriptor, so this is the same `std::rt::close` files use
+/// — re-exposed here so a socket program reads as one module. Effectful, so
+/// no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::net::close(conn);
+/// ```
+pub fn close(take fd: Int) -> Int {
+    std::rt::close(fd)
+}
+
+// ----------------------------------------------------------------------------
+// Specs — executable tier only.
+// ----------------------------------------------------------------------------
+
+spec is_descriptor {
+    then is_descriptor(0);
+    then is_descriptor(3);
+    then !is_descriptor(0 - 1);
+}

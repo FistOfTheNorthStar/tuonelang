@@ -11,11 +11,16 @@ compiler actually accepts and executes — nothing aspirational.
 > `Option`/`Result`, fixed `[T; N]` arrays, `for`/`while`/`match`, calls and
 > recursion, floats, borrow-mode (`in`/`mut`) calls, `Str` values with the
 > `std::str` byte operations, the **owned heap types** — an owned `String` and
-> a growable `Array[Int]` that allocate and free real memory (`std::string`/
-> `std::array`; since ADR-0009) — the `std::rt` host effects
+> a growable `Array[T]` that allocate and free real memory (`std::string`/
+> `std::array`; since ADR-0009, element-generic since ADR-0012, with `Float`
+> elements and the in-place `set` since ADR-0016) — the `std::rt` host effects
 > (`write`/`read_byte`/`write_string`/`exit`, the ADR-0007 `par_map`
-> fork-join, and — since ADR-0013 — `now_nanos`/`arg_count`/`arg_byte`/
-> `open`/`close`/`remove_file`, the clock, argv, and file boundary — native
+> fork-join, — since ADR-0013 — `now_nanos`/`arg_count`/`arg_byte`/
+> `open`/`close`/`remove_file`, the clock, argv, and file boundary, — since
+> ADR-0014 — `listen`/`bound_port`/`accept`/`connect`, the loopback TCP
+> sockets, and — since ADR-0015 — the channel and mutex primitives
+> `chan_new`/`chan_send`/`chan_recv`/`chan_close` and
+> `mutex_new`/`mutex_lock`/`mutex_unlock` — native
 > only; the spec sandbox
 > stays pure, but heap ops *are* pure, so a spec may build strings and arrays) —
 > and, since ADR-0008 Tier 1, **first-class (non-capturing) function values**: a
@@ -150,7 +155,7 @@ let wide: I64 = small as I64;
 | `Option[Int]`, `Result[Int, Str]`, `Pair[A, B]` | Generics use **square brackets**, never `<>` |
 | `[T; N]` | Fixed-capacity inline array, length is part of the type |
 | `String` | Owned, growable, heap-backed byte buffer (`std::string`; runnable since ADR-0009) |
-| `Array[Int]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009). `Array[T]` exists for any `T`, but the v0 operation surface is `Array[Int]`-monomorphic |
+| `Array[T]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009, element-generic since ADR-0012). Supported elements: `Int`, `Float` (since ADR-0016), `Bool`, `Str`, `String`, and structs/enums built from them |
 | `Box[T]`, `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; construction not in the runnable core) |
 | `()` | Unit |
 
@@ -167,7 +172,7 @@ never hand-written:
 - **Not** Copy: any struct/enum with a non-Copy field, `Box`/`Shared`/`Weak`,
   the owned `String`, the growable `Array[T]`, and generic `T` inside a generic
   body.
-- In practice in v0: **structs, enums you define, `String`, and `Array[Int]` are
+- In practice in v0: **structs, enums you define, `String`, and `Array[T]` are
   moved**; scalars and `[Int; N]` are copied. A moved-out owned heap value is
   freed exactly once (drop glue frees at scope end; a move transfers ownership).
 
@@ -295,7 +300,9 @@ returns `()`.
   moving `s.f` leaves `s.g` usable.
 - Copy values (scalars, `[Int; N]`) are copied and stay usable.
 - **Index expressions `xs[i]` are not places**: you can read a Copy element out,
-  but you cannot assign `xs[i] = v` or move out of an index in v0.
+  but you cannot assign `xs[i] = v` or move out of an index in v0. (For a
+  growable `Array[T]`, the in-place element write is the `std::array::set`
+  builtin — ADR-0016.)
 - No user destructors in v0; drop glue is compiler-generated.
 
 ---
@@ -330,6 +337,12 @@ let sh = Shape::Circle { r: 4 };
 - Field access is `p.x`. **Method syntax is not lowered in v0** — `impl` blocks
   and interfaces parse, but you write free functions (`area(s)`, not
   `s.area()`). The stdlib follows the same rule.
+- **A struct or enum may not reach itself** through its own fields/payloads —
+  through any chain of by-value fields, array/map elements, `Option`/`Result`
+  payloads, or tuple/fixed-array components. That is a type error at the
+  declaration (`T0016`, since ADR-0016), *unless* every cycle passes through a
+  `Box`/`Shared`/`Weak` indirection. Recursive data in v0 uses the index-arena
+  pattern instead (the way `std::json` does).
 
 ---
 
@@ -387,11 +400,11 @@ Rules:
 
 A fixed `[T; N]` never allocates — it lives inline wherever the value lives.
 When you need a sequence whose size isn't known at compile time, reach for the
-owned, heap-backed `Array[Int]` in the next section.
+owned, heap-backed `Array[T]` in the next section.
 
 ---
 
-## 11a. Owned `String` and growable `Array[Int]`
+## 11a. Owned `String` and growable `Array[T]`
 
 Since ADR-0009, tuonelang has two heap-backed, owned, growable types that
 allocate and free real memory — and they run in all three engines (the
@@ -413,13 +426,14 @@ let n = std::string::len(s);         // 8
 let c = std::string::byte_at(s, 0);  // 72 — checked, traps IndexOutOfBounds
 let joined = std::string::concat("ab", "cd");   // a fresh owned String "abcd"
 let part = std::string::slice(s, 0, 2);         // a fresh owned String (a copy, not a view)
+let view = std::string::as_str(s);              // borrow the bytes as a Str view (zero-copy; ADR-0010)
 ```
 
 `String == String` is byte-wise content equality (like `Str`); ordering is not
 defined. A `String` is written to a file descriptor with
 `std::rt::write_string(fd, s)` (an `in` borrow — no view type needed).
 
-### Growable `Array[Int]` (`std::array`)
+### Growable `Array[T]` (`std::array`)
 
 ```tuo
 var xs = std::array::empty();
@@ -427,12 +441,17 @@ std::array::push(xs, 10);
 std::array::push(xs, 20);
 let len = std::array::len(xs);            // 2
 let first = std::array::get(xs, 0);       // 10 — checked, traps IndexOutOfBounds
+std::array::set(xs, 0, 15);               // in-place indexed write — checked, traps IndexOutOfBounds (ADR-0016)
 let last = std::array::pop(xs);           // Option[Int]: Some { value: 20 }
 ```
 
-The v0 operation surface is **`Array[Int]`-monomorphic**: the `Array[T]` type
-exists for any `T`, but the builtins operate on `Array[Int]` (a call with a
-different element type is an ordinary `T0001`). Growth uses an amortized
+The operation surface is **element-generic** (since ADR-0012):
+`push`/`pop`/`len`/`get`/`set` operate on `Array[T]` for any supported
+element — `Int`, `Float` (since ADR-0016), `Bool`, `Str`, `String`, and
+structs/enums whose fields are themselves supported (any other element type
+is an ordinary `T0001`). A `get` of a heap-owning element is a recursive
+**deep copy**, and drop is recursive per-element glue; `set` drops the old
+element in place before the new value moves in. Growth uses an amortized
 doubling strategy internally; only length, contents, and `pop`'s `Option` are
 observable, so all three engines agree.
 
@@ -445,8 +464,10 @@ spec build { then std::string::len(std::string::concat("ab", "cd")) == 4; }
 ```
 
 Still on the heap roadmap: the `Box`/`Shared`/`Weak` wrapper *values* (declared,
-still refused natively), `Array[T]` operations for non-`Int` elements, and
-`String`→`Str` borrowing.
+still refused natively), **capturing closures** (ADR-0008 Tier 2), and
+**recursive nominal types** — a struct/enum that reaches itself is refused at
+the declaration (`T0016`) until a successor ADR gives the backends
+runtime-recursive clone/drop glue.
 
 ---
 
@@ -547,13 +568,18 @@ numeric = { path = "../numeric" }   # v0: local path deps only
 
 ## 14. Standard library
 
-Free functions only, one obvious API per task. Three tiers: **executable**
-(pure computation — runs today, has specs), **`EFFECT:`** (real
-implementations over the `std::rt` effect primitives — they run natively, but
-an effectful spec is impossible by `R0007`, so each is pinned by a named
-native CLI test instead), and **`CONTRACT:`** (exact signature + documented
-contract for an effect whose primitive does not exist yet — no executable
-spec, so nothing pretends to run).
+Twelve modules — `std::core`, `std::collections`, `std::math`, `std::str`,
+`std::json`, `std::io`, `std::fs`, `std::net`, `std::time`, `std::process`,
+`std::sync`, `std::test` — free functions only, one obvious API per task.
+Three tiers: **executable** (pure computation — runs today, has specs),
+**`EFFECT:`** (real implementations over the `std::rt` effect primitives —
+they run natively, but an effectful spec is impossible by `R0007`, so each is
+pinned by a named native CLI test instead), and **`CONTRACT:`** (exact
+signature + documented contract for an effect whose primitive does not exist
+yet — no executable spec, so nothing pretends to run). Since ADR-0015
+discharged the last `lock`/`unlock` stubs, **the contract tier is empty** —
+and a CLI test (`the_contract_tier_is_empty`) pins it so nothing re-enters
+silently.
 
 ### `std::core` — all executable
 
@@ -613,17 +639,48 @@ The array primitives themselves live in the `std::array` builtin module (§11a).
 `eq`, `ne`, `near(value, target, tolerance)`, `in_range(value, low, high)`,
 `is_true`, `is_false`, `str_eq`.
 
-### `std::io`, `std::fs`, `std::process`, `std::sync`, `std::time`
+### `std::json` — all executable (ADR-0016)
+
+JSON parsing and rendering, written in tuonelang, **entirely in the executable
+tier** (parsing is pure computation, so the whole module runs in the spec
+sandbox — and natively). A parsed document is a `Json` **index arena** — flat
+parallel arrays in DFS pre-order — navigated by node index:
+
+```tuo
+pub fn parse(in text: Str) -> Result[Json, String]  // Err is "invalid JSON at byte N"
+pub fn render(in d: Json) -> String                 // canonical re-render of what parse produced
+pub fn root() -> Int                                // the root node's index (always 0)
+pub fn node_count(in d: Json) -> Int
+pub fn kind_of(in d: Json, take node: Int) -> Int   // compare against the kind_* tags:
+                                                    // kind_null/kind_false/kind_true/kind_number/
+                                                    // kind_string/kind_array/kind_object
+pub fn num_of(in d: Json, take node: Int) -> Float
+pub fn text_of(in d: Json, take node: Int) -> String
+pub fn key_of(in d: Json, take node: Int) -> String
+pub fn first_child(in d: Json, take node: Int) -> Int
+pub fn next_sibling(in d: Json, take node: Int) -> Int
+pub fn child_count(in d: Json, take node: Int) -> Int
+pub fn member(in d: Json, take node: Int, in key: Str) -> Int
+```
+
+Documented limits (honest, in-module): numbers are IEEE `Float`; `\uXXXX`
+escapes are a **parse error** naming the gap; `render` re-emits what `parse`
+produced (building a document from scratch is deferred); objects preserve
+member order (the arena is insertion-ordered).
+
+### `std::io`, `std::fs`, `std::net`, `std::process`, `std::sync`, `std::time`
 
 Each pairs an executable pure core with an effect tier (where the `std::rt`
-primitive exists) and a contract tier (where it does not):
+primitive exists) and a contract tier (where it does not — empty since
+ADR-0015):
 
 | Module | Executable today | `EFFECT:` (runs natively, no spec) | `CONTRACT:` (not yet runnable) |
 |--------|------------------|------------------------------------|-------------------------------|
 | `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`), `read_line` → `Result[String, IoError]` (reads bytes via `std::rt::read_byte` into an owned `String`) | — |
 | `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | `read` → `Result[String, FsError]`, `write`, `exists`, `remove` (over the ADR-0013 `open`/`close`/`remove_file` primitives + the descriptor seam) | — |
+| `std::net` | `is_descriptor` | `listen`, `bound_port`, `accept`, `connect`, `close` (over the ADR-0014 socket primitives — IPv4 TCP, loopback listen, numeric hosts; data moves through the existing `write`/`read_byte` descriptor seam) | — |
 | `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`); `arg_count`, `arg(i)` → `String` (over the ADR-0013 argv primitives) | — |
-| `std::sync` | `Once`/`LockState` pure state models | `par_map` (structured fork-join over `std::rt::par_map`, ADR-0007) | `lock`, `unlock` (no shared state across threads) |
+| `std::sync` | `Once`/`LockState` pure state models | `par_map` (structured fork-join over `std::rt::par_map`, ADR-0007); `channel`, `send`, `recv`, `close`, `mutex`, `lock`, `unlock` (over the ADR-0015 channel/mutex primitives — process-lived `Int` handles; channels carry non-negative `Int`s by copy, `recv` returns `-1` once closed and drained; error-checked mutexes) | — |
 | `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …), `render` → `String`, `instant_at`, `elapsed` | `now` (over `std::rt::now_nanos`, ADR-0013) | — |
 
 A real program printing through the stdlib (compile the `std::io` module
@@ -711,14 +768,17 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Borrow-mode (`in`/`mut`) calls | ✅ | ✅ | ✅ |
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
-| Owned `String`, growable `Array[Int]` (`std::string`/`std::array`, allocate/free) | ✅ | ✅ | ✅ |
+| Owned `String`, growable `Array[T]` (`std::string`/`std::array` incl. `set`; elements `Int`/`Float`/`Bool`/`Str`/`String` + supported structs/enums) | ✅ | ✅ | ✅ |
+| `std::json` (`parse`/`render`, arena accessors — all pure) | ✅ | ✅ | ✅ |
 | First-class (non-capturing) function values `fn(mode T, …) -> R`, indirect calls | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `std::rt::now_nanos`/`arg_count`/`arg_byte`/`open`/`close`/`remove_file` (ADR-0013: clock, argv, files) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::sync::par_map` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `std::rt::listen`/`bound_port`/`accept`/`connect` (ADR-0014: loopback TCP sockets over the descriptor seam) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `std::rt::chan_new`/`chan_send`/`chan_recv`/`chan_close`, `mutex_new`/`mutex_lock`/`mutex_unlock` (ADR-0015: channels, mutexes) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::net::listen`/`bound_port`/`accept`/`connect`/`close`, `std::sync::par_map`/`channel`/`send`/`recv`/`close`/`mutex`/`lock`/`unlock` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
-| Shared state across threads (locks, channels), sockets | contract sigs only | ❌ (no primitive) | ❌ (no primitive) |
+| Recursive nominal types (a struct/enum reaching itself without a `Box`/`Shared`/`Weak` indirection) | ❌ refused (`T0016`) | ❌ | ❌ |
 
 "Refused" means a clear `Unsupported` error naming the construct, pointing you
 back to the interpreter as the reference — never silent mis-compilation.
@@ -737,7 +797,8 @@ call of non-function · `T0004` unknown field · `T0005` struct field-set error 
 invalid cast · `T0009` invalid `?` · `T0010` wrong type-argument count ·
 `T0011` type annotation needed · `T0012` expected value/constructor · `T0013`
 break/continue outside loop · `T0014` invalid fixed-array length · `T0015` a
-builtin or generic function is not first-class (cannot be used as a value).
+builtin or generic function is not first-class (cannot be used as a value) ·
+`T0016` recursive struct/enum without a `Box`/`Shared`/`Weak` indirection.
 
 **Ownership** — `O0001` use of moved value · `O0003` move out of borrowed
 param · `O0005` conflicting borrows in a call · `O0006` move of borrowed value
@@ -759,7 +820,9 @@ Copy element.
 6. **No bitwise operators** — `|` appears only in or-patterns.
 7. **The last expression of a block (no semicolon) is its value**; adding a `;`
    turns it into a `()`-valued statement (usually a `T0001` at the return).
-8. **`xs[i]` is not assignable** — build a new array or restructure with locals.
+8. **`xs[i]` is not assignable** — on a growable `Array[T]` use
+   `std::array::set`; on a fixed `[T; N]` build a new array or restructure
+   with locals.
 9. **Every parameter needs a mode** (`take`/`in`/`mut`) and a type.
 10. **Free functions only** — `map(x, f)`-style, never `x.map(f)`.
 11. **Overflow traps.** Don't rely on wraparound; it doesn't exist.

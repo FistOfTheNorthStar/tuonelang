@@ -261,6 +261,7 @@ the trait system will own.
 | `T0013` | `break`/`continue` outside a loop. |
 | `T0014` | Invalid fixed-size array length: suffixed, unparsable, or over `MAX_FIXED_ARRAY_LEN` (ADR-0004 Stage 2). |
 | `T0015` | Not first-class: a builtin or generic function used as a value (ADR-0008 Tier 1, §3.8). Only ordinary top-level user `fn`s become function values. |
+| `T0016` | Recursive type without a heap-wrapper indirection (ADR-0016, §3.7): a struct/enum reaches itself through its own fields/payloads. Only `Box`/`Shared`/`Weak` break a cycle. |
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
@@ -289,6 +290,17 @@ normal call checking — resolved per §2.4.
 | `fn open(in path: Str, take mode: Int) -> Int` | (ADR-0013) Opens `path`; returns a file descriptor (`>= 0`), `-2` when the path does not exist, or another negative value on host error (an unknown `mode` included). Modes: `0` read, `1` write (create + truncate), `2` append (create). The returned descriptor is exactly what `write`/`read_byte`/`write_string` accept — file I/O is the composition of `open` with the descriptor seam. **Never traps.** |
 | `fn close(take fd: Int) -> Int` | (ADR-0013) Closes `fd`; `0` on success, negative on host error. **Never traps.** |
 | `fn remove_file(in path: Str) -> Int` | (ADR-0013) Removes the file at `path`; `0` on success, `-2` when it does not exist, another negative value on other host errors. **Never traps.** |
+| `fn listen(take port: Int) -> Int` | (ADR-0014) Creates an IPv4 TCP socket bound to `127.0.0.1:port` and listening; returns the listening descriptor (`>= 0`) or a negative value on host error. Port `0` requests an ephemeral port — pair with `bound_port`. **Never traps.** |
+| `fn bound_port(take fd: Int) -> Int` | (ADR-0014) The local port a listening descriptor is bound to, or a negative value on host error. **Never traps.** |
+| `fn accept(take fd: Int) -> Int` | (ADR-0014) Accepts one pending connection; the connected descriptor (`>= 0`) or a negative value on host error. Blocks. The descriptor is exactly what `write`/`read_byte`/`close` accept — socket I/O is the composition of the producers with the descriptor seam. **Never traps.** |
+| `fn connect(in host: Str, take port: Int) -> Int` | (ADR-0014) Opens a TCP connection to the numeric IPv4 `host:port` (no name resolution); the connected descriptor (`>= 0`) or a negative value on host error. **Never traps.** |
+| `fn chan_new() -> Int` | (ADR-0015) Creates an unbounded FIFO channel of **non-negative** `Int` values; a process-lived handle (`>= 0`) or `-1` on registry exhaustion. **Never traps.** |
+| `fn chan_send(take ch: Int, take v: Int) -> Int` | (ADR-0015) Enqueues `v`; `0` on success, `-1` on an invalid handle, a closed channel, or a negative `v` (refused so `chan_recv`'s `-1` stays unambiguous). **Never traps.** |
+| `fn chan_recv(take ch: Int) -> Int` | (ADR-0015) Dequeues the oldest value, **blocking** until one is available; the value, or `-1` once the channel is closed and drained (or the handle is invalid). **Never traps.** |
+| `fn chan_close(take ch: Int) -> Int` | (ADR-0015) Closes the channel — sends refused, every blocked or future receive returns `-1` after the queue drains. `0` on success (idempotent), `-1` on an invalid handle. **Never traps.** |
+| `fn mutex_new() -> Int` | (ADR-0015) Creates a mutex; a process-lived handle (`>= 0`) or `-1` on registry exhaustion. **Never traps.** |
+| `fn mutex_lock(take m: Int) -> Int` | (ADR-0015) Acquires, **blocking** until available; `0` on success, `-1` on an invalid handle or an error-checked relock by the holding thread — a mistake is a code, never undefined behavior. **Never traps.** |
+| `fn mutex_unlock(take m: Int) -> Int` | (ADR-0015) Releases; `0` on success, `-1` on an invalid handle or when the caller does not hold it. **Never traps.** |
 
 **Pure string builtins (`std::str`)** — byte-level operations on the UTF-8
 buffer of a `Str` (a `slice` may split a multi-byte code point; that is the v0
@@ -364,18 +376,32 @@ builtins whose element type is resolved from the call, not user type parameters:
 | `fn pop(mut xs: Array[T]) -> Option[T]` | Removes and returns the last element; `None` when empty. Never traps. |
 | `fn len(in xs: Array[T]) -> Int` | The element count. Never traps. |
 | `fn get(in xs: Array[T], take i: Int) -> T` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(xs)`. |
+| `fn set(mut xs: Array[T], take i: Int, take v: T)` | (ADR-0016) Overwrites the element at `i` with `v` in place — the previous element is dropped. **Traps `IndexOutOfBounds`** on `get`'s bounds; `set` never grows the array. The one in-place element write, mirroring `get` as the one read. |
 
-The **v0-supported element set** is the scalars `Int`/`Bool`/`Str`/`String` and
-user structs/enums whose fields are themselves supported; an element outside it
-(a nested `Array`/`Map`, a `Box`/`Shared`/`Weak` wrapper) is an ordinary
-`T0001`. The reference interpreter **and both native backends** run every
-supported element type: since the ADR-0012 owned-element increment, a
-heap-owning element (`String`, or a struct/enum carrying one) gets a native
-deep copy on `get` and recursive per-element drop glue matching the
-interpreter's clone/drop semantics (`abi.md` §Arrays). Only an element
-containing a heap wrapper would be refused natively — and the wrapper is
-already outside the type-level set, so the refusal is unreachable from checked
-code.
+The **v0-supported element set** is the scalars `Int`/`Float`/`Bool`/`Str`/
+`String` (`Float` since ADR-0016) and user structs/enums whose fields are
+themselves supported; an element outside it (a nested `Array`/`Map`, a
+`Box`/`Shared`/`Weak` wrapper) is an ordinary `T0001`. The reference
+interpreter **and both native backends** run every supported element type:
+since the ADR-0012 owned-element increment, a heap-owning element (`String`,
+or a struct/enum carrying one) gets a native deep copy on `get` and recursive
+per-element drop glue matching the interpreter's clone/drop semantics
+(`abi.md` §Arrays). Only an element containing a heap wrapper would be
+refused natively — and the wrapper is already outside the type-level set, so
+the refusal is unreachable from checked code.
+
+**The recursion boundary (`T0016`, ADR-0016).** A struct or enum that reaches
+itself through its own fields or variant payloads — by value, or through any
+chain of `Array`/`Map` elements, `Option`/`Result` payloads, tuple or
+fixed-array components, or generic type arguments — is a **type error at the
+declaration**. v0 cannot represent such a type: a by-value cycle has infinite
+size, and a container cycle would recurse the native backends' inline
+clone/drop glue emission without bound. The one legal indirection is a heap
+wrapper (`Box`/`Shared`/`Weak`): its layout is a bare pointer, so a
+wrapper-broken cycle (the `Weak` back-edge shapes) declares fine. The
+diagnostic points at the wrapper escape hatch and at the index-arena pattern
+(`std::json`'s tree). A successor ADR that gives the backends
+runtime-recursive glue functions relaxes this boundary.
 
 **String equality.** `==`/`!=` on two `String` operands is **byte-wise content
 equality**, the same contract as `Str == Str` (§3.4); the comparison consumes

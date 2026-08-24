@@ -1,0 +1,27 @@
+// ADR-0016: `std::array::set` overwrites an element in place — for a scalar
+// element a single store, for a heap-owning element (`String`) a drop of the
+// old value's buffer before the new one moves in (no leak, no double free).
+// ints() reads back its overwrites (2), strings() replaces "aa" with "horse"
+// and reports the new length against the untouched neighbor (5 + 40 - 2 =
+// 43); main returns 2 + 43 + 5 - 40 = 10.
+fn ints() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 10);
+    std::array::push(xs, 20);
+    std::array::push(xs, 30);
+    std::array::set(xs, 1, 40);
+    std::array::set(xs, 0, 2);
+    std::array::get(xs, 0) + std::array::get(xs, 1) - 40
+}
+
+fn strings() -> Int {
+    var names = std::array::empty();
+    std::array::push(names, std::string::from_str("aa"));
+    std::array::push(names, std::string::from_str("bb"));
+    std::array::set(names, 0, std::string::from_str("horse"));
+    std::string::len(std::array::get(names, 0)) + 40 - std::string::len(std::array::get(names, 1))
+}
+
+fn main() -> Int {
+    ints() + strings() + 5 - 40
+}

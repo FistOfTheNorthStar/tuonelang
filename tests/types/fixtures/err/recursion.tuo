@@ -1,0 +1,32 @@
+// ADR-0016's recursion boundary (`T0016`): a struct or enum that reaches
+// itself through its own fields without a heap-wrapper indirection is a type
+// error at the declaration — v0 cannot represent it (a by-value cycle has
+// infinite size; a cycle through `Array`/`Map` would recurse the native
+// backends' inline glue emission forever). Before the boundary landed these
+// declarations were silently accepted and hung the compiler at codegen.
+
+// The by-value cycle: infinite size.
+struct ByValue {
+    next: ByValue,
+}
+
+// The container cycle: finite size (an `Array` field is a three-word
+// header), but the glue walk still descends — rejected until a successor
+// ADR gives the backends runtime-recursive glue.
+enum Tree {
+    Leaf { value: Int },
+    Branch { children: Array[Tree] },
+}
+
+// A mutual cycle reports at every participating declaration.
+struct Ping {
+    other: Pong,
+}
+
+struct Pong {
+    other: Option[Ping],
+}
+
+fn main() -> Int {
+    0
+}

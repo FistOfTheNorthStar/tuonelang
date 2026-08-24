@@ -22,9 +22,10 @@
 //!    peer even replicates the explicit doubling growth rather than leaning on
 //!    Go's `append` heuristic), so the equivalent-semantics rule still holds. A
 //!    workload whose tuonelang side is
-//!    [`Unsupported`](super::runtime::Support::Unsupported) (networking) has
-//!    **no comparison** for any peer — you cannot compare a feature that does not
-//!    exist.
+//!    [`Unsupported`](super::runtime::Support::Unsupported) has **no
+//!    comparison** for any peer — you cannot compare a feature that does not
+//!    exist. (Since ADR-0014 flipped networking, no workload is currently in
+//!    that state; the rule stands for any future entry.)
 //!
 //! 2. **No claim without both numbers.** A [`Comparison`] can only reach a
 //!    [`Verdict::Measured`] when *both* sides actually compiled and ran under the
@@ -170,6 +171,9 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "allocation" => include_str!("../../../../benchmarks/runtime/programs/c/allocation.c"),
         "map-lookup" => include_str!("../../../../benchmarks/runtime/programs/c/map-lookup.c"),
         "file-io" => include_str!("../../../../benchmarks/runtime/programs/c/file-io.c"),
+        "networking" => include_str!("../../../../benchmarks/runtime/programs/c/networking.c"),
+        "channels" => include_str!("../../../../benchmarks/runtime/programs/c/channels.c"),
+        "json-parse" => include_str!("../../../../benchmarks/runtime/programs/c/json-parse.c"),
         _ => return None,
     })
 }
@@ -202,6 +206,9 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
         "allocation" => include_str!("../../../../benchmarks/runtime/programs/go/allocation.go"),
         "map-lookup" => include_str!("../../../../benchmarks/runtime/programs/go/map-lookup.go"),
         "file-io" => include_str!("../../../../benchmarks/runtime/programs/go/file-io.go"),
+        "networking" => include_str!("../../../../benchmarks/runtime/programs/go/networking.go"),
+        "channels" => include_str!("../../../../benchmarks/runtime/programs/go/channels.go"),
+        "json-parse" => include_str!("../../../../benchmarks/runtime/programs/go/json-parse.go"),
         _ => return None,
     })
 }

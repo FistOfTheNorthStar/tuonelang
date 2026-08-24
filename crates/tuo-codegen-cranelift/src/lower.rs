@@ -2407,6 +2407,67 @@ impl<'a> Lowering<'a> {
                 let result = self.builder.inst_results(call)[0];
                 self.write_place(dest, result)
             }
+            // ADR-0014: the socket effects — descriptor producers on the
+            // same seam; a `Str` host passes as `{ptr, len}` like a path.
+            EffectOp::Listen | EffectOp::BoundPort | EffectOp::Accept => {
+                let [scalar] = args else {
+                    return Err(CodegenError::backend(
+                        "listen/bound_port/accept expects exactly 1 argument",
+                    ));
+                };
+                let scalar = self.lower_operand(&value_arg(scalar)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[scalar]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::Connect => {
+                let [host, port] = args else {
+                    return Err(CodegenError::backend("connect expects exactly 2 arguments"));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[ptr, len, port]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            // ADR-0015: channels and mutexes — nullary constructors and
+            // plain scalar calls, every result an `I64` handle or status.
+            EffectOp::ChanNew | EffectOp::MutexNew => {
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::ChanSend => {
+                let [ch, v] = args else {
+                    return Err(CodegenError::backend(
+                        "chan_send expects exactly 2 arguments",
+                    ));
+                };
+                let ch = self.lower_operand(&value_arg(ch)?)?;
+                let v = self.lower_operand(&value_arg(v)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[ch, v]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::ChanRecv
+            | EffectOp::ChanClose
+            | EffectOp::MutexLock
+            | EffectOp::MutexUnlock => {
+                let [handle] = args else {
+                    return Err(CodegenError::backend(
+                        "a channel/mutex effect expects exactly 1 argument",
+                    ));
+                };
+                let handle = self.lower_operand(&value_arg(handle)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[handle]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
         }
     }
 
@@ -2485,6 +2546,64 @@ impl<'a> Lowering<'a> {
                 signature.params.push(AbiParam::new(types::I64));
                 signature.returns.push(AbiParam::new(types::I64));
                 effect::REMOVE_FILE_SYMBOL
+            }
+            // ADR-0014: the socket effect symbols.
+            EffectOp::Listen => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::LISTEN_SYMBOL
+            }
+            EffectOp::BoundPort => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::BOUND_PORT_SYMBOL
+            }
+            EffectOp::Accept => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::ACCEPT_SYMBOL
+            }
+            EffectOp::Connect => {
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CONNECT_SYMBOL
+            }
+            // ADR-0015: the channel and mutex effect symbols.
+            EffectOp::ChanNew => {
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CHAN_NEW_SYMBOL
+            }
+            EffectOp::ChanSend => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CHAN_SEND_SYMBOL
+            }
+            EffectOp::ChanRecv => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CHAN_RECV_SYMBOL
+            }
+            EffectOp::ChanClose => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CHAN_CLOSE_SYMBOL
+            }
+            EffectOp::MutexNew => {
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::MUTEX_NEW_SYMBOL
+            }
+            EffectOp::MutexLock => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::MUTEX_LOCK_SYMBOL
+            }
+            EffectOp::MutexUnlock => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::MUTEX_UNLOCK_SYMBOL
             }
         };
         let id = self
@@ -3135,6 +3254,38 @@ impl<'a> Lowering<'a> {
                 self.write_unit_dest(dest)
             }
             HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+            HeapMutOp::Set => {
+                // ADR-0016: bounds-check against `len` (set never grows),
+                // drop the old element's owned buffers in place, then write
+                // the new element — a scalar store or a `stride`-byte memcpy
+                // — matching the interpreter's `elements[index] = value`.
+                let element = self.array_element_ty(target)?;
+                let header = self.header_address(target)?;
+                let (ptr, len, _cap) = self.load_header(header);
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .ins()
+                    .icmp(IntCC::UnsignedGreaterThanOrEqual, index, len);
+                self.guard(oob, TrapCode::IndexOutOfBounds);
+                let offset = self.builder.ins().imul_imm(index, stride);
+                let addr = self.builder.ins().iadd(ptr, offset);
+                let arg = args
+                    .get(1)
+                    .ok_or_else(|| CodegenError::backend("set is missing its element"))?;
+                if scalar_type(&element).is_some() {
+                    let v = self.lower_operand(arg)?;
+                    self.builder.ins().store(MemFlags::trusted(), v, addr, 0);
+                } else {
+                    if ty_owns_heap(&element, self.types) {
+                        self.emit_heap_glue(&element, addr, HeapGlue::DropInPlace)?;
+                    }
+                    let src = self.operand_aggregate_address(arg)?;
+                    let layout = self.layout(&element)?;
+                    self.emit_memcpy(addr, src, layout);
+                }
+                self.write_unit_dest(dest)
+            }
             HeapMutOp::MapInsert | HeapMutOp::MapRemove => {
                 // The whole table transition lives in the `tuo_rt_map_*` shim
                 // (ADR-0011): pass the header, the key (and value for insert),

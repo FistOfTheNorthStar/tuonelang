@@ -177,11 +177,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   the vector-pinned splitmix64/FNV-1a hashes — unobservable, since `keys` is
   insertion order — ABI v6); — since ADR-0007 — the one concurrency
   primitive `std::rt::par_map` (structured fork-join over POSIX threads via
-  `tuo_rt_par_map`, a typed effect); and — since ADR-0013 — the **OS effect
+  `tuo_rt_par_map`, a typed effect); — since ADR-0013 — the **OS effect
   boundary**: the six further `std::rt` primitives `now_nanos` (the
   monotonic clock), `arg_count`/`arg_byte` (argv, captured by the runtime
   before `main`), and `open`/`close`/`remove_file` (files, composing with
-  the ADR-0006 descriptor seam — ABI v7) — and *refuse* — never
+  the ADR-0006 descriptor seam); — since ADR-0014 — the **socket
+  effects** `listen`/`bound_port`/`accept`/`connect` (IPv4 TCP descriptor
+  producers on the same seam — a socket is a descriptor, so
+  `write`/`read_byte`/`close` move and release the bytes); — since
+  ADR-0015 — the **channels and mutexes**
+  `chan_new`/`chan_send`/`chan_recv`/`chan_close` and
+  `mutex_new`/`mutex_lock`/`mutex_unlock` (runtime-owned process-lived
+  handles; non-negative payloads cross threads by copy, so ADR-0007's
+  no-data-race property survives — ABI v9); and — since ADR-0016 — the
+  **data increment**: `Float` array elements, the in-place
+  `std::array::set` (bounds-trapping indexed write with old-element drop),
+  and the `T0016` recursion boundary (a struct/enum reaching itself without
+  a heap-wrapper indirection is now a *front-end* error — previously it
+  type-checked and hung codegen) — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
@@ -296,8 +309,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: of the eleven runtime
-  workloads exactly ten (**startup, integer-computation, function-calls,
+  honesty rule the prompt demands is enforced structurally: all **thirteen**
+  runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
@@ -309,16 +322,22 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   peer calling through a function pointer, same iteration count and exit, —
   since ADR-0011's hash map landed — **map-lookup**, an insert-1000/lookup-1000/
   remove-500 churn over `Map[Int, Int]` with open-addressing C and built-in-map
-  Go peers, and — since ADR-0013's OS boundary landed — **file-io**, per round
+  Go peers, — since ADR-0013's OS boundary landed — **file-io**, per round
   an open/write/close of a 240-byte scratch file, a byte-at-a-time read-back,
   and a remove, with C and Go peers making the identical calls — the deferred
-  ADR-0006 effect-crossing benchmark) carry a
-  real program and are `Support::Supported`, while only **networking** is
-  `Support::Unsupported` with the *exact reason* the v0 core cannot express it (no
-  socket-open effect) and emits **no number** — the entry becomes measurable the
-  moment the feature lands, with no other change (exactly how `collections`,
-  `string-processing`, `allocation`, `map-lookup`, and `file-io` flipped or
-  were added).
+  ADR-0006 effect-crossing benchmark, — since ADR-0014's sockets landed —
+  **networking**, per round a listen/connect/accept over an ephemeral
+  loopback port with 128 bytes read back byte-at-a-time, the catalog's last
+  `Unsupported` entry flipped exactly as its comment promised, — since
+  ADR-0015 — **channels**, a single-threaded send-500/recv-500 churn
+  isolating the locked-FIFO crossing (C peer a mutex-and-condvar queue, Go
+  peer its **native buffered `chan`**), and — since ADR-0016 —
+  **json-parse**, a recursive-descent parse of a fixed document into a
+  kind/number arena (C peer `strtod`-based, Go peer its standard
+  **`encoding/json`**)) carry a real program and are `Support::Supported` —
+  none remains `Unsupported`, and the mechanism (an entry with the *exact
+  reason* and **no number**, flipping the moment its feature lands) stays as
+  the documented re-entry path for any future workload.
   Since ADR-0007, the lab also owns the **parallel-speedup category**
   (`lab::parallel`): one CPU-bound reduction committed four ways (tuonelang
   serial + `par_map`, C serial + pthreads, same thread count, same exit byte),
@@ -427,22 +446,30 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   runtime; and since ADR-0007 landed structured fork-join,
   `concurrent-worker` **runs its pool live** — `main` computes the makespan
   through the pure scheduling model AND through a real `std::rt::par_map`
-  (one OS thread per worker running the model's own `worker_load`), exiting
-  15 only when the two agree — the model as the pool's runtime oracle.
+  (one OS thread per worker running the model's own `worker_load`) — and,
+  since ADR-0015 landed channels, **drains a real dynamically-drained shared
+  work queue too**: `dynamic_total` fills a channel with the task ids,
+  closes it, lets the workers race `chan_recv` to drain it, and `main`
+  exits 15 only when the static pool matches the model's makespan AND the
+  drained total equals the model's serial cost — both live paths against
+  the spec-checked oracle (the old `CONTRACT submit` discharged; detached
+  spawn remains a documented non-goal, not a contract).
   Since ADR-0006 landed the
   effect boundary, `http-service` **runs natively too**: its request-line
-  parsing is pure `std::str` byte scanning (spec-checked) under a thin
-  `std::rt::write` response shell, and its demo `main` prints
-  `HTTP/1.1 200 OK` and exits 200, while `cli-stats` prints its four-line
+  parsing is pure `std::str` byte scanning (spec-checked), and since
+  ADR-0014 landed sockets its old `CONTRACT serve` is gone — `serve_once`
+  serves a real request (read the request line off an accepted connection,
+  parse, route, respond over the wire, close), and `main` proves it by
+  **serving itself over a live loopback socket** (`live_status`: listen
+  ephemeral → connect → accept → the client reads the status back),
+  printing `HTTP/1.1 200 OK` and exiting 200 only when the wire agrees
+  with the pure parser; `cli-stats` prints its four-line
   report through `std::io::println`, consuming the stdlib's `std::io` module
   as input (`src/std_io.tuo`, a verbatim copy pinned byte-for-byte against
-  the catalog). What still cannot run (a socket accept-loop needs a socket
-  effect; a dynamically-drained shared work queue needs shared state across
-  threads, which the structured primitive deliberately does not admit) keeps
-  its **pure decision core** written in the runnable subset — which really
-  runs and is spec-checked — while the effectful shell is a documented
-  `CONTRACT:` tier naming the missing primitive, exactly as `tuo-stdlib`
-  splits its tiers; nothing advertises behavior the compiler cannot perform. The examples are kept
+  the catalog). What still cannot run (recursive nominal types await a
+  successor ADR's runtime-recursive glue; detached spawn is deliberately
+  absent) is documented in place; nothing advertises behavior the compiler
+  cannot perform. The examples are kept
   honest by `tuo-cli/tests/dogfood_examples.rs`, which drives the **real**
   `tuo` binary over every one (`check` accepts it, `test` runs its specs to
   `0 failed`, each runnable program `run`s/`build`s to the exact documented
@@ -475,9 +502,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   pool **live** with the spec-checked scheduling model as the runtime oracle
   (exit 15 survives only when the live run agrees), and the gating
   **parallel-speedup** benchmark category landed (`lab::parallel`, serial vs
-  `par_map` wall clock with a same-thread-count pthreads C peer); the
-  `networking` lab entry stays honestly unsupported — its missing primitive is
-  a socket-open *effect*, a future ADR). The successor ADRs the dogfooding
+  `par_map` wall clock with a same-thread-count pthreads C peer)). The successor ADRs the dogfooding
   chain produced — `ADR-0010` (the `String`→`Str` view) and `ADR-0012`
   (generic `Array[T]` element types) — are both since **accepted and landed**
   (all stages, including ADR-0010's Stage C stdlib payoff and ADR-0012's
@@ -487,7 +512,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `Map[Str, Int]` surface, insertion-ordered reference semantics, the native
   `tuo_rt_map_*` table on both backends at ABI v6, `std::collections::counts`,
   data-pipeline's keyed-aggregation oracle, and its gating `map-lookup`
-  workload). **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
+  workload). The 2026-08-24 Go-parity sweep closed the remaining chain:
+  `ADR-0013` (the OS effect boundary: clock, argv, files — the `file-io`
+  workload), `ADR-0014` (socket effects — `networking`, the lab's last
+  unsupported entry, flipped; `http-service` serves live), `ADR-0015`
+  (channels + mutexes — the stdlib's contract tier emptied,
+  `concurrent-worker`'s dynamic queue real, the `channels` workload with
+  Go's native `chan` as its peer), and `ADR-0016` (the data increment +
+  `std::json` — the `T0016` recursion boundary, `Float` elements,
+  `std::array::set`, and the `json-parse` workload against `encoding/json`)
+  are all since **accepted and landed**. **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
   machine-absolute dependency paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -702,9 +736,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   into three honest tiers — executable, effect, and contract — it never
   advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
-  compiler machinery, layer 90): each of the ten modules — `std::core`,
-  `std::collections`, `std::math`, `std::str`, `std::io`, `std::fs`,
-  `std::time`, `std::process`, `std::sync`, `std::test` — is a `.tuo` source
+  compiler machinery, layer 90): each of the twelve modules — `std::core`,
+  `std::collections`, `std::math`, `std::str`, `std::json`, `std::io`,
+  `std::fs`, `std::net`, `std::time`, `std::process`, `std::sync`,
+  `std::test` — is a `.tuo` source
   file under `src/std/`, embedded
   via `include_str!` and exposed as `Module { path, name, source }`
   (`MODULES`, `module(path)`), so any host loads them into its own `SourceMap`
@@ -733,25 +768,32 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `error_is`/`error_root`/`error_message`, the concrete `Array[String]`
   context-wrapping model — v0 has no traits, so no error interface is
   pretended), `std::time::render` (the one duration spelling) and the now-pure
-  `elapsed`/`instant_at`), an **effect
+  `elapsed`/`instant_at`, and, since ADR-0016, the whole of **`std::json`** —
+  decode/navigate/render over an index arena (parallel arrays in DFS
+  pre-order; positioned parse errors; documented `Float`-number and
+  escape-set limits), entirely pure and spec-checked, plus natively pinned
+  on both backends), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
   over `std::rt::exit`, — since ADR-0009 — `std::io::read_line`, which builds
   an owned `String` from the bytes `std::rt::read_byte` yields, — since
   ADR-0007 — `std::sync::par_map`, the structured fork-join wrapper over
-  `std::rt::par_map`, and — since ADR-0013 — `std::time::now` over
+  `std::rt::par_map`, — since ADR-0013 — `std::time::now` over
   `now_nanos`, `std::process::arg_count`/`arg` over the argv primitives, and
   the whole `std::fs` disk tier `read`/`write`/`exists`/`remove` over
-  `open`/`close`/`remove_file` composed with the descriptor seam — real
+  `open`/`close`/`remove_file` composed with the descriptor seam, — since
+  ADR-0014 — the whole `std::net` socket tier
+  `listen`/`bound_port`/`accept`/`connect`/`close`, and — since ADR-0015 —
+  `std::sync`'s channels `channel`/`send`/`recv`/`close` and mutexes
+  `mutex`/`lock`/`unlock` — real
   tuonelang
   implementations that run natively but can carry **no** spec, since `R0007`
   keeps the spec sandbox pure; each is marked `EFFECT:` and names the native CLI
   test that pins it), and a
-  **contract tier** (the effectful entry points whose primitive does not exist
-  yet — now only `std::sync::lock`/`unlock`, awaiting shared state across
-  threads — given as exact signatures + documented contracts marked `CONTRACT:`,
-  with **no** executable spec so nothing claims to run that cannot; the old
-  `spawn` contract is gone — detached spawn is deliberately absent, not
-  pending, per ADR-0007's structured model). The promise
+  **contract tier** that is now **empty**: ADR-0015 discharged the last
+  stubs (`std::sync::lock`/`unlock` are real, handle-based; the pure
+  `LockState` model stays executable), the mechanism remains (`CONTRACT:`
+  marker, exact signature, no spec) for any future entry, and a CLI test
+  pins the tier's emptiness so nothing re-enters silently. The promise
   is enforced, not asserted: `tuo-cli/tests/stdlib.rs` really compiles every
   module (alone and together) with zero errors, runs every shipped spec to
   green with **no skips** (a skipped spec would mean a dishonest, unrunnable
@@ -760,7 +802,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   native test; `CONTRACT:` ⇒ no spec), and proves the effect tier natively on
   both backends (`println` prints `hi\n` exactly; `exit` really exits with the
   status's code; `now` never runs backwards; `arg`/`arg_count` read a real
-  command line; the `std::fs` roundtrip really touches the disk), and
+  command line; the `std::fs` roundtrip really touches the disk; the
+  `std::net` roundtrip really touches the network over loopback; the
+  `std::sync` channels/mutexes really synchronize), and
   `tuo-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
   benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
   plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by

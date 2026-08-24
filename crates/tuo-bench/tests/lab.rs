@@ -144,11 +144,13 @@ fn honesty_rules_hold_over_the_catalog() {
     // collections workload (ADR-0004 Stage 2), the borrowed-`Str`
     // string-processing workload (ADR-0006), the allocator-core allocation
     // workload (ADR-0009), the function-value indirect-calls workload
-    // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011), and the
-    // OS-boundary file-io workload (ADR-0013) run; only networking is
-    // honestly recorded as not-yet-expressible.
-    assert_eq!(supported, 10);
-    assert_eq!(unsupported, 1);
+    // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011), the
+    // OS-boundary file-io workload (ADR-0013), the socket networking
+    // workload (ADR-0014), and the channel workload (ADR-0015) all run — the
+    // catalog's last unsupported entry flipped when ADR-0014 landed, so none
+    // remains.
+    assert_eq!(supported, 13);
+    assert_eq!(unsupported, 0);
 }
 
 /// (3, cont.) The human report never markets. No superlative may appear, and
@@ -173,7 +175,10 @@ fn human_report_carries_no_superlative() {
             "the human report must never contain the marketing phrase `{banned}`"
         );
     }
-    assert!(text.contains("not yet expressible"));
+    // Since ADR-0014 flipped networking, no workload is unexpressible, so the
+    // reason line must not appear — its reappearance would mean a silent
+    // regression to unsupported.
+    assert!(!text.contains("not yet expressible"));
 }
 
 /// (4) The committed example report parses, round-trips, and matches a fresh
@@ -228,7 +233,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     let committed = LabReport::from_json(&read(&path)).expect("example report parses");
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 10);
+    assert_eq!(committed.supported_workload_count(), 13);
     assert_eq!(
         committed.edit_scenarios, fresh_edits,
         "example report's edit scenarios are stale; regenerate the example"
@@ -236,8 +241,8 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set,
-    // once per peer language — 10 supported workloads × 2 peers (C and Go) = 20.
-    assert_eq!(committed.comparisons.len(), 20);
+    // once per peer language — 13 supported workloads × 2 peers (C and Go) = 26.
+    assert_eq!(committed.comparisons.len(), 26);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -251,8 +256,8 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Go)
         .count();
-    assert_eq!(c_count, 10, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 10, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 13, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 13, "every supported workload has a Go peer entry");
 
     // Round-trip.
     let reserialized = committed.to_json_pretty().expect("serialize");

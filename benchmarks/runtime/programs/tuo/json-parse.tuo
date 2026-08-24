@@ -1,0 +1,169 @@
+// The json-parse workload (ADR-0016): JSON decoding throughput. Each round
+// parses a fixed 149-byte document with a self-contained recursive-descent
+// parser over the ADR-0016 data increment (an `Array[Int]`/`Array[Float]`
+// kind/number arena — the lab's workloads are single-file by design;
+// `std::json` itself is pinned natively by the stdlib suite) and folds a
+// structural checksum: 3 × the node count plus the truncated sum of every
+// number. The C peer makes the identical walk with `strtod`; the Go peer is
+// the parity target itself — `encoding/json` unmarshalling into `any` and
+// walking the result to the same checksum.
+//
+// The document holds 21 nodes and its numbers sum to 247.5, so a round's
+// checksum is (21 * 3 + 247) % 256 = 54; main runs 200 rounds and returns
+// the last round's checksum (reassigned, not accumulated). Exit byte: 54.
+
+fn doc() -> Str {
+    "{\"id\":42,\"name\":\"tuonelang\",\"tags\":[\"fast\",\"safe\",\"native\"],\"metrics\":{\"stars\":128,\"forks\":32,\"score\":9.5},\"active\":true,\"refs\":[1,2,3,4,5,6,7,8]}"
+}
+
+fn is_digit(take b: Int) -> Bool {
+    b >= 48 && b <= 57
+}
+
+fn skip_ws(in s: Str, take pos: Int) -> Int {
+    var p = pos;
+    while p < std::str::len(s) && std::str::byte_at(s, p) == 32 {
+        p = p + 1;
+    }
+    p
+}
+
+// Scan past a string token (the workload document carries no escapes).
+fn string_end(in s: Str, take pos: Int) -> Int {
+    var p = pos + 1;
+    while p < std::str::len(s) && std::str::byte_at(s, p) != 34 {
+        p = p + 1;
+    }
+    p + 1
+}
+
+fn number_end(in s: Str, take pos: Int) -> Int {
+    var p = pos;
+    let n = std::str::len(s);
+    if p < n && std::str::byte_at(s, p) == 45 {
+        p = p + 1;
+    }
+    while p < n && is_digit(std::str::byte_at(s, p)) {
+        p = p + 1;
+    }
+    if p < n && std::str::byte_at(s, p) == 46 {
+        p = p + 1;
+        while p < n && is_digit(std::str::byte_at(s, p)) {
+            p = p + 1;
+        }
+    }
+    p
+}
+
+fn number_value(in s: Str, take a: Int, take b: Int) -> Float {
+    var p = a;
+    var negative = false;
+    if std::str::byte_at(s, p) == 45 {
+        negative = true;
+        p = p + 1;
+    }
+    var value = 0.0;
+    while p < b && is_digit(std::str::byte_at(s, p)) {
+        value = value * 10.0 + ((std::str::byte_at(s, p) - 48) as Float);
+        p = p + 1;
+    }
+    if p < b && std::str::byte_at(s, p) == 46 {
+        p = p + 1;
+        var place = 0.1;
+        while p < b && is_digit(std::str::byte_at(s, p)) {
+            value = value + ((std::str::byte_at(s, p) - 48) as Float) * place;
+            place = place / 10.0;
+            p = p + 1;
+        }
+    }
+    if negative {
+        0.0 - value
+    } else {
+        value
+    }
+}
+
+// Parse one value: record its kind (0 scalar, 1 number) and number value,
+// returning the position after it (the fixed document is valid, so no error
+// path is needed — a mis-parse would derail the checksum and fail the run).
+fn parse_value(mut kinds: Array[Int], mut nums: Array[Float], in s: Str, take pos: Int) -> Int {
+    let p = skip_ws(s, pos);
+    let b = std::str::byte_at(s, p);
+    if b == 110 || b == 116 {
+        std::array::push(kinds, 0);
+        std::array::push(nums, 0.0);
+        p + 4
+    } else if b == 102 {
+        std::array::push(kinds, 0);
+        std::array::push(nums, 0.0);
+        p + 5
+    } else if b == 34 {
+        std::array::push(kinds, 0);
+        std::array::push(nums, 0.0);
+        string_end(s, p)
+    } else if b == 91 {
+        std::array::push(kinds, 0);
+        std::array::push(nums, 0.0);
+        parse_items(kinds, nums, s, p + 1, 93)
+    } else if b == 123 {
+        std::array::push(kinds, 0);
+        std::array::push(nums, 0.0);
+        parse_items(kinds, nums, s, p + 1, 125)
+    } else {
+        let e = number_end(s, p);
+        std::array::push(kinds, 1);
+        std::array::push(nums, number_value(s, p, e));
+        e
+    }
+}
+
+// Parse a container's items up to the closer: array elements, or an
+// object's `"key": value` members (the key string is skipped, not a node).
+fn parse_items(mut kinds: Array[Int], mut nums: Array[Float], in s: Str, take pos: Int, take closer: Int) -> Int {
+    var p = skip_ws(s, pos);
+    if std::str::byte_at(s, p) == closer {
+        return p + 1;
+    }
+    var done = false;
+    while !done {
+        if closer == 125 {
+            p = skip_ws(s, p);
+            p = string_end(s, p);
+            p = skip_ws(s, p);
+            p = p + 1;
+        }
+        p = parse_value(kinds, nums, s, p);
+        p = skip_ws(s, p);
+        let c = std::str::byte_at(s, p);
+        p = p + 1;
+        if c == closer {
+            done = true;
+        }
+    }
+    p
+}
+
+fn round() -> Int {
+    var kinds = std::array::empty();
+    var nums = std::array::empty();
+    let text = doc();
+    parse_value(kinds, nums, text, 0);
+    let nodes = std::array::len(kinds);
+    var sum = 0.0;
+    var i = 0;
+    while i < std::array::len(nums) {
+        sum = sum + std::array::get(nums, i);
+        i = i + 1;
+    }
+    (nodes * 3 + (sum as Int)) % 256
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 200 {
+        result = round();
+        r = r + 1;
+    }
+    result
+}

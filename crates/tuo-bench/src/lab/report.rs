@@ -259,8 +259,8 @@ mod tests {
     fn new_report_carries_the_full_workload_catalog() {
         let report = LabReport::new(Environment::capture());
         assert_eq!(report.schema_version, SCHEMA_VERSION);
-        assert_eq!(report.runtime_workloads.len(), 11);
-        assert_eq!(report.supported_workload_count(), 10);
+        assert_eq!(report.runtime_workloads.len(), 13);
+        assert_eq!(report.supported_workload_count(), 13);
     }
 
     #[test]
@@ -275,8 +275,12 @@ mod tests {
     fn human_render_names_unsupported_reasons_and_no_superlative() {
         let report = LabReport::new(Environment::capture());
         let text = render_human(&report);
-        // Every unsupported workload's reason surfaces.
-        assert!(text.contains("not yet expressible in v0"));
+        // Since ADR-0014 flipped networking, every catalog workload is
+        // supported, so the "not yet expressible" line must NOT appear — a
+        // reappearance would mean a workload silently regressed to
+        // unsupported. (The renderer still prints the reason for any future
+        // unsupported entry.)
+        assert!(!text.contains("not yet expressible in v0"));
         // No forbidden marketing language.
         let lowered = text.to_lowercase();
         for banned in ["blazing", "fastest", "blazingly", "lightning-fast"] {
