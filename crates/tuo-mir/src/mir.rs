@@ -372,6 +372,52 @@ pub enum EffectOp {
     /// success, `-2` when it does not exist, another negative value on
     /// other host errors. Never traps. (ADR-0013.)
     RemoveFile,
+    /// `listen(port: I64) -> I64` — create an IPv4 TCP socket bound to
+    /// `127.0.0.1:port` and listening; the result is the listening
+    /// descriptor (`>= 0`) or a negative value on host error. Port `0`
+    /// requests an ephemeral port. Never traps. (ADR-0014.)
+    Listen,
+    /// `bound_port(fd: I64) -> I64` — the local port a listening descriptor
+    /// is bound to, or a negative value on host error. Never traps.
+    /// (ADR-0014.)
+    BoundPort,
+    /// `accept(fd: I64) -> I64` — accept one pending connection on a
+    /// listening descriptor; the result is the connected descriptor
+    /// (`>= 0`) or a negative value on host error. Blocks. Never traps.
+    /// (ADR-0014.)
+    Accept,
+    /// `connect(host: Str, port: I64) -> I64` — open a TCP connection to
+    /// the numeric IPv4 address `host` at `port`; the result is the
+    /// connected descriptor (`>= 0`) or a negative value on host error.
+    /// Never traps. (ADR-0014.)
+    Connect,
+    /// `chan_new() -> I64` — create an unbounded FIFO channel of
+    /// non-negative `I64` values; the result is a process-lived handle
+    /// (`>= 0`) or `-1` on registry exhaustion. Never traps. (ADR-0015.)
+    ChanNew,
+    /// `chan_send(ch: I64, v: I64) -> I64` — enqueue `v`; `0` on success,
+    /// `-1` on an invalid handle, a closed channel, or a negative `v`.
+    /// Never traps. (ADR-0015.)
+    ChanSend,
+    /// `chan_recv(ch: I64) -> I64` — dequeue the oldest value, blocking
+    /// until one is available; the value, or `-1` once the channel is
+    /// closed and drained (or the handle is invalid). Never traps.
+    /// (ADR-0015.)
+    ChanRecv,
+    /// `chan_close(ch: I64) -> I64` — close the channel (idempotent); `0`
+    /// on success, `-1` on an invalid handle. Never traps. (ADR-0015.)
+    ChanClose,
+    /// `mutex_new() -> I64` — create a mutex; a process-lived handle
+    /// (`>= 0`) or `-1` on registry exhaustion. Never traps. (ADR-0015.)
+    MutexNew,
+    /// `mutex_lock(m: I64) -> I64` — acquire, blocking; `0` on success,
+    /// `-1` on an invalid handle or host error (an error-checked relock
+    /// included). Never traps. (ADR-0015.)
+    MutexLock,
+    /// `mutex_unlock(m: I64) -> I64` — release; `0` on success, `-1` on an
+    /// invalid handle or when the caller does not hold it. Never traps.
+    /// (ADR-0015.)
+    MutexUnlock,
 }
 
 impl EffectOp {
@@ -391,6 +437,17 @@ impl EffectOp {
             Self::Open => "open",
             Self::Close => "close",
             Self::RemoveFile => "remove_file",
+            Self::Listen => "listen",
+            Self::BoundPort => "bound_port",
+            Self::Accept => "accept",
+            Self::Connect => "connect",
+            Self::ChanNew => "chan_new",
+            Self::ChanSend => "chan_send",
+            Self::ChanRecv => "chan_recv",
+            Self::ChanClose => "chan_close",
+            Self::MutexNew => "mutex_new",
+            Self::MutexLock => "mutex_lock",
+            Self::MutexUnlock => "mutex_unlock",
         }
     }
 
@@ -398,9 +455,24 @@ impl EffectOp {
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::NowNanos | Self::ArgCount => 0,
-            Self::ReadByte | Self::Exit | Self::Close | Self::RemoveFile => 1,
-            Self::Write | Self::WriteString | Self::ArgByte | Self::Open => 2,
+            Self::NowNanos | Self::ArgCount | Self::ChanNew | Self::MutexNew => 0,
+            Self::ReadByte
+            | Self::Exit
+            | Self::Close
+            | Self::RemoveFile
+            | Self::Listen
+            | Self::BoundPort
+            | Self::Accept
+            | Self::ChanRecv
+            | Self::ChanClose
+            | Self::MutexLock
+            | Self::MutexUnlock => 1,
+            Self::Write
+            | Self::WriteString
+            | Self::ArgByte
+            | Self::Open
+            | Self::Connect
+            | Self::ChanSend => 2,
             Self::ParMap => 3,
         }
     }
@@ -428,6 +500,11 @@ pub enum HeapMutOp {
     /// statement-level mutator and not an rvalue: an rvalue must not
     /// mutate a place.
     Pop,
+    /// `set(target: mut Array[T], i: I64, v: T)` — overwrite the element
+    /// at `i` with `v` in place, dropping the previous element's owned
+    /// buffers first. **Traps `IndexOutOfBounds`** when `i < 0` or
+    /// `i >= len` — `set` never grows the array. (ADR-0016.)
+    Set,
     /// `insert(target: mut Map[K, V], k: K, v: V) -> Option[V]` — insert or
     /// overwrite `k → v`, producing the **previous** value for `k` (`Some`)
     /// or `None` when `k` was absent (ADR-0011). A fresh key appends to the
@@ -451,6 +528,7 @@ impl HeapMutOp {
             Self::Append => "append",
             Self::Push => "push",
             Self::Pop => "pop",
+            Self::Set => "set",
             Self::MapInsert => "map_insert",
             Self::MapRemove => "map_remove",
         }
@@ -462,7 +540,7 @@ impl HeapMutOp {
         match self {
             Self::PushByte | Self::Append | Self::Push | Self::MapRemove => 1,
             Self::Pop => 0,
-            Self::MapInsert => 2,
+            Self::Set | Self::MapInsert => 2,
         }
     }
 }

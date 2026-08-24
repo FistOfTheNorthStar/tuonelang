@@ -37,18 +37,19 @@ dogfooding move was to build the **pure decision core** that v0 *can* run
 documented **contract tier**, mirroring exactly how `tuo-stdlib` separates its
 executable tier from its `CONTRACT:` tier. Nothing pretends to do what the
 language cannot. (The ADRs this exercise opened have since moved the boundary:
-ADR-0004 landed aggregates, and ADR-0006 landed `Str` and the effect boundary —
-the table below reflects the examples as they stand today, with cli-stats
-printing its report and http-service parsing and printing a request/response
-line.)
+ADR-0004 landed aggregates, ADR-0006 landed `Str` and the effect boundary,
+ADR-0007 landed structured fork-join, ADR-0014 landed sockets, and ADR-0015
+landed channels — the table below reflects the examples as they stand today,
+with all five running natively and **no `CONTRACT:` tier left in any
+example**.)
 
 | # | Project | Directory | v0 status | `main` exit | Specs |
 |---|---------|-----------|-----------|:-----------:|:-----:|
 | 1 | Command-line application | [`examples/cli-stats/`](examples/cli-stats/) | **runs natively**, prints its report | 18 | 12 |
 | 2 | JSON/data-processing | [`examples/data-pipeline/`](examples/data-pipeline/) | **runs natively** | 144 | 6 |
 | 3 | Medium multi-package project | [`examples/workspace/`](examples/workspace/) | **builds natively** (3-package graph) | 26 | 14 |
-| 4 | HTTP service *(when networking exists)* | [`examples/http-service/`](examples/http-service/) | **runs natively**: parses + prints; sockets are contract-tier | 200 | 12 |
-| 5 | Concurrent worker | [`examples/concurrent-worker/`](examples/concurrent-worker/) | scheduling core runs; execution is contract-tier | 15 | 8 |
+| 4 | HTTP service | [`examples/http-service/`](examples/http-service/) | **runs natively**: serves a live loopback request | 200 | 12 |
+| 5 | Concurrent worker | [`examples/concurrent-worker/`](examples/concurrent-worker/) | **runs natively**: live pool + channel-drained queue | 15 | 8 |
 
 **1 — cli-stats.** A descriptive-statistics tool: sum, min/max, range, floored
 mean, a scaled dispersion measure, and a bounded integer square root, over a
@@ -88,8 +89,13 @@ is the real decision logic of any server, and it runs. At the time of the
 exercise, sockets, request-line parsing, and response writing were `CONTRACT:`
 comments only — see finding D-3. Since ADR-0006 landed, request-line parsing
 (pure `std::str` byte scans, spec-checked) and response writing (a thin
-`std::rt::write` shell) are runnable code with a byte-asserted stdout; only
-`serve` (socket setup) remains contract-tier, pending a socket effect.
+`std::rt::write` shell) are runnable code with a byte-asserted stdout. And
+since ADR-0014 landed the socket effects, `CONTRACT serve` is gone too: the
+real `serve_once`/`live_status` run the service against itself over a **live
+loopback socket** — `main` listens on an ephemeral port, connects, sends
+`GET /health HTTP/1.1`, serves it, and reads the status back, exiting 200
+only when the wire agrees with the pure parser (stdout still exactly
+`HTTP/1.1 200 OK\n`). No contract tier remains.
 
 **5 — concurrent-worker.** The scheduling model of a worker pool: round-robin
 partition of eight uneven tasks across three workers, per-worker load, the
@@ -98,9 +104,13 @@ and **imbalance** (3 units). These are a pool's actual observable performance
 figures, computed exactly. At the time of the exercise threads/channels/task
 values were `CONTRACT:` only — see finding D-4. Since ADR-0007 landed
 structured fork-join, the pool **runs live**: `main` computes the makespan
-through the model *and* through a real `std::rt::par_map`, exiting 15 only
-when the two agree. A dynamically-drained shared queue (channels) still awaits
-a shared-state ADR.
+through the model *and* through a real `std::rt::par_map`. And since ADR-0015
+landed channels, the dynamically-drained shared queue its contract named runs
+too: `dynamic_total` fills a channel with the task ids, closes it, and lets
+`par_map` workers **race to drain it** — exit 15 now requires the static pool
+to match the model's makespan *and* the drained total to equal the serial
+cost. Detached spawn is a documented non-goal (per ADR-0007's structured
+model); no `CONTRACT:` block remains.
 
 ---
 
@@ -236,9 +246,10 @@ Dogfooding re-derived several stdlib functions by hand because the shipped
   `fold`/`map_into`/`filter_into`/`any`/`all` over a function value — one `fold`,
   not N specialized folds — and `data-pipeline`'s once-bespoke fold now calls the
   generic `fold(items, 0, add)` with `add` passed by value, identical spec
-  verdicts and exit byte. Only **capturing closures** (a heap-allocated captured
-  environment) and non-`Int` element polymorphism remain deferred to a future
-  ADR (Tier 2).
+  verdicts and exit byte. Non-`Int` element polymorphism has since landed too
+  (ADR-0012 made `Array[T]` element-generic, ADR-0016 added `Float`); only
+  **capturing closures** (a heap-allocated captured environment) remain
+  deferred to a future ADR (Tier 2).
 - The effectful entry points a CLI/HTTP/worker actually needs — `println`,
   `read_line`, `now`, `exit`, `lock` — were all **contract-tier** (documented
   signatures, no runnable body) because there was no effect boundary (→ **D-3 /
@@ -249,9 +260,16 @@ Dogfooding re-derived several stdlib functions by hand because the shipped
   followed when ADR-0009 landed the owned `String`, structured spawning
   (`par_map`) when ADR-0007 resolved the concurrency model, and `now` — plus
   argv (`arg_count`/`arg`) and the whole `std::fs` disk tier — when ADR-0013
-  landed the OS effect boundary (clock, argv, file open/close/remove). Of the
-  entry points this exercise named, only `lock` remains contract-tier,
-  awaiting shared state across threads.
+  landed the OS effect boundary (clock, argv, file open/close/remove). The
+  last holdout, `lock`, was discharged when ADR-0015 landed channels and
+  mutexes: `std::sync::lock`/`unlock` are now real handle-based effect
+  wrappers over error-checked mutexes (alongside `channel`/`send`/`recv`/
+  `close`), and ADR-0014's `std::net` and ADR-0016's `std::json` filled the
+  networking and data-format gaps this exercise's HTTP/JSON projects implied.
+  **The stdlib's contract tier is now empty** — pinned by
+  `the_contract_tier_is_empty` in
+  [`tuo-cli/tests/stdlib.rs`](crates/tuo-cli/tests/stdlib.rs), so nothing can
+  re-enter it silently.
 
 ### 6. Runtime performance
 
@@ -266,18 +284,22 @@ compiles, links, and runs to a fixed exit byte via the real Cranelift+`cc` path
 The four workloads the lab then recorded as **unsupported** (allocation,
 collections, string-processing, networking) were the *same* four gaps this
 dogfooding exercise hit from the application side — independent confirmation
-that the honest boundary was drawn in the right place. Three have since flipped
-exactly as their ADRs required: `collections` when ADR-0004 landed fixed
-arrays, `string-processing` when ADR-0006 landed the borrowed `Str` core, and
+that the honest boundary was drawn in the right place. All four have since
+flipped exactly as their ADRs required: `collections` when ADR-0004 landed
+fixed arrays, `string-processing` when ADR-0006 landed the borrowed `Str` core,
 `allocation` when ADR-0009 landed the allocator core (owned `String` + growable
 `Array[Int]`, measured against a `malloc`/`realloc`/`free` C peer with the same
-doubling growth). ADR-0008 Tier 1 then *added* a ninth workload,
-`indirect-calls` — a hot loop through a first-class function value, measured
-against a C peer calling through a function pointer — so the indirect-call
-overhead is a recorded number, not a guess. Only `networking` (no socket effect)
-still publishes a reason, not a number: eight of the nine workloads now measure.
-No new runtime figure is invented here; the lab remains the one measurement of
-record.
+doubling growth), and — last — `networking` when ADR-0014 landed the socket
+effects, exactly as the entry's recorded reason promised. ADR-0008 Tier 1 then
+*added* a workload of its own, `indirect-calls` — a hot loop through a
+first-class function value, measured against a C peer calling through a
+function pointer — so the indirect-call overhead is a recorded number, not a
+guess, and the later ADRs kept the pattern: `map-lookup` (ADR-0011), `file-io`
+(ADR-0013), `channels` (ADR-0015, whose Go peer is Go's native buffered
+`chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`). All
+**thirteen** workloads now measure, each against equivalent-semantics C *and*
+Go peers; none is unsupported. No new runtime figure is invented here; the lab
+remains the one measurement of record.
 
 ---
 
@@ -290,9 +312,9 @@ benchmark-consideration section, per the prompt. None was patched ad hoc.
 |----|-------------------------|-------------|
 | **D-1** | No product type (struct/tuple) in the runnable core — *geometry points, every dataset* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — geometry now passes a real `Point` |
 | **D-2** | No arrays/collections + no iteration in the runnable core — *every fold* | [ADR-0004](specification/adr/ADR-0004-aggregates-in-the-runnable-core.md) **(accepted, landed)** — the folds now run over `[T; N]` arrays |
-| **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) **(accepted, landed)** — cli-stats now `println`s its report and http-service parses/prints its request/response line, stdout byte-asserted by the dogfood tests. The *owned, growable* `String`/`Array[Int]` half (D-3's allocator continuation) is [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — `std::io::read_line` now builds a real `String` from stdin, and `std::collections` gained real `Array[Int]` algorithms |
+| **D-3** | No String value + no effect boundary/I/O — *http-service shell, every CLI* | [ADR-0006](specification/adr/ADR-0006-effect-boundary-and-strings.md) **(accepted, landed)** — cli-stats now `println`s its report and http-service parses/prints its request/response line, stdout byte-asserted by the dogfood tests. The *owned, growable* `String`/`Array[Int]` half (D-3's allocator continuation) is [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — `std::io::read_line` now builds a real `String` from stdin, and `std::collections` gained real `Array[Int]` algorithms. The socket half of the shell followed via [ADR-0014](specification/adr/ADR-0014-socket-effects.md) **(accepted, landed)** — http-service now serves itself over a live loopback socket, exit 200 only when the wire agrees with the pure parser |
 | **D-2b** | No *growable* collection whose size is not compile-time-fixed — *data-pipeline filter+collect* | [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — data-pipeline now `push`es its filtered subset onto a heap-backed `Array[Int]` and folds it, spec-pinned equal to the streaming fold |
-| **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) **(accepted, landed)** — the model resolved to structured fork-join over one primitive (`std::rt::par_map`, a typed effect); concurrent-worker now runs its pool live, exiting with the model's makespan only when the real parallel run agrees — the scheduling model as the runtime oracle, exactly as this table predicted |
+| **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) **(accepted, landed)** — the model resolved to structured fork-join over one primitive (`std::rt::par_map`, a typed effect); concurrent-worker now runs its pool live, exiting with the model's makespan only when the real parallel run agrees — the scheduling model as the runtime oracle, exactly as this table predicted. The dynamically-drained shared queue its contract named followed via [ADR-0015](specification/adr/ADR-0015-channels-and-mutexes.md) **(accepted, landed)** — `dynamic_total` drains a real channel with racing workers, exit 15 only when the drained total equals the serial cost |
 | **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) **(Tier 1 accepted, landed)** — a bare `fn` name is now a `Copy` function value called indirectly (native, three-way pinned); `std::collections` ships generic `fold`/`map_into`/`filter_into`/`any`/`all` over a function value, and data-pipeline's fold calls the generic `fold` with `add` by value, same verdicts/exit byte. Tier 2 capturing closures deferred to a future ADR |
 | **D-5a** | `T0001` span points at the return annotation, not the offending body expression | backlog (diagnostics bug, no ADR) |
 | **D-5b** | Missing parameter mode degrades to coarse `P0002` whole-item recovery | backlog (diagnostics bug, no ADR) |
@@ -330,3 +352,29 @@ with its committed program and `malloc`/`realloc`/`free` C peer, taking the
 measured runtime workloads to seven of eight. Deferred, unchanged: surface
 `Box`/`Shared`/`Weak` values, non-`Int` `Array[T]` operations, and `String`→`Str`
 borrowing.
+
+**Post-exercise update (2026-08-24).** ADR-0014, ADR-0015, and ADR-0016 closed
+the loop on everything this exercise had to leave as a contract. Sockets
+joined the descriptor seam (ADR-0014), so http-service replaced `CONTRACT
+serve` with the real `serve_once`/`live_status`: `main` now serves
+`GET /health HTTP/1.1` to itself over a live loopback socket and exits 200
+only when the wire agrees with the pure parser, stdout still byte-asserted.
+Channels and mutexes joined the effect seam (ADR-0015), so concurrent-worker
+gained `dynamic_total` — the dynamically-drained shared work queue its
+contract named, drained by racing `par_map` workers — and exit 15 now also
+requires the drained total to equal the model's serial cost; detached spawn is
+a documented non-goal, and the stdlib's last `CONTRACT:` stubs
+(`lock`/`unlock`) became real handle-based wrappers over error-checked
+mutexes, leaving **the contract tier empty** (pinned by
+`the_contract_tier_is_empty`). ADR-0016 landed the data increment — `Float`
+array elements, the in-place `std::array::set`, and the `T0016` recursion
+boundary (a self-reaching struct/enum is now a declaration-time error instead
+of a compiler hang) — plus `std::json`, the entirely-executable twelfth
+stdlib module (index-arena `parse`/`render` with positioned errors). The
+perf-lab entries the three ADRs gated all measure: `networking` flipped from
+the lab's last `Unsupported`, and `channels` and `json-parse` landed
+supported — all thirteen workloads, each with C and Go peers. Still deferred,
+honestly: recursive nominal types (`T0016` is the boundary until a successor
+ADR gives the backends runtime-recursive clone/drop glue), DNS/IPv6/UDP/TLS
+and timeouts, `\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building
+JSON from scratch, detached spawn, and capturing closures (Tier 2).

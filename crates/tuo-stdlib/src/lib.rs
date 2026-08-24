@@ -30,22 +30,28 @@
 //!   models of a lock or latch), which runs and whose specs run;
 //! * an **effect tier** — real tuonelang implementations over the `std::rt`
 //!   effect primitives (`std::io::print`/`println`/`read_line`,
-//!   `std::process::exit`/`arg_count`/`arg`, `std::sync::par_map`,
-//!   `std::time::now`, and the whole `std::fs` disk tier
-//!   `read`/`write`/`exists`/`remove` — the last three groups real since
-//!   ADR-0013 landed the clock, argv, and file open/close/remove primitives).
+//!   `std::process::exit`/`arg_count`/`arg`, `std::time::now`, the whole
+//!   `std::fs` disk tier `read`/`write`/`exists`/`remove` — real since
+//!   ADR-0013 landed the clock, argv, and file open/close/remove primitives
+//!   — the whole `std::net` socket tier
+//!   `listen`/`bound_port`/`accept`/`connect`/`close`, real since ADR-0014
+//!   landed the socket primitives, and the whole `std::sync` concurrency
+//!   tier: `par_map` (ADR-0007), the channels
+//!   `channel`/`send`/`recv`/`close`, and the mutexes
+//!   `mutex`/`lock`/`unlock`, the last two groups real since ADR-0015).
 //!   These compile and run natively, but `R0007` makes an effectful spec
 //!   impossible, so each is marked `EFFECT:` in its doc and pinned by a named
 //!   native CLI test (in `tuo-cli`'s `stdlib.rs`) instead of a spec
 //!   (`read_line` builds an owned `String` from the bytes
 //!   `std::rt::read_byte` yields — real since ADR-0009 landed the allocator);
 //!   and
-//! * a **contract tier** — the effectful entry points whose primitive does not
-//!   exist yet (`std::sync::lock`/`unlock` shared state across threads), given
-//!   as exact signatures with documented contracts and **no** executable spec,
-//!   each marked `CONTRACT:` in its doc so no reader — human or machine — is
-//!   misled into thinking it runs today. When the missing primitive lands, a
-//!   contract gains an implementation with no change to its signature.
+//! * a **contract tier** — the effectful entry points whose primitive does
+//!   not exist yet, given as exact signatures with documented contracts and
+//!   **no** executable spec, each marked `CONTRACT:` in its doc so no reader
+//!   — human or machine — is misled into thinking it runs today. **Since
+//!   ADR-0015 discharged `std::sync::lock`/`unlock`, this tier is empty** —
+//!   the mechanism stays for any future entry, and a CLI test pins its
+//!   emptiness so nothing re-enters silently.
 //!
 //! This mirrors the toolchain's standing rule that the compiler never advertises
 //! behavior it cannot perform.
@@ -114,6 +120,14 @@ pub const IO: Module = Module {
     source: include_str!("std/io.tuo"),
 };
 
+/// `std::json` — JSON decoding, navigation, and rendering over an index
+/// arena (ADR-0016). Entirely executable.
+pub const JSON: Module = Module {
+    path: "std::json",
+    name: "std/json.tuo",
+    source: include_str!("std/json.tuo"),
+};
+
 /// `std::fs` — the file-system error vocabulary and path helpers (executable),
 /// and the real disk operations `read`/`write`/`exists`/`remove` over the
 /// ADR-0013 primitives (effect tier).
@@ -121,6 +135,15 @@ pub const FS: Module = Module {
     path: "std::fs",
     name: "std/fs.tuo",
     source: include_str!("std/fs.tuo"),
+};
+
+/// `std::net` — pure socket-outcome classification (executable), and the
+/// real TCP operations `listen`/`bound_port`/`accept`/`connect`/`close` over
+/// the ADR-0014 primitives (effect tier).
+pub const NET: Module = Module {
+    path: "std::net",
+    name: "std/net.tuo",
+    source: include_str!("std/net.tuo"),
 };
 
 /// `std::time` — `Duration` arithmetic, rendering, and `elapsed` (executable),
@@ -140,8 +163,9 @@ pub const PROCESS: Module = Module {
     source: include_str!("std/process.tuo"),
 };
 
-/// `std::sync` — the pure state models of a latch and a lock (executable) and
-/// the synchronization contract.
+/// `std::sync` — the pure state models of a latch and a lock (executable),
+/// and structured fork-join (`par_map`, ADR-0007) plus channels and mutexes
+/// (ADR-0015) as the effect tier.
 pub const SYNC: Module = Module {
     path: "std::sync",
     name: "std/sync.tuo",
@@ -166,8 +190,10 @@ pub const MODULES: &[Module] = &[
     COLLECTIONS,
     MATH,
     STR,
+    JSON,
     IO,
     FS,
+    NET,
     TIME,
     PROCESS,
     SYNC,

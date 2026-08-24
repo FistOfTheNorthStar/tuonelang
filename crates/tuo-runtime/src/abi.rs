@@ -71,7 +71,19 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `tuo_rt_remove_file`; see [`crate::effect`]), and the runtime now captures
 /// `argc`/`argv` before `main` via a platform initializer. No layout changed;
 /// the bump reflects the new load-bearing runtime symbols, exactly as `3` did.
-pub const ABI_VERSION: u32 = 7;
+///
+/// `8` — adds the socket effect symbols (ADR-0014: `tuo_rt_listen`,
+/// `tuo_rt_bound_port`, `tuo_rt_accept`, `tuo_rt_connect`; see
+/// [`crate::effect`]) — descriptor producers on the existing seam, released
+/// by the existing `tuo_rt_close`. No layout changed; the bump reflects the
+/// new load-bearing runtime symbols.
+///
+/// `9` — adds the channel and mutex effect symbols (ADR-0015:
+/// `tuo_rt_chan_new`/`send`/`recv`/`close`,
+/// `tuo_rt_mutex_new`/`lock`/`unlock`; see [`crate::effect`]) — runtime-owned
+/// synchronization objects behind opaque `Int` handles. No layout changed;
+/// the bump reflects the new load-bearing runtime symbols.
+pub const ABI_VERSION: u32 = 9;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -476,13 +488,14 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_seven() {
+    fn the_abi_is_version_nine() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
-        // allocator seam, the runtime surface), never silently. Version 7
-        // added the ADR-0013 OS-boundary effect symbols (clock, argv, file
-        // open/close/remove) and the runtime's argv capture.
-        assert_eq!(ABI_VERSION, 7);
+        // allocator seam, the runtime surface), never silently. Version 8
+        // added the ADR-0014 socket effect symbols
+        // (listen/bound_port/accept/connect); version 9 added the ADR-0015
+        // channel and mutex symbols.
+        assert_eq!(ABI_VERSION, 9);
     }
 
     #[test]

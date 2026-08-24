@@ -2,30 +2,31 @@ module http_service;
 
 // http-service — an HTTP service, dogfooded against the limits of v0.
 //
-// Prompt 39 asks for "an HTTP service WHEN networking support exists." Sockets
-// still do not exist, but ADR-0006 (accepted) landed the borrowed `Str` core
-// and the effect boundary, so this example is now split three ways, exactly
-// like `tdg-stdlib`'s tiers:
+// Prompt 39 asks for "an HTTP service WHEN networking support exists."
+// Networking support now exists: ADR-0006 landed the borrowed `Str` core and
+// the descriptor seam, and ADR-0014 landed the socket effects
+// (`listen`/`bound_port`/`accept`/`connect`), so the old `CONTRACT serve` is
+// gone — this example now serves a request over a real TCP connection. Two
+// tiers remain, exactly like `tuo-stdlib`'s:
 //
 //   * an EXECUTABLE TIER — the pure request-line parsing (`parse_request_line`,
 //     over `std::str` byte scans and slice comparisons) and the routing/status
 //     logic, the real decision core of any HTTP server. It checks with
-//     `tuo check` and runs its specs with `tuo test`;
+//     `tuo check` and runs its specs with `tuo test`; and
 //
-//   * an EFFECT TIER — the thin effectful shell (`write_response`) over the
-//     `std::rt::write` effect primitive. It runs natively; being effectful it
-//     can carry no spec (`R0007`), so it is pinned by the dogfood test
-//     (`crates/tuo-cli/tests/dogfood_examples.rs`) asserting the exact bytes
-//     `main` prints; and
+//   * an EFFECT TIER — the socket shell: `read_request_line` (bytes off a
+//     connection), `serve_once` (read → parse → route → respond → close, the
+//     whole request lifecycle over one accepted connection), `live_status`
+//     (the loopback self-request that proves the wire path), and
+//     `write_response` (stdout). Effectful, so no specs (`R0007`); pinned by
+//     the dogfood test (`crates/tuo-cli/tests/dogfood_examples.rs`).
 //
-//   * a CONTRACT TIER — what still cannot run: `serve`, because `std::rt`
-//     exposes no socket effect (no `socket`/`bind`/`listen`/`accept`/
-//     `connect`) — that is ADR-0007-or-successor ground. Nothing here
-//     pretends to serve real traffic.
-//
-// `main` is a small runnable demo: parse a fixed request line, route it, print
-// the response status line, and return the status code. Documented exit byte:
-// route(GET, /health) = 200, so the process exits 200.
+// `main` is the acceptance oracle: it routes "GET /health HTTP/1.1" through
+// the pure core AND serves the identical request to itself over a live
+// loopback socket (listen ephemeral → connect → accept → serve_once → the
+// client reads the status line back), printing the response line and exiting
+// with the status only when the wire agrees with the model. Documented exit
+// byte: route(GET, /health) = 200, so the process exits 200.
 //
 // Encoding, so the routing core has concrete values to route on:
 //
@@ -37,27 +38,44 @@ module http_service;
 
 // --- Method and path tags --------------------------------------------------
 
-fn method_get() -> Int { 1 }
-fn method_post() -> Int { 2 }
+fn method_get() -> Int {
+    1
+}
+fn method_post() -> Int {
+    2
+}
 
-fn path_root() -> Int { 1 }
-fn path_health() -> Int { 2 }
-fn path_users() -> Int { 3 }
-fn path_user_id() -> Int { 4 }
+fn path_root() -> Int {
+    1
+}
+fn path_health() -> Int {
+    2
+}
+fn path_users() -> Int {
+    3
+}
+fn path_user_id() -> Int {
+    4
+}
 
 // --- HTTP status codes (the executable routing core) -----------------------
 
-fn status_ok() -> Int { 200 }
-fn status_created() -> Int { 201 }
-fn status_not_found() -> Int { 404 }
-fn status_method_not_allowed() -> Int { 405 }
+fn status_ok() -> Int {
+    200
+}
+fn status_created() -> Int {
+    201
+}
+fn status_not_found() -> Int {
+    404
+}
+fn status_method_not_allowed() -> Int {
+    405
+}
 
 /// Does this path exist at all, regardless of method?
 fn path_exists(take path: Int) -> Bool {
-    path == path_root()
-        || path == path_health()
-        || path == path_users()
-        || path == path_user_id()
+    path == path_root() || path == path_health() || path == path_users() || path == path_user_id()
 }
 
 /// Is `method` allowed on `path`? GET is allowed everywhere; POST only creates
@@ -95,15 +113,17 @@ fn route(take method: Int, take path: Int) -> Int {
 /// requests, summed into a single figure. The value is `sum of statuses -
 /// 1000` — proof the routing core executed.
 fn handle_sample_traffic() -> Int {
-    let a = route(method_get(), path_root());        // 200
-    let b = route(method_get(), path_health());      // 200
-    let c = route(method_post(), path_users());      // 201
+    let a = route(method_get(), path_root()); // 200
+    let b = route(method_get(), path_health()); // 200
+    let c = route(method_post(), path_users()); // 201
     let d = route(method_delete_unknown(), path_users()); // 405
     (a + b + c + d) - 1000
 }
 
 /// An unmodelled method tag (DELETE), used to exercise the 405 path.
-fn method_delete_unknown() -> Int { 4 }
+fn method_delete_unknown() -> Int {
+    4
+}
 
 // --- Request-line parsing (pure, over the borrowed Str core) ---------------
 //
@@ -180,18 +200,9 @@ fn parse_request_line(in line: Str) -> Request {
     } else {
         let second = find_space(line, first + 1);
         if second < 0 {
-            Request {
-                method: method_tag(std::str::slice(line, 0, first)),
-                path: 0,
-                version_ok: false,
-            }
+            Request { method: method_tag(std::str::slice(line, 0, first)), path: 0, version_ok: false }
         } else {
-            Request {
-                method: method_tag(std::str::slice(line, 0, first)),
-                path: path_tag(std::str::slice(line, first + 1, second)),
-                version_ok: std::str::slice(line, second + 1, std::str::len(line))
-                    == "HTTP/1.1",
-            }
+            Request { method: method_tag(std::str::slice(line, 0, first)), path: path_tag(std::str::slice(line, first + 1, second)), version_ok: std::str::slice(line, second + 1, std::str::len(line)) == "HTTP/1.1" }
         }
     }
 }
@@ -224,26 +235,95 @@ fn write_response(take status: Int) -> Int {
     line + newline
 }
 
-/// Demo: parse a fixed request line, route it, print the response status
-/// line, and exit with the status code's low byte. route(GET, /health) = 200,
-/// so the documented exit byte is 200 and stdout is "HTTP/1.1 200 OK\n".
-fn main() -> Int {
-    let request = parse_request_line("GET /health HTTP/1.1");
+// --- The socket shell (EFFECT tier, ADR-0014) -------------------------------
+
+/// EFFECT: read one line (bytes up to CR, LF, or end of input, exclusive)
+/// from a connection into an owned `String` — the request-line reader,
+/// accumulating exactly as `std::io::read_line` does. Effectful, so no spec
+/// (`R0007`); pinned natively by the dogfood test through `main`'s live
+/// round-trip.
+fn read_line_from(take conn: Int) -> String {
+    var line = std::string::empty();
+    var done = false;
+    while !done {
+        let b = std::rt::read_byte(conn);
+        if b < 0 || b == 13 || b == 10 {
+            done = true;
+        } else {
+            std::string::push_byte(line, b);
+        }
+    }
+    line
+}
+
+/// EFFECT: serve exactly one request on an accepted connection — the whole
+/// lifecycle the old `CONTRACT serve` promised, now real: read the request
+/// line off the socket, parse it with the pure core, route it, write the
+/// response status line back over the wire, and close the connection.
+/// Returns the routed status. Effectful, so no spec (`R0007`); pinned
+/// natively by the dogfood test through `main`'s live round-trip.
+fn serve_once(take conn: Int) -> Int {
+    let line = read_line_from(conn);
+    let request = parse_request_line(std::string::as_str(line));
     let status = route(request.method, request.path);
-    write_response(status);
+    std::rt::write(conn, response_line(status));
+    std::rt::write(conn, "\n");
+    std::rt::close(conn);
     status
 }
 
-// --- CONTRACT TIER: what still cannot run ----------------------------------
-//
-// CONTRACT serve(port: Int) -> Result[Int, IoError]
-//   Bind a TCP listener on `port`, accept connections, and for each: read the
-//   request bytes, `parse_request_line`, `route`, `write_response`. BLOCKED
-//   ON: a socket effect primitive — `std::rt` exposes descriptor I/O
-//   (`write`/`read_byte`) and process exit only; there is no `socket`/`bind`/
-//   `listen`/`accept`/`connect`, so no connection can be created (ADR-0006,
-//   amendment 2; tracked by ADR-0007 or a successor effect ADR). Everything
-//   downstream of an accepted, open connection is implemented above.
+/// EFFECT: the live loopback round-trip — the ADR-0014 acceptance oracle.
+/// Listen on an ephemeral port, connect to it (TCP's backlog completes the
+/// handshake before accept), accept, send the canonical request line from
+/// the client, `serve_once` it on the server side, and read the status line
+/// back off the client socket. Returns the served status (200) only when
+/// the bytes on the wire equal the pure model's response line; any
+/// divergence or socket failure returns -1. Effectful, so no spec (`R0007`).
+fn live_status() -> Int {
+    let listener = std::rt::listen(0);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    let port = std::rt::bound_port(listener);
+    if port <= 0 {
+        return 0 - 1;
+    }
+    let client = std::rt::connect("127.0.0.1", port);
+    if client < 0 {
+        return 0 - 1;
+    }
+    let conn = std::rt::accept(listener);
+    if conn < 0 {
+        return 0 - 1;
+    }
+    std::rt::write(client, "GET /health HTTP/1.1\r\n");
+    let served = serve_once(conn);
+    let reply = read_line_from(client);
+    std::rt::close(client);
+    std::rt::close(listener);
+    if served == 200 && std::string::as_str(reply) == "HTTP/1.1 200 OK" {
+        200
+    } else {
+        0 - 1
+    }
+}
+
+/// The demo and the oracle in one: parse the fixed request line through the
+/// pure core, serve the identical request to itself over a live loopback
+/// socket, and — only when the wire's answer agrees with the model's — print
+/// the response status line and exit with the status. route(GET, /health) =
+/// 200, so the documented exit byte is 200 and stdout is
+/// "HTTP/1.1 200 OK\n"; a disagreement exits 0 with no output, which the
+/// dogfood test reports loudly.
+fn main() -> Int {
+    let request = parse_request_line("GET /health HTTP/1.1");
+    let status = route(request.method, request.path);
+    if live_status() != status {
+        return 0;
+    }
+    write_response(status);
+    status
+}
 
 // --- Executable specs for the pure core ------------------------------------
 
@@ -323,18 +403,9 @@ spec parse_request_line {
 
 spec "a parsed request routes end to end" {
     // The full pure pipeline: raw line -> Request -> status.
-    then route(
-        parse_request_line("GET /health HTTP/1.1").method,
-        parse_request_line("GET /health HTTP/1.1").path
-    ) == 200;
-    then route(
-        parse_request_line("POST /users HTTP/1.1").method,
-        parse_request_line("POST /users HTTP/1.1").path
-    ) == 201;
-    then route(
-        parse_request_line("GET /missing HTTP/1.1").method,
-        parse_request_line("GET /missing HTTP/1.1").path
-    ) == 404;
+    then route(parse_request_line("GET /health HTTP/1.1").method, parse_request_line("GET /health HTTP/1.1").path) == 200;
+    then route(parse_request_line("POST /users HTTP/1.1").method, parse_request_line("POST /users HTTP/1.1").path) == 201;
+    then route(parse_request_line("GET /missing HTTP/1.1").method, parse_request_line("GET /missing HTTP/1.1").path) == 404;
 }
 
 spec response_line {

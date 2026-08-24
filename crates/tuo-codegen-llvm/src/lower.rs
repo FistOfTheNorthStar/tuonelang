@@ -2520,6 +2520,85 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 let result = call.try_as_basic_value().unwrap_basic();
                 self.write_place(dest, result)
             }
+            // ADR-0014: the socket effects — descriptor producers on the
+            // same seam; a `Str` host passes as `{ptr, len}` like a path.
+            EffectOp::Listen | EffectOp::BoundPort | EffectOp::Accept => {
+                let [scalar] = args else {
+                    return Err(CodegenError::backend(
+                        "listen/bound_port/accept expects exactly 1 argument",
+                    ));
+                };
+                let scalar = self.lower_operand(&value_arg(scalar)?)?;
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[scalar.into()], "rt_socket")
+                    .map_err(builder_err("calling a socket effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::Connect => {
+                let [host, port] = args else {
+                    return Err(CodegenError::backend("connect expects exactly 2 arguments"));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[ptr.into(), len.into(), port.into()],
+                        "rt_connect",
+                    )
+                    .map_err(builder_err("calling the connect effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            // ADR-0015: channels and mutexes — nullary constructors and
+            // plain scalar calls, every result an `I64` handle or status.
+            EffectOp::ChanNew | EffectOp::MutexNew => {
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[], "rt_sync_new")
+                    .map_err(builder_err("calling a channel/mutex constructor"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::ChanSend => {
+                let [ch, v] = args else {
+                    return Err(CodegenError::backend(
+                        "chan_send expects exactly 2 arguments",
+                    ));
+                };
+                let ch = self.lower_operand(&value_arg(ch)?)?;
+                let v = self.lower_operand(&value_arg(v)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[ch.into(), v.into()],
+                        "rt_chan_send",
+                    )
+                    .map_err(builder_err("calling the chan_send effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::ChanRecv
+            | EffectOp::ChanClose
+            | EffectOp::MutexLock
+            | EffectOp::MutexUnlock => {
+                let [handle] = args else {
+                    return Err(CodegenError::backend(
+                        "a channel/mutex effect expects exactly 1 argument",
+                    ));
+                };
+                let handle = self.lower_operand(&value_arg(handle)?)?;
+                let call = self
+                    .builder
+                    .build_call(self.effect_function(op), &[handle.into()], "rt_sync_op")
+                    .map_err(builder_err("calling a channel/mutex effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
         }
     }
 
@@ -2582,6 +2661,46 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             EffectOp::RemoveFile => (
                 effect::REMOVE_FILE_SYMBOL,
                 i64_ty.fn_type(&[self.ptr_ty.into(), i64_ty.into()], false),
+            ),
+            // ADR-0014: the socket effect symbols.
+            EffectOp::Listen => (
+                effect::LISTEN_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::BoundPort => (
+                effect::BOUND_PORT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::Accept => (
+                effect::ACCEPT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::Connect => (
+                effect::CONNECT_SYMBOL,
+                i64_ty.fn_type(&[self.ptr_ty.into(), i64_ty.into(), i64_ty.into()], false),
+            ),
+            // ADR-0015: the channel and mutex effect symbols.
+            EffectOp::ChanNew => (effect::CHAN_NEW_SYMBOL, i64_ty.fn_type(&[], false)),
+            EffectOp::ChanSend => (
+                effect::CHAN_SEND_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::ChanRecv => (
+                effect::CHAN_RECV_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::ChanClose => (
+                effect::CHAN_CLOSE_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::MutexNew => (effect::MUTEX_NEW_SYMBOL, i64_ty.fn_type(&[], false)),
+            EffectOp::MutexLock => (
+                effect::MUTEX_LOCK_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::MutexUnlock => (
+                effect::MUTEX_UNLOCK_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
             ),
         };
         if let Some(existing) = self.module.get_function(name) {
@@ -3291,6 +3410,39 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 Ok(())
             }
             HeapMutOp::Pop => self.lower_array_pop(target, stride, dest),
+            HeapMutOp::Set => {
+                // ADR-0016: bounds-check against `len` (set never grows),
+                // drop the old element's owned buffers in place, then write
+                // the new element — a scalar store or a `stride`-byte memcpy
+                // — matching the interpreter's `elements[index] = value`.
+                let element = self.array_element_ty(target)?;
+                let header = self.header_address(target)?;
+                let (ptr, len, _cap) = self.load_header(header)?;
+                let index = self.heap_index_arg(args)?;
+                let oob = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGE, index, len, "set_oob")
+                    .map_err(builder_err("bounds-checking a set index"))?;
+                self.guard(oob, TrapCode::IndexOutOfBounds)?;
+                let addr = self.dynamic_byte_gep(ptr, index, stride)?;
+                let arg = args
+                    .get(1)
+                    .ok_or_else(|| CodegenError::backend("set is missing its element"))?;
+                if scalar_type_is_some(&element) {
+                    let v = self.lower_operand(arg)?;
+                    self.builder
+                        .build_store(addr, v)
+                        .map_err(builder_err("storing a set element"))?;
+                } else {
+                    if ty_owns_heap(&element, self.types) {
+                        self.emit_heap_glue(&element, addr, HeapGlue::DropInPlace)?;
+                    }
+                    let src = self.operand_aggregate_address(arg)?;
+                    let layout = self.layout(&element)?;
+                    self.emit_memcpy(addr, src, layout)?;
+                }
+                Ok(())
+            }
             HeapMutOp::MapInsert | HeapMutOp::MapRemove => {
                 // The whole table transition lives in the `tuo_rt_map_*` shim
                 // (ADR-0011): pass the header, the key (and value for insert),

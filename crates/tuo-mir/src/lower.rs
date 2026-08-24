@@ -1795,7 +1795,18 @@ impl FnLower<'_> {
             | Builtin::RtArgByte
             | Builtin::RtOpen
             | Builtin::RtClose
-            | Builtin::RtRemoveFile => {
+            | Builtin::RtRemoveFile
+            | Builtin::RtListen
+            | Builtin::RtBoundPort
+            | Builtin::RtAccept
+            | Builtin::RtConnect
+            | Builtin::RtChanNew
+            | Builtin::RtChanSend
+            | Builtin::RtChanRecv
+            | Builtin::RtChanClose
+            | Builtin::RtMutexNew
+            | Builtin::RtMutexLock
+            | Builtin::RtMutexUnlock => {
                 let op = match builtin {
                     Builtin::RtWrite => EffectOp::Write,
                     Builtin::RtReadByte => EffectOp::ReadByte,
@@ -1807,6 +1818,17 @@ impl FnLower<'_> {
                     Builtin::RtOpen => EffectOp::Open,
                     Builtin::RtClose => EffectOp::Close,
                     Builtin::RtRemoveFile => EffectOp::RemoveFile,
+                    Builtin::RtListen => EffectOp::Listen,
+                    Builtin::RtBoundPort => EffectOp::BoundPort,
+                    Builtin::RtAccept => EffectOp::Accept,
+                    Builtin::RtConnect => EffectOp::Connect,
+                    Builtin::RtChanNew => EffectOp::ChanNew,
+                    Builtin::RtChanSend => EffectOp::ChanSend,
+                    Builtin::RtChanRecv => EffectOp::ChanRecv,
+                    Builtin::RtChanClose => EffectOp::ChanClose,
+                    Builtin::RtMutexNew => EffectOp::MutexNew,
+                    Builtin::RtMutexLock => EffectOp::MutexLock,
+                    Builtin::RtMutexUnlock => EffectOp::MutexUnlock,
                     _ => EffectOp::WriteString,
                 };
                 // Effect arguments are call-style: operands pass by value,
@@ -1867,12 +1889,14 @@ impl FnLower<'_> {
             | Builtin::StringAppend
             | Builtin::ArrayPush
             | Builtin::ArrayPop
+            | Builtin::ArraySet
             | Builtin::MapInsert
             | Builtin::MapRemove => {
                 let op = match builtin {
                     Builtin::StringPushByte => HeapMutOp::PushByte,
                     Builtin::StringAppend => HeapMutOp::Append,
                     Builtin::ArrayPush => HeapMutOp::Push,
+                    Builtin::ArraySet => HeapMutOp::Set,
                     Builtin::MapInsert => HeapMutOp::MapInsert,
                     Builtin::MapRemove => HeapMutOp::MapRemove,
                     _ => HeapMutOp::Pop,

@@ -66,15 +66,18 @@ fn load_one(module: tuo_stdlib::Module) -> (SourceMap, SourceId) {
 #[test]
 fn the_catalog_lists_exactly_its_modules() {
     // The eight initial modules the prompt named, plus the two pure modules
-    // grown on top of the runnable core: `std::math` (Int/Float arithmetic) and
-    // `std::str` (byte-level string algorithms + integer⇄text conversion).
+    // grown on top of the runnable core — `std::math` (Int/Float arithmetic)
+    // and `std::str` (byte-level string algorithms + integer⇄text
+    // conversion) — plus `std::net` (ADR-0014's TCP socket tier).
     let expected = [
         "std::core",
         "std::collections",
         "std::math",
         "std::str",
+        "std::json",
         "std::io",
         "std::fs",
+        "std::net",
         "std::time",
         "std::process",
         "std::sync",
@@ -323,12 +326,13 @@ fn the_three_tier_rule_holds_for_every_public_function() {
 fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
     // ADR-0006 landed descriptor writes/reads and process exit; ADR-0009 landed
     // the allocator, which lets `read_line` accumulate the bytes `read_byte`
-    // yields into an owned `String`; ADR-0007 landed structured fork-join; and
+    // yields into an owned `String`; ADR-0007 landed structured fork-join;
     // ADR-0013 landed the clock, argv, and file open/close/remove primitives,
     // which made the whole of `std::fs`'s disk tier, `std::process`'s argv
-    // pair, and `std::time::now` real. The effect tier must list exactly the
-    // functions those primitives can implement — no more (an over-claim) and no
-    // fewer (a stale contract).
+    // pair, and `std::time::now` real; and ADR-0014 landed the socket
+    // primitives, which made the whole of `std::net`'s TCP tier real. The
+    // effect tier must list exactly the functions those primitives can
+    // implement — no more (an over-claim) and no fewer (a stale contract).
     let mut effect_fns = Vec::new();
     for &module in tuo_stdlib::MODULES {
         for public in public_fns(module.source) {
@@ -348,13 +352,46 @@ fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
             "std::io::print".to_string(),
             "std::io::println".to_string(),
             "std::io::read_line".to_string(),
+            "std::net::accept".to_string(),
+            "std::net::bound_port".to_string(),
+            "std::net::close".to_string(),
+            "std::net::connect".to_string(),
+            "std::net::listen".to_string(),
             "std::process::arg".to_string(),
             "std::process::arg_count".to_string(),
             "std::process::exit".to_string(),
+            "std::sync::channel".to_string(),
+            "std::sync::close".to_string(),
+            "std::sync::lock".to_string(),
+            "std::sync::mutex".to_string(),
             "std::sync::par_map".to_string(),
+            "std::sync::recv".to_string(),
+            "std::sync::send".to_string(),
+            "std::sync::unlock".to_string(),
             "std::time::now".to_string(),
         ]
     );
+}
+
+#[test]
+fn the_contract_tier_is_empty() {
+    // ADR-0015 discharged the last CONTRACT stubs (`std::sync::lock`/
+    // `unlock`): the library no longer advertises anything it cannot run. A
+    // future contract may enter honestly (marked `CONTRACT:`, no spec), but
+    // one reappearing silently would be a regression this pin reports.
+    for &module in tuo_stdlib::MODULES {
+        for public in public_fns(module.source) {
+            assert_ne!(
+                public.tier,
+                Tier::Contract,
+                "{}::{} is CONTRACT-tier, but the contract tier has been \
+                 empty since ADR-0015 — either implement it or update this \
+                 pin deliberately",
+                module.path,
+                public.name
+            );
+        }
+    }
 }
 
 #[test]
@@ -832,6 +869,149 @@ fn main() -> Int {
             Some(0),
             "{which}: the full fs write/exists/read/remove roundtrip succeeds \
              (a nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The whole `std::net` socket tier really touches the network (ADR-0014):
+/// one process listens on an ephemeral loopback port, connects to itself
+/// (TCP's backlog completes the handshake before `accept` runs), accepts,
+/// moves bytes both ways through the ordinary descriptor seam, and closes
+/// all three descriptors. Both backends. This is the native pin `std::net`'s
+/// `EFFECT:` docs name.
+#[test]
+fn stdlib_net_listen_connect_accept_really_touch_the_network_natively() {
+    let caller = "\
+module caller;
+
+import std::net;
+
+fn main() -> Int {
+    let listener = std::net::listen(0);
+    if !std::net::is_descriptor(listener) { return 10; }
+    let port = std::net::bound_port(listener);
+    if port <= 0 { return 11; }
+    let client = std::net::connect(\"127.0.0.1\", port);
+    if !std::net::is_descriptor(client) { return 12; }
+    let server = std::net::accept(listener);
+    if !std::net::is_descriptor(server) { return 13; }
+    if std::rt::write(client, \"ping\") != 4 { return 14; }
+    if std::rt::read_byte(server) != 112 { return 15; }
+    if std::rt::write(server, \"o\") != 1 { return 16; }
+    if std::rt::read_byte(client) != 111 { return 17; }
+    if std::net::close(client) != 0 { return 18; }
+    if std::net::close(server) != 0 { return 19; }
+    if std::net::close(listener) != 0 { return 20; }
+    0
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("net_roundtrip_{which}"));
+        let exe = build_with_module(&dir, tuo_stdlib::NET, caller, release);
+        let output = Command::new(&exe).output().expect("the exe runs");
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full listen/connect/accept/roundtrip/close sequence \
+             succeeds (a nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The whole `std::sync` channel and mutex tier really synchronizes
+/// (ADR-0015): FIFO order through `channel`/`send`/`recv`, the unambiguous
+/// closed signal, and the error-checked `mutex`/`lock`/`unlock` lifecycle —
+/// the operations the old CONTRACT stubs could only describe. Both
+/// backends. This is the native pin `std::sync`'s channel/mutex `EFFECT:`
+/// docs name.
+#[test]
+fn stdlib_sync_channels_and_mutexes_really_synchronize_natively() {
+    let caller = "\
+module caller;
+
+import std::sync;
+
+fn main() -> Int {
+    let ch = std::sync::channel();
+    if ch < 0 { return 10; }
+    if std::sync::send(ch, 5) != 0 { return 11; }
+    if std::sync::send(ch, 6) != 0 { return 12; }
+    if std::sync::recv(ch) != 5 { return 13; }
+    if std::sync::close(ch) != 0 { return 14; }
+    if std::sync::recv(ch) != 6 { return 15; }
+    if std::sync::recv(ch) != 0 - 1 { return 16; }
+    let m = std::sync::mutex();
+    if m < 0 { return 17; }
+    if std::sync::lock(m) != 0 { return 18; }
+    if std::sync::unlock(m) != 0 { return 19; }
+    if std::sync::unlock(m) != 0 - 1 { return 20; }
+    0
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("sync_roundtrip_{which}"));
+        let output = run_with_module(&dir, tuo_stdlib::SYNC, caller, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full channel/mutex lifecycle through the std::sync \
+             wrappers succeeds (a nonzero status names the failing step); \
+             stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `std::json` runs **natively** (ADR-0016): the whole
+/// parse → navigate → render pipeline compiles and runs on both backends,
+/// exercising the data increment for real — `Array[Float]` elements, the
+/// in-place `std::array::set` (with owned-`String` slot drops in the key
+/// column), and the owning arena aggregate. Exit 0 only when every
+/// navigation answer and the canonical re-render agree with the spec'd
+/// semantics.
+#[test]
+fn stdlib_json_parses_navigates_and_renders_natively() {
+    let caller = "\
+module caller;
+
+import std::json;
+
+fn main() -> Int {
+    let text = \"{\\\"id\\\": 42, \\\"name\\\": \\\"tuo\\\", \\\"xs\\\": [1.5, 2, 3]}\";
+    let d = match std::json::parse(text) {
+        Ok { value } => value,
+        Err { error } => { return 10; },
+    };
+    if std::json::kind_of(d, std::json::root()) != std::json::kind_object() { return 11; }
+    let id = std::json::member(d, std::json::root(), \"id\");
+    if std::json::num_of(d, id) != 42.0 { return 12; }
+    let name = std::json::member(d, std::json::root(), \"name\");
+    let name_text = std::json::text_of(d, name);
+    if std::string::as_str(name_text) != \"tuo\" { return 13; }
+    let xs = std::json::member(d, std::json::root(), \"xs\");
+    if std::json::child_count(d, xs) != 3 { return 14; }
+    if std::json::num_of(d, std::json::first_child(d, xs)) != 1.5 { return 15; }
+    let rendered = std::json::render(d);
+    if std::string::as_str(rendered)
+        != \"{\\\"id\\\":42,\\\"name\\\":\\\"tuo\\\",\\\"xs\\\":[1.5,2,3]}\" {
+        return 16;
+    }
+    0
+}
+";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let dir = native_workspace(&format!("json_roundtrip_{which}"));
+        let output = run_with_module(&dir, tuo_stdlib::JSON, caller, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full parse/navigate/render pipeline succeeds \
+             natively (a nonzero status names the failing step); stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }

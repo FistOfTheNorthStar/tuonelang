@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym49)",
-        "fn_body(sym50)",
-        "fn_body(sym51)",
+        "fn_body(sym61)",
+        "fn_body(sym62)",
+        "fn_body(sym63)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym49)",
-        "fn_body(sym50)",
-        "fn_body(sym51)",
+        "fn_body(sym61)",
+        "fn_body(sym62)",
+        "fn_body(sym63)",
         "interface(file#0)",
-        "mir_of(sym49)",
+        "mir_of(sym61)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym49)",
-        "type_of(sym50)",
-        "type_of(sym51)"
+        "type_of(sym61)",
+        "type_of(sym62)",
+        "type_of(sym63)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym49)",
-        "fn_body(sym50)",
-        "fn_body(sym51)",
+        "fn_body(sym61)",
+        "fn_body(sym62)",
+        "fn_body(sym63)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:52"
+        "spec:64"
       ],
       "reexecuted_count": 1
     }
@@ -176,10 +176,29 @@
     },
     {
       "label": "networking",
-      "description": "a basic socket round-trip",
+      "description": "a basic socket round-trip over the ADR-0014 socket effects: per round, listen on an ephemeral loopback port, connect to it, accept, send 128 bytes from the client, read them back on the server byte-at-a-time through the read_byte seam, and close all three descriptors — measured against C and Go peers making the identical calls",
       "support": {
-        "support": "unsupported",
-        "reason": "the effect seam covers descriptors, process exit, and — since ADR-0013 — the clock, argv, and file open/close/remove; but no socket-open effect primitive exists (no socket/bind/listen/accept/connect), so no program can create a connection (ADR-0006, amendment 2). Awaits a successor effect ADR."
+        "support": "supported",
+        "source": "// The networking workload (ADR-0014): a basic socket round-trip. Each round\n// creates a listening socket on an ephemeral loopback port, connects to it\n// (TCP's backlog completes the handshake before accept runs), accepts, sends\n// 8 sixteen-byte chunks (128 bytes) from the client, reads them back on the\n// server byte-at-a-time (128 crossings of the read_byte seam), and closes\n// all three descriptors — so every ADR-0014 socket primitive and the\n// ADR-0006 descriptor seam are on the hot path. The C and Go peers perform\n// the identical sequence.\n//\n// round(8) returns the byte count received, 128; main runs 100 rounds and\n// returns the last round's count. Observable exit byte: 128 & 0xff = 128.\n\nfn round(take chunks: Int) -> Int {\n    let listener = std::rt::listen(0);\n    if listener < 0 {\n        return 0 - 1;\n    }\n    let port = std::rt::bound_port(listener);\n    if port <= 0 {\n        return 0 - 2;\n    }\n    let client = std::rt::connect(\"127.0.0.1\", port);\n    if client < 0 {\n        return 0 - 3;\n    }\n    let server = std::rt::accept(listener);\n    if server < 0 {\n        return 0 - 4;\n    }\n    var i = 0;\n    while i < chunks {\n        std::rt::write(client, \"0123456789abcdef\");\n        i = i + 1;\n    }\n    var count = 0;\n    while count < chunks * 16 {\n        let b = std::rt::read_byte(server);\n        if b < 0 {\n            return 0 - 5;\n        }\n        count = count + 1;\n    }\n    std::rt::close(client);\n    std::rt::close(server);\n    std::rt::close(listener);\n    count\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 100 {\n        result = round(8);\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 128
+      }
+    },
+    {
+      "label": "channels",
+      "description": "synchronization-crossing throughput over the ADR-0015 channel primitives: per round, send 500 values through one process-lived channel and receive all 500 back — single-threaded so the number isolates the locked-FIFO crossing itself — measured against a C peer making the identical mutex-and-condvar crossings and a Go peer using its native buffered channel",
+      "support": {
+        "support": "supported",
+        "source": "// The channels workload (ADR-0015): synchronization-crossing throughput over\n// the channel primitives. One channel is created up front (handles are\n// process-lived); each round sends 500 values through it and receives all\n// 500 back, so every iteration crosses the runtime's locked FIFO twice —\n// single-threaded on purpose, so the number isolates the crossing cost\n// itself (the parallel lab category already measures threading). The C peer\n// makes the identical locked crossings through a mutex-and-condvar FIFO; the\n// Go peer uses its native buffered channel — the direct Go-parity\n// comparison.\n//\n// round(ch, 500) returns the count received, 500; main runs 200 rounds and\n// returns the last round's count. Observable exit byte: 500 & 0xff = 244.\n\nfn round(take ch: Int, take n: Int) -> Int {\n    var i = 0;\n    while i < n {\n        if std::rt::chan_send(ch, i) != 0 {\n            return 0 - 1;\n        }\n        i = i + 1;\n    }\n    var count = 0;\n    while count < n {\n        if std::rt::chan_recv(ch) < 0 {\n            return 0 - 2;\n        }\n        count = count + 1;\n    }\n    count\n}\n\nfn main() -> Int {\n    let ch = std::rt::chan_new();\n    if ch < 0 {\n        return 1;\n    }\n    var result = 0;\n    var r = 0;\n    while r < 200 {\n        result = round(ch, 500);\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 244
+      }
+    },
+    {
+      "label": "json-parse",
+      "description": "JSON decoding throughput over the ADR-0016 data increment: per round, recursive-descent parse of a fixed 149-byte document into an Array[Int]/Array[Float] kind/number arena, folding a structural checksum (3 × nodes + the truncated number sum) — measured against a strtod-based C peer making the identical walk and Go's standard encoding/json (the parity target) walking to the same checksum",
+      "support": {
+        "support": "supported",
+        "source": "// The json-parse workload (ADR-0016): JSON decoding throughput. Each round\n// parses a fixed 149-byte document with a self-contained recursive-descent\n// parser over the ADR-0016 data increment (an `Array[Int]`/`Array[Float]`\n// kind/number arena — the lab's workloads are single-file by design;\n// `std::json` itself is pinned natively by the stdlib suite) and folds a\n// structural checksum: 3 × the node count plus the truncated sum of every\n// number. The C peer makes the identical walk with `strtod`; the Go peer is\n// the parity target itself — `encoding/json` unmarshalling into `any` and\n// walking the result to the same checksum.\n//\n// The document holds 21 nodes and its numbers sum to 247.5, so a round's\n// checksum is (21 * 3 + 247) % 256 = 54; main runs 200 rounds and returns\n// the last round's checksum (reassigned, not accumulated). Exit byte: 54.\n\nfn doc() -> Str {\n    \"{\\\"id\\\":42,\\\"name\\\":\\\"tuonelang\\\",\\\"tags\\\":[\\\"fast\\\",\\\"safe\\\",\\\"native\\\"],\\\"metrics\\\":{\\\"stars\\\":128,\\\"forks\\\":32,\\\"score\\\":9.5},\\\"active\\\":true,\\\"refs\\\":[1,2,3,4,5,6,7,8]}\"\n}\n\nfn is_digit(take b: Int) -> Bool {\n    b >= 48 && b <= 57\n}\n\nfn skip_ws(in s: Str, take pos: Int) -> Int {\n    var p = pos;\n    while p < std::str::len(s) && std::str::byte_at(s, p) == 32 {\n        p = p + 1;\n    }\n    p\n}\n\n// Scan past a string token (the workload document carries no escapes).\nfn string_end(in s: Str, take pos: Int) -> Int {\n    var p = pos + 1;\n    while p < std::str::len(s) && std::str::byte_at(s, p) != 34 {\n        p = p + 1;\n    }\n    p + 1\n}\n\nfn number_end(in s: Str, take pos: Int) -> Int {\n    var p = pos;\n    let n = std::str::len(s);\n    if p < n && std::str::byte_at(s, p) == 45 {\n        p = p + 1;\n    }\n    while p < n && is_digit(std::str::byte_at(s, p)) {\n        p = p + 1;\n    }\n    if p < n && std::str::byte_at(s, p) == 46 {\n        p = p + 1;\n        while p < n && is_digit(std::str::byte_at(s, p)) {\n            p = p + 1;\n        }\n    }\n    p\n}\n\nfn number_value(in s: Str, take a: Int, take b: Int) -> Float {\n    var p = a;\n    var negative = false;\n    if std::str::byte_at(s, p) == 45 {\n        negative = true;\n        p = p + 1;\n    }\n    var value = 0.0;\n    while p < b && is_digit(std::str::byte_at(s, p)) {\n        value = value * 10.0 + ((std::str::byte_at(s, p) - 48) as Float);\n        p = p + 1;\n    }\n    if p < b && std::str::byte_at(s, p) == 46 {\n        p = p + 1;\n        var place = 0.1;\n        while p < b && is_digit(std::str::byte_at(s, p)) {\n            value = value + ((std::str::byte_at(s, p) - 48) as Float) * place;\n            place = place / 10.0;\n            p = p + 1;\n        }\n    }\n    if negative {\n        0.0 - value\n    } else {\n        value\n    }\n}\n\n// Parse one value: record its kind (0 scalar, 1 number) and number value,\n// returning the position after it (the fixed document is valid, so no error\n// path is needed — a mis-parse would derail the checksum and fail the run).\nfn parse_value(mut kinds: Array[Int], mut nums: Array[Float], in s: Str, take pos: Int) -> Int {\n    let p = skip_ws(s, pos);\n    let b = std::str::byte_at(s, p);\n    if b == 110 || b == 116 {\n        std::array::push(kinds, 0);\n        std::array::push(nums, 0.0);\n        p + 4\n    } else if b == 102 {\n        std::array::push(kinds, 0);\n        std::array::push(nums, 0.0);\n        p + 5\n    } else if b == 34 {\n        std::array::push(kinds, 0);\n        std::array::push(nums, 0.0);\n        string_end(s, p)\n    } else if b == 91 {\n        std::array::push(kinds, 0);\n        std::array::push(nums, 0.0);\n        parse_items(kinds, nums, s, p + 1, 93)\n    } else if b == 123 {\n        std::array::push(kinds, 0);\n        std::array::push(nums, 0.0);\n        parse_items(kinds, nums, s, p + 1, 125)\n    } else {\n        let e = number_end(s, p);\n        std::array::push(kinds, 1);\n        std::array::push(nums, number_value(s, p, e));\n        e\n    }\n}\n\n// Parse a container's items up to the closer: array elements, or an\n// object's `\"key\": value` members (the key string is skipped, not a node).\nfn parse_items(mut kinds: Array[Int], mut nums: Array[Float], in s: Str, take pos: Int, take closer: Int) -> Int {\n    var p = skip_ws(s, pos);\n    if std::str::byte_at(s, p) == closer {\n        return p + 1;\n    }\n    var done = false;\n    while !done {\n        if closer == 125 {\n            p = skip_ws(s, p);\n            p = string_end(s, p);\n            p = skip_ws(s, p);\n            p = p + 1;\n        }\n        p = parse_value(kinds, nums, s, p);\n        p = skip_ws(s, p);\n        let c = std::str::byte_at(s, p);\n        p = p + 1;\n        if c == closer {\n            done = true;\n        }\n    }\n    p\n}\n\nfn round() -> Int {\n    var kinds = std::array::empty();\n    var nums = std::array::empty();\n    let text = doc();\n    parse_value(kinds, nums, text, 0);\n    let nodes = std::array::len(kinds);\n    var sum = 0.0;\n    var i = 0;\n    while i < std::array::len(nums) {\n        sum = sum + std::array::get(nums, i);\n        i = i + 1;\n    }\n    (nodes * 3 + (sum as Int)) % 256\n}\n\nfn main() -> Int {\n    var result = 0;\n    var r = 0;\n    while r < 200 {\n        result = round();\n        r = r + 1;\n    }\n    result\n}\n",
+        "expected_exit": 54
       }
     }
   ],
@@ -439,6 +458,84 @@
         "expected_exit": 240
       },
       "tuonelang_exit": 240,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "networking",
+        "peer": "c",
+        "peer_source": "/* networking — the equivalent-semantics C peer for the tuonelang networking\n * workload (ADR-0014's socket effects). The identical sequence: per round,\n * create an IPv4 TCP socket listening on an ephemeral loopback port, learn\n * the port with getsockname, connect to it (the backlog completes the\n * handshake before accept), accept, write 8 sixteen-byte chunks (128 bytes)\n * from the client, read them back on the server **one byte per read(2)\n * call** (mirroring the tuonelang program's byte-at-a-time read_byte\n * crossings), and close all three descriptors. The observable result is one\n * round's byte count (reassigned, not accumulated): 128, the exit byte. */\n#include <arpa/inet.h>\n#include <netinet/in.h>\n#include <string.h>\n#include <sys/socket.h>\n#include <unistd.h>\n\nstatic long long round_trip(long long chunks) {\n    struct sockaddr_in addr;\n    socklen_t alen = sizeof(addr);\n    int one = 1;\n    int listener, client, server;\n    long long i, count, want;\n    listener = socket(AF_INET, SOCK_STREAM, 0);\n    if (listener < 0) return -1;\n    setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));\n    memset(&addr, 0, sizeof(addr));\n    addr.sin_family = AF_INET;\n    addr.sin_port = htons(0);\n    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);\n    if (bind(listener, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||\n        listen(listener, 16) != 0 ||\n        getsockname(listener, (struct sockaddr *)&addr, &alen) != 0) {\n        close(listener);\n        return -2;\n    }\n    client = socket(AF_INET, SOCK_STREAM, 0);\n    if (client < 0) {\n        close(listener);\n        return -3;\n    }\n    if (connect(client, (struct sockaddr *)&addr, sizeof(addr)) != 0) {\n        close(client);\n        close(listener);\n        return -3;\n    }\n    server = accept(listener, 0, 0);\n    if (server < 0) {\n        close(client);\n        close(listener);\n        return -4;\n    }\n    for (i = 0; i < chunks; i++) {\n        write(client, \"0123456789abcdef\", 16);\n    }\n    count = 0;\n    want = chunks * 16;\n    while (count < want) {\n        unsigned char b;\n        if (read(server, &b, 1) != 1) return -5;\n        count++;\n    }\n    close(client);\n    close(server);\n    close(listener);\n    return count;\n}\n\nint main(void) {\n    long long result = 0;\n    long long r;\n    for (r = 0; r < 100; r++) {\n        result = round_trip(8);\n    }\n    return (int)(result & 0xff);\n}\n",
+        "expected_exit": 128
+      },
+      "tuonelang_exit": 128,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "networking",
+        "peer": "go",
+        "peer_source": "// networking — the equivalent-semantics Go peer for the tuonelang networking\n// workload (ADR-0014's socket effects). The identical sequence: per round,\n// listen on an ephemeral loopback port, dial it (the backlog completes the\n// handshake before Accept), accept, write 8 sixteen-byte chunks (128 bytes)\n// from the client, read them back on the server **one byte per Read call**\n// (mirroring the tuonelang program's byte-at-a-time read_byte crossings and\n// the C peer's one-byte read(2) loop), and close all three. The observable\n// result is one round's byte count (reassigned, not accumulated): 128, the\n// exit byte.\npackage main\n\nimport (\n\t\"net\"\n\t\"os\"\n)\n\nfunc roundTrip(chunks int64) int64 {\n\tlistener, err := net.Listen(\"tcp\", \"127.0.0.1:0\")\n\tif err != nil {\n\t\treturn -1\n\t}\n\tclient, err := net.Dial(\"tcp\", listener.Addr().String())\n\tif err != nil {\n\t\tlistener.Close()\n\t\treturn -3\n\t}\n\tserver, err := listener.Accept()\n\tif err != nil {\n\t\tclient.Close()\n\t\tlistener.Close()\n\t\treturn -4\n\t}\n\tchunk := []byte(\"0123456789abcdef\")\n\tfor i := int64(0); i < chunks; i++ {\n\t\tclient.Write(chunk)\n\t}\n\tvar count int64 = 0\n\twant := chunks * 16\n\tb := make([]byte, 1)\n\tfor count < want {\n\t\tn, _ := server.Read(b)\n\t\tif n != 1 {\n\t\t\treturn -5\n\t\t}\n\t\tcount++\n\t}\n\tclient.Close()\n\tserver.Close()\n\tlistener.Close()\n\treturn count\n}\n\nfunc main() {\n\tvar result int64 = 0\n\tfor r := int64(0); r < 100; r++ {\n\t\tresult = roundTrip(8)\n\t}\n\tos.Exit(int(result & 0xff))\n}\n",
+        "expected_exit": 128
+      },
+      "tuonelang_exit": 128,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "channels",
+        "peer": "c",
+        "peer_source": "/* channels — the equivalent-semantics C peer for the tuonelang channels\n * workload (ADR-0015). The identical sequence through the same kind of\n * structure the tuonelang runtime uses: a mutex-and-condvar FIFO of\n * malloc'd nodes. Per round, send 500 values through the queue (lock,\n * append, signal, unlock) and receive all 500 back (lock, wait-while-empty,\n * pop, unlock) — the identical locked crossings, single-threaded. The\n * observable result is one round's receive count (reassigned, not\n * accumulated): 500, exit byte 500 & 0xff = 244. */\n#include <pthread.h>\n#include <stdlib.h>\n\ntypedef struct node {\n    long long value;\n    struct node *next;\n} node;\n\nstatic pthread_mutex_t q_lock = PTHREAD_MUTEX_INITIALIZER;\nstatic pthread_cond_t q_ready = PTHREAD_COND_INITIALIZER;\nstatic node *q_head = 0;\nstatic node *q_tail = 0;\n\nstatic long long q_send(long long v) {\n    node *n = (node *)malloc(sizeof(node));\n    if (!n) return -1;\n    n->value = v;\n    n->next = 0;\n    pthread_mutex_lock(&q_lock);\n    if (q_tail) q_tail->next = n; else q_head = n;\n    q_tail = n;\n    pthread_cond_signal(&q_ready);\n    pthread_mutex_unlock(&q_lock);\n    return 0;\n}\n\nstatic long long q_recv(void) {\n    node *n;\n    long long v;\n    pthread_mutex_lock(&q_lock);\n    while (!q_head) pthread_cond_wait(&q_ready, &q_lock);\n    n = q_head;\n    q_head = n->next;\n    if (!q_head) q_tail = 0;\n    pthread_mutex_unlock(&q_lock);\n    v = n->value;\n    free(n);\n    return v;\n}\n\nstatic long long round_trip(long long n) {\n    long long i, count;\n    for (i = 0; i < n; i++) {\n        if (q_send(i) != 0) return -1;\n    }\n    count = 0;\n    while (count < n) {\n        if (q_recv() < 0) return -2;\n        count++;\n    }\n    return count;\n}\n\nint main(void) {\n    long long result = 0;\n    long long r;\n    for (r = 0; r < 200; r++) {\n        result = round_trip(500);\n    }\n    return (int)(result & 0xff);\n}\n",
+        "expected_exit": 244
+      },
+      "tuonelang_exit": 244,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "channels",
+        "peer": "go",
+        "peer_source": "// channels — the equivalent-semantics Go peer for the tuonelang channels\n// workload (ADR-0015), and the direct Go-parity comparison the ADR invites:\n// where tuonelang crosses its runtime's locked FIFO and C a hand-rolled\n// mutex-and-condvar queue, Go uses its **native channel** (buffered to the\n// round's size, since the protocol sends all 500 before receiving and an\n// unbuffered channel would block a single goroutine). Per round, send 500\n// values and receive all 500 back. The observable result is one round's\n// receive count (reassigned, not accumulated): 500, exit byte\n// 500 & 0xff = 244.\npackage main\n\nimport \"os\"\n\nfunc roundTrip(ch chan int64, n int64) int64 {\n\tfor i := int64(0); i < n; i++ {\n\t\tch <- i\n\t}\n\tvar count int64 = 0\n\tfor count < n {\n\t\tif <-ch < 0 {\n\t\t\treturn -2\n\t\t}\n\t\tcount++\n\t}\n\treturn count\n}\n\nfunc main() {\n\tch := make(chan int64, 500)\n\tvar result int64 = 0\n\tfor r := int64(0); r < 200; r++ {\n\t\tresult = roundTrip(ch, 500)\n\t}\n\tos.Exit(int(result & 0xff))\n}\n",
+        "expected_exit": 244
+      },
+      "tuonelang_exit": 244,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "json-parse",
+        "peer": "c",
+        "peer_source": "/* json-parse — the equivalent-semantics C peer for the tuonelang json-parse\n * workload (ADR-0016). The identical walk: per round, recursive-descent\n * parse of the same fixed document (numbers via strtod — the same decimal\n * accumulation), counting nodes and summing every number, then fold the\n * same structural checksum: (nodes * 3 + (long long)sum) % 256 = 54, the\n * exit byte (the last round's value, reassigned, not accumulated). */\n#include <stdlib.h>\n\nstatic const char *DOC =\n    \"{\\\"id\\\":42,\\\"name\\\":\\\"tuonelang\\\",\\\"tags\\\":[\\\"fast\\\",\\\"safe\\\",\\\"native\\\"],\"\n    \"\\\"metrics\\\":{\\\"stars\\\":128,\\\"forks\\\":32,\\\"score\\\":9.5},\\\"active\\\":true,\"\n    \"\\\"refs\\\":[1,2,3,4,5,6,7,8]}\";\n\nstatic const char *skip_ws(const char *p) {\n    while (*p == ' ') p++;\n    return p;\n}\n\nstatic const char *string_end(const char *p) {\n    p++;\n    while (*p && *p != '\"') p++;\n    return p + 1;\n}\n\nstatic const char *parse_value(const char *p, long long *nodes, double *sum);\n\nstatic const char *parse_items(const char *p, char closer, long long *nodes,\n                               double *sum) {\n    p = skip_ws(p);\n    if (*p == closer) return p + 1;\n    for (;;) {\n        char c;\n        if (closer == '}') {\n            p = skip_ws(p);\n            p = string_end(p);\n            p = skip_ws(p);\n            p++; /* ':' */\n        }\n        p = parse_value(p, nodes, sum);\n        p = skip_ws(p);\n        c = *p;\n        p++;\n        if (c == closer) return p;\n    }\n}\n\nstatic const char *parse_value(const char *p, long long *nodes, double *sum) {\n    p = skip_ws(p);\n    (*nodes)++;\n    if (*p == 'n' || *p == 't') return p + 4;\n    if (*p == 'f') return p + 5;\n    if (*p == '\"') return string_end(p);\n    if (*p == '[') return parse_items(p + 1, ']', nodes, sum);\n    if (*p == '{') return parse_items(p + 1, '}', nodes, sum);\n    {\n        char *end;\n        *sum += strtod(p, &end);\n        return end;\n    }\n}\n\nstatic long long round_trip(void) {\n    long long nodes = 0;\n    double sum = 0.0;\n    parse_value(DOC, &nodes, &sum);\n    return (nodes * 3 + (long long)sum) % 256;\n}\n\nint main(void) {\n    long long result = 0;\n    long long r;\n    for (r = 0; r < 200; r++) {\n        result = round_trip();\n    }\n    return (int)(result & 0xff);\n}\n",
+        "expected_exit": 54
+      },
+      "tuonelang_exit": 54,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "json-parse",
+        "peer": "go",
+        "peer_source": "// json-parse — the equivalent-semantics Go peer for the tuonelang json-parse\n// workload, and the parity target ADR-0016 answers: Go's standard\n// `encoding/json` unmarshals the same fixed document into `any` and the walk\n// folds the identical structural checksum — one node per JSON value, every\n// number summed — (nodes * 3 + int64(sum)) % 256 = 54, the exit byte (the\n// last round's value, reassigned, not accumulated). The walk is\n// order-independent (count + sum), so Go's randomized map iteration cannot\n// change the answer.\npackage main\n\nimport (\n\t\"encoding/json\"\n\t\"os\"\n)\n\nconst doc = `{\"id\":42,\"name\":\"tuonelang\",\"tags\":[\"fast\",\"safe\",\"native\"],` +\n\t`\"metrics\":{\"stars\":128,\"forks\":32,\"score\":9.5},\"active\":true,` +\n\t`\"refs\":[1,2,3,4,5,6,7,8]}`\n\nfunc walk(v any, nodes *int64, sum *float64) {\n\t*nodes++\n\tswitch value := v.(type) {\n\tcase map[string]any:\n\t\tfor _, child := range value {\n\t\t\twalk(child, nodes, sum)\n\t\t}\n\tcase []any:\n\t\tfor _, child := range value {\n\t\t\twalk(child, nodes, sum)\n\t\t}\n\tcase float64:\n\t\t*sum += value\n\t}\n}\n\nfunc roundTrip() int64 {\n\tvar parsed any\n\tif err := json.Unmarshal([]byte(doc), &parsed); err != nil {\n\t\treturn -1\n\t}\n\tvar nodes int64 = 0\n\tvar sum float64 = 0.0\n\twalk(parsed, &nodes, &sum)\n\treturn (nodes*3 + int64(sum)) % 256\n}\n\nfunc main() {\n\tvar result int64 = 0\n\tfor r := int64(0); r < 200; r++ {\n\t\tresult = roundTrip()\n\t}\n\tos.Exit(int(result & 0xff))\n}\n",
+        "expected_exit": 54
+      },
+      "tuonelang_exit": 54,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

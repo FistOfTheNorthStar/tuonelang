@@ -17,11 +17,16 @@ module concurrent_worker;
 //     answer only when the live run agrees (the ADR's "the deterministic
 //     scheduling model is the oracle" constraint, executed literally). The
 //     spec sandbox stays pure (spawning is an effect, `R0007`), so the live
-//     path is pinned by the native dogfood test, not a spec.
+//     path is pinned by the native dogfood test, not a spec; and
 //
-// What still cannot run — a *shared* work queue with dynamic stealing, or any
-// shared mutable state across workers — remains a documented CONTRACT below,
-// blocked on an ADR admitting shared state across threads.
+//   * the DYNAMIC QUEUE (since ADR-0015): the shared, dynamically-drained
+//     work queue the old CONTRACT could only describe. `main` fills a
+//     channel with every task id, closes it, and lets the same workers
+//     *race to drain it* — dynamic stealing, where which worker wins which
+//     task is scheduler-dependent — and cross-checks the one thing stealing
+//     must preserve: the drained total equals the model's serial cost (no
+//     task lost, none run twice). Both live paths must agree with the model
+//     for `main` to exit 15.
 //
 // The task batch: eight tasks whose costs (in abstract time units) are the
 // accessors `cost0`..`cost7`. Workers pull them round-robin: worker w handles
@@ -205,35 +210,83 @@ fn live_makespan() -> Int {
     best
 }
 
-/// Exit with the model's makespan **only if the live parallel run agrees** —
-/// the scheduling model acting as the pool's correctness oracle, at runtime.
+// --- The dynamic queue (ADR-0015) --------------------------------------------
+
+/// EFFECT: one dynamic worker — drain the shared channel until it is closed
+/// and empty, accumulating the cost of every task id this worker wins the
+/// race for. Which tasks those are is scheduler-dependent; the sum of all
+/// workers' totals is not.
+fn drain_queue(take ch: Int) -> Int {
+    var acc = 0;
+    var done = false;
+    while !done {
+        let task = std::rt::chan_recv(ch);
+        if task < 0 {
+            done = true;
+        } else {
+            acc = acc + cost_of(task);
+        }
+    }
+    acc
+}
+
+/// EFFECT: the dynamically-drained pool — the shared work queue the old
+/// contract named, now real over the ADR-0015 channel. Fill the channel
+/// with every task id, close it, and let `worker_count` workers race
+/// `chan_recv` to drain it (each par_map task is the same channel handle).
+/// Returns the drained grand total, which dynamic stealing must keep equal
+/// to the model's `serial_cost` however the race resolves.
+fn dynamic_total() -> Int {
+    let ch = std::rt::chan_new();
+    if ch < 0 {
+        return 0 - 1;
+    }
+    var i = 0;
+    while i < task_count() {
+        if std::rt::chan_send(ch, i) != 0 {
+            return 0 - 1;
+        }
+        i = i + 1;
+    }
+    if std::rt::chan_close(ch) != 0 {
+        return 0 - 1;
+    }
+    var handles = std::array::empty();
+    var w = 0;
+    while w < worker_count() {
+        std::array::push(handles, ch);
+        w = w + 1;
+    }
+    let drained = std::rt::par_map(drain_queue, handles, worker_count());
+    var total = 0;
+    var j = 0;
+    while j < std::array::len(drained) {
+        total = total + std::array::get(drained, j);
+        j = j + 1;
+    }
+    total
+}
+
+/// Exit with the model's makespan **only if both live runs agree with the
+/// model** — the static pool's makespan matches the prediction, and the
+/// dynamic queue drains to exactly the serial cost. The scheduling model
+/// acting as the pool's correctness oracle, at runtime, twice.
 fn main() -> Int {
     let predicted = makespan();
     let live = live_makespan();
-    if predicted == live {
-        predicted
-    } else {
-        0
+    if predicted != live {
+        return 0;
     }
+    if dynamic_total() != serial_cost() {
+        return 0;
+    }
+    predicted
 }
 
-// --- CONTRACT TIER: what structured fork-join deliberately does not admit ---
-//
-// ADR-0007's primitive is structured: workers share nothing mutable and
-// nothing outlives the call. A pool with a *shared, dynamically-drained* work
-// queue needs shared mutable state across threads, which stays out of v0 by
-// design. Given as contracts only, blocked on a future ADR admitting shared
-// state (the Shared/atomics story):
-//
-// CONTRACT submit(pool: Pool, task: Task) -> Unit
-//   Enqueue a task onto a shared queue workers drain dynamically. BLOCKED ON:
-//   a synchronized channel/queue type — dynamic stealing changes *which*
-//   worker runs a task (the round-robin model pins it statically).
-//
-// CONTRACT join_detached(pool: Pool) -> Results
-//   Wait on workers that outlive the spawning call. BLOCKED ON: detached
-//   spawn — deliberately absent; ADR-0007 chose structured fork-join so
-//   nothing can dangle.
+// What structured fork-join still deliberately does not admit: detached
+// spawn (workers outliving the spawning call). That is not a pending
+// contract but a design decision — ADR-0007 chose structured fork-join so
+// nothing can dangle, and ADR-0015 added communication, not detachment.
 
 // --- Executable specs for the scheduling model -----------------------------
 

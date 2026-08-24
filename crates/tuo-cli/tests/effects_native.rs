@@ -317,3 +317,143 @@ fn file_open_write_read_append_remove_roundtrip() {
         );
     }
 }
+
+/// The ADR-0014 socket primitives round-trip for real, in one process over
+/// loopback: `listen(0)` takes an ephemeral port `bound_port` reveals,
+/// `connect` completes against the listening socket's backlog *before*
+/// `accept` runs (TCP completes the handshake in the kernel), and the two
+/// connected descriptors move bytes both ways through the ordinary
+/// `write`/`read_byte` seam, with EOF after the peer closes. A `connect` to
+/// the closed port and a non-numeric host are host errors, not traps — on
+/// both backends.
+#[test]
+fn socket_listen_connect_accept_roundtrip() {
+    let dir = workspace("socket_roundtrip");
+    let source = "fn main() -> Int {\n    \
+        let listener = std::rt::listen(0);\n    \
+        if listener < 0 { return 10; }\n    \
+        let port = std::rt::bound_port(listener);\n    \
+        if port <= 0 { return 11; }\n    \
+        let client = std::rt::connect(\"127.0.0.1\", port);\n    \
+        if client < 0 { return 12; }\n    \
+        let server = std::rt::accept(listener);\n    \
+        if server < 0 { return 13; }\n    \
+        if std::rt::write(client, \"hi\") != 2 { return 14; }\n    \
+        if std::rt::read_byte(server) != 104 { return 15; }\n    \
+        if std::rt::read_byte(server) != 105 { return 16; }\n    \
+        if std::rt::write(server, \"!\") != 1 { return 17; }\n    \
+        if std::rt::read_byte(client) != 33 { return 18; }\n    \
+        if std::rt::close(client) != 0 { return 19; }\n    \
+        if std::rt::read_byte(server) != 0 - 1 { return 20; }\n    \
+        if std::rt::close(server) != 0 { return 21; }\n    \
+        if std::rt::close(listener) != 0 { return 22; }\n    \
+        if std::rt::connect(\"127.0.0.1\", port) >= 0 { return 23; }\n    \
+        if std::rt::connect(\"localhost\", port) >= 0 { return 24; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("sockets_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full listen/connect/accept/write/read/close \
+             roundtrip succeeds (a nonzero status names the failing step); \
+             stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The ADR-0015 channel and mutex primitives obey their documented policy,
+/// single-threaded: FIFO order, negative payloads refused (so the closed
+/// signal stays unambiguous), sends to a closed channel refused, `-1` after
+/// close-and-drain, idempotent close, invalid handles as `-1`, and the
+/// error-checking mutex reporting a relock and a non-holder unlock as `-1`
+/// instead of undefined behavior — on both backends.
+#[test]
+fn channel_and_mutex_policy_roundtrip() {
+    let dir = workspace("sync_policy");
+    let source = "fn main() -> Int {\n    \
+        let ch = std::rt::chan_new();\n    \
+        if ch < 0 { return 10; }\n    \
+        if std::rt::chan_send(ch, 7) != 0 { return 11; }\n    \
+        if std::rt::chan_send(ch, 0 - 3) != 0 - 1 { return 12; }\n    \
+        if std::rt::chan_send(ch, 9) != 0 { return 13; }\n    \
+        if std::rt::chan_recv(ch) != 7 { return 14; }\n    \
+        if std::rt::chan_recv(ch) != 9 { return 15; }\n    \
+        if std::rt::chan_close(ch) != 0 { return 16; }\n    \
+        if std::rt::chan_send(ch, 1) != 0 - 1 { return 17; }\n    \
+        if std::rt::chan_recv(ch) != 0 - 1 { return 18; }\n    \
+        if std::rt::chan_close(ch) != 0 { return 19; }\n    \
+        if std::rt::chan_recv(9999) != 0 - 1 { return 20; }\n    \
+        let m = std::rt::mutex_new();\n    \
+        if m < 0 { return 21; }\n    \
+        if std::rt::mutex_lock(m) != 0 { return 22; }\n    \
+        if std::rt::mutex_lock(m) != 0 - 1 { return 23; }\n    \
+        if std::rt::mutex_unlock(m) != 0 { return 24; }\n    \
+        if std::rt::mutex_unlock(m) != 0 - 1 { return 25; }\n    \
+        if std::rt::mutex_lock(9999) != 0 - 1 { return 26; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("sync_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the full channel/mutex policy roundtrip succeeds \
+             (a nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// Channels really synchronize across OS threads (ADR-0015 ∘ ADR-0007): a
+/// pre-filled, closed channel is drained by three `par_map` workers racing
+/// `chan_recv` — dynamic stealing, where which worker gets which value is
+/// scheduler-dependent — and the drained total still equals the sum of what
+/// was sent (1..=10 → 55), the invariant stealing must preserve — on both
+/// backends.
+#[test]
+fn channels_distribute_work_across_par_map_threads() {
+    let dir = workspace("chan_threads");
+    let source = "fn drain(take ch: Int) -> Int {\n    \
+        var acc = 0;\n    \
+        var done = false;\n    \
+        while !done {\n        \
+        let v = std::rt::chan_recv(ch);\n        \
+        if v < 0 { done = true; } else { acc = acc + v; }\n    \
+        }\n    \
+        acc\n}\n\
+        fn main() -> Int {\n    \
+        let ch = std::rt::chan_new();\n    \
+        if ch < 0 { return 1; }\n    \
+        var tasks = std::array::empty();\n    \
+        std::array::push(tasks, ch);\n    \
+        std::array::push(tasks, ch);\n    \
+        std::array::push(tasks, ch);\n    \
+        var i = 1;\n    \
+        while i <= 10 {\n        \
+        if std::rt::chan_send(ch, i) != 0 { return 2; }\n        \
+        i = i + 1;\n    \
+        }\n    \
+        if std::rt::chan_close(ch) != 0 { return 3; }\n    \
+        let sums = std::rt::par_map(drain, tasks, 3);\n    \
+        var total = 0;\n    \
+        var j = 0;\n    \
+        while j < std::array::len(sums) {\n        \
+        total = total + std::array::get(sums, j);\n        \
+        j = j + 1;\n    \
+        }\n    \
+        total\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("chan_par_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(55),
+            "{which}: three workers drain the queue to exactly the sum sent \
+             (55), however the values are stolen; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

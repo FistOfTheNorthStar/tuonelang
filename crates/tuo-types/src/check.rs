@@ -11,7 +11,7 @@
 //! dispatch), `Self` types, and interface bounds — those arrive with the
 //! trait system, not the core type system.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use tuo_ast::{
     ArrayLiteralExpr, ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, Item,
@@ -48,6 +48,11 @@ use crate::ty::{
 /// - `T0015` — not first-class: a builtin or generic function used as a
 ///   value (ADR-0008 Tier 1). Only ordinary top-level user `fn`s are
 ///   first-class function values.
+/// - `T0016` — recursive type without a heap-wrapper indirection: a struct
+///   or enum reaches itself through its own fields/payloads (by value or
+///   through `Array`/`Map`/`Option`/`Result`/tuple/fixed-array components),
+///   which v0 cannot represent — only a `Box`/`Shared`/`Weak` indirection
+///   breaks a cycle (ADR-0016).
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -191,6 +196,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     for ast in files {
         checker.collect_signatures(*ast);
     }
+    checker.check_recursion_boundary();
     for ast in files {
         checker.check_file(*ast);
     }
@@ -273,6 +279,20 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::RtOpen => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::RtClose => (vec![Ty::int()], Ty::int()),
         Builtin::RtRemoveFile => (vec![Ty::Str], Ty::int()),
+        // ADR-0014: socket effects — descriptor producers over the same
+        // seam; `write`/`read_byte`/`close` move the bytes and release them.
+        Builtin::RtListen | Builtin::RtBoundPort | Builtin::RtAccept => {
+            (vec![Ty::int()], Ty::int())
+        }
+        Builtin::RtConnect => (vec![Ty::Str, Ty::int()], Ty::int()),
+        // ADR-0015: channels and mutexes — runtime-owned objects behind
+        // opaque `Int` handles, the same shape as a descriptor.
+        Builtin::RtChanNew | Builtin::RtMutexNew => (Vec::new(), Ty::int()),
+        Builtin::RtChanSend => (vec![Ty::int(), Ty::int()], Ty::int()),
+        Builtin::RtChanRecv
+        | Builtin::RtChanClose
+        | Builtin::RtMutexLock
+        | Builtin::RtMutexUnlock => (vec![Ty::int()], Ty::int()),
         Builtin::StrLen => (vec![Ty::Str], Ty::int()),
         Builtin::StrByteAt => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::StrSlice => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::Str),
@@ -287,6 +307,7 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::StringAsStr => (vec![Ty::String], Ty::Str),
         Builtin::ArrayEmpty => (Vec::new(), int_array()),
         Builtin::ArrayPush => (vec![int_array(), Ty::int()], Ty::Unit),
+        Builtin::ArraySet => (vec![int_array(), Ty::int(), Ty::int()], Ty::Unit),
         Builtin::ArrayPop => (vec![int_array()], Ty::Option(Box::new(Ty::int()))),
         Builtin::ArrayLen => (vec![int_array()], Ty::int()),
         Builtin::ArrayGet => (vec![int_array(), Ty::int()], Ty::int()),
@@ -659,6 +680,124 @@ impl<'a> Checker<'a> {
             params,
             modes,
             ret,
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // The recursion boundary (ADR-0016, `T0016`)
+    // ------------------------------------------------------------------
+
+    /// Reject every struct/enum that reaches itself through its own fields
+    /// or variant payloads without a heap-wrapper indirection (`T0016`).
+    ///
+    /// v0 cannot represent such a type: a by-value cycle has infinite size,
+    /// and a cycle through `Array`/`Map` (heap-indirected but glue-walked)
+    /// would recurse the native backends' inline clone/drop emission
+    /// forever. Only `Box`/`Shared`/`Weak` break a cycle — their layout is
+    /// a bare pointer and the backends refuse their *values* cleanly — so
+    /// `Weak` back-edges (the shipped cyclic-shape declarations) stay
+    /// legal. A successor ADR that gives the backends runtime-recursive
+    /// glue relaxes this boundary; until then the check keeps an accepted
+    /// program from ever hanging the compiler.
+    fn check_recursion_boundary(&mut self) {
+        let mut aggregates: Vec<SymbolId> = self
+            .structs
+            .keys()
+            .copied()
+            .chain(self.enums.keys().copied())
+            .collect();
+        aggregates.sort();
+        for symbol in aggregates {
+            let mut visited = HashSet::new();
+            if self.reaches_by_value(symbol, symbol, &mut visited) {
+                let (name, span) = self
+                    .resolution
+                    .symbols()
+                    .find(|(id, _)| *id == symbol)
+                    .map_or_else(
+                        || ("<unknown>".to_string(), self.fallback),
+                        |(_, declared)| {
+                            (
+                                declared.name.to_string(),
+                                declared.declaration.unwrap_or(self.fallback),
+                            )
+                        },
+                    );
+                self.push(Diagnostic::error(
+                    code(16),
+                    format!(
+                        "recursive type: `{name}` reaches itself through its own \
+                         fields without a heap-wrapper indirection; v0 cannot \
+                         represent this — break the cycle with a `Box`/`Shared`/\
+                         `Weak` indirection, or flatten the recursion into an \
+                         index arena (how `std::json` stores its tree)"
+                    ),
+                    span,
+                ));
+            }
+        }
+    }
+
+    /// Does `from`'s field graph reach `target` without passing through a
+    /// heap wrapper? `visited` keeps the walk linear (and terminating) over
+    /// arbitrary declaration graphs.
+    fn reaches_by_value(
+        &self,
+        from: SymbolId,
+        target: SymbolId,
+        visited: &mut HashSet<SymbolId>,
+    ) -> bool {
+        if !visited.insert(from) {
+            return false;
+        }
+        let mut field_tys: Vec<Ty> = Vec::new();
+        if let Some(def) = self.structs.get(&from) {
+            field_tys.extend(def.fields.iter().map(|(_, ty)| ty.clone()));
+        }
+        if let Some(def) = self.enums.get(&from) {
+            field_tys.extend(
+                def.variants
+                    .iter()
+                    .flat_map(|(_, fields)| fields.iter().map(|(_, ty)| ty.clone())),
+            );
+        }
+        field_tys
+            .iter()
+            .any(|ty| self.ty_reaches(ty, target, visited))
+    }
+
+    /// Does `ty` structurally contain `target` (or an aggregate whose field
+    /// graph reaches it) without a heap-wrapper indirection in between?
+    /// Type arguments are followed too, so a generic self-application
+    /// (`struct A { w: Wrap[A] }`) is caught at the use edge.
+    fn ty_reaches(&self, ty: &Ty, target: SymbolId, visited: &mut HashSet<SymbolId>) -> bool {
+        match ty {
+            Ty::Struct(symbol, targs) | Ty::Enum(symbol, targs) => {
+                *symbol == target
+                    || self.reaches_by_value(*symbol, target, visited)
+                    || targs
+                        .iter()
+                        .any(|arg| self.ty_reaches(arg, target, visited))
+            }
+            // The one legal indirection: a wrapper's layout is a bare
+            // pointer, so the cycle's size is finite and no glue descends.
+            Ty::Wrapper(..) => false,
+            Ty::Array(item) | Ty::FixedArray(item, _) | Ty::Range(item) | Ty::Option(item) => {
+                self.ty_reaches(item, target, visited)
+            }
+            Ty::Map(key, value) => {
+                self.ty_reaches(key, target, visited) || self.ty_reaches(value, target, visited)
+            }
+            Ty::Result(ok, err) => {
+                self.ty_reaches(ok, target, visited) || self.ty_reaches(err, target, visited)
+            }
+            Ty::Tuple(items) => items
+                .iter()
+                .any(|item| self.ty_reaches(item, target, visited)),
+            // Scalars, text, `Param` (substituted at the use edge via the
+            // targ walk above), `Fn` (a `Copy` code pointer stores no
+            // value), and inference/poison types close no cycle.
+            _ => false,
         }
     }
 
@@ -2376,6 +2515,15 @@ impl<'a> Checker<'a> {
                 self.reject_unsupported_array_element(&elem, span);
                 Some(elem)
             }
+            Builtin::ArraySet => {
+                // `set(mut Array[T], Int, T) -> Unit` (ADR-0016): the
+                // in-place element overwrite, `get`'s write mirror.
+                let elem = self.fresh(span);
+                let array = Ty::Array(Box::new(elem.clone()));
+                self.check_args(&[array, int, elem.clone()], args, span);
+                self.reject_unsupported_array_element(&elem, span);
+                Some(Ty::Unit)
+            }
             Builtin::ArrayLen => {
                 // `len(Array[T]) -> Int`; the count, always `Int`.
                 let elem = self.fresh(span);
@@ -2524,7 +2672,8 @@ impl<'a> Checker<'a> {
                 )
                 .with_primary_label(format!(
                     "the growable `Array` element type must be a scalar \
-                     (`Int`/`Bool`/`Str`/`String`) or a supported struct/enum, not `{rendered}`"
+                     (`Int`/`Float`/`Bool`/`Str`/`String`) or a supported \
+                     struct/enum, not `{rendered}`"
                 ))
                 .with_help(
                     "nested owned containers and wrapped values are outside the v0 element \
@@ -2541,17 +2690,20 @@ impl<'a> Checker<'a> {
     /// rejected.
     fn is_supported_array_element(&self, ty: &Ty) -> bool {
         match ty {
-            Ty::Int(_) | Ty::Bool | Ty::Str | Ty::String => true,
+            // `Float` joined the scalar element set with ADR-0016 — a `Copy`
+            // scalar with a fixed layout, exactly like `Int`.
+            Ty::Int(_) | Ty::Float(_) | Ty::Bool | Ty::Str | Ty::String => true,
             // A struct/enum is supported iff every field/variant-field type is.
             // The recursion terminates: a type cannot contain itself by value
-            // (that is an infinite-size error caught elsewhere), and we only
-            // descend through already-instantiated shapes.
+            // or through a container (the ADR-0016 recursion boundary,
+            // `T0016`), and we only descend through already-instantiated
+            // shapes.
             Ty::Struct(symbol, targs) => self.aggregate_fields_supported(*symbol, targs, true),
             Ty::Enum(symbol, targs) => self.aggregate_fields_supported(*symbol, targs, false),
             // Unsolved / poisoned: not this check's responsibility.
             Ty::Var(_) | Ty::Error | Ty::Never => true,
             // Everything else — nested Array/FixedArray/Option/Result/Tuple/Fn/
-            // Wrapper/Range/Char/Float/Unit — is out of the Stage A set.
+            // Wrapper/Range/Char/Unit — is out of the v0 element set.
             _ => false,
         }
     }

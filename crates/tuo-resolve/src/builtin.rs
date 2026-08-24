@@ -79,6 +79,61 @@ pub enum Builtin {
     /// negative value on other host errors. Never traps. **Effectful.**
     /// (ADR-0013.)
     RtRemoveFile,
+    /// `std::rt::listen(take port: Int) -> Int` — create an IPv4 TCP socket
+    /// bound to `127.0.0.1:port` and listening (backlog 16, `SO_REUSEADDR`);
+    /// returns the listening descriptor (`>= 0`) or a negative value on host
+    /// error. Port `0` asks the host for an ephemeral port — pair with
+    /// `bound_port`. Never traps. **Effectful.** (ADR-0014.)
+    RtListen,
+    /// `std::rt::bound_port(take fd: Int) -> Int` — the local port a
+    /// listening descriptor is actually bound to (`getsockname`), or a
+    /// negative value on host error. Never traps. **Effectful.**
+    /// (ADR-0014.)
+    RtBoundPort,
+    /// `std::rt::accept(take fd: Int) -> Int` — accept one pending
+    /// connection on a listening descriptor; returns the connected
+    /// descriptor (`>= 0`) or a negative value on host error. Blocks until
+    /// a connection arrives. Never traps. **Effectful.** (ADR-0014.)
+    RtAccept,
+    /// `std::rt::connect(in host: Str, take port: Int) -> Int` — open a TCP
+    /// connection to `host:port` (`host` a numeric IPv4 address such as
+    /// `"127.0.0.1"` — no name resolution); returns the connected
+    /// descriptor (`>= 0`) or a negative value on host error. Never traps.
+    /// **Effectful.** (ADR-0014.)
+    RtConnect,
+    /// `std::rt::chan_new() -> Int` — create an unbounded FIFO channel of
+    /// non-negative `Int` values; returns a channel handle (`>= 0`) or `-1`
+    /// when the registry is exhausted. Handles are process-lived. Never
+    /// traps. **Effectful.** (ADR-0015.)
+    RtChanNew,
+    /// `std::rt::chan_send(take ch: Int, take v: Int) -> Int` — enqueue
+    /// `v`; `0` on success, `-1` on an invalid handle, a closed channel, or
+    /// a negative `v` (refused so `chan_recv`'s `-1` stays unambiguous).
+    /// Never traps. **Effectful.** (ADR-0015.)
+    RtChanSend,
+    /// `std::rt::chan_recv(take ch: Int) -> Int` — dequeue the oldest
+    /// value, blocking until one is available; returns the value, or `-1`
+    /// once the channel is closed and drained (or the handle is invalid).
+    /// Never traps. **Effectful.** (ADR-0015.)
+    RtChanRecv,
+    /// `std::rt::chan_close(take ch: Int) -> Int` — close the channel:
+    /// sends are refused and every blocked or future receive returns `-1`
+    /// after the queue drains. `0` on success (idempotent), `-1` on an
+    /// invalid handle. Never traps. **Effectful.** (ADR-0015.)
+    RtChanClose,
+    /// `std::rt::mutex_new() -> Int` — create a mutex; returns a handle
+    /// (`>= 0`) or `-1` when the registry is exhausted. Handles are
+    /// process-lived. Never traps. **Effectful.** (ADR-0015.)
+    RtMutexNew,
+    /// `std::rt::mutex_lock(take m: Int) -> Int` — acquire, blocking until
+    /// available; `0` on success, `-1` on an invalid handle or a host error
+    /// (a relock by the holding thread included — error-checking, never
+    /// undefined behavior). Never traps. **Effectful.** (ADR-0015.)
+    RtMutexLock,
+    /// `std::rt::mutex_unlock(take m: Int) -> Int` — release; `0` on
+    /// success, `-1` on an invalid handle or when the calling thread does
+    /// not hold it. Never traps. **Effectful.** (ADR-0015.)
+    RtMutexUnlock,
     /// `std::str::len(in s: Str) -> Int` — the byte length of `s`. Pure;
     /// never traps.
     StrLen,
@@ -147,6 +202,11 @@ pub enum Builtin {
     /// element at `i`; traps `IndexOutOfBounds` when `i < 0` or
     /// `i >= len(xs)`. Pure. (ADR-0009.)
     ArrayGet,
+    /// `std::array::set(mut xs: Array[T], take i: Int, take v: T)` —
+    /// overwrite the element at `i` with `v` in place (the previous element
+    /// is dropped); traps `IndexOutOfBounds` when `i < 0` or `i >= len(xs)`
+    /// — `set` never grows the array. Pure. (ADR-0016.)
+    ArraySet,
     /// `std::map::empty() -> Map[K, V]` — a new empty hash map. The key and
     /// value types are witnessed by context (an undetermined pair is
     /// `T0011`); the v0 surface supports `Map[Int, Int]` and
@@ -194,7 +254,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 47] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -206,6 +266,17 @@ impl Builtin {
         Self::RtOpen,
         Self::RtClose,
         Self::RtRemoveFile,
+        Self::RtListen,
+        Self::RtBoundPort,
+        Self::RtAccept,
+        Self::RtConnect,
+        Self::RtChanNew,
+        Self::RtChanSend,
+        Self::RtChanRecv,
+        Self::RtChanClose,
+        Self::RtMutexNew,
+        Self::RtMutexLock,
+        Self::RtMutexUnlock,
         Self::StrLen,
         Self::StrByteAt,
         Self::StrSlice,
@@ -223,6 +294,7 @@ impl Builtin {
         Self::ArrayPop,
         Self::ArrayLen,
         Self::ArrayGet,
+        Self::ArraySet,
         Self::MapEmpty,
         Self::MapInsert,
         Self::MapGet,
@@ -246,7 +318,18 @@ impl Builtin {
             | Self::RtArgByte
             | Self::RtOpen
             | Self::RtClose
-            | Self::RtRemoveFile => &["std", "rt"],
+            | Self::RtRemoveFile
+            | Self::RtListen
+            | Self::RtBoundPort
+            | Self::RtAccept
+            | Self::RtConnect
+            | Self::RtChanNew
+            | Self::RtChanSend
+            | Self::RtChanRecv
+            | Self::RtChanClose
+            | Self::RtMutexNew
+            | Self::RtMutexLock
+            | Self::RtMutexUnlock => &["std", "rt"],
             Self::StrLen | Self::StrByteAt | Self::StrSlice => &["std", "str"],
             Self::StringEmpty
             | Self::StringFromStr
@@ -261,7 +344,8 @@ impl Builtin {
             | Self::ArrayPush
             | Self::ArrayPop
             | Self::ArrayLen
-            | Self::ArrayGet => &["std", "array"],
+            | Self::ArrayGet
+            | Self::ArraySet => &["std", "array"],
             Self::MapEmpty
             | Self::MapInsert
             | Self::MapGet
@@ -287,6 +371,17 @@ impl Builtin {
             Self::RtOpen => "open",
             Self::RtClose => "close",
             Self::RtRemoveFile => "remove_file",
+            Self::RtListen => "listen",
+            Self::RtBoundPort => "bound_port",
+            Self::RtAccept => "accept",
+            Self::RtConnect => "connect",
+            Self::RtChanNew => "chan_new",
+            Self::RtChanSend => "chan_send",
+            Self::RtChanRecv => "chan_recv",
+            Self::RtChanClose => "chan_close",
+            Self::RtMutexNew => "mutex_new",
+            Self::RtMutexLock => "mutex_lock",
+            Self::RtMutexUnlock => "mutex_unlock",
             Self::StrLen | Self::StringLen | Self::ArrayLen | Self::MapLen => "len",
             Self::StrByteAt | Self::StringByteAt => "byte_at",
             Self::StrSlice | Self::StringSlice => "slice",
@@ -298,6 +393,7 @@ impl Builtin {
             Self::StringAsStr => "as_str",
             Self::ArrayPush => "push",
             Self::ArrayPop => "pop",
+            Self::ArraySet => "set",
             Self::ArrayGet | Self::MapGet => "get",
             Self::MapInsert => "insert",
             Self::MapContainsKey => "contains_key",
@@ -321,6 +417,17 @@ impl Builtin {
             Self::RtOpen => "std::rt::open",
             Self::RtClose => "std::rt::close",
             Self::RtRemoveFile => "std::rt::remove_file",
+            Self::RtListen => "std::rt::listen",
+            Self::RtBoundPort => "std::rt::bound_port",
+            Self::RtAccept => "std::rt::accept",
+            Self::RtConnect => "std::rt::connect",
+            Self::RtChanNew => "std::rt::chan_new",
+            Self::RtChanSend => "std::rt::chan_send",
+            Self::RtChanRecv => "std::rt::chan_recv",
+            Self::RtChanClose => "std::rt::chan_close",
+            Self::RtMutexNew => "std::rt::mutex_new",
+            Self::RtMutexLock => "std::rt::mutex_lock",
+            Self::RtMutexUnlock => "std::rt::mutex_unlock",
             Self::StrLen => "std::str::len",
             Self::StrByteAt => "std::str::byte_at",
             Self::StrSlice => "std::str::slice",
@@ -338,6 +445,7 @@ impl Builtin {
             Self::ArrayPop => "std::array::pop",
             Self::ArrayLen => "std::array::len",
             Self::ArrayGet => "std::array::get",
+            Self::ArraySet => "std::array::set",
             Self::MapEmpty => "std::map::empty",
             Self::MapInsert => "std::map::insert",
             Self::MapGet => "std::map::get",
@@ -367,6 +475,17 @@ impl Builtin {
                 | Self::RtOpen
                 | Self::RtClose
                 | Self::RtRemoveFile
+                | Self::RtListen
+                | Self::RtBoundPort
+                | Self::RtAccept
+                | Self::RtConnect
+                | Self::RtChanNew
+                | Self::RtChanSend
+                | Self::RtChanRecv
+                | Self::RtChanClose
+                | Self::RtMutexNew
+                | Self::RtMutexLock
+                | Self::RtMutexUnlock
         )
     }
 
@@ -384,6 +503,13 @@ impl Builtin {
             Self::RtOpen => &[In, Take],
             Self::RtClose => &[Take],
             Self::RtRemoveFile => &[In],
+            Self::RtListen | Self::RtBoundPort | Self::RtAccept => &[Take],
+            Self::RtConnect => &[In, Take],
+            Self::RtChanNew | Self::RtMutexNew => &[],
+            Self::RtChanSend => &[Take, Take],
+            Self::RtChanRecv | Self::RtChanClose | Self::RtMutexLock | Self::RtMutexUnlock => {
+                &[Take]
+            }
             Self::StrLen => &[In],
             Self::StrByteAt => &[In, Take],
             Self::StrSlice => &[In, Take, Take],
@@ -397,6 +523,7 @@ impl Builtin {
             Self::StringSlice => &[In, Take, Take],
             Self::ArrayPush => &[Mut, Take],
             Self::ArrayPop => &[Mut],
+            Self::ArraySet => &[Mut, Take, Take],
             Self::MapEmpty => &[],
             Self::MapInsert => &[Mut, Take, Take],
             Self::MapGet | Self::MapContainsKey => &[In, Take],

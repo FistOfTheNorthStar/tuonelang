@@ -1,31 +1,29 @@
 // std::sync — synchronization and structured concurrency.
 //
 // Synchronization is inherently about *effects* — threads observing and
-// changing shared state. Since ADR-0007 landed, v0 has exactly **one**
-// concurrency primitive: the structured fork-join `std::rt::par_map`, wrapped
-// here as `par_map`. It is deliberately the *only* way to start a thread —
-// every worker joins before the call returns, and the only values that cross
-// a thread boundary are a non-capturing function value, `Copy` `Int` tasks
-// read from a shared read-only buffer, and each thread's own disjoint result
-// slot, so no data race is expressible through it (the ADR's "no data races,
-// checked" constraint, enforced by the primitive's shape rather than a
-// bolted-on marker system).
+// coordinating with each other. Since ADR-0007 landed, the *only* way to
+// start a thread is the structured fork-join `std::rt::par_map`, wrapped
+// here as `par_map`: every worker joins before the call returns, and no
+// tuonelang memory is ever shared between threads. Since ADR-0015 landed,
+// threads can also *communicate*: `channel`/`send`/`recv`/`close` move
+// non-negative `Int`s by value through a runtime-synchronized FIFO, and
+// `mutex`/`lock`/`unlock` guard critical sections over *external* resources
+// (files, sockets). Neither introduces shared mutable memory, so ADR-0007's
+// no-data-race property is preserved by the primitives' shape.
 //
 //   Executable tier — the pure *state models*: whether a one-shot latch has
 //   fired, whether a lock is held. Reasoning about the state is computation
 //   and runs; performing the synchronization is not and does not.
 //
-//   Effect tier — `par_map`. Spawning is a typed effect (ADR-0007), so it
-//   carries no spec; the native CLI test named in its doc pins it on both
-//   backends.
+//   Effect tier — `par_map`, the channel operations, and the mutex
+//   operations. Each is a typed effect, so it carries no spec (`R0007`);
+//   the native CLI tests named in their docs pin them on both backends.
 //
-//   Contract tier — `lock`, `unlock`. Shared-state locking needs a mutable
-//   place shared across threads, which the structured primitive deliberately
-//   does not admit; these stay exact signatures with documented contracts and
-//   no executable spec, marked `CONTRACT:`, until an ADR admits shared state.
-//
-// One lock model, one one-shot latch model, one way to go parallel — no
-// competing primitives.
+// There is no contract tier left: ADR-0015 discharged the old
+// `lock`/`unlock` contracts (their pure-model signatures were placeholders;
+// the real API is handle-based, and the pure `LockState` model stays here
+// as the documented state model). One lock, one latch model, one channel,
+// one way to go parallel — no competing primitives.
 
 module std::sync;
 
@@ -104,33 +102,115 @@ pub fn is_held(in s: LockState) -> Bool {
 }
 
 // ----------------------------------------------------------------------------
-// Synchronization operations — the CONTRACT tier.
+// Channels — communication between par_map workers. EFFECT tier (ADR-0015).
+//
+// A channel is an unbounded FIFO of **non-negative** Ints behind an opaque
+// handle. Values cross threads by copy — never by shared memory — so the
+// no-data-race property survives. `recv` returns -1 once the channel is
+// closed and drained; `send` refuses a negative value so that signal stays
+// unambiguous.
 // ----------------------------------------------------------------------------
 
-/// CONTRACT (not executable in v0): acquire the lock, returning the held state.
-///
-/// The real operation blocks until the lock is available; v0 has no threads
-/// and `std::rt` exposes no lock primitive, so this is a contract and does not
-/// run.
+/// EFFECT (executable and effectful): create a channel; returns its handle
+/// (`>= 0`) or a negative value when the registry is exhausted. Handles
+/// live for the process — there is deliberately no free. Effectful, so no
+/// spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
-/// // let held = std::sync::lock(state);
+/// // let ch = std::sync::channel();
 /// ```
-pub fn lock(in state: LockState) -> LockState {
-    // Contract placeholder: the real implementation blocks until acquired.
-    LockState { held: true }
+pub fn channel() -> Int {
+    std::rt::chan_new()
 }
 
-/// CONTRACT (not executable in v0): release the lock, returning the free state.
+/// EFFECT (executable and effectful): enqueue the non-negative `v`; `0` on
+/// success, negative on an invalid handle, a closed channel, or a negative
+/// `v`. Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
 ///
 /// # Example
 /// ```tuo
-/// // let free = std::sync::unlock(state);
+/// // let ok = std::sync::send(ch, 7);
 /// ```
-pub fn unlock(in state: LockState) -> LockState {
-    // Contract placeholder.
-    LockState { held: false }
+pub fn send(take ch: Int, take v: Int) -> Int {
+    std::rt::chan_send(ch, v)
+}
+
+/// EFFECT (executable and effectful): dequeue the oldest value, blocking
+/// until one is available; returns the value, or `-1` once the channel is
+/// closed and drained. Blocks forever if nothing will ever send — a
+/// liveness bug the compiler does not catch. Effectful, so no spec
+/// (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let v = std::sync::recv(ch);
+/// ```
+pub fn recv(take ch: Int) -> Int {
+    std::rt::chan_recv(ch)
+}
+
+/// EFFECT (executable and effectful): close the channel — sends are refused
+/// and every blocked or future `recv` returns `-1` after the queue drains.
+/// Idempotent. Effectful, so no spec (`R0007`); pinned by the native CLI
+/// tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let _ = std::sync::close(ch);
+/// ```
+pub fn close(take ch: Int) -> Int {
+    std::rt::chan_close(ch)
+}
+
+// ----------------------------------------------------------------------------
+// Mutexes — critical sections over external resources. EFFECT tier
+// (ADR-0015). The old CONTRACT stubs, now real: handle-based, since there is
+// no shared tuonelang memory for a lock to guard — a mutex serializes
+// workers' access to what the OS effects reach (a file, a socket).
+// ----------------------------------------------------------------------------
+
+/// EFFECT (executable and effectful): create a mutex; returns its handle
+/// (`>= 0`) or a negative value when the registry is exhausted. Handles
+/// live for the process. Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let m = std::sync::mutex();
+/// ```
+pub fn mutex() -> Int {
+    std::rt::mutex_new()
+}
+
+/// EFFECT (executable and effectful): acquire the mutex, blocking until it
+/// is available; `0` on success, negative on an invalid handle or a relock
+/// by the holding thread (error-checked — a mistake is a code, never
+/// undefined behavior). Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let ok = std::sync::lock(m);
+/// ```
+pub fn lock(take m: Int) -> Int {
+    std::rt::mutex_lock(m)
+}
+
+/// EFFECT (executable and effectful): release the mutex; `0` on success,
+/// negative on an invalid handle or when the calling thread does not hold
+/// it. Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let ok = std::sync::unlock(m);
+/// ```
+pub fn unlock(take m: Int) -> Int {
+    std::rt::mutex_unlock(m)
 }
 
 /// EFFECT (runs natively; no spec — spawning is a typed effect, so a spec

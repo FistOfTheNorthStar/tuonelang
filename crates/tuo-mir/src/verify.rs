@@ -447,6 +447,18 @@ impl Verifier<'_> {
             EffectOp::Open => vec![(true, Ty::Str), (true, Ty::int())],
             EffectOp::Close => vec![(true, Ty::int())],
             EffectOp::RemoveFile => vec![(true, Ty::Str)],
+            // ADR-0014: the socket effects — all by-value operands.
+            EffectOp::Listen | EffectOp::BoundPort | EffectOp::Accept => {
+                vec![(true, Ty::int())]
+            }
+            EffectOp::Connect => vec![(true, Ty::Str), (true, Ty::int())],
+            // ADR-0015: channels and mutexes — all by-value operands.
+            EffectOp::ChanNew | EffectOp::MutexNew => Vec::new(),
+            EffectOp::ChanSend => vec![(true, Ty::int()), (true, Ty::int())],
+            EffectOp::ChanRecv
+            | EffectOp::ChanClose
+            | EffectOp::MutexLock
+            | EffectOp::MutexUnlock => vec![(true, Ty::int())],
         };
         for (position, (arg, (want_value, want_ty))) in args.iter().zip(&expected).enumerate() {
             let ty = match (arg, want_value) {
@@ -519,7 +531,7 @@ impl Verifier<'_> {
         // If the target's type is unavailable (a poisoned place), fall back to a
         // fresh `Array[?]` shape that only checks the container-ness.
         let elem = match op {
-            HeapMutOp::Push | HeapMutOp::Pop => self
+            HeapMutOp::Push | HeapMutOp::Pop | HeapMutOp::Set => self
                 .place_ty(target)
                 .and_then(|ty| array_element(&ty))
                 .unwrap_or_else(Ty::int),
@@ -540,6 +552,7 @@ impl Verifier<'_> {
             HeapMutOp::PushByte => (Ty::String, vec![Ty::int()], Ty::Unit),
             HeapMutOp::Append => (Ty::String, vec![Ty::Str], Ty::Unit),
             HeapMutOp::Push => (elem_array.clone(), vec![elem.clone()], Ty::Unit),
+            HeapMutOp::Set => (elem_array.clone(), vec![Ty::int(), elem.clone()], Ty::Unit),
             HeapMutOp::Pop => (
                 elem_array.clone(),
                 Vec::new(),

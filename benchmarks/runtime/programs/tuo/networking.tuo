@@ -1,0 +1,57 @@
+// The networking workload (ADR-0014): a basic socket round-trip. Each round
+// creates a listening socket on an ephemeral loopback port, connects to it
+// (TCP's backlog completes the handshake before accept runs), accepts, sends
+// 8 sixteen-byte chunks (128 bytes) from the client, reads them back on the
+// server byte-at-a-time (128 crossings of the read_byte seam), and closes
+// all three descriptors — so every ADR-0014 socket primitive and the
+// ADR-0006 descriptor seam are on the hot path. The C and Go peers perform
+// the identical sequence.
+//
+// round(8) returns the byte count received, 128; main runs 100 rounds and
+// returns the last round's count. Observable exit byte: 128 & 0xff = 128.
+
+fn round(take chunks: Int) -> Int {
+    let listener = std::rt::listen(0);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    let port = std::rt::bound_port(listener);
+    if port <= 0 {
+        return 0 - 2;
+    }
+    let client = std::rt::connect("127.0.0.1", port);
+    if client < 0 {
+        return 0 - 3;
+    }
+    let server = std::rt::accept(listener);
+    if server < 0 {
+        return 0 - 4;
+    }
+    var i = 0;
+    while i < chunks {
+        std::rt::write(client, "0123456789abcdef");
+        i = i + 1;
+    }
+    var count = 0;
+    while count < chunks * 16 {
+        let b = std::rt::read_byte(server);
+        if b < 0 {
+            return 0 - 5;
+        }
+        count = count + 1;
+    }
+    std::rt::close(client);
+    std::rt::close(server);
+    std::rt::close(listener);
+    count
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 100 {
+        result = round(8);
+        r = r + 1;
+    }
+    result
+}

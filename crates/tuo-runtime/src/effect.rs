@@ -90,6 +90,73 @@ pub const CLOSE_SYMBOL: &str = "tuo_rt_close";
 /// other host error.
 pub const REMOVE_FILE_SYMBOL: &str = "tuo_rt_remove_file";
 
+/// The name of the C-ABI symbol generated code calls for `std::rt::listen`
+/// (ADR-0014): `long long tuo_rt_listen(long long port)` — an IPv4 TCP
+/// socket bound to `127.0.0.1:port` (`0` = ephemeral) and listening
+/// (backlog 16, `SO_REUSEADDR`); the listening descriptor (`>= 0`) or
+/// [`NET_ERROR`] on host error.
+pub const LISTEN_SYMBOL: &str = "tuo_rt_listen";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::bound_port` (ADR-0014): `long long tuo_rt_bound_port(long long
+/// fd)` — the local port `fd` is bound to (`getsockname`), or [`NET_ERROR`]
+/// on host error.
+pub const BOUND_PORT_SYMBOL: &str = "tuo_rt_bound_port";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::accept`
+/// (ADR-0014): `long long tuo_rt_accept(long long fd)` — accept one pending
+/// connection (`EINTR` retried); the connected descriptor (`>= 0`) or
+/// [`NET_ERROR`] on host error.
+pub const ACCEPT_SYMBOL: &str = "tuo_rt_accept";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::connect`
+/// (ADR-0014): `long long tuo_rt_connect(const unsigned char *ptr, unsigned
+/// long long len, long long port)` — open a TCP connection to the numeric
+/// IPv4 address in the `{ptr, len}` bytes at `port`; the connected
+/// descriptor (`>= 0`) or [`NET_ERROR`] on host error.
+pub const CONNECT_SYMBOL: &str = "tuo_rt_connect";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::chan_new` (ADR-0015): `long long tuo_rt_chan_new(void)` — a
+/// process-lived channel handle (`>= 0`) or [`SYNC_ERROR`] on registry
+/// exhaustion.
+pub const CHAN_NEW_SYMBOL: &str = "tuo_rt_chan_new";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::chan_send` (ADR-0015): `long long tuo_rt_chan_send(long long
+/// ch, long long v)` — `0` on success, [`SYNC_ERROR`] on an invalid handle,
+/// a closed channel, or a negative `v`.
+pub const CHAN_SEND_SYMBOL: &str = "tuo_rt_chan_send";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::chan_recv` (ADR-0015): `long long tuo_rt_chan_recv(long long
+/// ch)` — blocks; the oldest value, or [`SYNC_ERROR`] once closed and
+/// drained (or on an invalid handle).
+pub const CHAN_RECV_SYMBOL: &str = "tuo_rt_chan_recv";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::chan_close` (ADR-0015): `long long tuo_rt_chan_close(long long
+/// ch)` — `0` on success (idempotent), [`SYNC_ERROR`] on an invalid handle.
+pub const CHAN_CLOSE_SYMBOL: &str = "tuo_rt_chan_close";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::mutex_new` (ADR-0015): `long long tuo_rt_mutex_new(void)` — a
+/// process-lived mutex handle (`>= 0`) or [`SYNC_ERROR`] on registry
+/// exhaustion.
+pub const MUTEX_NEW_SYMBOL: &str = "tuo_rt_mutex_new";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::mutex_lock` (ADR-0015): `long long tuo_rt_mutex_lock(long long
+/// m)` — blocks; `0` on success, [`SYNC_ERROR`] on an invalid handle or a
+/// host error (an error-checked relock included).
+pub const MUTEX_LOCK_SYMBOL: &str = "tuo_rt_mutex_lock";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::mutex_unlock` (ADR-0015): `long long tuo_rt_mutex_unlock(long
+/// long m)` — `0` on success, [`SYNC_ERROR`] on an invalid handle or when
+/// the calling thread does not hold it.
+pub const MUTEX_UNLOCK_SYMBOL: &str = "tuo_rt_mutex_unlock";
+
 /// The value [`WRITE_SYMBOL`] returns on a host write error (after retrying
 /// `EINTR`). A successful write returns the total byte count instead.
 pub const WRITE_ERROR: i64 = -1;
@@ -116,6 +183,27 @@ pub const FILE_NOT_FOUND: i64 = -2;
 /// The value the ADR-0013 file symbols return on any other host error
 /// (an unknown open mode and an over-long path included).
 pub const FILE_ERROR: i64 = -1;
+
+/// The value the ADR-0014 socket symbols return on any host error (an
+/// out-of-range port, a non-numeric or over-long host, and every refused
+/// system call included). There is deliberately no finer taxonomy: a socket
+/// failure is environmental, and v0 programs branch only on "descriptor or
+/// not".
+pub const NET_ERROR: i64 = -1;
+
+/// The value the ADR-0015 channel and mutex symbols return on any error —
+/// an invalid handle, an exhausted registry, a send of a negative value or
+/// to a closed channel, an error-checked relock, an unlock by a non-holder
+/// — and the value `chan_recv` returns once the channel is closed and
+/// drained. Channel payloads are non-negative by contract (`chan_send`
+/// refuses a negative `v`), so this closed/error signal is unambiguous.
+pub const SYNC_ERROR: i64 = -1;
+
+/// The bound on how many channels (and, separately, mutexes) one process
+/// may create (ADR-0015). Handles are process-lived — there is deliberately
+/// no free — so the registries are fixed arrays; creation past the bound is
+/// a [`SYNC_ERROR`], never a trap.
+pub const SYNC_REGISTRY_CAP: i64 = 256;
 
 /// The process exit status `tuo_rt_exit(code)` terminates with: the low byte
 /// of `code`, exactly the truncation a normal `main` return undergoes on the
@@ -331,6 +419,220 @@ pub fn effect_runtime_c_source() -> String {
          \x20   if (!tuo_rt_path_copy(path, sizeof(path), ptr, len)) return {FILE_ERROR};\n\
          \x20   if (unlink(path) == 0) return 0;\n\
          \x20   return errno == ENOENT ? {FILE_NOT_FOUND} : {FILE_ERROR};\n\
+         }}\n\
+         \n\
+         /* ADR-0014: socket effects — descriptor producers on the same seam\n\
+         \x20  (`tuo_rt_write`/`tuo_rt_read_byte`/`tuo_rt_close` move and\n\
+         \x20  release the bytes). IPv4 TCP, loopback listen, numeric hosts. */\n\
+         #include <sys/socket.h>\n\
+         #include <netinet/in.h>\n\
+         #include <arpa/inet.h>\n\
+         \n\
+         long long {LISTEN_SYMBOL}(long long port) {{\n\
+         \x20   struct sockaddr_in addr;\n\
+         \x20   int one = 1;\n\
+         \x20   int fd;\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   fd = socket(AF_INET, SOCK_STREAM, 0);\n\
+         \x20   if (fd < 0) return {NET_ERROR};\n\
+         \x20   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));\n\
+         \x20   memset(&addr, 0, sizeof(addr));\n\
+         \x20   addr.sin_family = AF_INET;\n\
+         \x20   addr.sin_port = htons((unsigned short)port);\n\
+         \x20   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);\n\
+         \x20   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||\n\
+         \x20       listen(fd, 16) != 0) {{\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         \x20   return (long long)fd;\n\
+         }}\n\
+         \n\
+         long long {BOUND_PORT_SYMBOL}(long long fd) {{\n\
+         \x20   struct sockaddr_in addr;\n\
+         \x20   socklen_t alen = sizeof(addr);\n\
+         \x20   if (getsockname((int)fd, (struct sockaddr *)&addr, &alen) != 0)\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   return (long long)ntohs(addr.sin_port);\n\
+         }}\n\
+         \n\
+         long long {ACCEPT_SYMBOL}(long long fd) {{\n\
+         \x20   for (;;) {{\n\
+         \x20       int conn = accept((int)fd, 0, 0);\n\
+         \x20       if (conn >= 0) return (long long)conn;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {CONNECT_SYMBOL}(const unsigned char *ptr, unsigned long long len,\n\
+         \x20                       long long port) {{\n\
+         \x20   char host[64];\n\
+         \x20   struct sockaddr_in addr;\n\
+         \x20   int fd;\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   if (!tuo_rt_path_copy(host, sizeof(host), ptr, len)) return {NET_ERROR};\n\
+         \x20   memset(&addr, 0, sizeof(addr));\n\
+         \x20   addr.sin_family = AF_INET;\n\
+         \x20   addr.sin_port = htons((unsigned short)port);\n\
+         \x20   if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return {NET_ERROR};\n\
+         \x20   fd = socket(AF_INET, SOCK_STREAM, 0);\n\
+         \x20   if (fd < 0) return {NET_ERROR};\n\
+         \x20   for (;;) {{\n\
+         \x20       if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)\n\
+         \x20           return (long long)fd;\n\
+         \x20       /* An EINTR'd connect may complete asynchronously: a retry\n\
+         \x20          reporting EISCONN is success, not failure. */\n\
+         \x20       if (errno == EISCONN) return (long long)fd;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         /* ADR-0015: channels and mutexes — communication over the effect\n\
+         \x20  seam. Bounded static registries of process-lived handles; each\n\
+         \x20  channel is a mutex+condvar over a heap FIFO whose nodes flow\n\
+         \x20  through the ADR-0009 allocation seam; each mutex is an\n\
+         \x20  error-checking pthread mutex (a misuse is a {SYNC_ERROR},\n\
+         \x20  never undefined behavior). */\n\
+         extern void tuo_rt_dealloc(void *ptr, unsigned long long size,\n\
+         \x20                       unsigned long long align);\n\
+         \n\
+         typedef struct tuo_rt_chan_node {{\n\
+         \x20   long long value;\n\
+         \x20   struct tuo_rt_chan_node *next;\n\
+         }} tuo_rt_chan_node;\n\
+         \n\
+         typedef struct {{\n\
+         \x20   pthread_mutex_t lock;\n\
+         \x20   pthread_cond_t ready;\n\
+         \x20   tuo_rt_chan_node *head;\n\
+         \x20   tuo_rt_chan_node *tail;\n\
+         \x20   int closed;\n\
+         }} tuo_rt_chan;\n\
+         \n\
+         static tuo_rt_chan tuo_rt_chans[{SYNC_REGISTRY_CAP}];\n\
+         static long long tuo_rt_chan_count = 0;\n\
+         static pthread_mutex_t tuo_rt_mutexes[{SYNC_REGISTRY_CAP}];\n\
+         static long long tuo_rt_mutex_count = 0;\n\
+         static pthread_mutex_t tuo_rt_sync_registry = PTHREAD_MUTEX_INITIALIZER;\n\
+         \n\
+         long long {CHAN_NEW_SYMBOL}(void) {{\n\
+         \x20   long long id;\n\
+         \x20   pthread_mutex_lock(&tuo_rt_sync_registry);\n\
+         \x20   if (tuo_rt_chan_count >= {SYNC_REGISTRY_CAP}) {{\n\
+         \x20       pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20       return {SYNC_ERROR};\n\
+         \x20   }}\n\
+         \x20   id = tuo_rt_chan_count;\n\
+         \x20   pthread_mutex_init(&tuo_rt_chans[id].lock, 0);\n\
+         \x20   pthread_cond_init(&tuo_rt_chans[id].ready, 0);\n\
+         \x20   tuo_rt_chans[id].head = 0;\n\
+         \x20   tuo_rt_chans[id].tail = 0;\n\
+         \x20   tuo_rt_chans[id].closed = 0;\n\
+         \x20   tuo_rt_chan_count = id + 1;\n\
+         \x20   pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20   return id;\n\
+         }}\n\
+         \n\
+         /* Handle validation happens under the registry lock, so a handle is\n\
+         \x20  visible only after its slot is fully initialized. */\n\
+         static tuo_rt_chan *tuo_rt_chan_get(long long ch) {{\n\
+         \x20   tuo_rt_chan *c = 0;\n\
+         \x20   pthread_mutex_lock(&tuo_rt_sync_registry);\n\
+         \x20   if (ch >= 0 && ch < tuo_rt_chan_count) c = &tuo_rt_chans[ch];\n\
+         \x20   pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20   return c;\n\
+         }}\n\
+         \n\
+         long long {CHAN_SEND_SYMBOL}(long long ch, long long v) {{\n\
+         \x20   tuo_rt_chan *c = tuo_rt_chan_get(ch);\n\
+         \x20   tuo_rt_chan_node *node;\n\
+         \x20   if (!c || v < 0) return {SYNC_ERROR};\n\
+         \x20   node = (tuo_rt_chan_node *)tuo_rt_alloc(sizeof(tuo_rt_chan_node), 8);\n\
+         \x20   node->value = v;\n\
+         \x20   node->next = 0;\n\
+         \x20   pthread_mutex_lock(&c->lock);\n\
+         \x20   if (c->closed) {{\n\
+         \x20       pthread_mutex_unlock(&c->lock);\n\
+         \x20       tuo_rt_dealloc(node, sizeof(tuo_rt_chan_node), 8);\n\
+         \x20       return {SYNC_ERROR};\n\
+         \x20   }}\n\
+         \x20   if (c->tail) c->tail->next = node; else c->head = node;\n\
+         \x20   c->tail = node;\n\
+         \x20   pthread_cond_signal(&c->ready);\n\
+         \x20   pthread_mutex_unlock(&c->lock);\n\
+         \x20   return 0;\n\
+         }}\n\
+         \n\
+         long long {CHAN_RECV_SYMBOL}(long long ch) {{\n\
+         \x20   tuo_rt_chan *c = tuo_rt_chan_get(ch);\n\
+         \x20   tuo_rt_chan_node *node;\n\
+         \x20   long long v;\n\
+         \x20   if (!c) return {SYNC_ERROR};\n\
+         \x20   pthread_mutex_lock(&c->lock);\n\
+         \x20   while (!c->head && !c->closed)\n\
+         \x20       pthread_cond_wait(&c->ready, &c->lock);\n\
+         \x20   if (!c->head) {{\n\
+         \x20       pthread_mutex_unlock(&c->lock);\n\
+         \x20       return {SYNC_ERROR};\n\
+         \x20   }}\n\
+         \x20   node = c->head;\n\
+         \x20   c->head = node->next;\n\
+         \x20   if (!c->head) c->tail = 0;\n\
+         \x20   pthread_mutex_unlock(&c->lock);\n\
+         \x20   v = node->value;\n\
+         \x20   tuo_rt_dealloc(node, sizeof(tuo_rt_chan_node), 8);\n\
+         \x20   return v;\n\
+         }}\n\
+         \n\
+         long long {CHAN_CLOSE_SYMBOL}(long long ch) {{\n\
+         \x20   tuo_rt_chan *c = tuo_rt_chan_get(ch);\n\
+         \x20   if (!c) return {SYNC_ERROR};\n\
+         \x20   pthread_mutex_lock(&c->lock);\n\
+         \x20   c->closed = 1;\n\
+         \x20   pthread_cond_broadcast(&c->ready);\n\
+         \x20   pthread_mutex_unlock(&c->lock);\n\
+         \x20   return 0;\n\
+         }}\n\
+         \n\
+         long long {MUTEX_NEW_SYMBOL}(void) {{\n\
+         \x20   long long id;\n\
+         \x20   pthread_mutexattr_t attr;\n\
+         \x20   pthread_mutex_lock(&tuo_rt_sync_registry);\n\
+         \x20   if (tuo_rt_mutex_count >= {SYNC_REGISTRY_CAP}) {{\n\
+         \x20       pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20       return {SYNC_ERROR};\n\
+         \x20   }}\n\
+         \x20   id = tuo_rt_mutex_count;\n\
+         \x20   pthread_mutexattr_init(&attr);\n\
+         \x20   pthread_mutexattr_settype(&attr, PTHREAD_MUTEX_ERRORCHECK);\n\
+         \x20   pthread_mutex_init(&tuo_rt_mutexes[id], &attr);\n\
+         \x20   pthread_mutexattr_destroy(&attr);\n\
+         \x20   tuo_rt_mutex_count = id + 1;\n\
+         \x20   pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20   return id;\n\
+         }}\n\
+         \n\
+         static pthread_mutex_t *tuo_rt_mutex_get(long long m) {{\n\
+         \x20   pthread_mutex_t *mu = 0;\n\
+         \x20   pthread_mutex_lock(&tuo_rt_sync_registry);\n\
+         \x20   if (m >= 0 && m < tuo_rt_mutex_count) mu = &tuo_rt_mutexes[m];\n\
+         \x20   pthread_mutex_unlock(&tuo_rt_sync_registry);\n\
+         \x20   return mu;\n\
+         }}\n\
+         \n\
+         long long {MUTEX_LOCK_SYMBOL}(long long m) {{\n\
+         \x20   pthread_mutex_t *mu = tuo_rt_mutex_get(m);\n\
+         \x20   if (!mu) return {SYNC_ERROR};\n\
+         \x20   return pthread_mutex_lock(mu) == 0 ? 0 : {SYNC_ERROR};\n\
+         }}\n\
+         \n\
+         long long {MUTEX_UNLOCK_SYMBOL}(long long m) {{\n\
+         \x20   pthread_mutex_t *mu = tuo_rt_mutex_get(m);\n\
+         \x20   if (!mu) return {SYNC_ERROR};\n\
+         \x20   return pthread_mutex_unlock(mu) == 0 ? 0 : {SYNC_ERROR};\n\
          }}\n",
         sentinel = crate::alloc::ZERO_SIZE_SENTINEL,
     )
@@ -339,9 +641,12 @@ pub fn effect_runtime_c_source() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ARG_BYTE_SYMBOL, ARG_COUNT_SYMBOL, ARG_MISSING, CLOSE_SYMBOL, EXIT_SYMBOL, FILE_ERROR,
-        FILE_NOT_FOUND, NOW_NANOS_SYMBOL, OPEN_SYMBOL, READ_BYTE_SYMBOL, READ_EOF, READ_ERROR,
-        REMOVE_FILE_SYMBOL, WRITE_ERROR, WRITE_SYMBOL, effect_runtime_c_source, exit_status_of,
+        ACCEPT_SYMBOL, ARG_BYTE_SYMBOL, ARG_COUNT_SYMBOL, ARG_MISSING, BOUND_PORT_SYMBOL,
+        CHAN_CLOSE_SYMBOL, CHAN_NEW_SYMBOL, CHAN_RECV_SYMBOL, CHAN_SEND_SYMBOL, CLOSE_SYMBOL,
+        CONNECT_SYMBOL, EXIT_SYMBOL, FILE_ERROR, FILE_NOT_FOUND, LISTEN_SYMBOL, MUTEX_LOCK_SYMBOL,
+        MUTEX_NEW_SYMBOL, MUTEX_UNLOCK_SYMBOL, NET_ERROR, NOW_NANOS_SYMBOL, OPEN_SYMBOL,
+        READ_BYTE_SYMBOL, READ_EOF, READ_ERROR, REMOVE_FILE_SYMBOL, SYNC_ERROR, SYNC_REGISTRY_CAP,
+        WRITE_ERROR, WRITE_SYMBOL, effect_runtime_c_source, exit_status_of,
     };
 
     #[test]
@@ -418,5 +723,64 @@ mod tests {
         for value in [ARG_MISSING, FILE_NOT_FOUND, FILE_ERROR] {
             assert!(value < 0, "{value} must sit outside the byte range");
         }
+    }
+
+    #[test]
+    fn the_c_source_defines_the_socket_symbols_and_matches_the_policy() {
+        let source = effect_runtime_c_source();
+        // The four ADR-0014 C-ABI signatures, exactly as
+        // `specification/abi.md` fixes them.
+        assert!(source.contains(&format!("long long {LISTEN_SYMBOL}(long long port)")));
+        assert!(source.contains(&format!("long long {BOUND_PORT_SYMBOL}(long long fd)")));
+        assert!(source.contains(&format!("long long {ACCEPT_SYMBOL}(long long fd)")));
+        assert!(source.contains(&format!(
+            "long long {CONNECT_SYMBOL}(const unsigned char *ptr, unsigned long long len"
+        )));
+        // Loopback-only listening, SO_REUSEADDR, the ephemeral-port query,
+        // numeric-host parsing, and the EINTR/EISCONN connect policy.
+        assert!(source.contains("htonl(INADDR_LOOPBACK)"));
+        assert!(source.contains("SO_REUSEADDR"));
+        assert!(source.contains("getsockname((int)fd"));
+        assert!(source.contains("inet_pton(AF_INET, host"));
+        assert!(source.contains("if (errno == EISCONN) return (long long)fd;"));
+        // The socket error value sits outside the byte and descriptor range,
+        // and shares the file vocabulary's generic-error code.
+        for value in [NET_ERROR, FILE_ERROR] {
+            assert!(value < 0, "{value} must sit outside the byte range");
+        }
+        assert_eq!(NET_ERROR, FILE_ERROR);
+    }
+
+    #[test]
+    fn the_c_source_defines_the_sync_symbols_and_matches_the_policy() {
+        let source = effect_runtime_c_source();
+        // The seven ADR-0015 C-ABI signatures, exactly as
+        // `specification/abi.md` fixes them.
+        assert!(source.contains(&format!("long long {CHAN_NEW_SYMBOL}(void)")));
+        assert!(source.contains(&format!(
+            "long long {CHAN_SEND_SYMBOL}(long long ch, long long v)"
+        )));
+        assert!(source.contains(&format!("long long {CHAN_RECV_SYMBOL}(long long ch)")));
+        assert!(source.contains(&format!("long long {CHAN_CLOSE_SYMBOL}(long long ch)")));
+        assert!(source.contains(&format!("long long {MUTEX_NEW_SYMBOL}(void)")));
+        assert!(source.contains(&format!("long long {MUTEX_LOCK_SYMBOL}(long long m)")));
+        assert!(source.contains(&format!("long long {MUTEX_UNLOCK_SYMBOL}(long long m)")));
+        // The load-bearing policies: negative payloads refused (so the
+        // closed signal stays unambiguous), the blocking condvar wait, the
+        // close broadcast, error-checking mutexes, FIFO nodes through the
+        // ADR-0009 allocation seam, and the bounded registries.
+        assert!(source.contains("if (!c || v < 0) return"));
+        assert!(source.contains("pthread_cond_wait(&c->ready, &c->lock);"));
+        assert!(source.contains("pthread_cond_broadcast(&c->ready);"));
+        assert!(source.contains("PTHREAD_MUTEX_ERRORCHECK"));
+        assert!(source.contains("tuo_rt_alloc(sizeof(tuo_rt_chan_node), 8)"));
+        assert!(source.contains("tuo_rt_dealloc(node, sizeof(tuo_rt_chan_node), 8);"));
+        assert!(source.contains(&format!("[{SYNC_REGISTRY_CAP}]")));
+        // The sync error value sits outside the byte and handle range, and
+        // shares the seam's generic-error code.
+        for value in [SYNC_ERROR, NET_ERROR] {
+            assert!(value < 0, "{value} must sit outside the byte range");
+        }
+        assert_eq!(SYNC_ERROR, NET_ERROR);
     }
 }

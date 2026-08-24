@@ -463,6 +463,38 @@ impl Machine<'_, '_> {
                 };
                 (Value::Array(elements), result)
             }
+            (HeapMutOp::Set, Value::Array(mut elements)) => {
+                // ADR-0016: overwrite in place; the replaced element is
+                // dropped here (its `Value` is discarded), and the bounds
+                // are enforced exactly as `get`'s — `set` never grows.
+                let index = match operands.first() {
+                    Some(Value::Int(value, _)) => *value,
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        return Err(self.type_bug(
+                            function,
+                            "set with a non-integer index",
+                            &value,
+                        ));
+                    }
+                };
+                let len = elements.len() as i128;
+                if index < 0 || index >= len {
+                    return Err(self.abort(
+                        TrapKind::IndexOutOfBounds,
+                        format!("index {index} out of bounds for an array of length {len}"),
+                        function.span,
+                    ));
+                }
+                let value = operands.get(1).cloned().unwrap_or(Value::Unit);
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "guarded to be within 0..len by the bounds check above"
+                )]
+                let slot = index as usize;
+                elements[slot] = value;
+                (Value::Array(elements), Value::Unit)
+            }
             (HeapMutOp::MapInsert, Value::Map(mut entries)) => {
                 let key = operands.first().cloned().unwrap_or(Value::Unit);
                 let value = operands.get(1).cloned().unwrap_or(Value::Unit);

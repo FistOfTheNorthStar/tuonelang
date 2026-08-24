@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `7` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `9` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -514,6 +514,72 @@ changed — and the commit that landed them bumped `ABI_VERSION` to `7`,
 together with the tests that pin their behavior (`tuo-runtime`'s `effect`
 module tests, `tuo-cli/tests/effects_native.rs`, and the `std::fs`/
 `std::time`/`std::process` native pins in `tuo-cli/tests/stdlib.rs`).
+
+## Socket effect symbols (ADR-0014)
+
+ADR-0014 extends the seam with four further C-ABI symbols — descriptor
+*producers*: a POSIX socket is a file descriptor, so the existing
+`tuo_rt_write`/`tuo_rt_read_byte`/`tuo_rt_close` move and release the bytes;
+these four only create connected or listening descriptors. Every one returns
+`long long`, never traps, and reports every error as `-1` (deliberately no
+finer taxonomy — a socket failure is environmental):
+
+```c
+long long tuo_rt_listen(long long port);     /* listening fd >= 0; -1 on error */
+long long tuo_rt_bound_port(long long fd);   /* the bound local port; -1 on error */
+long long tuo_rt_accept(long long fd);       /* connected fd >= 0; -1 on error */
+long long tuo_rt_connect(const unsigned char *ptr, unsigned long long len,
+                         long long port);    /* connected fd >= 0; -1 on error */
+```
+
+- `tuo_rt_listen` creates an IPv4 TCP socket bound to `127.0.0.1:port`
+  (`SO_REUSEADDR`; loopback only, so no committed test or benchmark opens an
+  externally reachable port) listening with backlog 16. Port `0` requests an
+  ephemeral port — pair with `tuo_rt_bound_port` (`getsockname`) to learn it.
+- `tuo_rt_accept` accepts one pending connection, retrying `EINTR`. Blocks.
+- `tuo_rt_connect` connects to the numeric IPv4 address in the `{ptr, len}`
+  bytes (`inet_pton`; no name resolution) at `port`. An `EINTR`'d connect
+  that completes asynchronously (`EISCONN` on retry) is success.
+
+Additive again — no layout changed; the landing commit bumped `ABI_VERSION`
+to `8` together with the pins (`tuo-runtime`'s `effect` tests,
+`tuo-cli/tests/effects_native.rs`'s single-process loopback roundtrip, and
+the `std::net` native pin in `tuo-cli/tests/stdlib.rs`).
+
+## Channel and mutex symbols (ADR-0015)
+
+ADR-0015 adds runtime-owned synchronization objects behind opaque `long
+long` handles — the same shape as a descriptor. Handles are process-lived
+(no free; a bounded registry of 256 of each refuses exhaustion with `-1`,
+never a trap). Every symbol returns `long long` and reports errors as `-1`:
+
+```c
+long long tuo_rt_chan_new(void);                     /* handle >= 0; -1 exhausted */
+long long tuo_rt_chan_send(long long ch, long long v);
+                          /* 0; -1 invalid/closed/negative v */
+long long tuo_rt_chan_recv(long long ch);            /* blocks; value, or -1 closed+drained */
+long long tuo_rt_chan_close(long long ch);           /* 0 (idempotent); -1 invalid */
+long long tuo_rt_mutex_new(void);                    /* handle >= 0; -1 exhausted */
+long long tuo_rt_mutex_lock(long long m);            /* blocks; 0, or -1 invalid/relock */
+long long tuo_rt_mutex_unlock(long long m);          /* 0, or -1 invalid/not held */
+```
+
+- A channel is an unbounded FIFO of **non-negative** values: a `pthread`
+  mutex + condition variable over a heap linked list whose nodes flow
+  through the ADR-0009 allocation seam (`tuo_rt_alloc`/`tuo_rt_dealloc`).
+  `send` refuses a negative `v` so `recv`'s `-1` closed/error signal stays
+  unambiguous; `close` broadcasts, waking every blocked receiver once the
+  queue drains. Values cross threads **by copy** — no tuonelang memory is
+  ever shared, so ADR-0007's no-data-race property is preserved.
+- A mutex is a `PTHREAD_MUTEX_ERRORCHECK` pthread mutex: a relock by the
+  holding thread or an unlock by a non-holder is a `-1`, never undefined
+  behavior. It guards critical sections over *external* resources (files,
+  sockets); there is no shared tuonelang memory for it to guard.
+
+Additive again — no layout changed; the landing commit bumped `ABI_VERSION`
+to `9` together with the pins (`tuo-runtime`'s `effect` tests,
+`tuo-cli/tests/effects_native.rs`'s policy and cross-thread drain
+roundtrips, and the `std::sync` native pin in `tuo-cli/tests/stdlib.rs`).
 
 ## Memory allocation boundary
 

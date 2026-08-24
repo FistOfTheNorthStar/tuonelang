@@ -1,0 +1,31 @@
+// ADR-0016's recursion boundary, the legal side: a cycle that passes through
+// a heap wrapper (`Box`/`Shared`/`Weak`) is a fine declaration — the wrapper
+// is a bare pointer, so the size is finite and no glue descends. (Wrapper
+// *values* still cannot be constructed in v0; the declarations are what the
+// boundary must keep legal, exactly the shipped cyclic-shape ownership
+// fixtures.)
+
+struct Node {
+    value: Int,
+    parent: Weak[Node],
+}
+
+struct Tree {
+    root: Shared[Node],
+}
+
+enum List {
+    Nil,
+    Cons { head: Int, tail: Box[List] },
+}
+
+// Self-mention inside a generic argument is caught only when it closes a
+// by-value cycle; through a wrapper it is legal too.
+struct Graph {
+    nodes: Array[Int],
+    edges: Array[Int],
+}
+
+fn main() -> Int {
+    0
+}
