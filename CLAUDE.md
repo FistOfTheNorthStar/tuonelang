@@ -194,7 +194,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::array::set` (bounds-trapping indexed write with old-element drop),
   and the `T0016` recursion boundary (a struct/enum reaching itself without
   a heap-wrapper indirection is now a *front-end* error — previously it
-  type-checked and hung codegen) — and *refuse* — never
+  type-checked and hung codegen); and — since ADR-0017 — the **socket
+  seam's additive increment** (ABI v10): the bounded waits
+  `accept_timeout`/`connect_timeout`/`read_byte_timeout` (a distinct `-3`
+  timeout sentinel, so a timeout is never confused with a host error or end
+  of input), **IPv6** (`connect` infers the family from a numeric address,
+  so `"::1"` needs no new spelling; the server side gains
+  `listen6`/`peer_family`), and **UDP**
+  (`udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` — a
+  datagram is a *message*, so a receive reports its boundary and stages the
+  payload, which `udp_byte_at` indexes; the stream-side `read_byte` is
+  deliberately untouched) — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
@@ -309,7 +319,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: all **thirteen**
+  honesty rule the prompt demands is enforced structurally: all **fifteen**
   runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
@@ -334,7 +344,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   peer its **native buffered `chan`**), and — since ADR-0016 —
   **json-parse**, a recursive-descent parse of a fixed document into a
   kind/number arena (C peer `strtod`-based, Go peer its standard
-  **`encoding/json`**)) carry a real program and are `Support::Supported` —
+  **`encoding/json`**), and — since ADR-0017 — **udp-echo**, per round two
+  ephemeral loopback UDP sockets exchanging 8 datagrams with an echo back to
+  `udp_peer_port` (C peer `sendto`/`recvfrom`, Go peer
+  `net.ListenPacket`/`WriteTo`/`ReadFrom`), and **connect-timeout**, the cost
+  of a *bounded failure* — 200 rounds of `connect_timeout` to a port nothing
+  listens on, each required to come back rather than hang (C peer
+  non-blocking `connect`+`poll`, Go peer `net.DialTimeout`) — a workload that
+  **could not be written before ADR-0017**, since a blocking `connect` has no
+  bounded outcome to measure) carry a real program and are
+  `Support::Supported` —
   none remains `Unsupported`, and the mechanism (an entry with the *exact
   reason* and **no number**, flipping the moment its feature lands) stays as
   the documented re-entry path for any future workload.
@@ -521,7 +540,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Go's native `chan` as its peer), and `ADR-0016` (the data increment +
   `std::json` — the `T0016` recursion boundary, `Float` elements,
   `std::array::set`, and the `json-parse` workload against `encoding/json`)
-  are all since **accepted and landed**. **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
+  are all since **accepted and landed** — as is `ADR-0017` (timeouts, IPv6,
+  and UDP: three of the four items ADR-0014 had listed as additive
+  *"when its need is demonstrated by dogfooding"*, landed in three stages at
+  ABI v10 with the gating `udp-echo` and `connect-timeout` workloads;
+  **TLS and DNS stay out** — TLS needs a crypto dependency this workspace
+  avoids, and DNS is properly written *in tuonelang* on the new UDP
+  primitives). **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
   machine-absolute dependency paths and are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
@@ -782,9 +807,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   the whole `std::fs` disk tier `read`/`write`/`exists`/`remove` over
   `open`/`close`/`remove_file` composed with the descriptor seam, — since
   ADR-0014 — the whole `std::net` socket tier
-  `listen`/`bound_port`/`accept`/`connect`/`close`, and — since ADR-0015 —
+  `listen`/`bound_port`/`accept`/`connect`/`close`, — since ADR-0015 —
   `std::sync`'s channels `channel`/`send`/`recv`/`close` and mutexes
-  `mutex`/`lock`/`unlock` — real
+  `mutex`/`lock`/`unlock`, and — since ADR-0017 — `std::net`'s bounded
+  waits `accept_timeout`/`connect_timeout`/`read_byte_timeout`, its IPv6
+  pair `listen6`/`peer_family`, and its UDP tier
+  `udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` (joined in
+  the executable tier by the `is_timeout`/`is_ipv6` classifiers) — real
   tuonelang
   implementations that run natively but can carry **no** spec, since `R0007`
   keeps the spec sandbox pure; each is marked `EFFECT:` and names the native CLI

@@ -1,18 +1,18 @@
 {
-  "seeds_total": 34,
-  "train_seeds": 21,
-  "eval_seeds": 13,
-  "oneshot_examples": 21,
-  "repair_examples": 39,
-  "eval_examples": 13,
+  "seeds_total": 48,
+  "train_seeds": 33,
+  "eval_seeds": 15,
+  "oneshot_examples": 163,
+  "repair_examples": 62,
+  "eval_examples": 15,
   "repair_by_break": {
-    "missing-param-mode": 17,
-    "chained-comparison": 7,
-    "let-mut-for-var": 6,
-    "compound-assign": 4,
+    "missing-param-mode": 19,
+    "chained-comparison": 13,
+    "let-mut-for-var": 13,
+    "compound-assign": 8,
     "angle-bracket-generics": 3,
     "positional-some": 1,
-    "use-for-import": 1
+    "use-for-import": 5
   },
   "concepts": {
     "functions-arithmetic": 3,
@@ -31,6 +31,24 @@
     "owned-string": 1,
     "first-class-functions": 1,
     "generics": 1,
-    "runnable-main": 2
+    "runnable-main": 2,
+    "hash-map": 4,
+    "array-set": 1,
+    "float-array": 1,
+    "json": 1,
+    "concurrency": 1,
+    "channels": 1,
+    "filesystem": 1,
+    "net-outcomes": 1,
+    "timeouts": 1,
+    "ipv6": 1,
+    "udp": 1
+  },
+  "harvested_kept": 130,
+  "harvested_dropped": 61,
+  "harvested_by_origin": {
+    "stdlib": 122,
+    "example": 5,
+    "corpus": 3
   }
 }

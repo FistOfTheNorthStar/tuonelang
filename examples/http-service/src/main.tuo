@@ -21,6 +21,15 @@ module http_service;
 //     `write_response` (stdout). Effectful, so no specs (`R0007`); pinned by
 //     the dogfood test (`crates/tuo-cli/tests/dogfood_examples.rs`).
 //
+// Since ADR-0017 every wait in the effect tier is **bounded**: the connect,
+// the accept, and each byte read carry a timeout (`io_timeout_ms`), so a peer
+// that goes away is a value the program branches on instead of a wait it
+// never leaves. Before that this example was a potential CI hang — three
+// blocking calls with no recourse — which is the gap that motivated the ADR.
+// A timeout is deliberately NOT folded into "end of input": collapsing them
+// would let a truncated request route as if the peer had sent it, which is
+// exactly the confusion ADR-0017's distinct `-3` sentinel exists to prevent.
+//
 // `main` is the acceptance oracle: it routes "GET /health HTTP/1.1" through
 // the pure core AND serves the identical request to itself over a live
 // loopback socket (listen ephemeral → connect → accept → serve_once → the
@@ -237,20 +246,61 @@ fn write_response(take status: Int) -> Int {
 
 // --- The socket shell (EFFECT tier, ADR-0014) -------------------------------
 
+/// The bounded wait every socket operation in this example uses, in
+/// milliseconds (ADR-0017). Generous enough that a healthy loopback
+/// round-trip never reaches it, short enough that a peer which goes away
+/// fails the run instead of wedging it forever.
+fn io_timeout_ms() -> Int {
+    5000
+}
+
 /// EFFECT: read one line (bytes up to CR, LF, or end of input, exclusive)
 /// from a connection into an owned `String` — the request-line reader,
-/// accumulating exactly as `std::io::read_line` does. Effectful, so no spec
-/// (`R0007`); pinned natively by the dogfood test through `main`'s live
-/// round-trip.
-fn read_line_from(take conn: Int) -> String {
+/// accumulating exactly as `std::io::read_line` does, but with each byte
+/// **bounded** by `read_byte_timeout` (ADR-0017) rather than blocking
+/// forever on a silent peer.
+///
+/// `read_ok` reports whether the line terminated for a legitimate reason (a
+/// CR/LF delimiter or end of input) rather than a timeout or host error.
+/// The distinction matters: a timeout that quietly returned the bytes read
+/// so far would look exactly like a short-but-complete request line, so the
+/// caller would route a truncated request as if the peer had sent it. That
+/// is precisely the confusion ADR-0017's distinct `-3` sentinel exists to
+/// prevent, so this reader propagates it instead of collapsing it.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test
+/// through `main`'s live round-trip.
+fn read_line_from(take conn: Int, mut read_ok: Bool) -> String {
     var line = std::string::empty();
     var done = false;
+    read_ok = true;
     while !done {
-        let b = std::rt::read_byte(conn);
-        if b < 0 || b == 13 || b == 10 {
+        let b = std::rt::read_byte_timeout(conn, io_timeout_ms());
+        if b == 13 {
+            // A CR: consume the LF of the CRLF pair too. Leaving it unread
+            // matters — a peer that closes while bytes are still queued in
+            // its receive buffer makes TCP send RST, which discards data the
+            // peer had already written, so the *other* side's read fails with
+            // a host error instead of seeing the response. Draining the
+            // delimiter keeps the close orderly.
+            let lf = std::rt::read_byte_timeout(conn, io_timeout_ms());
+            if lf < 0 && lf != 0 - 1 {
+                read_ok = false;
+            }
             done = true;
         } else {
-            std::string::push_byte(line, b);
+            if b == 10 || b == 0 - 1 {
+                // A bare LF, or a clean end of input: the line is complete.
+                done = true;
+            } else {
+                if b < 0 {
+                    // -3 (timeout) or -2 (host error): the peer never finished.
+                    read_ok = false;
+                    done = true;
+                } else {
+                    std::string::push_byte(line, b);
+                }
+            }
         }
     }
     line
@@ -258,12 +308,24 @@ fn read_line_from(take conn: Int) -> String {
 
 /// EFFECT: serve exactly one request on an accepted connection — the whole
 /// lifecycle the old `CONTRACT serve` promised, now real: read the request
-/// line off the socket, parse it with the pure core, route it, write the
-/// response status line back over the wire, and close the connection.
-/// Returns the routed status. Effectful, so no spec (`R0007`); pinned
-/// natively by the dogfood test through `main`'s live round-trip.
+/// line off the socket (bounded, per ADR-0017), parse it with the pure core,
+/// route it, write the response status line back over the wire, and close
+/// the connection.
+///
+/// Returns the routed status, or `-1` when the request line never arrived
+/// within the bound. A peer that opens a connection and then goes silent is
+/// now a value this function returns rather than a wait it never leaves; the
+/// connection is closed on that path too, so a timed-out peer leaks nothing.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test
+/// through `main`'s live round-trip.
 fn serve_once(take conn: Int) -> Int {
-    let line = read_line_from(conn);
+    var read_ok = false;
+    let line = read_line_from(conn, read_ok);
+    if !read_ok {
+        std::rt::close(conn);
+        return 0 - 1;
+    }
     let request = parse_request_line(std::string::as_str(line));
     let status = route(request.method, request.path);
     std::rt::write(conn, response_line(status));
@@ -272,13 +334,25 @@ fn serve_once(take conn: Int) -> Int {
     status
 }
 
-/// EFFECT: the live loopback round-trip — the ADR-0014 acceptance oracle.
+/// EFFECT: the live loopback round-trip — the ADR-0014 acceptance oracle,
+/// bounded end to end by ADR-0017.
+///
 /// Listen on an ephemeral port, connect to it (TCP's backlog completes the
 /// handshake before accept), accept, send the canonical request line from
 /// the client, `serve_once` it on the server side, and read the status line
 /// back off the client socket. Returns the served status (200) only when
 /// the bytes on the wire equal the pure model's response line; any
-/// divergence or socket failure returns -1. Effectful, so no spec (`R0007`).
+/// divergence, timeout, or socket failure returns -1.
+///
+/// Every wait here is bounded: `connect_timeout` and `accept_timeout` cannot
+/// hang on a handshake that never completes, and both reads go through
+/// `read_line_from`'s bounded byte loop. Before ADR-0017 this function was a
+/// potential CI hang with no recourse — three blocking calls, any of which
+/// could wait forever if the peer or the kernel never answered. The
+/// descriptors are closed on the failure paths too, so a bounded failure
+/// does not leak a socket.
+///
+/// Effectful, so no spec (`R0007`).
 fn live_status() -> Int {
     let listener = std::rt::listen(0);
     if listener < 0 {
@@ -286,22 +360,27 @@ fn live_status() -> Int {
     }
     let port = std::rt::bound_port(listener);
     if port <= 0 {
+        std::rt::close(listener);
         return 0 - 1;
     }
-    let client = std::rt::connect("127.0.0.1", port);
+    let client = std::rt::connect_timeout("127.0.0.1", port, io_timeout_ms());
     if client < 0 {
+        std::rt::close(listener);
         return 0 - 1;
     }
-    let conn = std::rt::accept(listener);
+    let conn = std::rt::accept_timeout(listener, io_timeout_ms());
     if conn < 0 {
+        std::rt::close(client);
+        std::rt::close(listener);
         return 0 - 1;
     }
     std::rt::write(client, "GET /health HTTP/1.1\r\n");
     let served = serve_once(conn);
-    let reply = read_line_from(client);
+    var reply_ok = false;
+    let reply = read_line_from(client, reply_ok);
     std::rt::close(client);
     std::rt::close(listener);
-    if served == 200 && std::string::as_str(reply) == "HTTP/1.1 200 OK" {
+    if served == 200 && reply_ok && std::string::as_str(reply) == "HTTP/1.1 200 OK" {
         200
     } else {
         0 - 1

@@ -174,6 +174,10 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "networking" => include_str!("../../../../benchmarks/runtime/programs/c/networking.c"),
         "channels" => include_str!("../../../../benchmarks/runtime/programs/c/channels.c"),
         "json-parse" => include_str!("../../../../benchmarks/runtime/programs/c/json-parse.c"),
+        "udp-echo" => include_str!("../../../../benchmarks/runtime/programs/c/udp-echo.c"),
+        "connect-timeout" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/connect-timeout.c")
+        }
         _ => return None,
     })
 }
@@ -209,6 +213,10 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
         "networking" => include_str!("../../../../benchmarks/runtime/programs/go/networking.go"),
         "channels" => include_str!("../../../../benchmarks/runtime/programs/go/channels.go"),
         "json-parse" => include_str!("../../../../benchmarks/runtime/programs/go/json-parse.go"),
+        "udp-echo" => include_str!("../../../../benchmarks/runtime/programs/go/udp-echo.go"),
+        "connect-timeout" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/connect-timeout.go")
+        }
         _ => return None,
     })
 }

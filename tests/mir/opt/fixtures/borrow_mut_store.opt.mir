@@ -1,0 +1,14 @@
+fn set_const(_0: mut I64) -> I64 {
+bb0:
+    _0 = const 42_i64
+    return const 1_i64
+}
+
+fn main() -> I64 {
+    let _0: I64; // v
+    let _1: I64;
+bb0:
+    _0 = const 7_i64
+    _1 = call set_const(borrow mut _0)
+    return copy _0
+}

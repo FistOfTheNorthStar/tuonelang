@@ -1,0 +1,9 @@
+fn set_const(mut x: Int) { x = 42; }
+fn set_flag(mut f: Bool) { f = true; }
+fn main() -> Int {
+    var v = 7;
+    set_const(v);
+    var ok = false;
+    set_flag(ok);
+    if ok { v } else { 0 }
+}

@@ -364,6 +364,173 @@ fn socket_listen_connect_accept_roundtrip() {
     }
 }
 
+/// The ADR-0017 bounded-wait primitives really bound their wait, and report
+/// a timeout **distinguishably** from an error or end of input.
+///
+/// Only the robust directions are asserted, never a precise duration: an
+/// `accept_timeout` on a listener nobody connects to must report the `-2`
+/// timeout (not hang, not error); a `read_byte_timeout` on a connection whose
+/// peer sends nothing must do the same, then read the byte once it is there;
+/// a negative `ms` must be a host error rather than an unbounded wait; and
+/// `connect_timeout` must still succeed on a live listener. The test's own
+/// completion is the proof the waits are bounded — an unbounded one would
+/// hang the suite.
+#[test]
+fn bounded_waits_time_out_without_blocking_forever() {
+    let dir = workspace("bounded_waits");
+    let source = "fn main() -> Int {\n    \
+        let listener = std::rt::listen(0);\n    \
+        if listener < 0 { return 10; }\n    \
+        let port = std::rt::bound_port(listener);\n    \
+        if port <= 0 { return 11; }\n    \
+        if std::rt::accept_timeout(listener, 50) != 0 - 3 { return 12; }\n    \
+        if std::rt::accept_timeout(listener, 0 - 1) != 0 - 1 { return 13; }\n    \
+        let client = std::rt::connect_timeout(\"127.0.0.1\", port, 1000);\n    \
+        if client < 0 { return 14; }\n    \
+        let server = std::rt::accept_timeout(listener, 1000);\n    \
+        if server < 0 { return 15; }\n    \
+        if std::rt::read_byte_timeout(server, 50) != 0 - 3 { return 16; }\n    \
+        if std::rt::write(client, \"z\") != 1 { return 17; }\n    \
+        if std::rt::read_byte_timeout(server, 1000) != 122 { return 18; }\n    \
+        if std::rt::read_byte_timeout(server, 0 - 1) != 0 - 2 { return 19; }\n    \
+        if std::rt::close(client) != 0 { return 20; }\n    \
+        if std::rt::read_byte_timeout(server, 1000) != 0 - 1 { return 21; }\n    \
+        if std::rt::close(server) != 0 { return 22; }\n    \
+        if std::rt::close(listener) != 0 { return 23; }\n    \
+        if std::rt::connect_timeout(\"127.0.0.1\", port, 1000) >= 0 { return 24; }\n    \
+        if std::rt::connect_timeout(\"nope\", port, 1000) != 0 - 1 { return 25; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("timeouts_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the bounded waits time out, distinguish a timeout from \
+             an error and from EOF, and still complete a live roundtrip (a \
+             nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The ADR-0017 IPv6 surface: `listen6` really binds `[::1]`, `connect`
+/// infers the family from the address it is given (so the *same* spelling
+/// reaches both stacks), `bound_port` reads the port back from **either**
+/// family, and `peer_family` reports which one a descriptor got.
+///
+/// `bound_port` reads through `sockaddr_storage` and switches on
+/// `ss_family` rather than assuming `sockaddr_in`. On the POSIX layouts this
+/// project targets `sin_port` and `sin6_port` both sit at offset 2, so the
+/// v4-only spelling happened to read the right bytes for a v6 socket — but
+/// only by coincidence of layout, not by any guarantee, and it also passed a
+/// too-small `sizeof(sockaddr_in)` to `getsockname` for a v6 address. The
+/// explicit form is correct by construction; this test pins the behavior on
+/// both families either way.
+///
+/// A host with IPv6 loopback disabled is a real configuration, so a failure
+/// to *create* the v6 listener is tolerated; everything after it is not.
+#[test]
+fn ipv6_listen_connect_and_family_reporting() {
+    let dir = workspace("ipv6_sockets");
+    let source = "fn main() -> Int {\n    \
+        let v4 = std::rt::listen(0);\n    \
+        if v4 < 0 { return 10; }\n    \
+        let v4port = std::rt::bound_port(v4);\n    \
+        if v4port <= 0 { return 11; }\n    \
+        if std::rt::peer_family(v4) != 4 { return 12; }\n    \
+        let c4 = std::rt::connect(\"127.0.0.1\", v4port);\n    \
+        if c4 < 0 { return 13; }\n    \
+        if std::rt::peer_family(c4) != 4 { return 14; }\n    \
+        let _ = std::rt::close(c4);\n    \
+        let _ = std::rt::close(v4);\n    \
+        let v6 = std::rt::listen6(0);\n    \
+        if v6 < 0 { return 0; }\n    \
+        let v6port = std::rt::bound_port(v6);\n    \
+        if v6port <= 0 { return 15; }\n    \
+        if std::rt::peer_family(v6) != 6 { return 16; }\n    \
+        let c6 = std::rt::connect(\"::1\", v6port);\n    \
+        if c6 < 0 { return 17; }\n    \
+        if std::rt::peer_family(c6) != 6 { return 18; }\n    \
+        let s6 = std::rt::accept_timeout(v6, 1000);\n    \
+        if s6 < 0 { return 19; }\n    \
+        if std::rt::write(c6, \"6\") != 1 { return 20; }\n    \
+        if std::rt::read_byte_timeout(s6, 1000) != 54 { return 21; }\n    \
+        if std::rt::close(c6) != 0 { return 22; }\n    \
+        if std::rt::close(s6) != 0 { return 23; }\n    \
+        if std::rt::close(v6) != 0 { return 24; }\n    \
+        if std::rt::connect(\"::2\", v6port) >= 0 { return 25; }\n    \
+        if std::rt::connect(\"not-an-address\", v6port) >= 0 { return 26; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("ipv6_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the v4 path still works, and where IPv6 loopback exists \
+             listen6/connect(\"::1\")/bound_port/peer_family all agree (a \
+             nonzero status names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The ADR-0017 UDP surface: a real datagram round-trip in one process,
+/// including the **reply** path that motivated `udp_peer_port`.
+///
+/// A server socket and a client socket are bound to ephemeral loopback
+/// ports; the client sends a datagram, the server receives it (getting the
+/// *length* back, because a datagram is a message), indexes the payload with
+/// `udp_byte_at`, and replies to the port `udp_peer_port` reports. The
+/// timeout paths are asserted too: a receive on a silent socket reports the
+/// `-3` timeout rather than hanging, and an out-of-range index is a host
+/// error rather than a trap.
+#[test]
+fn udp_datagram_roundtrip_with_reply_to_sender() {
+    let dir = workspace("udp_sockets");
+    let source = "fn main() -> Int {\n    \
+        let server = std::rt::udp_bind(0);\n    \
+        if server < 0 { return 10; }\n    \
+        let sport = std::rt::bound_port(server);\n    \
+        if sport <= 0 { return 11; }\n    \
+        let client = std::rt::udp_bind(0);\n    \
+        if client < 0 { return 12; }\n    \
+        let cport = std::rt::bound_port(client);\n    \
+        if cport <= 0 { return 13; }\n    \
+        if std::rt::udp_recv(server, 50) != 0 - 3 { return 14; }\n    \
+        if std::rt::udp_byte_at(server, 0) >= 0 { return 15; }\n    \
+        if std::rt::udp_send(client, \"127.0.0.1\", sport, \"ping\") != 4 { return 16; }\n    \
+        if std::rt::udp_recv(server, 1000) != 4 { return 17; }\n    \
+        if std::rt::udp_byte_at(server, 0) != 112 { return 18; }\n    \
+        if std::rt::udp_byte_at(server, 1) != 105 { return 19; }\n    \
+        if std::rt::udp_byte_at(server, 2) != 110 { return 20; }\n    \
+        if std::rt::udp_byte_at(server, 3) != 103 { return 21; }\n    \
+        if std::rt::udp_byte_at(server, 4) >= 0 { return 22; }\n    \
+        if std::rt::udp_byte_at(server, 0 - 1) >= 0 { return 23; }\n    \
+        if std::rt::udp_peer_port(server) != cport { return 24; }\n    \
+        if std::rt::udp_send(server, \"127.0.0.1\", cport, \"ok\") != 2 { return 25; }\n    \
+        if std::rt::udp_recv(client, 1000) != 2 { return 26; }\n    \
+        if std::rt::udp_byte_at(client, 0) != 111 { return 27; }\n    \
+        if std::rt::udp_byte_at(client, 1) != 107 { return 28; }\n    \
+        if std::rt::udp_peer_port(client) != sport { return 29; }\n    \
+        if std::rt::close(client) != 0 { return 30; }\n    \
+        if std::rt::close(server) != 0 { return 31; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("udp_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the datagram roundtrip, the reply to udp_peer_port, and \
+             the timeout/out-of-range paths all behave (a nonzero status \
+             names the failing step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// The ADR-0015 channel and mutex primitives obey their documented policy,
 /// single-threaded: FIFO order, negative payloads refused (so the closed
 /// signal stays unambiguous), sends to a closed channel refused, `-1` after

@@ -296,9 +296,10 @@ first-class function value, measured against a C peer calling through a
 function pointer — so the indirect-call overhead is a recorded number, not a
 guess, and the later ADRs kept the pattern: `map-lookup` (ADR-0011), `file-io`
 (ADR-0013), `channels` (ADR-0015, whose Go peer is Go's native buffered
-`chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`). All
-**thirteen** workloads now measure, each against equivalent-semantics C *and*
-Go peers; none is unsupported. No new runtime figure is invented here; the lab
+`chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`), then
+`udp-echo` and `connect-timeout` (ADR-0017). All **fifteen** workloads now
+measure, each against equivalent-semantics C *and* Go peers; none is
+unsupported. No new runtime figure is invented here; the lab
 remains the one measurement of record.
 
 ---
@@ -373,8 +374,30 @@ of a compiler hang) — plus `std::json`, the entirely-executable twelfth
 stdlib module (index-arena `parse`/`render` with positioned errors). The
 perf-lab entries the three ADRs gated all measure: `networking` flipped from
 the lab's last `Unsupported`, and `channels` and `json-parse` landed
-supported — all thirteen workloads, each with C and Go peers. Still deferred,
+supported — thirteen workloads at that point, each with C and Go peers
+(ADR-0017 has since taken the catalog to fifteen). Still deferred,
 honestly: recursive nominal types (`T0016` is the boundary until a successor
-ADR gives the backends runtime-recursive clone/drop glue), DNS/IPv6/UDP/TLS
-and timeouts, `\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building
-JSON from scratch, detached spawn, and capturing closures (Tier 2).
+ADR gives the backends runtime-recursive clone/drop glue), DNS and TLS,
+`\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building JSON from
+scratch, detached spawn, and capturing closures (Tier 2).
+
+**Post-exercise update (2026-08-25).** [ADR-0017](specification/adr/ADR-0017-timeouts-ipv6-and-udp.md)
+took up three of the four items ADR-0014 had listed as out of scope *"when
+its need is demonstrated by dogfooding"*, on the strength of a gap this
+exercise's own committed code carries: `http-service` reads its request line
+with an unbounded `read_byte`, and the `networking` workload blocks in
+`accept`/`connect`, so any peer that goes away wedges the process with no
+recourse — not a missing capability but an unbounded wait in shipped code.
+Timeouts (`accept_timeout`/`connect_timeout`/`read_byte_timeout`, with a
+distinct `-3` sentinel so a timeout is never confused with an error or EOF),
+IPv6 (`connect` infers the family, so `"::1"` needs no new spelling; the
+server side gains `listen6`/`peer_family`), and UDP (`udp_bind`/`send`/
+`recv`/`byte_at`/`peer_port` — a datagram is a message, so a receive reports
+its boundary) all landed across three stages at ABI v10. Two gating lab
+workloads came with them, taking the catalog to **fifteen** measured:
+`udp-echo` and `connect-timeout`, the latter measuring a *bounded failure* —
+a program that could not have been written before the ADR. **DNS and TLS stay
+out**, and deliberately so: TLS would need a cryptographic dependency this
+workspace avoids on purpose, and DNS is properly written *in tuonelang* on
+the UDP primitives this ADR just added, rather than bolted into the runtime
+shim.

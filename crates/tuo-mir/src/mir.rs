@@ -391,6 +391,46 @@ pub enum EffectOp {
     /// connected descriptor (`>= 0`) or a negative value on host error.
     /// Never traps. (ADR-0014.)
     Connect,
+    /// `accept_timeout(fd: I64, ms: I64) -> I64` — as [`Self::Accept`], but
+    /// waits at most `ms` milliseconds; the result is the connected
+    /// descriptor (`>= 0`), `-3` on timeout, or `-1` on host error. Never
+    /// traps. (ADR-0017.)
+    AcceptTimeout,
+    /// `connect_timeout(host: Str, port: I64, ms: I64) -> I64` — as
+    /// [`Self::Connect`], but abandons the handshake after `ms`
+    /// milliseconds; `-3` on timeout. Never traps. (ADR-0017.)
+    ConnectTimeout,
+    /// `read_byte_timeout(fd: I64, ms: I64) -> I64` — as [`Self::ReadByte`],
+    /// but waits at most `ms` milliseconds; the byte (`0..=255`), `-1` at
+    /// end of input, `-2` on host error, or `-3` on timeout. Never traps.
+    /// (ADR-0017.)
+    ReadByteTimeout,
+    /// `listen6(port: I64) -> I64` — as [`Self::Listen`], but an IPv6 TCP
+    /// socket bound to `[::1]:port`; the listening descriptor (`>= 0`) or
+    /// `-1` on host error. Never traps. (ADR-0017.)
+    Listen6,
+    /// `peer_family(fd: I64) -> I64` — the descriptor's address family (`4`
+    /// or `6`), or `-1` on host error. Never traps. (ADR-0017.)
+    PeerFamily,
+    /// `udp_bind(port: I64) -> I64` — an IPv4 UDP socket bound to
+    /// `127.0.0.1:port`; the descriptor (`>= 0`) or `-1`. Never traps.
+    /// (ADR-0017.)
+    UdpBind,
+    /// `udp_send(fd: I64, host: Str, port: I64, bytes: Str) -> I64` — send
+    /// one datagram; the byte count (`>= 0`) or `-1`. Never traps.
+    /// (ADR-0017.)
+    UdpSend,
+    /// `udp_recv(fd: I64, ms: I64) -> I64` — receive one datagram into the
+    /// descriptor's staging buffer; its length (`>= 0`), `-3` on timeout, or
+    /// `-1`. Never traps. (ADR-0017.)
+    UdpRecv,
+    /// `udp_byte_at(fd: I64, i: I64) -> I64` — byte `i` of the staged
+    /// datagram (`0..=255`), or `-1` when out of range. Never traps.
+    /// (ADR-0017.)
+    UdpByteAt,
+    /// `udp_peer_port(fd: I64) -> I64` — the source port of the most recent
+    /// `udp_recv`, or `-1`. Never traps. (ADR-0017.)
+    UdpPeerPort,
     /// `chan_new() -> I64` — create an unbounded FIFO channel of
     /// non-negative `I64` values; the result is a process-lived handle
     /// (`>= 0`) or `-1` on registry exhaustion. Never traps. (ADR-0015.)
@@ -441,6 +481,16 @@ impl EffectOp {
             Self::BoundPort => "bound_port",
             Self::Accept => "accept",
             Self::Connect => "connect",
+            Self::AcceptTimeout => "accept_timeout",
+            Self::ConnectTimeout => "connect_timeout",
+            Self::ReadByteTimeout => "read_byte_timeout",
+            Self::Listen6 => "listen6",
+            Self::PeerFamily => "peer_family",
+            Self::UdpBind => "udp_bind",
+            Self::UdpSend => "udp_send",
+            Self::UdpRecv => "udp_recv",
+            Self::UdpByteAt => "udp_byte_at",
+            Self::UdpPeerPort => "udp_peer_port",
             Self::ChanNew => "chan_new",
             Self::ChanSend => "chan_send",
             Self::ChanRecv => "chan_recv",
@@ -463,6 +513,10 @@ impl EffectOp {
             | Self::Listen
             | Self::BoundPort
             | Self::Accept
+            | Self::Listen6
+            | Self::PeerFamily
+            | Self::UdpBind
+            | Self::UdpPeerPort
             | Self::ChanRecv
             | Self::ChanClose
             | Self::MutexLock
@@ -472,8 +526,13 @@ impl EffectOp {
             | Self::ArgByte
             | Self::Open
             | Self::Connect
-            | Self::ChanSend => 2,
-            Self::ParMap => 3,
+            | Self::ChanSend
+            | Self::AcceptTimeout
+            | Self::ReadByteTimeout
+            | Self::UdpRecv
+            | Self::UdpByteAt => 2,
+            Self::ParMap | Self::ConnectTimeout => 3,
+            Self::UdpSend => 4,
         }
     }
 }

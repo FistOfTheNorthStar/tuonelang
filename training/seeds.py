@@ -797,4 +797,449 @@ spec sum {
         runnable=True,
         run_exit=100,
     ),
+    # --- hash maps (ADR-0011) -------------------------------------------
+    Seed(
+        concept="hash-map",
+        task="Write `count_of(xs, needle)` that builds a frequency table of an "
+        "`Array[Int]` in a `Map[Int, Int]` and returns how many times `needle` "
+        "occurs (0 if absent). Spec it.",
+        solution="""fn build() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 4);
+    std::array::push(xs, 9);
+    std::array::push(xs, 4);
+    xs
+}
+
+fn count_of(in xs: Array[Int], take needle: Int) -> Int {
+    var freq = std::map::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        let seen = match std::map::get(freq, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(freq, x, seen + 1);
+        i = i + 1;
+    }
+    match std::map::get(freq, needle) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec count_of {
+    then count_of(build(), 4) == 2;
+    then count_of(build(), 9) == 1;
+    then count_of(build(), 7) == 0;
+}
+""",
+        notes="`std::map::get` returns `Option[V]` and never traps; "
+        "`std::map::insert` returns the PREVIOUS value, so bind it to `_`. "
+        "A map is built through a `var` binding because the mutators take it "
+        "by `mut` borrow.",
+    ),
+    Seed(
+        concept="hash-map",
+        task="Using a `Map[Str, Int]`, write `score_of(key)` that looks up a "
+        "score for a string key, returning 0 when the key is absent.",
+        solution="""fn score_of(in key: Str) -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "alpha", 10);
+    let _ = std::map::insert(m, "beta", 20);
+    match std::map::get(m, key) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec score_of {
+    then score_of("alpha") == 10;
+    then score_of("beta") == 20;
+    then score_of("gamma") == 0;
+}
+""",
+        notes="The v0 map operation surface is `Map[Int, Int]` and "
+        "`Map[Str, Int]`; any other key/value pair is a `T0001`.",
+    ),
+    Seed(
+        concept="hash-map",
+        task="Write `distinct(xs)` returning how many distinct values an "
+        "`Array[Int]` holds, using a map's keys.",
+        solution="""fn sample() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 3);
+    std::array::push(xs, 3);
+    std::array::push(xs, 8);
+    xs
+}
+
+fn distinct(in xs: Array[Int]) -> Int {
+    var seen = std::map::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let _ = std::map::insert(seen, std::array::get(xs, i), 1);
+        i = i + 1;
+    }
+    std::array::len(std::map::keys(seen))
+}
+
+spec distinct {
+    then distinct(sample()) == 2;
+    then distinct(std::array::empty()) == 0;
+}
+""",
+        notes="`std::map::keys` returns a NEW `Array[K]` in insertion "
+        "(first-seen) order — deterministic across all three engines.",
+    ),
+    Seed(
+        concept="hash-map",
+        task="Key a `Map[Str, Int]` with a view borrowed from an owned "
+        "`String` via `std::string::as_str`, and look entries up by Str.",
+        solution="""fn tally_for(in name: Str) -> Int {
+    var owned = std::string::empty();
+    std::string::append(owned, "beta");
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "alpha", 1);
+    let _ = std::map::insert(m, std::string::as_str(owned), 2);
+    match std::map::get(m, name) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec tally_for {
+    then tally_for("alpha") == 1;
+    then tally_for("beta") == 2;
+    then tally_for("gamma") == 0;
+}
+""",
+        notes="`std::string::as_str` is a zero-copy `Str` view into a live "
+        "`String` (ADR-0010); it composes with `Map[Str, Int]` keys.",
+    ),
+    # --- the data increment (ADR-0016) ----------------------------------
+    Seed(
+        concept="array-set",
+        task="Write `zero_first(xs)` that overwrites element 0 of a growable "
+        "`Array[Int]` in place with 0 (leaving an empty array alone) and "
+        "returns it.",
+        solution="""fn two() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 5);
+    std::array::push(xs, 6);
+    xs
+}
+
+fn head(in xs: Array[Int]) -> Int {
+    if std::array::len(xs) > 0 { std::array::get(xs, 0) } else { -1 }
+}
+
+fn zero_first(take xs: Array[Int]) -> Array[Int] {
+    var ys = xs;
+    if std::array::len(ys) > 0 {
+        std::array::set(ys, 0, 0);
+    }
+    ys
+}
+
+spec zero_first {
+    then head(zero_first(two())) == 0;
+    then std::array::len(zero_first(two())) == 2;
+}
+""",
+        notes="`std::array::set` is an in-place indexed write (ADR-0016). It "
+        "never grows the array and traps IndexOutOfBounds off the end; the "
+        "old element is dropped in place.",
+    ),
+    Seed(
+        concept="float-array",
+        task="Write `mean(xs)` over an `Array[Float]`, returning 0.0 for an "
+        "empty array. Spec it.",
+        solution="""fn sample() -> Array[Float] {
+    var xs = std::array::empty();
+    std::array::push(xs, 1.0);
+    std::array::push(xs, 2.0);
+    std::array::push(xs, 3.0);
+    xs
+}
+
+fn mean(in xs: Array[Float]) -> Float {
+    if std::array::len(xs) == 0 {
+        return 0.0;
+    }
+    var total = 0.0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total / (std::array::len(xs) as Float)
+}
+
+spec mean {
+    then mean(sample()) == 2.0;
+    then mean(std::array::empty()) == 0.0;
+}
+""",
+        notes="`Float` array elements landed with ADR-0016. `as Float` is a "
+        "saturating cast; float literals need the decimal point (`0.0`).",
+    ),
+    Seed(
+        concept="json",
+        task="Using `std::json`, write `port_of(text)` that parses a JSON "
+        "object and returns its integer `port` member, or 0 when the input is "
+        "not valid JSON or has no such member.",
+        solution="""module app;
+
+import std::json;
+
+fn port_of(in text: Str) -> Int {
+    match std::json::parse(text) {
+        Ok { value } => {
+            let node = std::json::member(value, std::json::root(), "port");
+            if node < 0 { 0 } else { std::json::num_of(value, node) as Int }
+        },
+        Err { error } => 0,
+    }
+}
+
+spec port_of {
+    then port_of("{\\"port\\": 8080}") == 8080;
+    then port_of("{\\"host\\": \\"x\\"}") == 0;
+    then port_of("not json") == 0;
+}
+""",
+        notes="A parsed `Json` is an index arena navigated by node index; "
+        "`member` returns a negative index when the key is absent, and JSON "
+        "numbers are `Float` (cast with `as Int`). std::json is entirely pure, "
+        "so it runs in the spec sandbox.",
+        stdlib_deps=("json",),
+    ),
+    # --- concurrency and effects (ADR-0007, ADR-0013/14/15) -------------
+    Seed(
+        concept="concurrency",
+        task="Write a runnable program whose `main` squares four tasks in "
+        "parallel with `std::rt::par_map` over two workers and returns the sum "
+        "of the results.",
+        solution="""module app;
+
+fn square(take n: Int) -> Int {
+    n * n
+}
+
+fn main() -> Int {
+    var tasks = std::array::empty();
+    std::array::push(tasks, 1);
+    std::array::push(tasks, 2);
+    std::array::push(tasks, 3);
+    std::array::push(tasks, 4);
+    let results = std::rt::par_map(square, tasks, 2);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(results) {
+        total = total + std::array::get(results, i);
+        i = i + 1;
+    }
+    total
+}
+""",
+        runnable=True,
+        run_exit=30,
+        notes="`par_map` is structured fork-join: it takes a NON-capturing "
+        "function value, runs the tasks across N OS threads, and joins before "
+        "returning — so no data race is expressible. It is an EFFECT, so it "
+        "cannot appear in a spec (R0007); this program is verified by running.",
+    ),
+    Seed(
+        concept="channels",
+        task="Write a runnable program that sends five doubled values into a "
+        "channel, closes it, then drains it and returns the total.",
+        solution="""module app;
+
+fn main() -> Int {
+    let ch = std::rt::chan_new();
+    var i = 1;
+    while i <= 5 {
+        let _ = std::rt::chan_send(ch, i * 2);
+        i = i + 1;
+    }
+    let _ = std::rt::chan_close(ch);
+    var total = 0;
+    var v = std::rt::chan_recv(ch);
+    while v >= 0 {
+        total = total + v;
+        v = std::rt::chan_recv(ch);
+    }
+    total
+}
+""",
+        runnable=True,
+        run_exit=30,
+        notes="Channels (ADR-0015) carry non-negative Ints by copy through a "
+        "process-lived Int handle; `chan_recv` returns -1 once the channel is "
+        "closed AND drained, which is the drain loop's sentinel. An EFFECT, so "
+        "no spec (R0007).",
+    ),
+    Seed(
+        concept="filesystem",
+        task="Write a runnable program that writes a short file with "
+        "`std::fs`, reads it back, removes it, and returns the byte count it "
+        "read.",
+        solution="""module app;
+
+import std::fs;
+
+fn main() -> Int {
+    let path = "tuo_seed_scratch.txt";
+    match std::fs::write(path, "hello") {
+        Ok { value } => {
+            let n = match std::fs::read(path) {
+                Ok { value } => std::string::len(value),
+                Err { error } => 0,
+            };
+            match std::fs::remove(path) {
+                Ok { value } => n,
+                Err { error } => 0,
+            }
+        },
+        Err { error } => 0,
+    }
+}
+""",
+        runnable=True,
+        run_exit=5,
+        notes="`std::fs` returns `Result[_, FsError]` over the ADR-0013 file "
+        "primitives. The whole tier is an EFFECT (no spec, R0007) — correctness "
+        "is proven by really running it.",
+        stdlib_deps=("fs",),
+    ),
+    # --- bounded waits, IPv6, UDP (ADR-0017) ----------------------------
+    Seed(
+        concept="net-outcomes",
+        task="Write `classify(outcome)` that turns a `std::net` return value "
+        "into 0 for success, 1 for a timeout, and 2 for a host error. Spec "
+        "every branch.",
+        solution="""fn classify(take outcome: Int) -> Int {
+    if outcome >= 0 {
+        0
+    } else {
+        if outcome == -3 { 1 } else { 2 }
+    }
+}
+
+spec classify {
+    then classify(7) == 0;
+    then classify(0) == 0;
+    then classify(-3) == 1;
+    then classify(-1) == 2;
+    then classify(-2) == 2;
+}
+""",
+        notes="The socket seam never traps: it reports through negative return "
+        "values. A descriptor/length is `>= 0`, `-3` is the ADR-0017 timeout "
+        "sentinel NET_TIMEOUT, and `-1`/`-2` are host errors. The stdlib spells "
+        "these once as `std::net::is_descriptor` / `is_timeout`. Classifying "
+        "is pure, so unlike the socket calls themselves it can carry a spec.",
+    ),
+    Seed(
+        concept="timeouts",
+        task="Write a runnable program that binds a UDP socket, waits at most "
+        "50ms for a datagram that never arrives, and returns 42 when the wait "
+        "times out instead of hanging.",
+        solution="""module app;
+
+import std::net;
+
+fn main() -> Int {
+    let sock = std::net::udp_bind(0);
+    if sock < 0 { return 1; }
+    let outcome = std::net::udp_recv(sock, 50);
+    let _ = std::net::close(sock);
+    if std::net::is_timeout(outcome) { 42 } else { 0 }
+}
+""",
+        runnable=True,
+        run_exit=42,
+        notes="ADR-0017 added bounded waits so a program can RECOVER from a "
+        "silent peer instead of blocking forever. A timeout is a value you "
+        "branch on (`is_timeout`), not a trap. `ms` of 0 is a valid poll; a "
+        "negative `ms` is a host error, never an unbounded wait. An EFFECT, so "
+        "no spec (R0007) — proven by running.",
+        stdlib_deps=("net",),
+    ),
+    Seed(
+        concept="ipv6",
+        task="Write a runnable program that listens on an ephemeral IPv6 "
+        "loopback port, connects to it over `::1`, accepts the connection, and "
+        "returns 6 when the peer family really is IPv6.",
+        solution="""module app;
+
+import std::net;
+
+fn main() -> Int {
+    let server = std::net::listen6(0);
+    if server < 0 { return 1; }
+    let port = std::net::bound_port(server);
+    if port < 0 { return 2; }
+    let client = std::net::connect("::1", port);
+    if client < 0 { return 3; }
+    let session = std::net::accept(server);
+    if session < 0 { return 4; }
+    let family = std::net::peer_family(session);
+    let _ = std::net::close(session);
+    let _ = std::net::close(client);
+    let _ = std::net::close(server);
+    if std::net::is_ipv6(family) { 6 } else { 4 }
+}
+""",
+        runnable=True,
+        run_exit=6,
+        notes="A server cannot infer an address family from a port, so IPv6 "
+        "listening is the explicit `listen6`. The CLIENT side needs no new "
+        "spelling: `connect` infers the family from the numeric address, so "
+        "`connect(\"::1\", port)` just works. `bound_port` covers both "
+        "families. An EFFECT, so no spec (R0007).",
+        stdlib_deps=("net",),
+    ),
+    Seed(
+        concept="udp",
+        task="Write a runnable program that sends the datagram \"ping\" from "
+        "one UDP socket to another on loopback, reads the payload back byte by "
+        "byte, and returns the byte sum modulo 100.",
+        solution="""module app;
+
+fn main() -> Int {
+    let server = std::rt::udp_bind(0);
+    if server < 0 { return 1; }
+    let port = std::rt::bound_port(server);
+    if port < 0 { return 2; }
+    let client = std::rt::udp_bind(0);
+    if client < 0 { return 3; }
+
+    let sent = std::rt::udp_send(client, "127.0.0.1", port, "ping");
+    if sent < 0 { return 4; }
+
+    let n = std::rt::udp_recv(server, 2000);
+    if n < 0 { return 5; }
+
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + std::rt::udp_byte_at(server, i);
+        i = i + 1;
+    }
+    let _ = std::rt::close(server);
+    let _ = std::rt::close(client);
+    sum % 100
+}
+""",
+        runnable=True,
+        run_exit=30,
+        notes="A datagram is a MESSAGE, not a stream: `udp_recv` returns the "
+        "message LENGTH and stages the payload, which `udp_byte_at` then "
+        "indexes — `read_byte` (the stream spelling) cannot see it. "
+        "`udp_peer_port` names the sender so a server can reply. An EFFECT, so "
+        "no spec (R0007).",
+    ),
 ]

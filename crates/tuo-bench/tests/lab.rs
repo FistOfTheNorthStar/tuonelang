@@ -146,10 +146,12 @@ fn honesty_rules_hold_over_the_catalog() {
     // workload (ADR-0009), the function-value indirect-calls workload
     // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011), the
     // OS-boundary file-io workload (ADR-0013), the socket networking
-    // workload (ADR-0014), and the channel workload (ADR-0015) all run — the
+    // workload (ADR-0014), the channel workload (ADR-0015), and the ADR-0017
+    // pair (udp-echo and connect-timeout — the latter measuring a *bounded
+    // failure*, which could not be written before that ADR) all run — the
     // catalog's last unsupported entry flipped when ADR-0014 landed, so none
     // remains.
-    assert_eq!(supported, 13);
+    assert_eq!(supported, 15);
     assert_eq!(unsupported, 0);
 }
 
@@ -233,7 +235,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     let committed = LabReport::from_json(&read(&path)).expect("example report parses");
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 13);
+    assert_eq!(committed.supported_workload_count(), 15);
     assert_eq!(
         committed.edit_scenarios, fresh_edits,
         "example report's edit scenarios are stale; regenerate the example"
@@ -241,8 +243,8 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set,
-    // once per peer language — 13 supported workloads × 2 peers (C and Go) = 26.
-    assert_eq!(committed.comparisons.len(), 26);
+    // once per peer language — 15 supported workloads × 2 peers (C and Go) = 30.
+    assert_eq!(committed.comparisons.len(), 30);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -256,8 +258,8 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Go)
         .count();
-    assert_eq!(c_count, 13, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 13, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 15, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 15, "every supported workload has a Go peer entry");
 
     // Round-trip.
     let reserialized = committed.to_json_pretty().expect("serialize");
