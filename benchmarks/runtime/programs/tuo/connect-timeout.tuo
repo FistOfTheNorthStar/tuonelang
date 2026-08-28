@@ -1,0 +1,48 @@
+// The connect-timeout workload (ADR-0017): the cost of a *bounded failure*.
+// Each round attempts connect_timeout to a loopback port nothing listens on
+// and requires the attempt to come back — as a refusal (the usual loopback
+// behavior, where the kernel answers RST immediately) or as the -3 timeout —
+// rather than hanging. This is the workload that could not be written before
+// ADR-0017: with only the blocking `connect`, a peer that never answers has
+// no bounded outcome at all. The C peer uses non-blocking connect + poll and
+// the Go peer uses net.DialTimeout, both with the identical deadline.
+//
+// A port is chosen by binding a listener, reading its ephemeral port, and
+// closing it — so the port is real and almost certainly unused. round()
+// returns 1 per bounded outcome; main runs 200 rounds and returns the count,
+// so the observable exit byte is 200.
+
+fn dead_port() -> Int {
+    let probe = std::rt::listen(0);
+    if probe < 0 {
+        return 0 - 1;
+    }
+    let port = std::rt::bound_port(probe);
+    std::rt::close(probe);
+    port
+}
+
+fn round(take port: Int, take ms: Int) -> Int {
+    let fd = std::rt::connect_timeout("127.0.0.1", port, ms);
+    if fd >= 0 {
+        // Something actually accepted: not the bounded-failure path.
+        std::rt::close(fd);
+        return 0;
+    }
+    // A refusal (-1) or the -3 timeout both mean the attempt came back.
+    1
+}
+
+fn main() -> Int {
+    let port = dead_port();
+    if port <= 0 {
+        return 0 - 1;
+    }
+    var count = 0;
+    var r = 0;
+    while r < 200 {
+        count = count + round(port, 50);
+        r = r + 1;
+    }
+    count
+}

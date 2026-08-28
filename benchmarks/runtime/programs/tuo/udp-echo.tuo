@@ -1,0 +1,68 @@
+// The udp-echo workload (ADR-0017): a datagram round-trip. Each round binds
+// two UDP sockets on ephemeral loopback ports, sends 8 sixteen-byte
+// datagrams from the client to the server, and for each one receives it,
+// reads all 16 bytes back through udp_byte_at, and echoes a reply to the
+// port udp_peer_port reports — which the client then receives. So every
+// ADR-0017 UDP primitive is on the hot path, and unlike the TCP `networking`
+// workload the measurement is of *message* delivery, not stream bytes. The C
+// and Go peers perform the identical sequence.
+//
+// round(8) returns the byte count read back, 8 × 16 = 128; main runs 100
+// rounds and returns the last round's count. Observable exit byte: 128.
+
+fn round(take datagrams: Int) -> Int {
+    let server = std::rt::udp_bind(0);
+    if server < 0 {
+        return 0 - 1;
+    }
+    let sport = std::rt::bound_port(server);
+    if sport <= 0 {
+        return 0 - 2;
+    }
+    let client = std::rt::udp_bind(0);
+    if client < 0 {
+        return 0 - 3;
+    }
+    var count = 0;
+    var i = 0;
+    while i < datagrams {
+        if std::rt::udp_send(client, "127.0.0.1", sport, "0123456789abcdef") != 16 {
+            return 0 - 4;
+        }
+        if std::rt::udp_recv(server, 1000) != 16 {
+            return 0 - 5;
+        }
+        var b = 0;
+        while b < 16 {
+            if std::rt::udp_byte_at(server, b) < 0 {
+                return 0 - 6;
+            }
+            count = count + 1;
+            b = b + 1;
+        }
+        let from = std::rt::udp_peer_port(server);
+        if from <= 0 {
+            return 0 - 7;
+        }
+        if std::rt::udp_send(server, "127.0.0.1", from, "ok") != 2 {
+            return 0 - 8;
+        }
+        if std::rt::udp_recv(client, 1000) != 2 {
+            return 0 - 9;
+        }
+        i = i + 1;
+    }
+    std::rt::close(client);
+    std::rt::close(server);
+    count
+}
+
+fn main() -> Int {
+    var result = 0;
+    var r = 0;
+    while r < 100 {
+        result = round(8);
+        r = r + 1;
+    }
+    result
+}

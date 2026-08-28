@@ -1,0 +1,10 @@
+fn set_const(mut x: I64) -> I64 {
+    x = 42;
+    return 1;
+}
+
+fn main() -> I64 {
+    var v: I64 = 7;
+    let ignored: I64 = set_const(v);
+    return v;
+}
