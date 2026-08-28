@@ -87,8 +87,11 @@
   is the flip the lab's own comment promised: *the entry becomes measurable
   the moment the feature lands, with no other change.*
 
-- **Deliberately out of scope:** DNS/name resolution, IPv6, UDP, TLS,
-  non-blocking I/O and timeouts, `net/http`-style request/response types
+- **Deliberately out of scope** (*three of these were since taken up by
+  [ADR-0017](ADR-0017-timeouts-ipv6-and-udp.md) — timeouts, IPv6, and UDP —
+  exactly on the "when its need is demonstrated by dogfooding" condition this
+  section states; TLS and DNS remain out*)**:** DNS/name resolution, IPv6, UDP,
+  TLS, non-blocking I/O and timeouts, `net/http`-style request/response types
   (the `http-service` example remains the HTTP story — a library can be
   written in tuonelang later, in tuonelang), and listening on non-loopback
   addresses (binding `127.0.0.1` only keeps every committed test and

@@ -189,6 +189,7 @@ fn borrow_mode_calls_match_the_interpreter() {
     for name in [
         "brw_scalar_in.tuo",
         "brw_scalar_mut.tuo",
+        "brw_scalar_mut_const.tuo",
         "brw_agg_in.tuo",
         "brw_agg_mut.tuo",
         "brw_arr_in.tuo",

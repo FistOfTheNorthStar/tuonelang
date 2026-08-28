@@ -42,6 +42,7 @@ OUT = HERE / "dataset"
 
 sys.path.insert(0, str(HERE))
 from breaks import BREAKS  # noqa: E402
+from harvest import Harvested, harvest_all  # noqa: E402
 from seeds import SEEDS, Seed  # noqa: E402
 
 SYSTEM_PROMPT = (
@@ -257,6 +258,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="validate only")
     ap.add_argument("--limit", type=int, default=0, help="first N seeds only")
+    ap.add_argument(
+        "--no-harvest",
+        action="store_true",
+        help="skip the repository harvest (seeds only)",
+    )
     args = ap.parse_args()
 
     OUT.mkdir(parents=True, exist_ok=True)
@@ -285,6 +291,37 @@ def main() -> int:
         print("--check: validation passed, emitting nothing.")
         return 0
 
+    # ---- harvest additional examples from validated repository source ---
+    # The seed library is the coverage skeleton; these supply volume from code
+    # the repository already keeps green. Each is compiled through the real
+    # compiler here, exactly like a seed — an item that does not compile
+    # standalone is dropped, and the count is recorded in stats.json.
+    harvested: list[Harvested] = []
+    harvest_dropped = 0
+    harvest_by_origin: dict[str, int] = {}
+    if not args.no_harvest:
+        candidates = harvest_all(REPO)
+        print(f"\nHarvesting {len(candidates)} examples from repository source...")
+        for item in candidates:
+            ok, _ = check_ok(item.solution, item.stdlib_deps)
+            if not ok:
+                harvest_dropped += 1
+                continue
+            ok, _ = spec_ok(item.solution, item.stdlib_deps)
+            if not ok:
+                harvest_dropped += 1
+                continue
+            harvested.append(item)
+            harvest_by_origin[item.origin] = (
+                harvest_by_origin.get(item.origin, 0) + 1
+            )
+        kept = len(harvested)
+        print(
+            f"  {kept} kept, {harvest_dropped} dropped "
+            f"(did not compile/spec standalone): "
+            + ", ".join(f"{k}={v}" for k, v in sorted(harvest_by_origin.items()))
+        )
+
     # ---- emit datasets -------------------------------------------------
     train = [s for s in valid if not held_out(s)]
     eval_ = [s for s in valid if held_out(s)]
@@ -297,6 +334,16 @@ def main() -> int:
     with sft_path.open("w") as f:
         for seed in train:
             rec = chat(SYSTEM_PROMPT, seed.task, assistant_answer(seed))
+            f.write(json.dumps(rec) + "\n")
+            n_oneshot += 1
+        # Harvested records join the one-shot set only. They are deliberately
+        # kept OUT of the eval split so scoring is never contaminated by
+        # material that also appears verbatim in the repository.
+        for item in harvested:
+            body = "```tuo\n" + item.solution.rstrip() + "\n```"
+            if item.notes:
+                body += f"\n\n{item.notes}"
+            rec = chat(SYSTEM_PROMPT, item.task, body)
             f.write(json.dumps(rec) + "\n")
             n_oneshot += 1
 
@@ -359,6 +406,9 @@ def main() -> int:
         "eval_examples": n_eval,
         "repair_by_break": repair_by_break,
         "concepts": concepts,
+        "harvested_kept": len(harvested),
+        "harvested_dropped": harvest_dropped,
+        "harvested_by_origin": harvest_by_origin,
     }
     (OUT / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
 
@@ -368,6 +418,11 @@ def main() -> int:
     print(f"  {eval_path.relative_to(REPO)}  ({n_eval} held-out eval tasks)")
     print(f"  {(OUT / 'stats.json').relative_to(REPO)}")
     print(f"\nConcept coverage: {len(concepts)} concepts")
+    if harvested:
+        print(
+            f"Harvested examples included: {len(harvested)} "
+            f"({harvest_dropped} dropped by the compile gate)"
+        )
     return 0
 
 

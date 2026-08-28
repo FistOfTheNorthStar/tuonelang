@@ -83,7 +83,7 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `tuo_rt_mutex_new`/`lock`/`unlock`; see [`crate::effect`]) — runtime-owned
 /// synchronization objects behind opaque `Int` handles. No layout changed;
 /// the bump reflects the new load-bearing runtime symbols.
-pub const ABI_VERSION: u32 = 9;
+pub const ABI_VERSION: u32 = 10;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -495,7 +495,7 @@ mod tests {
         // added the ADR-0014 socket effect symbols
         // (listen/bound_port/accept/connect); version 9 added the ADR-0015
         // channel and mutex symbols.
-        assert_eq!(ABI_VERSION, 9);
+        assert_eq!(ABI_VERSION, 10);
     }
 
     #[test]

@@ -251,10 +251,14 @@ fn borrow_mode_calls_agree_across_all_three_engines() {
     for name in [
         "brw_scalar_in.tuo",  // scalar read through `in`
         "brw_scalar_mut.tuo", // scalar write-back observed through `mut`
-        "brw_agg_in.tuo",     // struct fields read through `in` (twice — no move)
-        "brw_agg_mut.tuo",    // struct field written through `mut`
-        "brw_arr_in.tuo",     // `[Int; 4]` borrowed `in`, folded by `for`
-        "brw_forward.tuo",    // an `in` parameter forwarded as an `in` argument
+        // A *constant* store to a `mut` scalar param: nothing in the callee
+        // reads it back, so dead-store elimination used to delete the write
+        // and the native run silently lost it while the interpreter kept it.
+        "brw_scalar_mut_const.tuo",
+        "brw_agg_in.tuo",  // struct fields read through `in` (twice — no move)
+        "brw_agg_mut.tuo", // struct field written through `mut`
+        "brw_arr_in.tuo",  // `[Int; 4]` borrowed `in`, folded by `for`
+        "brw_forward.tuo", // an `in` parameter forwarded as an `in` argument
     ] {
         assert_three_way_agreement(name);
     }

@@ -18,9 +18,12 @@ compiler actually accepts and executes — nothing aspirational.
 > fork-join, — since ADR-0013 — `now_nanos`/`arg_count`/`arg_byte`/
 > `open`/`close`/`remove_file`, the clock, argv, and file boundary, — since
 > ADR-0014 — `listen`/`bound_port`/`accept`/`connect`, the loopback TCP
-> sockets, and — since ADR-0015 — the channel and mutex primitives
+> sockets, — since ADR-0015 — the channel and mutex primitives
 > `chan_new`/`chan_send`/`chan_recv`/`chan_close` and
-> `mutex_new`/`mutex_lock`/`mutex_unlock` — native
+> `mutex_new`/`mutex_lock`/`mutex_unlock`, and — since ADR-0017 — the
+> bounded waits `accept_timeout`/`connect_timeout`/`read_byte_timeout`, the
+> IPv6 pair `listen6`/`peer_family`, and the UDP tier
+> `udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` — native
 > only; the spec sandbox
 > stays pure, but heap ops *are* pure, so a spec may build strings and arrays) —
 > and, since ADR-0008 Tier 1, **first-class (non-capturing) function values**: a
@@ -156,6 +159,7 @@ let wide: I64 = small as I64;
 | `[T; N]` | Fixed-capacity inline array, length is part of the type |
 | `String` | Owned, growable, heap-backed byte buffer (`std::string`; runnable since ADR-0009) |
 | `Array[T]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009, element-generic since ADR-0012). Supported elements: `Int`, `Float` (since ADR-0016), `Bool`, `Str`, `String`, and structs/enums built from them |
+| `Map[K, V]` | Owned, heap-backed hash map (`std::map`; since ADR-0011). The v0 operation surface is `Map[Int, Int]` and `Map[Str, Int]` |
 | `Box[T]`, `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; construction not in the runnable core) |
 | `()` | Unit |
 
@@ -170,11 +174,11 @@ never hand-written:
 - Copy: all integer/float scalars, `Bool`, `Char`, `()`, `Str`, and `[T; N]`
   when `T` is Copy.
 - **Not** Copy: any struct/enum with a non-Copy field, `Box`/`Shared`/`Weak`,
-  the owned `String`, the growable `Array[T]`, and generic `T` inside a generic
-  body.
-- In practice in v0: **structs, enums you define, `String`, and `Array[T]` are
-  moved**; scalars and `[Int; N]` are copied. A moved-out owned heap value is
-  freed exactly once (drop glue frees at scope end; a move transfers ownership).
+  the owned `String`, the growable `Array[T]`, the `Map[K, V]`, and generic `T`
+  inside a generic body.
+- In practice in v0: **structs, enums you define, `String`, `Array[T]`, and
+  `Map[K, V]` are moved**; scalars and `[Int; N]` are copied. A moved-out owned
+  heap value is freed exactly once (drop glue frees at scope end; a move transfers ownership).
 
 ---
 
@@ -471,6 +475,92 @@ runtime-recursive clone/drop glue.
 
 ---
 
+## 11b. The hash map `Map[K, V]`
+
+Since ADR-0011, tuonelang has a builtin hash map. Like `String` and `Array[T]`
+it is heap-backed, **non-Copy** (passing one by value moves it), exposed as
+builtin free functions under `std::map::…` — no literal syntax, no `.method` —
+and it runs in all three engines.
+
+The **type** `Map[K, V]` is generic, but the v0 **operation surface is
+monomorphic** over two instantiations: **`Map[Int, Int]`** and
+**`Map[Str, Int]`**. A call with any other key or value type is an ordinary
+`T0001`. Key and value types are witnessed by context, so an `empty()` whose
+pair never gets determined is `T0011`.
+
+```tuo
+var m = std::map::empty();
+let old = std::map::insert(m, 7, 1);      // Option[Int]: None — 7 was absent
+let prev = std::map::insert(m, 7, 5);     // Some { value: 1 } — the PREVIOUS value
+let hit = std::map::get(m, 7);            // Some { value: 5 }
+let miss = std::map::get(m, 4);           // None — never traps
+let has = std::map::contains_key(m, 7);   // true
+let gone = std::map::remove(m, 7);        // Some { value: 5 }
+let n = std::map::len(m);                 // 0
+let ks = std::map::keys(m);               // a NEW Array[K]
+```
+
+| Function | Signature |
+|----------|-----------|
+| `empty` | `fn empty() -> Map[K, V]` |
+| `insert` | `fn insert(mut m: Map[K, V], take k: K, take v: V) -> Option[V]` |
+| `get` | `fn get(in m: Map[K, V], take k: K) -> Option[V]` |
+| `contains_key` | `fn contains_key(in m: Map[K, V], take k: K) -> Bool` |
+| `remove` | `fn remove(mut m: Map[K, V], take k: K) -> Option[V]` |
+| `len` | `fn len(in m: Map[K, V]) -> Int` |
+| `keys` | `fn keys(in m: Map[K, V]) -> Array[K]` |
+
+Building a map needs a `var` binding, because `insert`/`remove` take the map by
+`mut` borrow. `insert` **returns the previous value**, so the common
+count-or-zero update reads:
+
+```tuo
+let seen = match std::map::get(freq, x) {
+    Some { value } => value,
+    None => 0,
+};
+let _ = std::map::insert(freq, x, seen + 1);   // bind the returned Option to `_`
+```
+
+**No map operation ever traps** — a missing key is `None`, not an abort.
+
+**`keys` is insertion order.** The map's internal open-addressing index is
+hidden; what is observable is a dense, insertion-ordered entry list, and
+`remove` preserves the relative order of the entries that remain. That order is
+part of the contract (all three engines agree on it), so iterating `keys` is
+deterministic:
+
+```tuo
+var m = std::map::empty();
+let _ = std::map::insert(m, 5, 0);
+let _ = std::map::insert(m, 2, 0);
+let ks = std::map::keys(m);
+// std::array::get(ks, 0) == 5, std::array::get(ks, 1) == 2 — first-seen order
+```
+
+`Map[Str, Int]` is the identical surface with `K = Str`, which composes with
+`std::string::as_str` (ADR-0010) to key a map by an owned `String`'s bytes.
+
+Map operations are **pure** (allocation is deterministic, not an effect), so
+specs may build maps in the sandbox. `std::collections::counts(in xs:
+Array[Int]) -> Map[Int, Int]` is the stdlib's frequency table over this surface:
+
+```tuo
+fn distinct_count() -> Int {
+    std::map::len(std::collections::counts(std::collections::of3(2, 7, 2)))
+}
+
+spec distinct_count {
+    then distinct_count() == 2;
+}
+```
+
+Deferred, honestly: map **values** beyond `Int` (`Map[Str, String]` and friends
+are an additive later increment — the *type* admits any `V`, the v0 *ops* are
+`V = Int`), and a `Set[K]` (a set is a `Map[K, Unit]`; the map ships first).
+
+---
+
 ## 12. Specs — executable, colocated tests
 
 A `spec` is an item that names a function (or carries a description string) and
@@ -678,7 +768,7 @@ ADR-0015):
 |--------|------------------|------------------------------------|-------------------------------|
 | `std::io` | `IoError` enum, `error_code`, `is_eof` | `print`, `println` (over `std::rt::write`), `read_line` → `Result[String, IoError]` (reads bytes via `std::rt::read_byte` into an owned `String`) | — |
 | `std::fs` | `FsError` enum, `error_code`, `is_not_found`, path predicates | `read` → `Result[String, FsError]`, `write`, `exists`, `remove` (over the ADR-0013 `open`/`close`/`remove_file` primitives + the descriptor seam) | — |
-| `std::net` | `is_descriptor` | `listen`, `bound_port`, `accept`, `connect`, `close` (over the ADR-0014 socket primitives — IPv4 TCP, loopback listen, numeric hosts; data moves through the existing `write`/`read_byte` descriptor seam) | — |
+| `std::net` | `is_descriptor`, `is_timeout`, `is_ipv6` | `listen`, `bound_port`, `accept`, `connect`, `close` (over the ADR-0014 socket primitives — TCP, loopback listen, numeric hosts; data moves through the existing `write`/`read_byte` descriptor seam); since ADR-0017: `accept_timeout`, `connect_timeout`, `read_byte_timeout` (bounded waits, `-3` on timeout), `listen6`, `peer_family` (IPv6 — `connect` infers the family from the address), and `udp_bind`, `udp_send`, `udp_recv`, `udp_byte_at`, `udp_peer_port` (datagrams — a receive reports the message boundary and stages the payload) | — |
 | `std::process` | `ExitStatus`, `success`, `failure`, `code`, `is_success` | `exit` (over `std::rt::exit`); `arg_count`, `arg(i)` → `String` (over the ADR-0013 argv primitives) | — |
 | `std::sync` | `Once`/`LockState` pure state models | `par_map` (structured fork-join over `std::rt::par_map`, ADR-0007); `channel`, `send`, `recv`, `close`, `mutex`, `lock`, `unlock` (over the ADR-0015 channel/mutex primitives — process-lived `Int` handles; channels carry non-negative `Int`s by copy, `recv` returns `-1` once closed and drained; error-checked mutexes) | — |
 | `std::time` | `Duration` arithmetic (`from_nanos/millis/secs`, `add`, `lt`, …), `render` → `String`, `instant_at`, `elapsed` | `now` (over `std::rt::now_nanos`, ADR-0013) | — |
@@ -769,13 +859,17 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
 | Owned `String`, growable `Array[T]` (`std::string`/`std::array` incl. `set`; elements `Int`/`Float`/`Bool`/`Str`/`String` + supported structs/enums) | ✅ | ✅ | ✅ |
+| `Map[K, V]` hash map (`std::map`; surface `Map[Int, Int]` / `Map[Str, Int]`), insertion-ordered `keys` | ✅ | ✅ | ✅ |
 | `std::json` (`parse`/`render`, arena accessors — all pure) | ✅ | ✅ | ✅ |
 | First-class (non-capturing) function values `fn(mode T, …) -> R`, indirect calls | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `std::rt::now_nanos`/`arg_count`/`arg_byte`/`open`/`close`/`remove_file` (ADR-0013: clock, argv, files) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `std::rt::listen`/`bound_port`/`accept`/`connect` (ADR-0014: loopback TCP sockets over the descriptor seam) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `std::rt::chan_new`/`chan_send`/`chan_recv`/`chan_close`, `mutex_new`/`mutex_lock`/`mutex_unlock` (ADR-0015: channels, mutexes) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::net::listen`/`bound_port`/`accept`/`connect`/`close`, `std::sync::par_map`/`channel`/`send`/`recv`/`close`/`mutex`/`lock`/`unlock` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `std::rt::accept_timeout`/`connect_timeout`/`read_byte_timeout` (ADR-0017: bounded waits, `-3` timeout sentinel) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `std::rt::listen6`/`peer_family` (ADR-0017: IPv6; `connect` infers the family from a numeric address) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| `std::rt::udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` (ADR-0017: UDP datagrams) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
+| Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::net::listen`/`bound_port`/`accept`/`connect`/`close`/`accept_timeout`/`connect_timeout`/`read_byte_timeout`/`listen6`/`peer_family`/`udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port`, `std::sync::par_map`/`channel`/`send`/`recv`/`close`/`mutex`/`lock`/`unlock` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
 | Recursive nominal types (a struct/enum reaching itself without a `Box`/`Shared`/`Weak` indirection) | ❌ refused (`T0016`) | ❌ | ❌ |

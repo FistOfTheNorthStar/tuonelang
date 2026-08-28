@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `9` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `10` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -581,6 +581,116 @@ to `9` together with the pins (`tuo-runtime`'s `effect` tests,
 `tuo-cli/tests/effects_native.rs`'s policy and cross-thread drain
 roundtrips, and the `std::sync` native pin in `tuo-cli/tests/stdlib.rs`).
 
+## Bounded-wait symbols (ADR-0017)
+
+ADR-0017 adds bounded-wait counterparts to the three seam operations that
+otherwise block indefinitely. The blocking originals are **unchanged**; a
+timeout is opt-in. Each takes a trailing `ms` deadline in milliseconds:
+
+```c
+long long tuo_rt_accept_timeout(long long fd, long long ms);
+                          /* conn >= 0; -3 timed out; -1 host error */
+long long tuo_rt_read_byte_timeout(long long fd, long long ms);
+                          /* byte 0..=255; -1 EOF; -2 host error; -3 timed out */
+long long tuo_rt_connect_timeout(const unsigned char *ptr,
+                                 unsigned long long len,
+                                 long long port, long long ms);
+                          /* fd >= 0; -3 timed out; -1 host error */
+```
+
+- **A timeout is not an error**, and the ABI keeps them distinguishable: the
+  timeout sentinel is `-3` (`tuo_runtime::effect::NET_TIMEOUT`). The seam
+  already spends `-1` (`NET_ERROR`, and `read_byte`'s `READ_EOF`) and `-2`
+  (`read_byte`'s `READ_ERROR`), and `read_byte_timeout` is the call where all
+  four outcomes — a byte, end of input, a host error, and a timeout — are
+  simultaneously possible, so `-3` is the first value that stays unambiguous
+  everywhere. A program must be able to tell "the peer is slow" from "the peer
+  is gone", so collapsing them would lose the only information a bounded wait
+  exists to provide.
+- **The deadline is honored across `EINTR`.** Each symbol computes a
+  `CLOCK_MONOTONIC` deadline once and re-derives the remaining time on every
+  retry (the shared `tuo_rt_poll_until` helper), so a signal storm cannot
+  extend the wait past `ms`. A retry that finds no time left reports the
+  timeout rather than polling again.
+- **A negative `ms` is a host error** (`-1`), never an unbounded wait: a
+  bounded primitive must not silently become a blocking one. An `ms` of `0`
+  is a valid poll that returns immediately.
+- `connect_timeout` performs the handshake on a temporarily non-blocking
+  descriptor (`O_NONBLOCK`, restored before returning), polling `POLLOUT` and
+  consulting `SO_ERROR` — the standard bounded-connect idiom. `EISCONN` on a
+  retry is success, matching `tuo_rt_connect`'s existing policy.
+- `read_byte_timeout` is a **descriptor** operation, not a socket-only one: it
+  applies to any descriptor the seam produces, ADR-0013 files included.
+
+## IPv6 symbols (ADR-0017)
+
+ADR-0017 admits IPv6 on the same seam. The **client** side gains no new
+symbol: `tuo_rt_connect` and `tuo_rt_connect_timeout` now parse their numeric
+host into either family (`inet_pton` `AF_INET`, then `AF_INET6`) and open a
+socket of the matching family. This is a strict widening — every host string
+that parsed before parses identically. The **server** side cannot infer a
+family from a port alone, so it gains two symbols:
+
+```c
+long long tuo_rt_listen6(long long port);     /* fd >= 0; -1 host error */
+long long tuo_rt_peer_family(long long fd);   /* 4 or 6; -1 host error */
+```
+
+- `tuo_rt_listen6` binds `[::1]:port` — loopback only, for the same reason
+  ADR-0014 gave — with `SO_REUSEADDR` and **`IPV6_V6ONLY`**. The v6-only
+  setting is load-bearing: a dual-stack listener would also accept
+  v4-mapped connections, making `tuo_rt_peer_family` ambiguous.
+- `tuo_rt_peer_family` reports `4`/`6` (`FAMILY_IPV4`/`FAMILY_IPV6`) rather
+  than the host's `AF_INET`/`AF_INET6`, whose numeric values are not
+  portable.
+- `tuo_rt_bound_port` reads the port through `sockaddr_storage`, switching on
+  `ss_family`, so it serves both families and passes a correctly-sized
+  address length.
+
+## UDP symbols (ADR-0017)
+
+ADR-0017 adds datagram sockets. A datagram is a **message**, not a stream, so
+a receive reports the message boundary and stages the payload; a dedicated
+indexer reads it. The stream-side `tuo_rt_read_byte` is deliberately
+untouched — it calls `read(2)` directly and never consults the staging table,
+so no file or TCP read pays for UDP's existence.
+
+```c
+long long tuo_rt_udp_bind(long long port);    /* fd >= 0; -1 host error */
+long long tuo_rt_udp_send(long long fd, const unsigned char *hptr,
+                          unsigned long long hlen, long long port,
+                          const unsigned char *bptr,
+                          unsigned long long blen);
+                          /* bytes sent >= 0; -1 host error */
+long long tuo_rt_udp_recv(long long fd, long long ms);
+                          /* datagram length >= 0; -3 timed out; -1 error */
+long long tuo_rt_udp_byte_at(long long fd, long long i);
+                          /* byte 0..=255; -1 out of range / nothing staged */
+long long tuo_rt_udp_peer_port(long long fd);
+                          /* source port of the last recv; -1 if none */
+```
+
+- `tuo_rt_udp_send` is the seam's first **four-operand** effect and carries
+  two `Str` values, so it takes six machine arguments (`{ptr, len}` each).
+  The host address is parsed by the same `tuo_rt_addr_parse` helper
+  `tuo_rt_connect` uses, so a datagram reaches either family.
+- **Staging state.** `tuo_rt_udp_recv` `recvfrom`s into a fixed per-descriptor
+  slot (a 16-entry table of `UDP_DATAGRAM_CAP` = 2048-byte buffers), recording
+  the length and the sender's port. This is the socket seam's first
+  per-descriptor state; it is process-lived like the ADR-0015 handle
+  registries, so it adds no new lifetime concept. A datagram larger than the
+  cap is **truncated while its true length is still reported**, exactly as
+  `recvfrom` itself behaves — so `udp_byte_at` only serves indices actually
+  captured.
+- `tuo_rt_udp_peer_port` is what lets a datagram server reply to whoever wrote
+  to it. The source *address* is not exposed as a `Str` in this version:
+  returning host-allocated text needs a `String`-producing effect shape the
+  seam has never had.
+
+Additive — no layout changed; the landing commit bumped `ABI_VERSION` to `10`
+together with the pins (`tuo-runtime`'s `effect` tests and
+`tuo-cli/tests/effects_native.rs`'s bounded-wait, IPv6, and UDP roundtrips).
+
 ## Memory allocation boundary
 
 All heap memory (`Box`, `Shared`, `String`, `Array`) is acquired and released
@@ -668,7 +778,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `6`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `10`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -688,5 +798,17 @@ unlayoutable type gaining a layout is a layout-affecting change, so the version
 bumps. Version `6` (ADR-0011) gave the **map type** (`Ty::Map`) its three-word
 header layout and added the `tuo_rt_map_*` runtime symbols (and, with
 ADR-0007, the `tuo_rt_par_map` fork-join symbol); a new heap layout is
-layout-affecting, so the version bumps. The version is asserted by the crate's
+layout-affecting, so the version bumps. Version `7` (ADR-0013) added the OS
+effect symbols (`tuo_rt_now_nanos`, `tuo_rt_arg_count`, `tuo_rt_arg_byte`,
+`tuo_rt_open`, `tuo_rt_close`, `tuo_rt_remove_file`); no layout changed.
+Version `8` (ADR-0014) added the socket symbols (`tuo_rt_listen`,
+`tuo_rt_bound_port`, `tuo_rt_accept`, `tuo_rt_connect`); no layout changed.
+Version `9` (ADR-0015) added the channel and mutex symbols (`tuo_rt_chan_*`,
+`tuo_rt_mutex_*`); no layout changed. Version `10` (ADR-0017) added the
+bounded-wait symbols (`tuo_rt_accept_timeout`, `tuo_rt_connect_timeout`,
+`tuo_rt_read_byte_timeout`), the distinct `-3` timeout sentinel, and the IPv6
+symbols (`tuo_rt_listen6`, `tuo_rt_peer_family`, plus a family-inferring
+`tuo_rt_connect`), and the UDP symbols (`tuo_rt_udp_bind`/`send`/`recv`/
+`byte_at`/`peer_port`); no layout changed, but the new sentinel gives a
+previously-unused return value a meaning, so the version bumps. The version is asserted by the crate's
 tests so a silent reinterpretation of bytes is impossible.

@@ -117,6 +117,77 @@ pub const ACCEPT_SYMBOL: &str = "tuo_rt_accept";
 pub const CONNECT_SYMBOL: &str = "tuo_rt_connect";
 
 /// The name of the C-ABI symbol generated code calls for
+/// `std::rt::accept_timeout` (ADR-0017): `long long
+/// tuo_rt_accept_timeout(long long fd, long long ms)` — accept one pending
+/// connection, waiting at most `ms` milliseconds; the connected descriptor
+/// (`>= 0`), [`NET_TIMEOUT`], or [`NET_ERROR`].
+pub const ACCEPT_TIMEOUT_SYMBOL: &str = "tuo_rt_accept_timeout";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::listen6`
+/// (ADR-0017): `long long tuo_rt_listen6(long long port)` — an IPv6 TCP
+/// socket bound to `[::1]:port` and listening (`IPV6_V6ONLY`, loopback
+/// only); the listening descriptor (`>= 0`) or [`NET_ERROR`].
+pub const LISTEN6_SYMBOL: &str = "tuo_rt_listen6";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::peer_family` (ADR-0017): `long long tuo_rt_peer_family(long
+/// long fd)` — the address family of a descriptor as [`FAMILY_IPV4`] or
+/// [`FAMILY_IPV6`], or [`NET_ERROR`] on host error.
+pub const PEER_FAMILY_SYMBOL: &str = "tuo_rt_peer_family";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::udp_bind`
+/// (ADR-0017): `long long tuo_rt_udp_bind(long long port)` — an IPv4 UDP
+/// socket bound to `127.0.0.1:port`; the descriptor (`>= 0`) or
+/// [`NET_ERROR`].
+pub const UDP_BIND_SYMBOL: &str = "tuo_rt_udp_bind";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::udp_send`
+/// (ADR-0017): `long long tuo_rt_udp_send(long long fd, const unsigned char
+/// *hptr, unsigned long long hlen, long long port, const unsigned char
+/// *bptr, unsigned long long blen)` — send one datagram; the byte count
+/// (`>= 0`) or [`NET_ERROR`].
+pub const UDP_SEND_SYMBOL: &str = "tuo_rt_udp_send";
+
+/// The name of the C-ABI symbol generated code calls for `std::rt::udp_recv`
+/// (ADR-0017): `long long tuo_rt_udp_recv(long long fd, long long ms)` —
+/// receive one datagram into the descriptor's staging buffer; its length
+/// (`>= 0`), [`NET_TIMEOUT`], or [`NET_ERROR`]. The bytes are then drained
+/// with [`READ_BYTE_SYMBOL`].
+pub const UDP_RECV_SYMBOL: &str = "tuo_rt_udp_recv";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::udp_byte_at` (ADR-0017): `long long tuo_rt_udp_byte_at(long
+/// long fd, long long i)` — byte `i` of the datagram most recently staged on
+/// `fd` (`0..=255`), or [`NET_ERROR`] when `i` is out of range or nothing is
+/// staged.
+pub const UDP_BYTE_AT_SYMBOL: &str = "tuo_rt_udp_byte_at";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::udp_peer_port` (ADR-0017): `long long
+/// tuo_rt_udp_peer_port(long long fd)` — the source port of the most recent
+/// [`UDP_RECV_SYMBOL`] on `fd`, or [`NET_ERROR`] if there was none.
+pub const UDP_PEER_PORT_SYMBOL: &str = "tuo_rt_udp_peer_port";
+
+/// The bound on one staged datagram (ADR-0017). A larger datagram is
+/// truncated to this many bytes while [`UDP_RECV_SYMBOL`] still reports the
+/// true length, matching `recvfrom`'s own semantics.
+pub const UDP_DATAGRAM_CAP: i64 = 2048;
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::connect_timeout` (ADR-0017): `long long
+/// tuo_rt_connect_timeout(const unsigned char *ptr, unsigned long long len,
+/// long long port, long long ms)` — as [`CONNECT_SYMBOL`], abandoning the
+/// handshake after `ms` milliseconds; [`NET_TIMEOUT`] on timeout.
+pub const CONNECT_TIMEOUT_SYMBOL: &str = "tuo_rt_connect_timeout";
+
+/// The name of the C-ABI symbol generated code calls for
+/// `std::rt::read_byte_timeout` (ADR-0017): `long long
+/// tuo_rt_read_byte_timeout(long long fd, long long ms)` — as
+/// [`READ_BYTE_SYMBOL`], waiting at most `ms` milliseconds for readability;
+/// the byte, [`READ_EOF`], [`NET_TIMEOUT`], or [`READ_ERROR`].
+pub const READ_BYTE_TIMEOUT_SYMBOL: &str = "tuo_rt_read_byte_timeout";
+
+/// The name of the C-ABI symbol generated code calls for
 /// `std::rt::chan_new` (ADR-0015): `long long tuo_rt_chan_new(void)` — a
 /// process-lived channel handle (`>= 0`) or [`SYNC_ERROR`] on registry
 /// exhaustion.
@@ -190,6 +261,29 @@ pub const FILE_ERROR: i64 = -1;
 /// failure is environmental, and v0 programs branch only on "descriptor or
 /// not".
 pub const NET_ERROR: i64 = -1;
+
+/// The value the ADR-0017 bounded-wait symbols return when their deadline
+/// passed with nothing to report.
+///
+/// This is deliberately **distinct from every other sentinel the seam
+/// already uses**: a timeout is not a failure, and a program must be able to
+/// tell "the peer is slow" from "the peer is gone". `-1` is taken by
+/// [`NET_ERROR`] and [`READ_EOF`], and `-2` is taken by [`READ_ERROR`] — so
+/// the timeout is `-3`, the first value that stays unambiguous on
+/// `read_byte_timeout`, where all four outcomes (byte, EOF, host error,
+/// timeout) can occur on one call. A negative `ms` is a host error, never an
+/// unbounded wait — a bounded primitive must not silently become a blocking
+/// one.
+pub const NET_TIMEOUT: i64 = -3;
+
+/// The value [`PEER_FAMILY_SYMBOL`] returns for an IPv4 descriptor
+/// (ADR-0017). Spelled as the familiar version number rather than the host's
+/// `AF_INET`, whose numeric value is not portable.
+pub const FAMILY_IPV4: i64 = 4;
+
+/// The value [`PEER_FAMILY_SYMBOL`] returns for an IPv6 descriptor
+/// (ADR-0017). See [`FAMILY_IPV4`].
+pub const FAMILY_IPV6: i64 = 6;
 
 /// The value the ADR-0015 channel and mutex symbols return on any error —
 /// an invalid handle, an exhausted registry, a send of a negative value or
@@ -427,6 +521,32 @@ pub fn effect_runtime_c_source() -> String {
          #include <sys/socket.h>\n\
          #include <netinet/in.h>\n\
          #include <arpa/inet.h>\n\
+         #include <poll.h>\n\
+         \n\
+         /* ADR-0017: parse a numeric host into either family. Tries v4 then\n\
+         \x20  v6, so every string that parsed before parses identically and\n\
+         \x20  `::1` now works too. Returns the socket family, or -1. */\n\
+         static int tuo_rt_addr_parse(const char *host, long long port,\n\
+         \x20                        struct sockaddr_storage *out,\n\
+         \x20                        socklen_t *outlen) {{\n\
+         \x20   struct sockaddr_in *v4 = (struct sockaddr_in *)out;\n\
+         \x20   struct sockaddr_in6 *v6 = (struct sockaddr_in6 *)out;\n\
+         \x20   memset(out, 0, sizeof(*out));\n\
+         \x20   if (inet_pton(AF_INET, host, &v4->sin_addr) == 1) {{\n\
+         \x20       v4->sin_family = AF_INET;\n\
+         \x20       v4->sin_port = htons((unsigned short)port);\n\
+         \x20       *outlen = sizeof(*v4);\n\
+         \x20       return AF_INET;\n\
+         \x20   }}\n\
+         \x20   memset(out, 0, sizeof(*out));\n\
+         \x20   if (inet_pton(AF_INET6, host, &v6->sin6_addr) == 1) {{\n\
+         \x20       v6->sin6_family = AF_INET6;\n\
+         \x20       v6->sin6_port = htons((unsigned short)port);\n\
+         \x20       *outlen = sizeof(*v6);\n\
+         \x20       return AF_INET6;\n\
+         \x20   }}\n\
+         \x20   return -1;\n\
+         }}\n\
          \n\
          long long {LISTEN_SYMBOL}(long long port) {{\n\
          \x20   struct sockaddr_in addr;\n\
@@ -448,12 +568,55 @@ pub fn effect_runtime_c_source() -> String {
          \x20   return (long long)fd;\n\
          }}\n\
          \n\
+         /* ADR-0017 widened this to read the port from either family via\n\
+         \x20  sockaddr_storage + ss_family. On the targeted POSIX layouts\n\
+         \x20  sin_port and sin6_port share offset 2, so the v4-only spelling\n\
+         \x20  read the right bytes by coincidence -- but it also passed a\n\
+         \x20  too-small sizeof(sockaddr_in) for a v6 address. This form is\n\
+         \x20  correct by construction rather than by layout accident. */\n\
          long long {BOUND_PORT_SYMBOL}(long long fd) {{\n\
-         \x20   struct sockaddr_in addr;\n\
+         \x20   struct sockaddr_storage addr;\n\
          \x20   socklen_t alen = sizeof(addr);\n\
          \x20   if (getsockname((int)fd, (struct sockaddr *)&addr, &alen) != 0)\n\
          \x20       return {NET_ERROR};\n\
-         \x20   return (long long)ntohs(addr.sin_port);\n\
+         \x20   if (addr.ss_family == AF_INET)\n\
+         \x20       return (long long)ntohs(((struct sockaddr_in *)&addr)->sin_port);\n\
+         \x20   if (addr.ss_family == AF_INET6)\n\
+         \x20       return (long long)ntohs(((struct sockaddr_in6 *)&addr)->sin6_port);\n\
+         \x20   return {NET_ERROR};\n\
+         }}\n\
+         \n\
+         long long {LISTEN6_SYMBOL}(long long port) {{\n\
+         \x20   struct sockaddr_in6 addr;\n\
+         \x20   int one = 1;\n\
+         \x20   int fd;\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   fd = socket(AF_INET6, SOCK_STREAM, 0);\n\
+         \x20   if (fd < 0) return {NET_ERROR};\n\
+         \x20   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));\n\
+         \x20   /* v6-only: a dual-stack socket would also accept mapped v4,\n\
+         \x20      making `peer_family` ambiguous on an accepted connection. */\n\
+         \x20   setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &one, sizeof(one));\n\
+         \x20   memset(&addr, 0, sizeof(addr));\n\
+         \x20   addr.sin6_family = AF_INET6;\n\
+         \x20   addr.sin6_port = htons((unsigned short)port);\n\
+         \x20   addr.sin6_addr = in6addr_loopback;\n\
+         \x20   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0 ||\n\
+         \x20       listen(fd, 16) != 0) {{\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         \x20   return (long long)fd;\n\
+         }}\n\
+         \n\
+         long long {PEER_FAMILY_SYMBOL}(long long fd) {{\n\
+         \x20   struct sockaddr_storage addr;\n\
+         \x20   socklen_t alen = sizeof(addr);\n\
+         \x20   if (getsockname((int)fd, (struct sockaddr *)&addr, &alen) != 0)\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   if (addr.ss_family == AF_INET) return {FAMILY_IPV4};\n\
+         \x20   if (addr.ss_family == AF_INET6) return {FAMILY_IPV6};\n\
+         \x20   return {NET_ERROR};\n\
          }}\n\
          \n\
          long long {ACCEPT_SYMBOL}(long long fd) {{\n\
@@ -468,18 +631,17 @@ pub fn effect_runtime_c_source() -> String {
          long long {CONNECT_SYMBOL}(const unsigned char *ptr, unsigned long long len,\n\
          \x20                       long long port) {{\n\
          \x20   char host[64];\n\
-         \x20   struct sockaddr_in addr;\n\
-         \x20   int fd;\n\
+         \x20   struct sockaddr_storage addr;\n\
+         \x20   socklen_t alen;\n\
+         \x20   int family, fd;\n\
          \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
          \x20   if (!tuo_rt_path_copy(host, sizeof(host), ptr, len)) return {NET_ERROR};\n\
-         \x20   memset(&addr, 0, sizeof(addr));\n\
-         \x20   addr.sin_family = AF_INET;\n\
-         \x20   addr.sin_port = htons((unsigned short)port);\n\
-         \x20   if (inet_pton(AF_INET, host, &addr.sin_addr) != 1) return {NET_ERROR};\n\
-         \x20   fd = socket(AF_INET, SOCK_STREAM, 0);\n\
+         \x20   family = tuo_rt_addr_parse(host, port, &addr, &alen);\n\
+         \x20   if (family < 0) return {NET_ERROR};\n\
+         \x20   fd = socket(family, SOCK_STREAM, 0);\n\
          \x20   if (fd < 0) return {NET_ERROR};\n\
          \x20   for (;;) {{\n\
-         \x20       if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0)\n\
+         \x20       if (connect(fd, (struct sockaddr *)&addr, alen) == 0)\n\
          \x20           return (long long)fd;\n\
          \x20       /* An EINTR'd connect may complete asynchronously: a retry\n\
          \x20          reporting EISCONN is success, not failure. */\n\
@@ -488,6 +650,227 @@ pub fn effect_runtime_c_source() -> String {
          \x20       close(fd);\n\
          \x20       return {NET_ERROR};\n\
          \x20   }}\n\
+         }}\n\
+         \n\
+         /* ADR-0017: bounded waits. Each computes a monotonic deadline once\n\
+         \x20  and re-derives the remaining time on every EINTR retry, so a\n\
+         \x20  signal storm can never extend the wait past `ms`. A negative\n\
+         \x20  `ms` is a host error, never an unbounded wait. */\n\
+         static int tuo_rt_poll_until(int fd, short events, long long ms) {{\n\
+         \x20   struct timespec start;\n\
+         \x20   struct pollfd pfd;\n\
+         \x20   if (ms < 0) return -1;\n\
+         \x20   if (clock_gettime(CLOCK_MONOTONIC, &start) != 0) return -1;\n\
+         \x20   pfd.fd = fd;\n\
+         \x20   pfd.events = events;\n\
+         \x20   for (;;) {{\n\
+         \x20       struct timespec now;\n\
+         \x20       long long elapsed, remaining;\n\
+         \x20       int n;\n\
+         \x20       pfd.revents = 0;\n\
+         \x20       if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return -1;\n\
+         \x20       elapsed = (long long)(now.tv_sec - start.tv_sec) * 1000\n\
+         \x20               + (long long)(now.tv_nsec - start.tv_nsec) / 1000000;\n\
+         \x20       remaining = ms - elapsed;\n\
+         \x20       if (remaining < 0) remaining = 0;\n\
+         \x20       n = poll(&pfd, 1, (int)remaining);\n\
+         \x20       if (n > 0) return 1;   /* ready */\n\
+         \x20       if (n == 0) return 0;  /* timed out */\n\
+         \x20       if (errno == EINTR) {{\n\
+         \x20           if (remaining == 0) return 0;\n\
+         \x20           continue;\n\
+         \x20       }}\n\
+         \x20       return -1;\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {ACCEPT_TIMEOUT_SYMBOL}(long long fd, long long ms) {{\n\
+         \x20   int ready = tuo_rt_poll_until((int)fd, POLLIN, ms);\n\
+         \x20   if (ready < 0) return {NET_ERROR};\n\
+         \x20   if (ready == 0) return {NET_TIMEOUT};\n\
+         \x20   for (;;) {{\n\
+         \x20       int conn = accept((int)fd, 0, 0);\n\
+         \x20       if (conn >= 0) return (long long)conn;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {READ_BYTE_TIMEOUT_SYMBOL}(long long fd, long long ms) {{\n\
+         \x20   unsigned char byte;\n\
+         \x20   int ready = tuo_rt_poll_until((int)fd, POLLIN, ms);\n\
+         \x20   if (ready < 0) return {READ_ERROR};\n\
+         \x20   if (ready == 0) return {NET_TIMEOUT};\n\
+         \x20   for (;;) {{\n\
+         \x20       ssize_t n = read((int)fd, &byte, 1);\n\
+         \x20       if (n == 1) return (long long)byte;\n\
+         \x20       if (n == 0) return {READ_EOF};\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return {READ_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {CONNECT_TIMEOUT_SYMBOL}(const unsigned char *ptr,\n\
+         \x20                              unsigned long long len,\n\
+         \x20                              long long port, long long ms) {{\n\
+         \x20   char host[64];\n\
+         \x20   struct sockaddr_storage addr;\n\
+         \x20   socklen_t alen;\n\
+         \x20   int family, fd, flags, ready, err = 0;\n\
+         \x20   socklen_t errlen = sizeof(err);\n\
+         \x20   if (ms < 0) return {NET_ERROR};\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   if (!tuo_rt_path_copy(host, sizeof(host), ptr, len)) return {NET_ERROR};\n\
+         \x20   family = tuo_rt_addr_parse(host, port, &addr, &alen);\n\
+         \x20   if (family < 0) return {NET_ERROR};\n\
+         \x20   fd = socket(family, SOCK_STREAM, 0);\n\
+         \x20   if (fd < 0) return {NET_ERROR};\n\
+         \x20   /* Non-blocking for the bounded handshake, restored on success. */\n\
+         \x20   flags = fcntl(fd, F_GETFL, 0);\n\
+         \x20   if (flags < 0 || fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0) {{\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         \x20   for (;;) {{\n\
+         \x20       if (connect(fd, (struct sockaddr *)&addr, alen) == 0) break;\n\
+         \x20       if (errno == EISCONN) break;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       if (errno == EINPROGRESS || errno == EALREADY) {{\n\
+         \x20           ready = tuo_rt_poll_until(fd, POLLOUT, ms);\n\
+         \x20           if (ready < 0) {{ close(fd); return {NET_ERROR}; }}\n\
+         \x20           if (ready == 0) {{ close(fd); return {NET_TIMEOUT}; }}\n\
+         \x20           if (getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen) != 0\n\
+         \x20               || err != 0) {{\n\
+         \x20               close(fd);\n\
+         \x20               return {NET_ERROR};\n\
+         \x20           }}\n\
+         \x20           break;\n\
+         \x20       }}\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         \x20   if (fcntl(fd, F_SETFL, flags) < 0) {{ close(fd); return {NET_ERROR}; }}\n\
+         \x20   return (long long)fd;\n\
+         }}\n\
+         \n\
+         /* ADR-0017: UDP. A datagram is a message, not a stream, so a\n\
+         \x20  receive reports the boundary (its length) and stages the\n\
+         \x20  payload; tuo_rt_udp_byte_at indexes it. The staging table is a\n\
+         \x20  small fixed array keyed by descriptor -- process-lived like the\n\
+         \x20  ADR-0015 handle registries, so it introduces no new lifetime\n\
+         \x20  concept -- and a datagram larger than the cap is truncated\n\
+         \x20  while the true length is still reported, exactly as recvfrom\n\
+         \x20  itself behaves. */\n\
+         #define TUO_RT_UDP_SLOTS 16\n\
+         \n\
+         struct tuo_rt_udp_slot {{\n\
+         \x20   int fd;\n\
+         \x20   int used;\n\
+         \x20   long long len;\n\
+         \x20   long long peer_port;\n\
+         \x20   unsigned char bytes[{UDP_DATAGRAM_CAP}];\n\
+         }};\n\
+         \n\
+         static struct tuo_rt_udp_slot tuo_rt_udp_slots[TUO_RT_UDP_SLOTS];\n\
+         \n\
+         static struct tuo_rt_udp_slot *tuo_rt_udp_slot_for(int fd, int create) {{\n\
+         \x20   int i;\n\
+         \x20   for (i = 0; i < TUO_RT_UDP_SLOTS; i++)\n\
+         \x20       if (tuo_rt_udp_slots[i].used && tuo_rt_udp_slots[i].fd == fd)\n\
+         \x20           return &tuo_rt_udp_slots[i];\n\
+         \x20   if (!create) return 0;\n\
+         \x20   for (i = 0; i < TUO_RT_UDP_SLOTS; i++)\n\
+         \x20       if (!tuo_rt_udp_slots[i].used) {{\n\
+         \x20           tuo_rt_udp_slots[i].used = 1;\n\
+         \x20           tuo_rt_udp_slots[i].fd = fd;\n\
+         \x20           tuo_rt_udp_slots[i].len = -1;\n\
+         \x20           tuo_rt_udp_slots[i].peer_port = -1;\n\
+         \x20           return &tuo_rt_udp_slots[i];\n\
+         \x20       }}\n\
+         \x20   return 0;\n\
+         }}\n\
+         \n\
+         long long {UDP_BIND_SYMBOL}(long long port) {{\n\
+         \x20   struct sockaddr_in addr;\n\
+         \x20   int one = 1;\n\
+         \x20   int fd;\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   fd = socket(AF_INET, SOCK_DGRAM, 0);\n\
+         \x20   if (fd < 0) return {NET_ERROR};\n\
+         \x20   setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));\n\
+         \x20   memset(&addr, 0, sizeof(addr));\n\
+         \x20   addr.sin_family = AF_INET;\n\
+         \x20   addr.sin_port = htons((unsigned short)port);\n\
+         \x20   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);\n\
+         \x20   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {{\n\
+         \x20       close(fd);\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         \x20   return (long long)fd;\n\
+         }}\n\
+         \n\
+         long long {UDP_SEND_SYMBOL}(long long fd, const unsigned char *hptr,\n\
+         \x20                       unsigned long long hlen, long long port,\n\
+         \x20                       const unsigned char *bptr,\n\
+         \x20                       unsigned long long blen) {{\n\
+         \x20   char host[64];\n\
+         \x20   struct sockaddr_storage addr;\n\
+         \x20   socklen_t alen;\n\
+         \x20   if (port < 0 || port > 65535) return {NET_ERROR};\n\
+         \x20   if (!tuo_rt_path_copy(host, sizeof(host), hptr, hlen)) return {NET_ERROR};\n\
+         \x20   if (tuo_rt_addr_parse(host, port, &addr, &alen) < 0) return {NET_ERROR};\n\
+         \x20   for (;;) {{\n\
+         \x20       ssize_t n = sendto((int)fd, bptr, (size_t)blen, 0,\n\
+         \x20                          (struct sockaddr *)&addr, alen);\n\
+         \x20       if (n >= 0) return (long long)n;\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {UDP_RECV_SYMBOL}(long long fd, long long ms) {{\n\
+         \x20   struct tuo_rt_udp_slot *slot;\n\
+         \x20   struct sockaddr_storage from;\n\
+         \x20   socklen_t flen = sizeof(from);\n\
+         \x20   int ready = tuo_rt_poll_until((int)fd, POLLIN, ms);\n\
+         \x20   if (ready < 0) return {NET_ERROR};\n\
+         \x20   if (ready == 0) return {NET_TIMEOUT};\n\
+         \x20   slot = tuo_rt_udp_slot_for((int)fd, 1);\n\
+         \x20   if (!slot) return {NET_ERROR};\n\
+         \x20   for (;;) {{\n\
+         \x20       ssize_t n = recvfrom((int)fd, slot->bytes, sizeof(slot->bytes),\n\
+         \x20                            0, (struct sockaddr *)&from, &flen);\n\
+         \x20       if (n >= 0) {{\n\
+         \x20           slot->len = (long long)n;\n\
+         \x20           if (from.ss_family == AF_INET)\n\
+         \x20               slot->peer_port =\n\
+         \x20                   (long long)ntohs(((struct sockaddr_in *)&from)->sin_port);\n\
+         \x20           else if (from.ss_family == AF_INET6)\n\
+         \x20               slot->peer_port =\n\
+         \x20                   (long long)ntohs(((struct sockaddr_in6 *)&from)->sin6_port);\n\
+         \x20           else slot->peer_port = -1;\n\
+         \x20           return slot->len;\n\
+         \x20       }}\n\
+         \x20       if (errno == EINTR) continue;\n\
+         \x20       return {NET_ERROR};\n\
+         \x20   }}\n\
+         }}\n\
+         \n\
+         long long {UDP_BYTE_AT_SYMBOL}(long long fd, long long i) {{\n\
+         \x20   struct tuo_rt_udp_slot *slot = tuo_rt_udp_slot_for((int)fd, 0);\n\
+         \x20   long long staged;\n\
+         \x20   if (!slot || slot->len < 0) return {NET_ERROR};\n\
+         \x20   /* A truncated datagram reports its true length, so only the\n\
+         \x20      bytes actually captured are readable. */\n\
+         \x20   staged = slot->len < {UDP_DATAGRAM_CAP} ? slot->len : {UDP_DATAGRAM_CAP};\n\
+         \x20   if (i < 0 || i >= staged) return {NET_ERROR};\n\
+         \x20   return (long long)slot->bytes[i];\n\
+         }}\n\
+         \n\
+         long long {UDP_PEER_PORT_SYMBOL}(long long fd) {{\n\
+         \x20   struct tuo_rt_udp_slot *slot = tuo_rt_udp_slot_for((int)fd, 0);\n\
+         \x20   if (!slot || slot->len < 0) return {NET_ERROR};\n\
+         \x20   return slot->peer_port;\n\
          }}\n\
          \n\
          /* ADR-0015: channels and mutexes — communication over the effect\n\

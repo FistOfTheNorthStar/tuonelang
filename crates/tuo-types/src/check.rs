@@ -285,6 +285,21 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
             (vec![Ty::int()], Ty::int())
         }
         Builtin::RtConnect => (vec![Ty::Str, Ty::int()], Ty::int()),
+        // ADR-0017: bounded-wait counterparts to the three operations that
+        // can otherwise block forever. The trailing `Int` is the deadline in
+        // milliseconds; the result adds a distinct `-2` timeout sentinel.
+        Builtin::RtAcceptTimeout | Builtin::RtReadByteTimeout => {
+            (vec![Ty::int(), Ty::int()], Ty::int())
+        }
+        Builtin::RtConnectTimeout => (vec![Ty::Str, Ty::int(), Ty::int()], Ty::int()),
+        // ADR-0017: the IPv6 server-side pair — a family cannot be inferred
+        // from a port, so listening and reporting are explicit.
+        Builtin::RtListen6 | Builtin::RtPeerFamily => (vec![Ty::int()], Ty::int()),
+        // ADR-0017: UDP — a datagram is a message, so a receive reports its
+        // length and stages the payload for `udp_byte_at` to index.
+        Builtin::RtUdpBind | Builtin::RtUdpPeerPort => (vec![Ty::int()], Ty::int()),
+        Builtin::RtUdpSend => (vec![Ty::int(), Ty::Str, Ty::int(), Ty::Str], Ty::int()),
+        Builtin::RtUdpRecv | Builtin::RtUdpByteAt => (vec![Ty::int(), Ty::int()], Ty::int()),
         // ADR-0015: channels and mutexes — runtime-owned objects behind
         // opaque `Int` handles, the same shape as a descriptor.
         Builtin::RtChanNew | Builtin::RtMutexNew => (Vec::new(), Ty::int()),

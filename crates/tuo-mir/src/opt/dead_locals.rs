@@ -11,7 +11,11 @@
 //!    a `MIN` negation) is *kept* even when its result is unread, because the
 //!    trap itself is observable. A `Call` is never removed: it may diverge,
 //!    trap, or mutate a `mut`-borrowed argument, all observable regardless of
-//!    whether its return value is used.
+//!    whether its return value is used. For the same reason a write to a
+//!    **borrow-mode parameter** is never dead: that local names the caller's
+//!    place (`specification/abi.md` — an `in`/`mut` borrow passes a pointer),
+//!    so the store is observable after the call returns even though nothing
+//!    in this function reads it back.
 //! 2. **Dead local removal.** After dead stores are gone, any local that is
 //!    now referenced nowhere — not by a parameter slot, not by any place,
 //!    operand, argument, or index — is deleted and the remaining locals are
@@ -63,8 +67,14 @@ impl Pass for DeadLocals {
 /// Delete `Assign` statements whose destination is a whole (unprojected)
 /// local that is read nowhere and whose rvalue cannot trap. Returns whether
 /// anything was removed.
+///
+/// A write to a **borrow-mode parameter** is never dead: the local names the
+/// *caller's* place, so the store is observable after the call returns even
+/// though nothing in this function reads it back. This is the same reason a
+/// `Call` survives, applied to the direct write.
 fn remove_dead_stores(function: &mut Function) -> bool {
     let read = read_locals(function);
+    let borrow_params = borrow_param_locals(function);
     let mut changed = false;
     for block in &mut function.blocks {
         let before = block.statements.len();
@@ -72,6 +82,7 @@ fn remove_dead_stores(function: &mut Function) -> bool {
             Statement::Assign { place, rvalue } => {
                 let dead = place.projection.is_empty()
                     && !read.contains(&place.local.0)
+                    && !borrow_params.contains(&place.local.0)
                     && !rvalue_can_trap(rvalue);
                 !dead
             }
@@ -87,6 +98,22 @@ fn remove_dead_stores(function: &mut Function) -> bool {
         changed |= block.statements.len() != before;
     }
     changed
+}
+
+/// The locals that are **borrow-mode parameters** (`in`/`mut`). Such a local
+/// is a pointer to the caller's place, so a write through it outlives the
+/// call and must never be treated as a dead store. (`in` is included for
+/// safety: the ownership checker forbids writing through a shared borrow, so
+/// the set is `mut` in practice, but keying on "not by value" cannot go
+/// stale if a future mode is added.)
+fn borrow_param_locals(function: &Function) -> BTreeSet<u32> {
+    function
+        .params
+        .iter()
+        .enumerate()
+        .filter(|(_, mode)| **mode != crate::mir::PassMode::Value)
+        .filter_map(|(index, _)| u32::try_from(index).ok())
+        .collect()
 }
 
 /// Remove locals referenced nowhere (after dead stores are gone) and renumber
@@ -431,6 +458,36 @@ mod tests {
     // Fixtures use `_0` as a value parameter so it is a retained slot; this
     // keeps the local counts a test asserts about exactly the locals under
     // test (a stray unreferenced local would itself be reclaimed).
+
+    #[test]
+    fn keeps_a_store_to_a_borrow_mut_parameter() {
+        // param _0 is a `mut` borrow: `_0 = const 42` is observable by the
+        // caller even though nothing here reads _0 back, so the store must
+        // survive. (Deleting it silently dropped the write natively while the
+        // interpreter still performed it — a three-way divergence.)
+        let mut function = func(
+            vec![crate::mir::PassMode::BorrowMut],
+            vec![local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(0)),
+                    rvalue: Rvalue::Use(int(42)),
+                }],
+                terminator: Terminator::Return(int(1)),
+            }],
+            Ty::int(),
+        );
+        let changed = DeadLocals.run(&mut function, &TypeckResult::default());
+        assert!(
+            !changed,
+            "nothing is dead: the store is the callee's output"
+        );
+        assert_eq!(
+            function.blocks[0].statements.len(),
+            1,
+            "a write through a `mut` borrow parameter is never a dead store"
+        );
+    }
 
     #[test]
     fn removes_a_dead_pure_store_and_its_local() {

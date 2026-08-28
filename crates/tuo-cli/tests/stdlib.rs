@@ -330,7 +330,10 @@ fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
     // ADR-0013 landed the clock, argv, and file open/close/remove primitives,
     // which made the whole of `std::fs`'s disk tier, `std::process`'s argv
     // pair, and `std::time::now` real; and ADR-0014 landed the socket
-    // primitives, which made the whole of `std::net`'s TCP tier real. The
+    // primitives, which made the whole of `std::net`'s TCP tier real;
+    // ADR-0017 added the bounded-wait counterparts to the three operations
+    // that otherwise block forever, plus the IPv6 server-side pair and the
+    // UDP datagram tier. The
     // effect tier must list exactly the functions those primitives can
     // implement — no more (an over-claim) and no fewer (a stale contract).
     let mut effect_fns = Vec::new();
@@ -353,10 +356,20 @@ fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
             "std::io::println".to_string(),
             "std::io::read_line".to_string(),
             "std::net::accept".to_string(),
+            "std::net::accept_timeout".to_string(),
             "std::net::bound_port".to_string(),
             "std::net::close".to_string(),
             "std::net::connect".to_string(),
+            "std::net::connect_timeout".to_string(),
             "std::net::listen".to_string(),
+            "std::net::listen6".to_string(),
+            "std::net::peer_family".to_string(),
+            "std::net::read_byte_timeout".to_string(),
+            "std::net::udp_bind".to_string(),
+            "std::net::udp_byte_at".to_string(),
+            "std::net::udp_peer_port".to_string(),
+            "std::net::udp_recv".to_string(),
+            "std::net::udp_send".to_string(),
             "std::process::arg".to_string(),
             "std::process::arg_count".to_string(),
             "std::process::exit".to_string(),

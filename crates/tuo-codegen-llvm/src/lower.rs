@@ -2522,7 +2522,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
             // ADR-0014: the socket effects — descriptor producers on the
             // same seam; a `Str` host passes as `{ptr, len}` like a path.
-            EffectOp::Listen | EffectOp::BoundPort | EffectOp::Accept => {
+            EffectOp::Listen
+            | EffectOp::BoundPort
+            | EffectOp::Accept
+            | EffectOp::Listen6
+            | EffectOp::PeerFamily
+            | EffectOp::UdpBind
+            | EffectOp::UdpPeerPort => {
                 let [scalar] = args else {
                     return Err(CodegenError::backend(
                         "listen/bound_port/accept expects exactly 1 argument",
@@ -2550,6 +2556,96 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         "rt_connect",
                     )
                     .map_err(builder_err("calling the connect effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            // ADR-0017: the bounded-wait forms — the same operands as their
+            // blocking counterparts plus a trailing millisecond deadline.
+            EffectOp::AcceptTimeout | EffectOp::ReadByteTimeout => {
+                let [fd, ms] = args else {
+                    return Err(CodegenError::backend(
+                        "accept_timeout/read_byte_timeout expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let ms = self.lower_operand(&value_arg(ms)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[fd.into(), ms.into()],
+                        "rt_timeout",
+                    )
+                    .map_err(builder_err("calling a bounded-wait effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::ConnectTimeout => {
+                let [host, port, ms] = args else {
+                    return Err(CodegenError::backend(
+                        "connect_timeout expects exactly 3 arguments",
+                    ));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let ms = self.lower_operand(&value_arg(ms)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[ptr.into(), len.into(), port.into(), ms.into()],
+                        "rt_connect_timeout",
+                    )
+                    .map_err(builder_err("calling the connect_timeout effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            // ADR-0017: UDP — two-scalar recv/index, and the four-operand
+            // send (two of them `Str`, so six machine arguments).
+            EffectOp::UdpRecv | EffectOp::UdpByteAt => {
+                let [fd, second] = args else {
+                    return Err(CodegenError::backend(
+                        "udp_recv/udp_byte_at expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let second = self.lower_operand(&value_arg(second)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[fd.into(), second.into()],
+                        "rt_udp",
+                    )
+                    .map_err(builder_err("calling a UDP effect"))?;
+                let result = call.try_as_basic_value().unwrap_basic();
+                self.write_place(dest, result)
+            }
+            EffectOp::UdpSend => {
+                let [fd, host, port, bytes] = args else {
+                    return Err(CodegenError::backend(
+                        "udp_send expects exactly 4 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let (hptr, hlen) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let (bptr, blen) = self.str_operand_parts(&value_arg(bytes)?)?;
+                let call = self
+                    .builder
+                    .build_call(
+                        self.effect_function(op),
+                        &[
+                            fd.into(),
+                            hptr.into(),
+                            hlen.into(),
+                            port.into(),
+                            bptr.into(),
+                            blen.into(),
+                        ],
+                        "rt_udp_send",
+                    )
+                    .map_err(builder_err("calling the udp_send effect"))?;
                 let result = call.try_as_basic_value().unwrap_basic();
                 self.write_place(dest, result)
             }
@@ -2678,6 +2774,67 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             EffectOp::Connect => (
                 effect::CONNECT_SYMBOL,
                 i64_ty.fn_type(&[self.ptr_ty.into(), i64_ty.into(), i64_ty.into()], false),
+            ),
+            // ADR-0017: the IPv6 server-side symbols.
+            EffectOp::Listen6 => (
+                effect::LISTEN6_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::PeerFamily => (
+                effect::PEER_FAMILY_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            // ADR-0017: the UDP effect symbols.
+            EffectOp::UdpBind => (
+                effect::UDP_BIND_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::UdpPeerPort => (
+                effect::UDP_PEER_PORT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into()], false),
+            ),
+            EffectOp::UdpRecv => (
+                effect::UDP_RECV_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::UdpByteAt => (
+                effect::UDP_BYTE_AT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::UdpSend => (
+                effect::UDP_SEND_SYMBOL,
+                i64_ty.fn_type(
+                    &[
+                        i64_ty.into(),
+                        self.ptr_ty.into(),
+                        i64_ty.into(),
+                        i64_ty.into(),
+                        self.ptr_ty.into(),
+                        i64_ty.into(),
+                    ],
+                    false,
+                ),
+            ),
+            // ADR-0017: the bounded-wait effect symbols.
+            EffectOp::AcceptTimeout => (
+                effect::ACCEPT_TIMEOUT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::ReadByteTimeout => (
+                effect::READ_BYTE_TIMEOUT_SYMBOL,
+                i64_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false),
+            ),
+            EffectOp::ConnectTimeout => (
+                effect::CONNECT_TIMEOUT_SYMBOL,
+                i64_ty.fn_type(
+                    &[
+                        self.ptr_ty.into(),
+                        i64_ty.into(),
+                        i64_ty.into(),
+                        i64_ty.into(),
+                    ],
+                    false,
+                ),
             ),
             // ADR-0015: the channel and mutex effect symbols.
             EffectOp::ChanNew => (effect::CHAN_NEW_SYMBOL, i64_ty.fn_type(&[], false)),

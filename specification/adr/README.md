@@ -65,6 +65,7 @@ the replacement, preserving the decision history.
 | [ADR-0014](ADR-0014-socket-effects.md) | Socket effects — the network joins the descriptor seam | accepted |
 | [ADR-0015](ADR-0015-channels-and-mutexes.md) | Channels and mutexes — communication joins the effect seam | accepted |
 | [ADR-0016](ADR-0016-json-and-the-data-increment.md) | `std::json` and the data increment — Float elements, indexed writes, and the recursion boundary | accepted |
+| [ADR-0017](ADR-0017-timeouts-ipv6-and-udp.md) | Timeouts, IPv6, and UDP — the socket seam's additive increment | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -140,5 +141,28 @@ increment) closed the recursive-declaration compiler-hang hole with the
 `std::array::set` (the indexed write), and shipped `std::json` — decode,
 navigate, render over an index arena, entirely spec-checked and natively
 pinned — with the gating `json-parse` workload (whose Go peer is
-`encoding/json`). Of the thirteen runtime workloads, **all thirteen now
-measure**. **No ADR remains `proposed`.**
+`encoding/json`). That sweep took the catalog to thirteen measured
+workloads. **ADR-0017** (2026-08-25) is the first ADR opened since that sweep, and takes
+up three of the four items ADR-0014 listed as out of scope and additive
+*"when its need is demonstrated by dogfooding"*: **timeouts** (the strongest
+case — blocking `accept`/`connect`/`read_byte` are an unbounded wait in code
+that already ships, so `examples/http-service` and the `networking` lab
+workload can wedge with no recourse), **IPv6** (a strict widening of `connect`
+plus an explicit `listen6`, since a server cannot infer a family from a port),
+and **UDP** (a transport the seam cannot reach at all). **TLS and DNS stay
+out** — TLS would need a crypto dependency this workspace deliberately avoids,
+and DNS is properly written *in tuonelang* on the UDP primitives this ADR adds.
+It landed in three stages (timeouts → IPv6 → UDP, ABI v10) and is since
+**accepted**: both gating performance-lab workloads are committed and
+measuring — `udp-echo` (against `sendto`/`recvfrom` C and Go's
+`net.ListenPacket`) and `connect-timeout` (against non-blocking
+`connect`+`poll` C and Go's `net.DialTimeout`), the latter a workload that
+**could not be written before this ADR**, since a blocking `connect` has no
+bounded outcome to measure. Of the runtime workloads, **all fifteen now
+measure**. Two design errors were caught by the compiler and the tests rather
+than by review, and both are recorded in the ADR: the timeout sentinel had to
+become `-3` (`-1` and `-2` were already spent, and `read_byte_timeout` is the
+call where all four outcomes are simultaneously possible), and the staged
+datagram needed its own `udp_byte_at` indexer rather than reusing
+`read_byte`, which calls `read(2)` directly and cannot see a runtime buffer.
+**No ADR remains `proposed`.**

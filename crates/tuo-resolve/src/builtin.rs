@@ -101,6 +101,57 @@ pub enum Builtin {
     /// descriptor (`>= 0`) or a negative value on host error. Never traps.
     /// **Effectful.** (ADR-0014.)
     RtConnect,
+    /// `std::rt::accept_timeout(take fd: Int, take ms: Int) -> Int` — as
+    /// [`Self::RtAccept`], but waits at most `ms` milliseconds. Returns the
+    /// connected descriptor (`>= 0`), `-3` when the deadline passed with no
+    /// pending connection, or `-1` on host error. A negative `ms` is a host
+    /// error, never an unbounded wait. Never traps. **Effectful.**
+    /// (ADR-0017.)
+    RtAcceptTimeout,
+    /// `std::rt::connect_timeout(in host: Str, take port: Int, take ms: Int)
+    /// -> Int` — as [`Self::RtConnect`], but abandons the handshake after
+    /// `ms` milliseconds. Returns the connected descriptor (`>= 0`), `-3` on
+    /// timeout, or `-1` on host error. Never traps. **Effectful.**
+    /// (ADR-0017.)
+    RtConnectTimeout,
+    /// `std::rt::read_byte_timeout(take fd: Int, take ms: Int) -> Int` — as
+    /// [`Self::RtReadByte`], but waits at most `ms` milliseconds for
+    /// readability. Returns the byte (`0..=255`), `-1` at end of input, `-2`
+    /// on host error (both as `read_byte`), or `-3` on timeout. Never traps.
+    /// **Effectful.** (ADR-0017.)
+    RtReadByteTimeout,
+    /// `std::rt::listen6(take port: Int) -> Int` — as [`Self::RtListen`],
+    /// but creates an IPv6 TCP socket bound to `[::1]:port` (`IPV6_V6ONLY`,
+    /// loopback only). Returns the listening descriptor (`>= 0`) or `-1` on
+    /// host error. Never traps. **Effectful.** (ADR-0017.)
+    RtListen6,
+    /// `std::rt::peer_family(take fd: Int) -> Int` — the address family of a
+    /// descriptor: `4` for IPv4, `6` for IPv6, or `-1` on host error. Never
+    /// traps. **Effectful.** (ADR-0017.)
+    RtPeerFamily,
+    /// `std::rt::udp_bind(take port: Int) -> Int` — an IPv4 UDP socket bound
+    /// to `127.0.0.1:port`; the descriptor (`>= 0`) or `-1` on host error.
+    /// Port `0` asks for an ephemeral port. Never traps. **Effectful.**
+    /// (ADR-0017.)
+    RtUdpBind,
+    /// `std::rt::udp_send(take fd: Int, in host: Str, take port: Int,
+    /// in bytes: Str) -> Int` — send one datagram; the byte count (`>= 0`)
+    /// or `-1` on host error. Never traps. **Effectful.** (ADR-0017.)
+    RtUdpSend,
+    /// `std::rt::udp_recv(take fd: Int, take ms: Int) -> Int` — receive one
+    /// datagram, waiting at most `ms` milliseconds, and stage it on the
+    /// descriptor; its length (`>= 0`), `-3` on timeout, or `-1` on host
+    /// error. Never traps. **Effectful.** (ADR-0017.)
+    RtUdpRecv,
+    /// `std::rt::udp_byte_at(take fd: Int, take i: Int) -> Int` — byte `i`
+    /// of the datagram most recently staged on `fd` (`0..=255`), or `-1`
+    /// when `i` is out of range or nothing is staged. Never traps.
+    /// **Effectful.** (ADR-0017.)
+    RtUdpByteAt,
+    /// `std::rt::udp_peer_port(take fd: Int) -> Int` — the source port of
+    /// the most recent `udp_recv` on `fd`, or `-1` if there was none. Never
+    /// traps. **Effectful.** (ADR-0017.)
+    RtUdpPeerPort,
     /// `std::rt::chan_new() -> Int` — create an unbounded FIFO channel of
     /// non-negative `Int` values; returns a channel handle (`>= 0`) or `-1`
     /// when the registry is exhausted. Handles are process-lived. Never
@@ -254,7 +305,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 47] = [
+    pub const ALL: [Self; 57] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -270,6 +321,16 @@ impl Builtin {
         Self::RtBoundPort,
         Self::RtAccept,
         Self::RtConnect,
+        Self::RtAcceptTimeout,
+        Self::RtConnectTimeout,
+        Self::RtReadByteTimeout,
+        Self::RtListen6,
+        Self::RtPeerFamily,
+        Self::RtUdpBind,
+        Self::RtUdpSend,
+        Self::RtUdpRecv,
+        Self::RtUdpByteAt,
+        Self::RtUdpPeerPort,
         Self::RtChanNew,
         Self::RtChanSend,
         Self::RtChanRecv,
@@ -323,6 +384,16 @@ impl Builtin {
             | Self::RtBoundPort
             | Self::RtAccept
             | Self::RtConnect
+            | Self::RtAcceptTimeout
+            | Self::RtConnectTimeout
+            | Self::RtReadByteTimeout
+            | Self::RtListen6
+            | Self::RtPeerFamily
+            | Self::RtUdpBind
+            | Self::RtUdpSend
+            | Self::RtUdpRecv
+            | Self::RtUdpByteAt
+            | Self::RtUdpPeerPort
             | Self::RtChanNew
             | Self::RtChanSend
             | Self::RtChanRecv
@@ -375,6 +446,16 @@ impl Builtin {
             Self::RtBoundPort => "bound_port",
             Self::RtAccept => "accept",
             Self::RtConnect => "connect",
+            Self::RtAcceptTimeout => "accept_timeout",
+            Self::RtConnectTimeout => "connect_timeout",
+            Self::RtReadByteTimeout => "read_byte_timeout",
+            Self::RtListen6 => "listen6",
+            Self::RtPeerFamily => "peer_family",
+            Self::RtUdpBind => "udp_bind",
+            Self::RtUdpSend => "udp_send",
+            Self::RtUdpRecv => "udp_recv",
+            Self::RtUdpByteAt => "udp_byte_at",
+            Self::RtUdpPeerPort => "udp_peer_port",
             Self::RtChanNew => "chan_new",
             Self::RtChanSend => "chan_send",
             Self::RtChanRecv => "chan_recv",
@@ -421,6 +502,16 @@ impl Builtin {
             Self::RtBoundPort => "std::rt::bound_port",
             Self::RtAccept => "std::rt::accept",
             Self::RtConnect => "std::rt::connect",
+            Self::RtAcceptTimeout => "std::rt::accept_timeout",
+            Self::RtConnectTimeout => "std::rt::connect_timeout",
+            Self::RtReadByteTimeout => "std::rt::read_byte_timeout",
+            Self::RtListen6 => "std::rt::listen6",
+            Self::RtPeerFamily => "std::rt::peer_family",
+            Self::RtUdpBind => "std::rt::udp_bind",
+            Self::RtUdpSend => "std::rt::udp_send",
+            Self::RtUdpRecv => "std::rt::udp_recv",
+            Self::RtUdpByteAt => "std::rt::udp_byte_at",
+            Self::RtUdpPeerPort => "std::rt::udp_peer_port",
             Self::RtChanNew => "std::rt::chan_new",
             Self::RtChanSend => "std::rt::chan_send",
             Self::RtChanRecv => "std::rt::chan_recv",
@@ -479,6 +570,16 @@ impl Builtin {
                 | Self::RtBoundPort
                 | Self::RtAccept
                 | Self::RtConnect
+                | Self::RtAcceptTimeout
+                | Self::RtConnectTimeout
+                | Self::RtReadByteTimeout
+                | Self::RtListen6
+                | Self::RtPeerFamily
+                | Self::RtUdpBind
+                | Self::RtUdpSend
+                | Self::RtUdpRecv
+                | Self::RtUdpByteAt
+                | Self::RtUdpPeerPort
                 | Self::RtChanNew
                 | Self::RtChanSend
                 | Self::RtChanRecv
@@ -503,8 +604,18 @@ impl Builtin {
             Self::RtOpen => &[In, Take],
             Self::RtClose => &[Take],
             Self::RtRemoveFile => &[In],
-            Self::RtListen | Self::RtBoundPort | Self::RtAccept => &[Take],
+            Self::RtListen
+            | Self::RtBoundPort
+            | Self::RtAccept
+            | Self::RtListen6
+            | Self::RtPeerFamily
+            | Self::RtUdpBind
+            | Self::RtUdpPeerPort => &[Take],
+            Self::RtUdpSend => &[Take, In, Take, In],
+            Self::RtUdpRecv | Self::RtUdpByteAt => &[Take, Take],
             Self::RtConnect => &[In, Take],
+            Self::RtAcceptTimeout | Self::RtReadByteTimeout => &[Take, Take],
+            Self::RtConnectTimeout => &[In, Take, Take],
             Self::RtChanNew | Self::RtMutexNew => &[],
             Self::RtChanSend => &[Take, Take],
             Self::RtChanRecv | Self::RtChanClose | Self::RtMutexLock | Self::RtMutexUnlock => {

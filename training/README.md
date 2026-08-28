@@ -22,8 +22,12 @@ training/
   breaks.py        Break rules: deterministic edits that inject the cross-language
                    mistakes a model actually makes (use-for-import, <>-generics,
                    Some(x), += , missing param mode, chained comparison, ...).
-  generate.py      Compiler-validated generator. Validates every seed, then emits
-                   the datasets. Refuses to emit while any seed fails to compile.
+  harvest.py       Bulk harvester: mines additional examples from the repository's
+                   already-green tuonelang (stdlib modules, dogfooding examples,
+                   the validated corpus). Volume, on top of the seed skeleton.
+  generate.py      Compiler-validated generator. Validates every seed and every
+                   harvested example, then emits the datasets. Refuses to emit
+                   while any seed fails to compile.
   score_eval.py    Honest scorer: compiles a model's held-out completions through
                    the real compiler and reports Compile@1 / SpecPass@1 / Run@1.
   dataset/         Generated output (see below). Regenerate with generate.py.
@@ -45,10 +49,35 @@ This writes, under `training/dataset/`:
 | `sft_oneshot.jsonl` | Supervised fine-tuning for **fluency**: task → correct program. | Chat: `system`, `user`, `assistant`. |
 | `sft_repair.jsonl` | SFT for the **feedback loop**: task → buggy attempt → *real* compiler diagnostic → corrected program. | Chat with a `tool` (name `tuo_compiler`) turn between the two `assistant` turns. |
 | `eval_heldout.jsonl` | **Held-out** tasks never emitted into the SFT sets, for scoring. | `{task, concept, system, reference_solution, runnable, run_exit, stdlib_deps}`. |
-| `stats.json` | Coverage: seed/example counts, per-concept and per-break breakdown. | JSON. |
+| `stats.json` | Coverage: seed/example counts, per-concept and per-break breakdown, harvest kept/dropped counts. | JSON. |
 
 The eval split is deterministic (a stable hash of each task string), so the same
 seeds always produce the same train/eval partition — no leakage between runs.
+
+### Harvested examples
+
+Beyond the hand-authored seeds, `generate.py` mines `sft_oneshot.jsonl` from
+source the repository already keeps green (`harvest.py`):
+
+| Origin | What | Kept green by |
+|--------|------|---------------|
+| `crates/tuo-stdlib/src/std/*.tuo` | every documented `pub fn` — the doc comment becomes the task, the committed body the solution | `tuo-cli/tests/stdlib.rs` |
+| `examples/**/src/*.tuo` | whole multi-function programs | `tuo-cli/tests/dogfood_examples.rs` |
+| `corpus/correct/*.tuo` | compiler-validated correct programs | `tuo-corpus/tests/shipped_corpus.rs` |
+
+Every harvested item is compiled **and** spec-run through the real `tuo` before
+it is emitted, exactly like a seed. One that does not stand alone is *dropped*,
+not shipped with hidden context: a stdlib function referencing a module-private
+type (`Pair`) or a private helper cannot compile as presented, and an example
+only teaches if the target program compiles as shown. `stats.json` records
+`harvested_kept`, `harvested_dropped`, and the per-origin breakdown, so the drop
+rate is visible rather than silent.
+
+Harvested records join the **one-shot set only** and never the eval split — the
+held-out tasks stay the hand-authored seed slice, so scoring is never
+contaminated by material that also appears verbatim in the repository.
+
+Skip the harvest with `--no-harvest` to regenerate from seeds alone.
 
 ### Chat record shapes
 
@@ -102,11 +131,10 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
 2. **Add break rules** (`breaks.py`) — more mistake patterns produce more repair
    transcripts from the same seeds. A break that fails to actually break a
    program (or that the compiler still accepts) is skipped, never faked.
-3. **Feed real programs** — the repository already ships hundreds of lines of
-   validated tuonelang under `../examples/`, `../corpus/`, and
-   `../crates/tuo-stdlib/src/std/`. These are compiler-validated by their own
-   test suites and are excellent additional SFT targets; point new seeds at them
-   or extend `generate.py` to ingest them directly.
+3. **Feed real programs** — `harvest.py` already ingests `../examples/`,
+   `../corpus/correct/`, and `../crates/tuo-stdlib/src/std/` directly. To widen
+   it, teach the harvester a new origin (or raise its keep rate by emitting a
+   stdlib function together with the module context its prompt shows).
 4. **Generate → repair with a live model** — the highest-value data is a real
    model's *own* mistakes. Run your candidate model over the eval/seed tasks,
    capture the completions it gets wrong, compile them to harvest the real

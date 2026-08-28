@@ -1800,6 +1800,16 @@ impl FnLower<'_> {
             | Builtin::RtBoundPort
             | Builtin::RtAccept
             | Builtin::RtConnect
+            | Builtin::RtAcceptTimeout
+            | Builtin::RtConnectTimeout
+            | Builtin::RtReadByteTimeout
+            | Builtin::RtListen6
+            | Builtin::RtPeerFamily
+            | Builtin::RtUdpBind
+            | Builtin::RtUdpSend
+            | Builtin::RtUdpRecv
+            | Builtin::RtUdpByteAt
+            | Builtin::RtUdpPeerPort
             | Builtin::RtChanNew
             | Builtin::RtChanSend
             | Builtin::RtChanRecv
@@ -1822,6 +1832,16 @@ impl FnLower<'_> {
                     Builtin::RtBoundPort => EffectOp::BoundPort,
                     Builtin::RtAccept => EffectOp::Accept,
                     Builtin::RtConnect => EffectOp::Connect,
+                    Builtin::RtAcceptTimeout => EffectOp::AcceptTimeout,
+                    Builtin::RtConnectTimeout => EffectOp::ConnectTimeout,
+                    Builtin::RtReadByteTimeout => EffectOp::ReadByteTimeout,
+                    Builtin::RtListen6 => EffectOp::Listen6,
+                    Builtin::RtPeerFamily => EffectOp::PeerFamily,
+                    Builtin::RtUdpBind => EffectOp::UdpBind,
+                    Builtin::RtUdpSend => EffectOp::UdpSend,
+                    Builtin::RtUdpRecv => EffectOp::UdpRecv,
+                    Builtin::RtUdpByteAt => EffectOp::UdpByteAt,
+                    Builtin::RtUdpPeerPort => EffectOp::UdpPeerPort,
                     Builtin::RtChanNew => EffectOp::ChanNew,
                     Builtin::RtChanSend => EffectOp::ChanSend,
                     Builtin::RtChanRecv => EffectOp::ChanRecv,

@@ -2409,10 +2409,17 @@ impl<'a> Lowering<'a> {
             }
             // ADR-0014: the socket effects — descriptor producers on the
             // same seam; a `Str` host passes as `{ptr, len}` like a path.
-            EffectOp::Listen | EffectOp::BoundPort | EffectOp::Accept => {
+            EffectOp::Listen
+            | EffectOp::BoundPort
+            | EffectOp::Accept
+            | EffectOp::Listen6
+            | EffectOp::PeerFamily
+            | EffectOp::UdpBind
+            | EffectOp::UdpPeerPort => {
                 let [scalar] = args else {
                     return Err(CodegenError::backend(
-                        "listen/bound_port/accept expects exactly 1 argument",
+                        "listen/bound_port/accept/listen6/peer_family expects \
+                         exactly 1 argument",
                     ));
                 };
                 let scalar = self.lower_operand(&value_arg(scalar)?)?;
@@ -2429,6 +2436,68 @@ impl<'a> Lowering<'a> {
                 let port = self.lower_operand(&value_arg(port)?)?;
                 let func_ref = self.effect_func_ref(op);
                 let call = self.builder.ins().call(func_ref, &[ptr, len, port]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            // ADR-0017: the bounded-wait forms — the same operands as their
+            // blocking counterparts plus a trailing millisecond deadline.
+            EffectOp::AcceptTimeout | EffectOp::ReadByteTimeout => {
+                let [fd, ms] = args else {
+                    return Err(CodegenError::backend(
+                        "accept_timeout/read_byte_timeout expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let ms = self.lower_operand(&value_arg(ms)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[fd, ms]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::ConnectTimeout => {
+                let [host, port, ms] = args else {
+                    return Err(CodegenError::backend(
+                        "connect_timeout expects exactly 3 arguments",
+                    ));
+                };
+                let (ptr, len) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let ms = self.lower_operand(&value_arg(ms)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[ptr, len, port, ms]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            // ADR-0017: UDP — two-scalar recv/index, and the four-operand
+            // send (two of them `Str`, so six machine arguments).
+            EffectOp::UdpRecv | EffectOp::UdpByteAt => {
+                let [fd, second] = args else {
+                    return Err(CodegenError::backend(
+                        "udp_recv/udp_byte_at expects exactly 2 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let second = self.lower_operand(&value_arg(second)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self.builder.ins().call(func_ref, &[fd, second]);
+                let result = self.builder.inst_results(call)[0];
+                self.write_place(dest, result)
+            }
+            EffectOp::UdpSend => {
+                let [fd, host, port, bytes] = args else {
+                    return Err(CodegenError::backend(
+                        "udp_send expects exactly 4 arguments",
+                    ));
+                };
+                let fd = self.lower_operand(&value_arg(fd)?)?;
+                let (hptr, hlen) = self.str_operand_parts(&value_arg(host)?)?;
+                let port = self.lower_operand(&value_arg(port)?)?;
+                let (bptr, blen) = self.str_operand_parts(&value_arg(bytes)?)?;
+                let func_ref = self.effect_func_ref(op);
+                let call = self
+                    .builder
+                    .ins()
+                    .call(func_ref, &[fd, hptr, hlen, port, bptr, blen]);
                 let result = self.builder.inst_results(call)[0];
                 self.write_place(dest, result)
             }
@@ -2569,6 +2638,71 @@ impl<'a> Lowering<'a> {
                 signature.params.push(AbiParam::new(types::I64));
                 signature.returns.push(AbiParam::new(types::I64));
                 effect::CONNECT_SYMBOL
+            }
+            // ADR-0017: the IPv6 server-side symbols.
+            EffectOp::Listen6 => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::LISTEN6_SYMBOL
+            }
+            EffectOp::PeerFamily => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::PEER_FAMILY_SYMBOL
+            }
+            // ADR-0017: the UDP effect symbols.
+            EffectOp::UdpBind => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::UDP_BIND_SYMBOL
+            }
+            EffectOp::UdpPeerPort => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::UDP_PEER_PORT_SYMBOL
+            }
+            EffectOp::UdpRecv => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::UDP_RECV_SYMBOL
+            }
+            EffectOp::UdpByteAt => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::UDP_BYTE_AT_SYMBOL
+            }
+            EffectOp::UdpSend => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::UDP_SEND_SYMBOL
+            }
+            // ADR-0017: the bounded-wait effect symbols.
+            EffectOp::AcceptTimeout => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::ACCEPT_TIMEOUT_SYMBOL
+            }
+            EffectOp::ReadByteTimeout => {
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::READ_BYTE_TIMEOUT_SYMBOL
+            }
+            EffectOp::ConnectTimeout => {
+                signature.params.push(AbiParam::new(self.pointer_type));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.params.push(AbiParam::new(types::I64));
+                signature.returns.push(AbiParam::new(types::I64));
+                effect::CONNECT_TIMEOUT_SYMBOL
             }
             // ADR-0015: the channel and mutex effect symbols.
             EffectOp::ChanNew => {

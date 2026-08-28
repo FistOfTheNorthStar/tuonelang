@@ -11,7 +11,25 @@
 //   (`R0007`), so each is pinned by a native CLI test instead and marked
 //   `EFFECT:`.
 //
-// IPv4 TCP only; `listen` binds loopback; `connect` takes a numeric address.
+//   ADR-0017 adds the bounded-wait forms `accept_timeout`,
+//   `connect_timeout`, and `read_byte_timeout`: the blocking originals wait
+//   forever, which is an unrecoverable hang for any program whose peer goes
+//   away. A timeout reports `-3` (`is_timeout`), distinct from every value
+//   the seam already spends: `-1` (host error, end of input) and `-2` (a
+//   `read_byte` host error).
+//
+//   ADR-0017 also admits IPv6: `connect` infers the family from the numeric
+//   address it is given (so `"::1"` works with no new spelling), while the
+//   server side gains an explicit `listen6` — a family cannot be inferred
+//   from a port alone — and `peer_family` to report what a descriptor got.
+//
+//   ADR-0017 also adds the UDP tier — `udp_bind`, `udp_send`, `udp_recv`,
+//   `udp_byte_at`, `udp_peer_port`. A datagram is a *message*, so a receive
+//   reports its length and stages the payload; `udp_byte_at` indexes it and
+//   `udp_peer_port` names the sender, which is what lets a server reply.
+//
+// `listen`/`listen6`/`udp_bind` bind loopback; `connect`/`udp_send` take a
+// numeric address (v4 or v6), never a name — DNS is deliberately absent.
 
 module std::net;
 
@@ -30,6 +48,34 @@ module std::net;
 /// ```
 pub fn is_descriptor(take outcome: Int) -> Bool {
     outcome >= 0
+}
+
+/// Did a bounded-wait operation run out of time (ADR-0017)?
+///
+/// The timeout sentinel (`-3`) is deliberately distinct from every other
+/// value the seam returns — `-1` (host error, end of input) and `-2` (a
+/// `read_byte` host error) — so a program can tell "the peer is slow" from
+/// "the peer is gone", the one distinction a bounded wait exists to provide.
+///
+/// # Example
+/// ```tuo
+/// let waited = std::net::is_timeout(0 - 3); // true
+/// ```
+pub fn is_timeout(take outcome: Int) -> Bool {
+    outcome == 0 - 3
+}
+
+/// Is this address family IPv6 (ADR-0017)?
+///
+/// `peer_family` reports `4` or `6`; this is the branch a program takes to
+/// report or adapt to the family it actually got.
+///
+/// # Example
+/// ```tuo
+/// let six = std::net::is_ipv6(6); // true
+/// ```
+pub fn is_ipv6(take family: Int) -> Bool {
+    family == 6
 }
 
 // ----------------------------------------------------------------------------
@@ -98,6 +144,173 @@ pub fn connect(in host: Str, take port: Int) -> Int {
     std::rt::connect(host, port)
 }
 
+/// EFFECT (executable and effectful): accept one pending connection, waiting
+/// at most `ms` milliseconds (ADR-0017). Returns the connected descriptor
+/// (`>= 0`), `-3` on timeout (see `is_timeout`), or `-1` on host error.
+///
+/// The bounded counterpart to `accept`, which waits forever. A negative `ms`
+/// is a host error, never an unbounded wait. Effectful, so no spec
+/// (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let conn = std::net::accept_timeout(listener, 1000);
+/// ```
+pub fn accept_timeout(take fd: Int, take ms: Int) -> Int {
+    std::rt::accept_timeout(fd, ms)
+}
+
+/// EFFECT (executable and effectful): open a TCP connection to `host:port`,
+/// abandoning the handshake after `ms` milliseconds (ADR-0017). Returns the
+/// connected descriptor (`>= 0`), `-3` on timeout, or `-1` on host error.
+///
+/// The bounded counterpart to `connect`. Effectful, so no spec (`R0007`);
+/// pinned by the native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let conn = std::net::connect_timeout("127.0.0.1", port, 1000);
+/// ```
+pub fn connect_timeout(in host: Str, take port: Int, take ms: Int) -> Int {
+    std::rt::connect_timeout(host, port, ms)
+}
+
+/// EFFECT (executable and effectful): read one byte from `fd`, waiting at
+/// most `ms` milliseconds for it (ADR-0017). Returns the byte (`0..=255`),
+/// `-1` at end of input, `-2` on host error, or `-3` on timeout.
+///
+/// The bounded counterpart to `std::rt::read_byte`. It applies to any
+/// descriptor the seam produces — a file as much as a socket — and is the
+/// operation a hung network read otherwise blocks in. Effectful, so no spec
+/// (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let byte = std::net::read_byte_timeout(conn, 1000);
+/// ```
+pub fn read_byte_timeout(take fd: Int, take ms: Int) -> Int {
+    std::rt::read_byte_timeout(fd, ms)
+}
+
+/// EFFECT (executable and effectful): create an IPv6 TCP socket bound to
+/// `[::1]:port` and listening (ADR-0017). Returns the listening descriptor
+/// (`>= 0`) or a negative value on host error.
+///
+/// The IPv6 counterpart to `listen`: a server cannot infer a family from a
+/// port, so the two are separate spellings — unlike `connect`, which infers
+/// the family from the address it is given. The socket is `IPV6_V6ONLY`, so
+/// `peer_family` on an accepted connection is unambiguous. Port `0` asks for
+/// an ephemeral port; `bound_port` reads it back from either family.
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let listener = std::net::listen6(0);
+/// ```
+pub fn listen6(take port: Int) -> Int {
+    std::rt::listen6(port)
+}
+
+/// EFFECT (executable and effectful): the address family of a descriptor —
+/// `4` for IPv4, `6` for IPv6 — or a negative value on host error
+/// (ADR-0017).
+///
+/// Lets a program report and test which family it actually got, which is
+/// what makes the inferred-family `connect` observable. Effectful, so no
+/// spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let family = std::net::peer_family(conn);
+/// ```
+pub fn peer_family(take fd: Int) -> Int {
+    std::rt::peer_family(fd)
+}
+
+/// EFFECT (executable and effectful): create an IPv4 UDP socket bound to
+/// `127.0.0.1:port` (ADR-0017). Returns the descriptor (`>= 0`) or a
+/// negative value on host error.
+///
+/// Port `0` asks for an ephemeral port — pair with `bound_port`, which reads
+/// a UDP descriptor's port just as it does a TCP one. Effectful, so no spec
+/// (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let sock = std::net::udp_bind(0);
+/// ```
+pub fn udp_bind(take port: Int) -> Int {
+    std::rt::udp_bind(port)
+}
+
+/// EFFECT (executable and effectful): send one datagram of `bytes` to
+/// `host:port` (ADR-0017). Returns the number of bytes sent (`>= 0`) or a
+/// negative value on host error.
+///
+/// `host` is a numeric address; the family is inferred exactly as `connect`
+/// infers it. Effectful, so no spec (`R0007`); pinned by the native CLI
+/// tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let sent = std::net::udp_send(sock, "127.0.0.1", port, "ping");
+/// ```
+pub fn udp_send(take fd: Int, in host: Str, take port: Int, in bytes: Str) -> Int {
+    std::rt::udp_send(fd, host, port, bytes)
+}
+
+/// EFFECT (executable and effectful): receive one datagram, waiting at most
+/// `ms` milliseconds, and stage it on the descriptor (ADR-0017). Returns the
+/// datagram's length (`>= 0`), `-3` on timeout, or `-1` on host error.
+///
+/// A datagram is a message, not a stream, so the receive reports the
+/// **boundary** — read the bytes with `udp_byte_at` and the sender's port
+/// with `udp_peer_port`. Effectful, so no spec (`R0007`); pinned by the
+/// native CLI tests in `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let len = std::net::udp_recv(sock, 1000);
+/// ```
+pub fn udp_recv(take fd: Int, take ms: Int) -> Int {
+    std::rt::udp_recv(fd, ms)
+}
+
+/// EFFECT (executable and effectful): byte `i` of the datagram most recently
+/// staged on `fd` (ADR-0017). Returns the byte (`0..=255`), or a negative
+/// value when `i` is out of range or nothing is staged.
+///
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let first = std::net::udp_byte_at(sock, 0);
+/// ```
+pub fn udp_byte_at(take fd: Int, take i: Int) -> Int {
+    std::rt::udp_byte_at(fd, i)
+}
+
+/// EFFECT (executable and effectful): the source port of the most recent
+/// `udp_recv` on `fd`, or a negative value if there was none (ADR-0017).
+///
+/// This is what lets a datagram server reply to whoever wrote to it.
+/// Effectful, so no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let from = std::net::udp_peer_port(sock);
+/// ```
+pub fn udp_peer_port(take fd: Int) -> Int {
+    std::rt::udp_peer_port(fd)
+}
+
 /// EFFECT (executable and effectful): close a socket descriptor. `0` on
 /// success, negative on host error.
 ///
@@ -122,4 +335,18 @@ spec is_descriptor {
     then is_descriptor(0);
     then is_descriptor(3);
     then !is_descriptor(0 - 1);
+}
+
+spec is_ipv6 {
+    then is_ipv6(6);
+    then !is_ipv6(4);
+    then !is_ipv6(0 - 1);
+}
+
+spec is_timeout {
+    then is_timeout(0 - 3);
+    then !is_timeout(0 - 2);
+    then !is_timeout(0 - 1);
+    then !is_timeout(0);
+    then !is_timeout(3);
 }

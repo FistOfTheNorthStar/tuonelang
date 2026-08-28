@@ -19,8 +19,12 @@
 //! direct-call ABI — which makes the indirect-calls workload measurable; and,
 //! since ADR-0014, the **socket effects** (`listen`/`bound_port`/`accept`/
 //! `connect` over the descriptor seam), which made the networking workload —
-//! the catalog's last unsupported entry — measurable too. Every named
-//! workload now carries a real program.
+//! the catalog's last unsupported entry — measurable too. ADR-0017 then added
+//! two of its own: **udp-echo** (the datagram round-trip its UDP effects made
+//! expressible) and **connect-timeout**, which measures a *bounded failure* —
+//! a program that could not be written at all before that ADR, since a
+//! blocking `connect` has no bounded outcome. Every named workload carries a
+//! real program.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -264,6 +268,34 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // accumulated) is (21 * 3 + 247) % 256 = 54; exit byte 54.
             54,
         ),
+        RuntimeWorkload::supported(
+            "udp-echo",
+            "datagram round-trip throughput over the ADR-0017 UDP effects: \
+             per round, bind two ephemeral loopback UDP sockets, then for \
+             each of 8 datagrams send 16 bytes, receive the message (whose \
+             boundary udp_recv reports), read all 16 bytes back through \
+             udp_byte_at, and echo a reply to the port udp_peer_port names — \
+             measured against a sendto/recvfrom C peer and a Go peer using \
+             net.ListenPacket/WriteTo/ReadFrom (the parity target)",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/udp-echo.tuo"),
+            // 100 rounds of round(8); each round's count (reassigned, not
+            // accumulated) is 8 datagrams × 16 bytes = 128; exit byte 128.
+            128,
+        ),
+        RuntimeWorkload::supported(
+            "connect-timeout",
+            "the cost of a bounded failure over the ADR-0017 timeout \
+             effects: per round, connect_timeout to a loopback port nothing \
+             listens on and require the attempt to come back — refused or \
+             timed out — rather than hang. This workload could not be \
+             written before ADR-0017, since a blocking connect has no \
+             bounded outcome; measured against a non-blocking connect+poll C \
+             peer and a Go peer using net.DialTimeout, both with the same \
+             deadline",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/connect-timeout.tuo"),
+            // 200 rounds, each contributing 1 bounded outcome; exit byte 200.
+            200,
+        ),
         // Every workload the catalog names is now supported: the last
         // unsupported entry (networking) flipped when ADR-0014 landed the
         // socket effects — exactly the move this catalog's contract promises.
@@ -351,6 +383,8 @@ mod tests {
             "networking",
             "channels",
             "json-parse",
+            "udp-echo",
+            "connect-timeout",
         ] {
             assert!(labels.contains(&required), "missing workload `{required}`");
         }
@@ -382,8 +416,8 @@ mod tests {
         // workload (ADR-0009), the function-value indirect-calls workload
         // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011),
         // the OS-boundary file-io workload (ADR-0013), the socket networking
-        // workload (ADR-0014), and the channel workload (ADR-0015) — every
-        // named workload.
+        // workload (ADR-0014), the channel workload (ADR-0015), and the
+        // ADR-0017 udp-echo / connect-timeout pair — every named workload.
         assert_eq!(
             supported,
             vec![
@@ -400,6 +434,8 @@ mod tests {
                 "networking".to_string(),
                 "channels".to_string(),
                 "json-parse".to_string(),
+                "udp-echo".to_string(),
+                "connect-timeout".to_string(),
             ]
         );
     }
@@ -420,7 +456,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 13, "exactly the supported workloads run");
+        assert_eq!(results.len(), 15, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

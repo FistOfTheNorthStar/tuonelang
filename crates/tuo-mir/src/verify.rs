@@ -452,6 +452,25 @@ impl Verifier<'_> {
                 vec![(true, Ty::int())]
             }
             EffectOp::Connect => vec![(true, Ty::Str), (true, Ty::int())],
+            // ADR-0017: the bounded-wait forms take the same operands plus a
+            // trailing millisecond deadline.
+            EffectOp::AcceptTimeout | EffectOp::ReadByteTimeout => {
+                vec![(true, Ty::int()), (true, Ty::int())]
+            }
+            EffectOp::Listen6 | EffectOp::PeerFamily => vec![(true, Ty::int())],
+            EffectOp::UdpBind | EffectOp::UdpPeerPort => vec![(true, Ty::int())],
+            EffectOp::UdpRecv | EffectOp::UdpByteAt => {
+                vec![(true, Ty::int()), (true, Ty::int())]
+            }
+            EffectOp::UdpSend => vec![
+                (true, Ty::int()),
+                (true, Ty::Str),
+                (true, Ty::int()),
+                (true, Ty::Str),
+            ],
+            EffectOp::ConnectTimeout => {
+                vec![(true, Ty::Str), (true, Ty::int()), (true, Ty::int())]
+            }
             // ADR-0015: channels and mutexes — all by-value operands.
             EffectOp::ChanNew | EffectOp::MutexNew => Vec::new(),
             EffectOp::ChanSend => vec![(true, Ty::int()), (true, Ty::int())],
