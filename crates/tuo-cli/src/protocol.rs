@@ -88,6 +88,8 @@ pub(crate) enum ProtocolCommand {
     Corpus,
     /// `tuo bench report` — the code-generation evaluation harness.
     Bench,
+    /// `tuo cheatsheet` — the context-injectable language brief (ADR-0018).
+    Cheatsheet,
 }
 
 impl ProtocolCommand {
@@ -104,6 +106,7 @@ impl ProtocolCommand {
             Self::Test => "test",
             Self::Corpus => "corpus",
             Self::Bench => "bench",
+            Self::Cheatsheet => "cheatsheet",
         }
     }
 }

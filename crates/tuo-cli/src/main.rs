@@ -22,6 +22,7 @@
 
 mod agent;
 mod bench;
+mod cheatsheet;
 mod check;
 mod cli;
 mod codegen;

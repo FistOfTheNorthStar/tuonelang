@@ -5,7 +5,7 @@
 //! `tuo spec`, `tuo verify`, `tuo fmt`, `tuo build`, `tuo run`, the package
 //! commands (`tuo new`/`add`/`remove`/`test` and the package-aware forms of
 //! `check`/`build`/`verify`, plus `tuo package symbols`), `tuo corpus validate`,
-//! `tuo bench report`, `tuo agent --stdio`,
+//! `tuo bench report`, `tuo cheatsheet`, `tuo agent --stdio`,
 //! and the `tuo debug` developer tools. Further compiler subcommands are added
 //! as their functionality is implemented — a new [`Command`] variant plus a
 //! match arm in [`Cli::dispatch`].
@@ -17,6 +17,7 @@ use clap::{CommandFactory as _, Parser, Subcommand};
 
 use crate::agent;
 use crate::bench;
+use crate::cheatsheet;
 use crate::check;
 use crate::codegen;
 use crate::corpus::{self, CorpusCategory, CorpusOrigin};
@@ -35,8 +36,8 @@ use crate::spec;
     long_about = "tuonelang is an experimental compiler project. Compiler subcommands are added \
                   as their functionality is implemented; today the CLI exposes check, spec, \
                   verify, fmt, build, run, the package commands (new, add, remove, test, \
-                  package), corpus, bench, the agent protocol (`agent --stdio`), and the \
-                  `debug` developer tools.",
+                  package), corpus, bench, cheatsheet, the agent protocol (`agent --stdio`), \
+                  and the `debug` developer tools.",
     disable_help_subcommand = true
 )]
 pub(crate) struct Cli {
@@ -172,6 +173,18 @@ enum Command {
         #[arg(required = true)]
         files: Vec<PathBuf>,
     },
+    /// Emit a dense, context-injectable language brief for a coding agent
+    /// or a local model (ADR-0018).
+    ///
+    /// The brief is **generated from the compiler's own sources**: the syntax
+    /// section carries `grammar.ebnf`'s version marker and every listed
+    /// standard-library signature is the one the type checker inferred for
+    /// this build, so the text cannot advertise a function that does not
+    /// exist or a signature that has changed. Written to stdout, it is meant
+    /// to be pasted into a model's context before asking it to write
+    /// tuonelang. Human output is plain text; a machine format carries the
+    /// same brief as a protocol item.
+    Cheatsheet,
     /// Serve the tuonelang agent protocol over stdio.
     ///
     /// Speaks a versioned, JSON-lines request/response protocol: a coding agent
@@ -453,6 +466,7 @@ impl Cli {
             // stdio, independent of `--message-format` (which governs the
             // result-producing commands' output). `mode` is passed only so
             // internal logging honors `--log`.
+            Some(Command::Cheatsheet) => cheatsheet::run(mode),
             Some(Command::Agent { stdio: _ }) => agent::run(mode),
             // The `debug` dumps are developer tools with deliberately unstable
             // output, not a language protocol — so they have no machine

@@ -66,6 +66,7 @@ the replacement, preserving the decision history.
 | [ADR-0015](ADR-0015-channels-and-mutexes.md) | Channels and mutexes — communication joins the effect seam | accepted |
 | [ADR-0016](ADR-0016-json-and-the-data-increment.md) | `std::json` and the data increment — Float elements, indexed writes, and the recursion boundary | accepted |
 | [ADR-0017](ADR-0017-timeouts-ipv6-and-udp.md) | Timeouts, IPv6, and UDP — the socket seam's additive increment | accepted |
+| [ADR-0018](ADR-0018-context-injectable-cheat-sheet.md) | The context-injectable cheat sheet — a generated, compiler-backed language brief | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally

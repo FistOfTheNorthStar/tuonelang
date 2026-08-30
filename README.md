@@ -123,6 +123,7 @@ protocol with `--message-format json` / `json-lines`.
 | `tuo new <name>` · `add` · `remove` · `test` · `package symbols` | Package lifecycle over a `tdg.toml` manifest and `tdg.lock`; `package symbols` queries a package's real exported symbols. |
 | `tuo corpus validate [--category <c>] <files>` | Run a program through the compiler-validated corpus pipeline and report its per-stage results. |
 | `tuo bench report <tasks> <run>` | Score a recorded LLM code-generation run by recompiling its outputs through the real compiler. |
+| `tuo cheatsheet` | Emit a dense, context-injectable language brief generated from the compiler's own sources. |
 | `tuo agent --stdio` | Serve the versioned JSON-lines agent protocol (one long-lived compiler DB). |
 | `tuo debug syntax\|ast\|hir\|mir <file>` | Developer dumps (unstable output, not a language protocol). |
 
@@ -154,6 +155,14 @@ compiler exposes its knowledge rather than making an agent guess:
   `visible_symbols_at`, `valid_members_of`, `call_signature`, …) help write the
   next token, and each one states in-band whether its answer is exhaustive —
   never over-claiming a power the compiler lacks.
+- [`tuonelang-cheat-sheet.txt`](tuonelang-cheat-sheet.txt) is a dense language
+  brief to paste into a model's context before asking it to write tuonelang —
+  syntax skeleton, the real stdlib surface, the runnable-core boundary, and the
+  cross-language anti-patterns. It is **generated** by `tuo cheatsheet` from the
+  compiler's own sources (ADR-0018): every listed signature is a declaration the
+  compiler accepted, every sample is compiled by CI, and the committed copy is
+  pinned byte-for-byte against fresh output — so it cannot drift into teaching a
+  model something the compiler rejects.
 - `--message-format json` / `json-lines` gives every command a versioned machine
   protocol, so feedback is parsed, not scraped.
 - [`training/`](training/) is a **compiler-validated** fine-tuning corpus
