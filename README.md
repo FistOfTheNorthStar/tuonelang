@@ -24,9 +24,14 @@ the interpreter.
 - ✅ Colocated executable `spec` blocks, run through a reference MIR interpreter.
 - ✅ Native compilation: a Cranelift debug backend and an optimizing LLVM
   `--release` backend, kept interpreter-equivalent by differential test suites.
+- ✅ A standard library **written in tuonelang** and consumed as compiler input —
+  twelve modules (`core`, `collections`, `math`, `str`, `json`, `io`, `fs`,
+  `net`, `time`, `process`, `sync`, `test`), each public function either spec'd
+  or pinned by a native test.
 - ✅ Tooling: canonical formatter, package system (manifest + lockfile + path
   deps), LSP core, an agent protocol server, a compiler-validated corpus, and
-  benchmark harnesses.
+  benchmark harnesses — including a performance lab whose fifteen runtime
+  workloads all measure against equivalent C and Go peers.
 - 📋 The **0.1 release gate** (`specification/RELEASE-0.1-GATE.md`) currently
   reads **READY** — all sixteen criteria are `MET`, each backed by a committed
   proving artifact.
@@ -35,12 +40,23 @@ The runnable core has grown one ADR at a time: scalar arithmetic, control flow,
 and recursion; **structs, enums, `Option`/`Result`, fixed `[T; N]` arrays, and
 bounded `for`** (ADR-0004); **IEEE-754 floats and borrow-mode (`in`/`mut`)
 calls**; the **borrowed `Str` core and effect boundary** (ADR-0006); the
-**allocator core** — owned `String` and growable `Array[Int]` on real heap
-memory (ADR-0009); and **first-class non-capturing function values** with the
-generic higher-order stdlib combinators (`fold`/`map_into`/`filter_into`/`any`/
-`all`, ADR-0008 Tier 1). Still outside the core: **capturing closures**
-(ADR-0008 Tier 2), **concurrency** (ADR-0007), the heap-wrapper **values**
-`Box`/`Shared`/`Weak`, and `Array[T]` for non-`Int` elements.
+**allocator core** — owned `String` and growable `Array[T]` on real heap memory
+(ADR-0009, element-generic since ADR-0012); **first-class non-capturing
+function values** with the generic higher-order stdlib combinators (ADR-0008
+Tier 1); the **hash map** `Map[K, V]` (ADR-0011); **structured fork-join
+concurrency** over the one primitive `std::rt::par_map` (ADR-0007); the **OS
+effect boundary** — clock, argv, and files (ADR-0013); **TCP sockets**
+(ADR-0014); **channels and mutexes** (ADR-0015); the **data increment** —
+`Float` array elements, indexed writes, and `std::json` (ADR-0016); and
+**bounded waits, IPv6, and UDP** (ADR-0017). Every ADR is `accepted`; **none
+remains `proposed`**.
+
+Still outside the core, and refused rather than mis-compiled: **capturing
+closures** (ADR-0008 Tier 2), the heap-wrapper **values** `Box`/`Shared`/`Weak`,
+recursive nominal types without a heap-wrapper indirection (a front-end error
+since ADR-0016), and **TLS/DNS** — deliberately out of ADR-0017, since TLS would
+need a crypto dependency this workspace avoids and DNS belongs *in tuonelang* on
+the UDP primitives.
 
 Because tuonelang v0 ships a deliberately bounded core, the compiler
 **refuses** programs outside it rather than mis-compiling them — no component
@@ -80,13 +96,16 @@ cargo run -p tuo-cli -- run   hello.tuo   # compile natively and run; exit statu
 through the optimizing LLVM backend, or `build [-o <path>]` to produce an
 executable without running it.
 
-For real, multi-function programs written against v0, see [`examples/`](examples/)
-(four run natively — cli-stats prints its four-line report and http-service
-prints its response line through the effect boundary, data-pipeline folds a
-heap-backed `Array[Int]` through a first-class `fold`, and the concurrent
-worker runs its scheduling decision core while its effectful shell stays a
-documented contract tier; the fifth, `workspace/`, is a three-package graph
-that checks and tests green) and [`DOGFOODING.md`](DOGFOODING.md).
+For real, multi-function programs written against v0, see [`examples/`](examples/):
+`cli-stats` prints its four-line report through the effect boundary,
+`data-pipeline` folds heap-backed `Array[Record]` values through a generic
+first-class `fold` and cross-checks them against a `Map[Int, Int]` aggregation,
+`http-service` **serves itself over a live loopback socket**, `concurrent-worker`
+runs a real `par_map` thread pool and drains a shared channel queue, and
+`workspace/` is a three-package graph that checks and tests green. Every one is
+re-validated by the real `tuo` binary on each `cargo test`. The findings from
+building them — and the ADRs those findings produced — are in
+[`DOGFOODING.md`](DOGFOODING.md).
 
 ## CLI
 
@@ -109,6 +128,46 @@ protocol with `--message-format json` / `json-lines`.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full command surface and the conventions
 each command upholds.
+
+## Learning tuonelang
+
+Material for both audiences the language is designed for.
+
+**For humans**
+
+| Document | What it is |
+|----------|------------|
+| [`REFERENCE.md`](REFERENCE.md) | The complete programmer's guide to writing tuonelang today — types, ownership, aggregates, heap collections, maps, specs, modules, the stdlib, traps, diagnostics, gotchas, and a worked example. Everything in it reflects what the compiler actually accepts, and its §16 *honesty map* says exactly what runs where. |
+| [`DOGFOODING.md`](DOGFOODING.md) | What using v0 for real programs revealed, measured across compiler usability, diagnostics, incremental builds, LLM generation, stdlib gaps, and runtime performance. |
+| [`specification/`](specification/) | The normative documents: the v0 [Constitution](specification/CONSTITUTION.md), grammar, [static semantics](specification/static-semantics.md), [ownership](specification/ownership.md), [MIR](specification/mir.md), and [ABI](specification/abi.md). |
+| [`specification/adr/`](specification/adr/) | Why each design decision was made, one ADR at a time — the durable record of the language's growth. |
+
+**For AI coding agents**
+
+tuonelang treats machine-generated code as a first-class use case, so the
+compiler exposes its knowledge rather than making an agent guess:
+
+- `tuo agent --stdio` serves a versioned JSON-lines **compiler-intelligence
+  protocol** over one long-lived database — diagnostics, types, definitions,
+  references, symbols, signatures, available imports, spec execution, and
+  compiler-authored safe fixes. Its *generation* queries (`expected_type_at`,
+  `visible_symbols_at`, `valid_members_of`, `call_signature`, …) help write the
+  next token, and each one states in-band whether its answer is exhaustive —
+  never over-claiming a power the compiler lacks.
+- `--message-format json` / `json-lines` gives every command a versioned machine
+  protocol, so feedback is parsed, not scraped.
+- [`training/`](training/) is a **compiler-validated** fine-tuning corpus
+  generator: task → correct program, multi-turn repair transcripts (buggy
+  attempt → the compiler's real diagnostic → fix — the TDG loop), and a held-out
+  eval set scored by really compiling the model's output. Nothing is emitted
+  that the real `tuo` did not accept, and examples harvested from the stdlib,
+  the dogfooding examples, and the validated corpus are dropped rather than
+  shipped with hidden context.
+- [`corpus/`](corpus/) holds compiler-validated programs in six categories
+  (correct plus four repair categories and repository-level changes); a repair
+  entry is admitted only if it fails at *exactly* the stage its category names.
+- `tuo bench report` scores a recorded code-generation run by **recompiling**
+  the model's outputs — a fabricated result cannot survive.
 
 ## Repository layout
 
