@@ -54,6 +54,8 @@ cargo run -p tuo-cli -- --message-format=json package symbols # a package's real
 cargo run -p tuo-cli -- corpus validate file.tuo # validate a program through the compiler-validated corpus pipeline
 cargo run -p tuo-cli -- corpus validate --category type-repair a.tuo # …proving it fails at exactly one stage
 cargo run -p tuo-cli -- --message-format=json corpus validate file.tuo # …with the full metadata record as a protocol item
+cargo run -p tuo-cli -- cheatsheet             # emit the context-injectable language brief (ADR-0018)
+cargo run -p tuo-cli -- --message-format=json cheatsheet # …the brief as a protocol item
 cargo run -p tuo-cli -- bench report tasks.json run.json # score a code-gen benchmark by recompiling the model's outputs
 cargo run -p tuo-cli -- --message-format=json bench report tasks.json run.json # …the metric summary as a protocol item
 cargo run -p tuo-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
@@ -305,6 +307,40 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tuo-cli/tests/bench_command.rs` (the whole thing through the real binary,
   including a run whose recorded verdict is a *lie* that recompilation exposes).
   The dependency-policy guard keeps `tuo-codegen-bench` at layer 116.
+- **The context-injectable brief is generated from the compiler, never authored
+  as prose about it.** `tuo cheatsheet` (ADR-0018) emits a dense language brief
+  meant to be pasted into a coding agent's or a local model's context before it
+  writes tuonelang — the *priming* counterpart to the feedback surfaces (machine
+  diagnostics, the agent protocol, the corpus, the codegen benchmark). Its five
+  sections are assembled from compiler-owned sources: the syntax skeleton
+  carries `grammar.ebnf`'s own `GRAMMAR-VERSION`; the standard-library section
+  drives the twelve `tuo-stdlib` catalog modules through the **real** front end
+  (`check_sources` is the acceptance gate — the brief refuses to describe a
+  library that does not compile) and lists each public `fn` as its *declaration*,
+  parameter names and written type spellings included, because that is the form
+  a caller must type (`Ty::render` would normalize `Int` to `I64` and drop the
+  names); the runnable-core section states what `tuo check` accepts versus what
+  `run`/`build` execute, including what is deliberately absent (capturing
+  closures, `Box`/`Shared`/`Weak` values, detached spawn, method calls) so a
+  model does not invent it; and the anti-pattern table is the forward reading of
+  `training/breaks.py` — one list, two consumers, so the generator's error model
+  and the brief's advice cannot drift apart. A committed copy lives at
+  `tuonelang-cheat-sheet.txt`. The promise is *enforced*, not asserted:
+  `tuo-cli/tests/cheatsheet_command.rs` compiles every `tuo` sample in the brief
+  (the worked program additionally runs to its documented exit byte), proves
+  every listed signature is callable as shown, proves every anti-pattern is
+  really rejected **and its correction really accepted** (so the brief cannot
+  teach a model to avoid something legal), verifies no listed name is absent
+  from its module, and pins the committed copy byte-for-byte against fresh
+  output — because a stale brief fails *silently*, producing confidently wrong
+  generations rather than a visible error. Whether the brief actually helps is
+  measured, not claimed: `tuo-cli/tests/cheatsheet_benchmark.rs` (`--nocapture`)
+  is a deterministic Compile@1 proxy over a corpus whose cross-language prior is
+  wrong, each pick *really* compiled, reporting unprimed (0%) versus primed
+  (100%); the primed policy reads the real generated brief, so a brief that
+  stopped carrying a fact would stop scoring for it. It is a proxy for the
+  brief's discriminative power, **not** a live-LLM eval (no provider is
+  embedded); the doc says so plainly.
 - **The performance laboratory drives the real compiler for every number,
   reports only what it measured, and never publishes an unsupported claim.**
   `tuo-bench`'s `lab` module (in the layer-110 research crate, which may sit

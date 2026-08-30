@@ -47,6 +47,12 @@ tuo-package.workspace = true
 # crate runs the real stages (format → … → specs) and this CLI injects native
 # execution (compile-link-run) through the corpus's `NativeExecutor` seam.
 tuo-corpus.workspace = true
+# `tuo cheatsheet` drives the catalog's twelve modules through the real front
+# end to report the standard library's actual symbol surface (ADR-0018), rather
+# than restating it as prose. The stdlib is a layer-90 catalog crate consumed as
+# input, so this is a valid lower-layer edge. The integration tests
+# (stdlib.rs, stdlib_hallucination.rs) use it too.
+tuo-stdlib.workspace = true
 # `tuo bench report` re-scores a recorded code-generation benchmark by really
 # compiling the model's outputs through the evaluation harness (which embeds no
 # LLM); the CLI loads the run + pinned task set and renders the reports.
@@ -60,10 +66,6 @@ tuo-mir-interp.workspace = true
 # The ABI-equivalence tests assert the runtime ABI layouts (`tuo_runtime::abi`,
 # over `tuo_types` types) agree with the interpreter's value model.
 tuo-types.workspace = true
-# The standard-library integration tests really compile every stdlib module and
-# run every spec; the hallucination benchmark compiles real vs. invented APIs.
-# (tuo-spec and tuo-compiler are already normal dependencies above.)
-tuo-stdlib.workspace = true
 # The performance-laboratory seam test injects the CLI's real native
 # compile-link-run and a live `cc` as the lab's NativeRunner/ComparisonRunner,
 # proving the supported workloads run natively and agree with C. tuo-bench is
