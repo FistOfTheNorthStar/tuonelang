@@ -1,0 +1,9 @@
+[package]
+name = "file_report"
+version = "0.1.0"
+edition = "2024"
+
+[modules]
+root = "src"
+
+[dependencies]

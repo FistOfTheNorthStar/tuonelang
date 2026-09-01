@@ -1,0 +1,348 @@
+module file_report;
+
+// file-report — a report generator that really touches the disk, dogfooded on
+// the ADR-0013 OS effect boundary.
+//
+// The other examples are hermetic by construction: they compute over literal
+// input. This one is the counterpart the effect boundary made possible — a
+// tool that *renders* a report, *writes* it to a file, *reads it back*, and
+// verifies the roundtrip byte-for-byte before reporting success. That is the
+// shape almost every real command-line tool has, and none of it was
+// expressible before ADR-0013 landed `open`/`close`/`remove_file` on the
+// ADR-0006 descriptor seam.
+//
+// The two tiers stay strictly separated, exactly as the standard library
+// separates them:
+//
+//   * The EXECUTABLE tier — rendering the report into an owned `String`,
+//     formatting integers, and the arithmetic behind the figures — is pure, so
+//     every function in it carries a `spec`. That is the whole report *content*:
+//     what the file will say is decided by spec-checked code.
+//
+//   * The EFFECT tier — `open`/`write`/`read_byte`/`close`/`remove_file` — can
+//     carry no spec (`R0007` keeps the spec sandbox pure), so it is marked
+//     `EFFECT:` per function and pinned instead by the dogfood test, which
+//     runs the program and asserts both its stdout and its exit byte.
+//
+// The program is self-cleaning: it removes its scratch file before exiting, so
+// running it twice is identical to running it once, and it leaves nothing
+// behind for the next test.
+//
+// It compiles with `tuo check`, its specs run under `tuo test`, and it runs
+// natively with `tuo run`, printing its summary line and exiting 7 — the
+// number of report lines it verified through the disk.
+
+// --- The data ---------------------------------------------------------------
+
+/// The measurements the report summarizes: seven daily request counts.
+fn samples() -> [Int; 7] {
+    [1204, 980, 1533, 1102, 875, 1650, 1418]
+}
+
+/// The number of samples — the declared length of `samples()`'s type, and the
+/// number of detail lines the report will carry.
+fn sample_count() -> Int {
+    7
+}
+
+// --- Statistics (executable tier) -------------------------------------------
+
+/// The total across every sample.
+fn total() -> Int {
+    var sum = 0;
+    for x in samples() {
+        sum = sum + x;
+    }
+    sum
+}
+
+/// The arithmetic mean, floored.
+fn mean() -> Int {
+    total() / sample_count()
+}
+
+/// The largest sample.
+fn peak() -> Int {
+    let xs = samples();
+    var best = xs[0];
+    for x in xs {
+        if x > best {
+            best = x;
+        }
+    }
+    best
+}
+
+/// The smallest sample.
+fn trough() -> Int {
+    let xs = samples();
+    var worst = xs[0];
+    for x in xs {
+        if x < worst {
+            worst = x;
+        }
+    }
+    worst
+}
+
+/// How many samples exceeded the mean — the "busy days" figure.
+fn above_mean() -> Int {
+    let m = mean();
+    var n = 0;
+    for x in samples() {
+        if x > m {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+// --- Rendering (executable tier) --------------------------------------------
+//
+// The report is built into an owned `String` (ADR-0009) with no I/O involved,
+// which is what lets the *content* be spec-checked: `render()` is a pure
+// function from the samples to the exact bytes the file will hold.
+
+/// The byte value of a newline.
+fn newline() -> Int {
+    10
+}
+
+/// The number of decimal digits in a non-negative integer.
+fn digits(take n: Int) -> Int {
+    if n < 10 {
+        return 1;
+    }
+    var count = 0;
+    var rest = n;
+    while rest > 0 {
+        count = count + 1;
+        rest = rest / 10;
+    }
+    count
+}
+
+/// Append the decimal spelling of a non-negative integer to `out`, most
+/// significant digit first. Pure: it mutates only the buffer it was handed.
+fn push_uint(mut out: String, take n: Int) -> () {
+    if n < 10 {
+        std::string::push_byte(out, 48 + n);
+        return;
+    }
+    let width = digits(n);
+    var place = 1;
+    var i = 1;
+    while i < width {
+        place = place * 10;
+        i = i + 1;
+    }
+    var rest = n;
+    while place > 0 {
+        let digit = rest / place;
+        std::string::push_byte(out, 48 + digit);
+        rest = rest - digit * place;
+        place = place / 10;
+    }
+}
+
+/// The decimal spelling of a non-negative integer, as owned text.
+fn uint_to_string(take n: Int) -> String {
+    var out = std::string::empty();
+    push_uint(out, n);
+    out
+}
+
+/// Append one `label value` line, newline included.
+fn push_line(mut out: String, in label: Str, take value: Int) -> () {
+    std::string::append(out, label);
+    push_uint(out, value);
+    std::string::push_byte(out, newline());
+}
+
+/// The whole report, rendered into an owned `String`. Seven lines, each
+/// `label value`, newline-terminated — the exact bytes that will be written to
+/// disk, decided by pure, spec-checked code.
+fn render() -> String {
+    var out = std::string::empty();
+    push_line(out, "samples ", sample_count());
+    push_line(out, "total ", total());
+    push_line(out, "mean ", mean());
+    push_line(out, "peak ", peak());
+    push_line(out, "trough ", trough());
+    push_line(out, "spread ", peak() - trough());
+    push_line(out, "busy ", above_mean());
+    out
+}
+
+/// The number of lines in the rendered report — counted by scanning the
+/// rendered bytes, so it measures what will actually be written rather than
+/// restating a constant.
+fn rendered_lines() -> Int {
+    let text = render();
+    let n = std::string::len(text);
+    var count = 0;
+    var i = 0;
+    while i < n {
+        if std::string::byte_at(text, i) == newline() {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+// --- The disk (effect tier) -------------------------------------------------
+//
+// No function below can carry a spec (`R0007`); each is marked `EFFECT:` and
+// names the exact host behavior it relies on. The dogfood test is their pin:
+// it runs the program and asserts the printed summary and the exit byte, both
+// of which are only reachable if every step below really succeeded.
+
+/// Where the report is written. A relative path, so the program works from a
+/// scratch directory and needs no absolute-path assumptions.
+fn report_path() -> Str {
+    "file-report-output.txt"
+}
+
+/// EFFECT: write `text` to `path`, creating or truncating it. Returns the byte
+/// count written, or a negative host error. `mode` 1 is write (create +
+/// truncate) per the ADR-0013 primitive.
+fn write_file(in path: Str, in text: String) -> Int {
+    let fd = std::rt::open(path, 1);
+    if fd < 0 {
+        return fd;
+    }
+    let wrote = std::rt::write_string(fd, text);
+    std::rt::close(fd);
+    wrote
+}
+
+/// EFFECT: read the file at `path` back into an owned `String`, one byte at a
+/// time until end of input. Returns the empty string when the file cannot be
+/// opened — the caller distinguishes that from an empty file by comparing
+/// against what it wrote.
+fn read_file(in path: Str) -> String {
+    var out = std::string::empty();
+    let fd = std::rt::open(path, 0);
+    if fd < 0 {
+        return out;
+    }
+    var byte = std::rt::read_byte(fd);
+    while byte >= 0 {
+        std::string::push_byte(out, byte);
+        byte = std::rt::read_byte(fd);
+    }
+    std::rt::close(fd);
+    out
+}
+
+/// EFFECT: remove the file at `path`; `0` on success, negative otherwise.
+fn remove_file(in path: Str) -> Int {
+    std::rt::remove_file(path)
+}
+
+/// EFFECT: print `text` to stdout (descriptor 1), returning the bytes written.
+fn print(in text: Str) -> Int {
+    std::rt::write(1, text)
+}
+
+/// EFFECT: print an owned `String` to stdout.
+fn print_string(in text: String) -> Int {
+    std::rt::write_string(1, text)
+}
+
+// --- The roundtrip ----------------------------------------------------------
+
+/// Whether two owned strings hold identical bytes. Pure, so it is spec-checked
+/// — which matters, because it is the predicate the whole program's verdict
+/// rests on.
+fn same_bytes(in a: String, in b: String) -> Bool {
+    let n = std::string::len(a);
+    if n != std::string::len(b) {
+        return false;
+    }
+    var i = 0;
+    while i < n {
+        if std::string::byte_at(a, i) != std::string::byte_at(b, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// EFFECT: the whole disk roundtrip — render, write, read back, compare, and
+/// clean up. Returns the number of verified report lines, or 0 if any step
+/// failed or the bytes came back different.
+///
+/// The scratch file is removed whether or not the comparison succeeded, so the
+/// program never leaves state behind for the next run.
+fn roundtrip() -> Int {
+    let path = report_path();
+    let written = render();
+    let bytes = write_file(path, written);
+    if bytes < 0 {
+        return 0;
+    }
+    let read_back = read_file(path);
+    let matched = same_bytes(render(), read_back);
+    remove_file(path);
+    if matched {
+        rendered_lines()
+    } else {
+        0
+    }
+}
+
+fn main() -> Int {
+    // The report itself, to stdout — the same bytes that went to disk.
+    print_string(render());
+
+    // Then the verdict of the roundtrip, which is the program's exit status.
+    let verified = roundtrip();
+    print("verified ");
+    print_string(uint_to_string(verified));
+    print("\n");
+    verified
+}
+
+// --- Executable specs -------------------------------------------------------
+//
+// Everything pure is pinned. The effect tier above carries none by design
+// (`R0007`); the dogfood test pins it by running the program.
+
+spec "the statistics summarize the samples" {
+    then total() == 8762;
+    then mean() == 1251;
+    then peak() == 1650;
+    then trough() == 875;
+    then above_mean() == 3;
+}
+
+spec digits {
+    then digits(0) == 1;
+    then digits(9) == 1;
+    then digits(10) == 2;
+    then digits(1204) == 4;
+}
+
+spec uint_to_string {
+    then std::string::as_str(uint_to_string(0)) == "0";
+    then std::string::as_str(uint_to_string(7)) == "7";
+    then std::string::as_str(uint_to_string(42)) == "42";
+    then std::string::as_str(uint_to_string(1650)) == "1650";
+}
+
+spec same_bytes {
+    then same_bytes(uint_to_string(42), uint_to_string(42));
+    then !same_bytes(uint_to_string(42), uint_to_string(43));
+    then !same_bytes(uint_to_string(4), uint_to_string(42));
+}
+
+spec "the report renders the exact bytes the file will hold" {
+    then std::string::as_str(render()) == "samples 7\ntotal 8762\nmean 1251\npeak 1650\ntrough 875\nspread 775\nbusy 3\n";
+}
+
+spec rendered_lines {
+    then rendered_lines() == sample_count();
+}

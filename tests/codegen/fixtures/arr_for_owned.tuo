@@ -1,0 +1,71 @@
+// Iterating a growable `Array[T]` of **owned** (non-`Copy`) elements. The loop
+// binding is filled by the same `array_get` deep copy `std::array::get` lowers
+// to, and lives in a per-iteration scope so its drop glue runs every iteration
+// — so the array outlives the loop intact and every element is freed exactly
+// once. Before this was lowered, MIR skipped the whole function and the
+// interpreter hit an internal "not present in the lowered MIR" trap, so this
+// fixture is the regression guard for that gap.
+//
+// `for` sums the three string lengths (2+3+1 = 6); the indexed loop re-reads
+// them through `std::array::get` as an independent oracle and must agree. The
+// struct case additionally exercises recursive per-field copy/drop glue: three
+// records contribute 10+20+30 = 60 plus their label lengths (3+3+3 = 9) = 69.
+// Exit = 6 + 69 = 75.
+fn strs() -> Array[String] {
+    var xs = std::array::empty();
+    std::array::push(xs, std::string::from_str("ab"));
+    std::array::push(xs, std::string::from_str("cde"));
+    std::array::push(xs, std::string::from_str("f"));
+    xs
+}
+
+/// Sum by `for` — the deep-copy path plus per-iteration drop.
+fn sum_for() -> Int {
+    var n = 0;
+    for s in strs() {
+        n = n + std::string::len(s);
+    }
+    n
+}
+
+/// Sum by explicit index — the oracle the `for` above must match.
+fn sum_indexed() -> Int {
+    let xs = strs();
+    let k = std::array::len(xs);
+    var n = 0;
+    var i = 0;
+    while i < k {
+        n = n + std::string::len(std::array::get(xs, i));
+        i = i + 1;
+    }
+    n
+}
+
+struct Rec { id: Int, label: String }
+
+fn recs() -> Array[Rec] {
+    var xs = std::array::empty();
+    std::array::push(xs, Rec { id: 10, label: std::string::from_str("aaa") });
+    std::array::push(xs, Rec { id: 20, label: std::string::from_str("bbb") });
+    std::array::push(xs, Rec { id: 30, label: std::string::from_str("ccc") });
+    xs
+}
+
+/// A struct element owning a `String` field: recursive copy and drop glue.
+fn sum_records() -> Int {
+    var n = 0;
+    for r in recs() {
+        n = n + r.id + std::string::len(r.label);
+    }
+    n
+}
+
+fn main() -> Int {
+    let a = sum_for();
+    let b = sum_indexed();
+    if a == b {
+        a + sum_records()
+    } else {
+        0
+    }
+}

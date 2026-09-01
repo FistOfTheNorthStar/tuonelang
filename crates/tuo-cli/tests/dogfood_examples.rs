@@ -114,6 +114,30 @@ fn assert_runs_to(srcs: &[&Path], expected: i32) -> Output {
     out
 }
 
+/// As `assert_runs_to`, but with the program's working directory set to `cwd`.
+/// `file-report` really creates and removes a file relative to the working
+/// directory, so it is run inside a scratch directory rather than the
+/// repository, and the test can then assert the scratch directory is left
+/// clean.
+fn assert_runs_to_in(srcs: &[&Path], expected: i32, cwd: &Path) -> Output {
+    let mut args = vec!["run".to_string()];
+    args.extend(srcs.iter().map(|s| s.display().to_string()));
+    let out = Command::new(env!("CARGO_BIN_EXE_tuo"))
+        .args(&args)
+        .current_dir(cwd)
+        .output()
+        .expect("the tuo binary runs");
+    let code = out.status.code();
+    assert_eq!(
+        code,
+        Some(expected),
+        "tuo run {args:?} (in {}) exited {code:?}, expected {expected}\nstderr:\n{}",
+        cwd.display(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    out
+}
+
 /// cli-stats: a runnable command-line statistics tool. Since ADR-0006 it
 /// prints its report through `std::io::println` (consuming the stdlib module
 /// as input); stdout is the exact four-line report and exit = 18.
@@ -206,6 +230,98 @@ fn concurrent_worker_scheduling_core_checks_specs_and_runs() {
     assert_checks(&[&main]);
     assert_specs_green(&dir);
     assert_runs_to(&[&main], 15);
+}
+
+/// router: the declarative dispatch table. Its route registry is a runtime
+/// `Map[Str, Int]` and its handlers are function values in a fixed
+/// `[fn(in Request) -> Int; 4]` — the **split table** forced by ADR-0012 (a
+/// growable `Array[Route]` holding a function-valued field is refused), which
+/// is this example's documented finding. `main` resolves each path at runtime
+/// and calls through the slot it lands on, so the native run exercises a real
+/// indirect call (ADR-0008 Tier 1) that no pass can fold back into a direct
+/// one. Everything is pure, so the whole router is spec-checked; exit = 74.
+#[test]
+fn router_dispatch_table_checks_specs_and_runs() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    assert_checks(&[&main]);
+    assert_specs_green(&dir);
+    assert_runs_to(&[&main], 74);
+}
+
+/// log-analytics: the keyed-aggregation tool. It scans a literal access log
+/// byte by byte, builds its columns in growable `Array[Int]`s, and folds the
+/// whole log into a `Map[Int, Int]` in ONE pass (ADR-0011) — pinned by its
+/// specs against an independent per-status re-scan, so the map path and a
+/// naive path must agree. Writing it surfaced a real backend boundary, which
+/// the example documents in place rather than hiding: the Cranelift debug
+/// backend does not lower `Rvalue::Len`, so neither `std::array::len(xs)` nor
+/// `for x in xs` over a *growable* array compiles there (both work on LLVM and
+/// in the interpreter), and the runtime paths therefore carry their lengths
+/// explicitly. Exit = 42.
+#[test]
+fn log_analytics_checks_specs_and_runs() {
+    let dir = example_dir("log-analytics");
+    let main = dir.join("src/main.tuo");
+    assert_checks(&[&main]);
+    assert_specs_green(&dir);
+    assert_runs_to(&[&main], 42);
+}
+
+/// log-analytics stays inside the subset **both** backends lower: the same
+/// program must reach the same answer under the optimizing LLVM release
+/// backend as under the Cranelift debug backend. This is the example's own
+/// guard on the `Rvalue::Len` finding above — if a runtime path regained a
+/// `for` over a growable array it would still pass `--release` while failing
+/// the debug build, so both are asserted.
+#[test]
+fn log_analytics_runs_the_same_on_both_backends() {
+    let main = example_dir("log-analytics").join("src/main.tuo");
+    let out = tuo(&["run", "--release", &main.display().to_string()]);
+    assert_eq!(
+        out.status.code(),
+        Some(42),
+        "log-analytics under --release exited {:?}, expected 42\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
+
+/// file-report: the disk roundtrip. Its report *content* is rendered into an
+/// owned `String` by pure, spec-checked code; its effect tier really writes
+/// that file, reads it back a byte at a time, compares it byte-for-byte, and
+/// removes it (ADR-0013's `open`/`close`/`remove_file` on the ADR-0006
+/// descriptor seam). Effectful functions can carry no spec (`R0007`), so this
+/// test is their pin: the program is run in a scratch directory, its stdout is
+/// asserted byte-for-byte, and the exit byte is the number of report lines it
+/// verified *through the disk* — reachable only if every I/O step succeeded.
+#[test]
+fn file_report_checks_specs_runs_and_roundtrips_a_real_file() {
+    let dir = example_dir("file-report");
+    let main = dir.join("src/main.tuo");
+    assert_checks(&[&main]);
+    assert_specs_green(&dir);
+
+    // A scratch directory of its own: the program writes a file relative to
+    // the working directory, so it must not run in the repository.
+    let scratch = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join("dogfood_examples")
+        .join("file-report");
+    std::fs::create_dir_all(&scratch).expect("scratch dir is creatable");
+
+    let out = assert_runs_to_in(&[&main], 7, &scratch);
+    assert_eq!(
+        String::from_utf8_lossy(&out.stdout),
+        "samples 7\ntotal 8762\nmean 1251\npeak 1650\ntrough 875\nspread 775\nbusy 3\nverified 7\n",
+        "file-report must print its documented report and verdict, byte for byte"
+    );
+
+    // The program removes its own scratch file, so running it leaves nothing
+    // behind — the property that makes it safe to re-run in CI.
+    assert!(
+        !scratch.join("file-report-output.txt").exists(),
+        "file-report left its scratch file behind; it must clean up after itself"
+    );
 }
 
 /// The medium multi-package workspace: `app → geometry → numeric`. Every
