@@ -1,0 +1,482 @@
+module log_analytics;
+
+// log-analytics — a log-aggregation tool, dogfooded on the post-ADR-0011 core.
+//
+// A real log analyzer reads request lines, parses each into structured fields,
+// aggregates them by key, and reports the result. That shape needs three
+// things the earlier examples predate: byte-level `Str` scanning over an owned
+// payload (ADR-0006/0009/0010), growable `Array[T]` (ADR-0009/0012), and a
+// **hash map** to aggregate by key in ONE pass instead of re-scanning the log
+// once per key (ADR-0011). This program is that pipeline, and it exercises the
+// map for real rather than describing it.
+//
+// It uses only the builtin `std::str` / `std::string` / `std::array` /
+// `std::map` operations, so it is a single self-contained file — the catalog
+// modules (`std::str::split`, `std::str::parse_int`) would have to be vendored
+// as source the way `cli-stats` vendors `std::io`, and writing the field
+// scanning directly is the more honest dogfooding: it is real logic in the
+// runnable core, not a call into a library that already works.
+//
+// Every function here is pure, so every one is spec-checked, and the map
+// aggregation is pinned against an independent per-status re-scan — the oracle
+// discipline `data-pipeline` uses for its own map path: two unrelated
+// computations must agree, so a bug in either breaks the specs.
+//
+// Writing this example found a real compiler gap and fixed it rather than
+// working around it: neither backend lowered `Rvalue::Len`, which is what a
+// `for x in xs` over a GROWABLE `Array[T]` compiles to, so this program was
+// refused natively at first. Both backends now lower it (and the growable
+// index projection underneath it), pinned three-way by
+// `tests/codegen/fixtures/arr_for_len.tuo`, so the loops below are written the
+// obvious way.
+//
+// It compiles with `tuo check`, its specs run under `tuo test`, and it runs
+// natively with `tuo run`, exiting with `report()` — 42.
+
+// --- The input -------------------------------------------------------------
+
+/// The raw access log: one request per line, each `METHOD PATH STATUS BYTES`.
+/// Written with explicit `\n` separators (string literals never span lines),
+/// and chosen so the aggregates land on distinct, hand-checkable values.
+fn payload() -> Str {
+    "GET /health 200 128\nGET /users 200 512\nPOST /users 201 256\nGET /missing 404 64\nGET /users 200 512\nPOST /orders 500 32\nGET /health 200 128"
+}
+
+/// The number of log lines in `payload()`.
+fn line_count() -> Int {
+    7
+}
+
+/// The byte value of a space — the field separator.
+fn space() -> Int {
+    32
+}
+
+/// The byte value of a newline — the record separator.
+fn newline() -> Int {
+    10
+}
+
+// --- Byte-level scanning ---------------------------------------------------
+//
+// The primitives the rest of the program is built from. Each is total: an
+// out-of-range request yields the end of the input rather than trapping, so a
+// malformed line degrades the report instead of aborting the run.
+
+/// The index of the next `b` in `s` at or after `from`, or `len(s)` when there
+/// is none. Bounded by the length, so it always terminates.
+fn index_of_from(in s: Str, take b: Int, take from: Int) -> Int {
+    let n = std::str::len(s);
+    var i = from;
+    while i < n {
+        if std::str::byte_at(s, i) == b {
+            return i;
+        }
+        i = i + 1;
+    }
+    n
+}
+
+/// The end of the line beginning at `start`: the next newline, or the end of
+/// the payload for the final line.
+fn line_end(in s: Str, take start: Int) -> Int {
+    index_of_from(s, newline(), start)
+}
+
+/// Whether a byte is an ASCII digit.
+fn is_digit(take b: Int) -> Bool {
+    b >= 48 && b <= 57
+}
+
+/// The non-negative integer spelled by the bytes of `s` in `[start, end)`, or
+/// 0 when the range holds anything that is not a digit. Total by construction:
+/// no status code or byte count is 0, so the sentinel is unambiguous.
+fn parse_uint(in s: Str, take start: Int, take end: Int) -> Int {
+    if start >= end {
+        return 0;
+    }
+    var value = 0;
+    var i = start;
+    while i < end {
+        let b = std::str::byte_at(s, i);
+        if !is_digit(b) {
+            return 0;
+        }
+        value = value * 10 + (b - 48);
+        i = i + 1;
+    }
+    value
+}
+
+// --- Field extraction ------------------------------------------------------
+//
+// A line is four space-separated fields: METHOD PATH STATUS BYTES. Fields are
+// located by index, so the parser reads the same way the format is documented.
+
+/// The start offset of field `n` of the line beginning at `start`, clamped to
+/// the line's end when the line has fewer fields.
+fn field_start(in s: Str, take start: Int, take n: Int) -> Int {
+    let stop = line_end(s, start);
+    var at = start;
+    var seen = 0;
+    while seen < n {
+        let next = index_of_from(s, space(), at);
+        if next >= stop {
+            return stop;
+        }
+        at = next + 1;
+        seen = seen + 1;
+    }
+    at
+}
+
+/// The end offset of the field beginning at `from` within the line that ends
+/// at `stop`: the next space, or the line's end.
+fn field_end(in s: Str, take from: Int, take stop: Int) -> Int {
+    let next = index_of_from(s, space(), from);
+    if next < stop {
+        next
+    } else {
+        stop
+    }
+}
+
+/// Field `n` of the line beginning at `start`, copied out as owned text.
+fn field(in s: Str, take start: Int, take n: Int) -> String {
+    let stop = line_end(s, start);
+    let from = field_start(s, start, n);
+    let to = field_end(s, from, stop);
+    std::string::from_str(std::str::slice(s, from, to))
+}
+
+/// Field `n` of the line beginning at `start`, read as a non-negative integer
+/// (0 when the field is absent or not a number).
+fn field_uint(in s: Str, take start: Int, take n: Int) -> Int {
+    let stop = line_end(s, start);
+    let from = field_start(s, start, n);
+    let to = field_end(s, from, stop);
+    parse_uint(s, from, to)
+}
+
+/// The HTTP method of the line beginning at `start`.
+fn method_at(take start: Int) -> String {
+    field(payload(), start, 0)
+}
+
+/// The request path of the line beginning at `start`.
+fn path_at(take start: Int) -> String {
+    field(payload(), start, 1)
+}
+
+/// The status code of the line beginning at `start`.
+fn status_at(take start: Int) -> Int {
+    field_uint(payload(), start, 2)
+}
+
+/// The byte count of the line beginning at `start`.
+fn bytes_at(take start: Int) -> Int {
+    field_uint(payload(), start, 3)
+}
+
+// --- Classification --------------------------------------------------------
+
+/// Whether a status code denotes success (2xx).
+fn is_success(take status: Int) -> Bool {
+    status >= 200 && status < 300
+}
+
+/// Whether a status code denotes a client fault (4xx).
+fn is_client_error(take status: Int) -> Bool {
+    status >= 400 && status < 500
+}
+
+/// Whether a status code denotes a server fault (5xx).
+fn is_server_error(take status: Int) -> Bool {
+    status >= 500 && status < 600
+}
+
+// --- The scan --------------------------------------------------------------
+//
+// One walk over the payload produces the columns every aggregate reads. The
+// growable `Array[Int]` is what makes this expressible: the line count is a
+// property of the data, not a constant a fixed `[Int; N]` could declare.
+
+/// How many lines the payload holds — counted by the same walk `line_starts`
+/// makes, so the two can never disagree about where the records are. Kept as
+/// an independent oracle for `std::array::len(line_starts())`, which the specs
+/// pin equal to it.
+fn line_total() -> Int {
+    let s = payload();
+    let n = std::str::len(s);
+    var count = 0;
+    var at = 0;
+    while at < n {
+        count = count + 1;
+        at = line_end(s, at) + 1;
+    }
+    count
+}
+
+/// The start offset of every line in the payload, in order.
+fn line_starts() -> Array[Int] {
+    let s = payload();
+    let n = std::str::len(s);
+    var out = std::array::empty();
+    var at = 0;
+    while at < n {
+        std::array::push(out, at);
+        at = line_end(s, at) + 1;
+    }
+    out
+}
+
+/// The status code of every line, in order — the column the aggregates read.
+fn statuses() -> Array[Int] {
+    let starts = line_starts();
+    let total = line_total();
+    var out = std::array::empty();
+    var i = 0;
+    while i < total {
+        std::array::push(out, status_at(std::array::get(starts, i)));
+        i = i + 1;
+    }
+    out
+}
+
+/// The byte count of every line, in order.
+fn byte_counts() -> Array[Int] {
+    let starts = line_starts();
+    let total = line_total();
+    var out = std::array::empty();
+    var i = 0;
+    while i < total {
+        std::array::push(out, bytes_at(std::array::get(starts, i)));
+        i = i + 1;
+    }
+    out
+}
+
+/// Total bytes served across the whole log.
+fn total_bytes() -> Int {
+    var total = 0;
+    for b in byte_counts() {
+        total = total + b;
+    }
+    total
+}
+
+// --- Keyed aggregation (the ADR-0011 map path) -----------------------------
+
+/// How many requests ended in each status code — the whole log folded into a
+/// `Map[Int, Int]` in ONE pass. This is the point of the map: `count_by_scan`
+/// below answers the same question in one pass *per key*, and the specs pin
+/// the two equal.
+fn status_counts() -> Map[Int, Int] {
+    var table = std::map::empty();
+    for s in statuses() {
+        let seen = match std::map::get(table, s) {
+            Some { value } => value,
+            None => 0,
+        };
+        std::map::insert(table, s, seen + 1);
+    }
+    table
+}
+
+/// How many requests ended in `status`, read out of the aggregated map.
+fn count_of(take status: Int) -> Int {
+    let table = status_counts();
+    match std::map::get(table, status) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+/// How many requests ended in `status`, counted by an independent re-scan.
+/// The oracle for the map path: unrelated computation, same answer.
+fn count_by_scan(take status: Int) -> Int {
+    var n = 0;
+    for s in statuses() {
+        if s == status {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+/// How many distinct status codes the log contains — the map's key count.
+fn distinct_statuses() -> Int {
+    std::map::len(status_counts())
+}
+
+/// The most frequent status code, and how often it occurred, resolved by
+/// walking the map's keys — insertion-ordered, so this is deterministic.
+fn most_common_count() -> Int {
+    let table = status_counts();
+    let ks = std::map::keys(table);
+    let n = std::map::len(table);
+    var best = 0;
+    var i = 0;
+    while i < n {
+        let k = std::array::get(ks, i);
+        let n = match std::map::get(table, k) {
+            Some { value } => value,
+            None => 0,
+        };
+        if n > best {
+            best = n;
+        }
+        i = i + 1;
+    }
+    best
+}
+
+/// The number of requests in a status class, by re-scan.
+fn class_count(take low: Int, take high: Int) -> Int {
+    var n = 0;
+    for s in statuses() {
+        if s >= low && s < high {
+            n = n + 1;
+        }
+    }
+    n
+}
+
+/// The number of successful (2xx) requests.
+fn success_count() -> Int {
+    class_count(200, 300)
+}
+
+/// The number of client-fault (4xx) requests.
+fn client_error_count() -> Int {
+    class_count(400, 500)
+}
+
+/// The number of server-fault (5xx) requests.
+fn server_error_count() -> Int {
+    class_count(500, 600)
+}
+
+/// The success rate in whole percent, floored. The guard keeps the function
+/// total for an empty log, where the rate is undefined.
+fn success_percent() -> Int {
+    let total = std::array::len(statuses());
+    if total == 0 {
+        0
+    } else {
+        success_count() * 100 / total
+    }
+}
+
+// --- The report ------------------------------------------------------------
+
+/// A single figure small enough to survive exit-status truncation: ten per
+/// distinct status code (4), plus the server-error count (1), plus the most
+/// common status's tally (4), minus three. For this log that is
+/// 40 + 1 + 4 - 3 = 42.
+fn report() -> Int {
+    distinct_statuses() * 10 + server_error_count() + most_common_count() - 3
+}
+
+fn main() -> Int {
+    report()
+}
+
+// --- Executable specs ------------------------------------------------------
+
+spec index_of_from {
+    then index_of_from("a b", 32, 0) == 1;
+    then index_of_from("a b", 32, 2) == 3;
+    then index_of_from("abc", 32, 0) == 3;
+}
+
+spec is_digit {
+    then is_digit(48);
+    then is_digit(57);
+    then !is_digit(47);
+    then !is_digit(58);
+}
+
+spec parse_uint {
+    then parse_uint("200", 0, 3) == 200;
+    then parse_uint("512", 0, 3) == 512;
+    then parse_uint("0", 0, 1) == 0;
+    then parse_uint("x1", 0, 2) == 0;
+    then parse_uint("7", 0, 0) == 0;
+}
+
+spec "a line splits into its four fields" {
+    then std::string::as_str(method_at(0)) == "GET";
+    then std::string::as_str(path_at(0)) == "/health";
+    then status_at(0) == 200;
+    then bytes_at(0) == 128;
+}
+
+spec "a missing field yields the empty string, not a trap" {
+    then std::string::as_str(field(payload(), 0, 9)) == "";
+    then field_uint(payload(), 0, 9) == 0;
+}
+
+spec is_success {
+    then is_success(200);
+    then is_success(201);
+    then !is_success(404);
+    then !is_success(500);
+}
+
+spec is_client_error {
+    then is_client_error(404);
+    then !is_client_error(200);
+    then !is_client_error(500);
+}
+
+spec is_server_error {
+    then is_server_error(500);
+    then !is_server_error(404);
+}
+
+spec "the payload scans into one entry per request" {
+    then line_total() == line_count();
+    then std::array::len(line_starts()) == line_count();
+    then std::array::len(statuses()) == line_count();
+    then std::array::len(byte_counts()) == line_count();
+}
+
+spec total_bytes {
+    then total_bytes() == 1632;
+}
+
+spec "the map aggregation agrees with an independent re-scan" {
+    then count_of(200) == count_by_scan(200);
+    then count_of(201) == count_by_scan(201);
+    then count_of(404) == count_by_scan(404);
+    then count_of(500) == count_by_scan(500);
+    then count_of(999) == count_by_scan(999);
+}
+
+spec count_of {
+    then count_of(200) == 4;
+    then count_of(201) == 1;
+    then count_of(404) == 1;
+    then count_of(500) == 1;
+    then count_of(999) == 0;
+}
+
+spec distinct_statuses {
+    then distinct_statuses() == 4;
+}
+
+spec most_common_count {
+    then most_common_count() == 4;
+}
+
+spec "the tallies partition the log" {
+    then success_count() == 5;
+    then client_error_count() == 1;
+    then server_error_count() == 1;
+    then success_percent() == 71;
+}
+
+spec report {
+    then report() == 42;
+}

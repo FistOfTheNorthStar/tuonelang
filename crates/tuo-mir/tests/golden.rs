@@ -133,7 +133,7 @@ fn ownership_ok_corpus_lowers_or_skips_for_documented_reasons() {
         "destructuring `for` patterns are not lowered in v0",
         "or-patterns that bind are not lowered in v0",
         "match guards on arms that bind non-`Copy` values are not lowered in v0",
-        "iterating an array of non-`Copy` elements is not lowered in v0",
+        "iterating a fixed `[T; N]` of non-`Copy` elements is not lowered in v0",
         "impl functions are not lowered in v0",
     ];
     let mut lowered = 0usize;

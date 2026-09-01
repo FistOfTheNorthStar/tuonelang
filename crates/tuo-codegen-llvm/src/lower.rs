@@ -48,7 +48,13 @@
 //! by-pointer/sret call ABI, every size/offset from the runtime ABI. Fixed
 //! arrays are laid out inline — element `i` at `i × stride(T)` — and indexed
 //! by unchecked address arithmetic, because MIR asserts the bounds
-//! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use.
+//! (`Assert { IndexOutOfBounds }`) before every `Projection::Index` use. A
+//! growable `Array[T]` is indexed the same way, one indirection later: its
+//! place holds the `{ptr, len, cap}` header, so element 0 is at the header's
+//! `ptr` word rather than inline. That is also what `Rvalue::Len` reads (the
+//! `len` word), so `for x in xs` — which lowers to a `Len` plus an `Index` —
+//! and `std::array::len`/`get` observe one header, never two notions of
+//! length.
 //!
 //! # Heap values (ADR-0009 Stage B)
 //!
@@ -1195,13 +1201,17 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 self.lower_heap_op_scalar(*op, subject.as_ref(), args)
             }
-            // `Len` applies only to the growable `Array[T]` (a `[T; N]`'s
-            // length is lowered as a constant and the MIR verifier rejects
-            // `Len` of a fixed-array place), so refusing it entirely stays
-            // sound for fixed arrays.
-            Rvalue::Len(_) => Err(CodegenError::unsupported(
-                "the growable `Array[T]` (and its `Len`) is not lowered by the LLVM backend yet",
-            )),
+            // `Len` applies only to the growable `Array[T]`: the MIR verifier
+            // rejects `Len` of a fixed-array place (a `[T; N]`'s length is
+            // lowered as a constant), so the place here always holds a
+            // three-word `{ptr, len, cap}` header and the length is its `len`
+            // word — the same load `HeapOp::ArrayLen` performs, which is what
+            // keeps `for x in xs` and `std::array::len(xs)` in agreement.
+            Rvalue::Len(place) => {
+                let header = self.header_address(place)?;
+                let (_ptr, len, _cap) = self.load_header(header)?;
+                Ok(len.into())
+            }
         }
     }
 
@@ -1810,14 +1820,29 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     addr = self.byte_gep(addr, offset)?;
                 }
                 Projection::Index(index_local) => {
-                    // Only the fixed `[T; N]` is indexable natively; element
-                    // `i` lives at `i × stride(T)` (the ABI's inline layout).
+                    // Both array kinds are indexable; they differ only in where
+                    // the elements live. A fixed `[T; N]` stores them inline, so
+                    // the running address already points at element 0. A
+                    // growable `Array[T]` stores them in its heap buffer, so the
+                    // running address points at the `{ptr, len, cap}` header and
+                    // element 0 is at its `ptr` word — the same base
+                    // `HeapOp::ArrayGet` loads, which is what keeps indexing and
+                    // `std::array::get(xs, i)` in agreement. Either way element
+                    // `i` then lives at `i × stride(T)`.
                     let element = match &cur_ty {
                         Ty::FixedArray(element, _) => (**element).clone(),
+                        Ty::Array(element) => {
+                            let element = (**element).clone();
+                            addr = self
+                                .builder
+                                .build_load(self.ptr_ty, addr, "arr_buf")
+                                .map_err(builder_err("loading the array buffer pointer"))?
+                                .into_pointer_value();
+                            element
+                        }
                         _ => {
-                            return Err(CodegenError::unsupported(
-                                "indexing the growable `Array[T]` is not lowered by the LLVM \
-                                 backend (only the fixed `[T; N]` is)",
+                            return Err(CodegenError::backend(
+                                "indexing a place that is neither a fixed nor a growable array",
                             ));
                         }
                     };

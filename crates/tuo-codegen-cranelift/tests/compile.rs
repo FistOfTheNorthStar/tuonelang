@@ -450,9 +450,14 @@ fn heap_wrapper_types_are_refused_at_classification_time_with_a_clean_message() 
 }
 
 #[test]
-fn an_array_index_projection_is_still_unsupported() {
-    // Arrays are Stage 2: an `Index` projection must still be refused (never
-    // silently lowered) even though struct/tuple/enum projections now work.
+fn a_growable_array_index_projection_now_compiles() {
+    // An `Index` projection into a growable `Array[T]` is lowered since the
+    // ADR-0009 header gained its indexing path: the place holds the three-word
+    // `{ptr, len, cap}` header, so element `i` is read from the heap buffer at
+    // `ptr + i × stride(T)` — the same base `HeapOp::ArrayGet` uses, which is
+    // what keeps `for x in xs` / `xs[i]` and `std::array::get(xs, i)` in
+    // agreement. (End-to-end three-way agreement with the interpreter and the
+    // LLVM backend is pinned in `tuo-cli/tests/codegen_three_way.rs`.)
     use tuo_mir::{Projection, Rvalue};
     let array_ty = Ty::Array(Box::new(Ty::int()));
     let function = Function {
@@ -493,7 +498,7 @@ fn an_array_index_projection_is_still_unsupported() {
         functions: vec![function],
         skipped: Vec::new(),
     };
-    let error = CraneliftBackend::new()
+    CraneliftBackend::new()
         .compile(
             &program,
             &TypeckResult::default(),
@@ -501,8 +506,7 @@ fn an_array_index_projection_is_still_unsupported() {
             EntryAbi::IntReturn,
             &TargetSpec::host(),
         )
-        .expect_err("array indexing is a Stage 2 concern and must be refused");
-    assert_eq!(error.kind, CodegenErrorKind::Unsupported);
+        .expect("indexing a growable array lowers to a load from its heap buffer");
 }
 
 // ---------------------------------------------------------------------------

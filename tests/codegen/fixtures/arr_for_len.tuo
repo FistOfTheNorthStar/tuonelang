@@ -1,0 +1,51 @@
+// `Rvalue::Len` over a growable `Array[T]`: both `for x in xs` (whose desugaring
+// reads the array's length and indexes it) and `std::array::len(xs)` must lower
+// on both backends and agree with the interpreter. Before this was lowered the
+// two backends refused the program outright, so this fixture is the regression
+// guard for that gap.
+//
+// The `for` sums 3+5+7+9 = 24 over the heap buffer; `len` is 4; the indexed
+// while-loop re-reads the same elements as an independent oracle and must
+// produce the same 24. Exit = 24 + 4 = 28.
+fn build() -> Array[Int] {
+    var xs = std::array::empty();
+    var i = 0;
+    while i < 4 {
+        std::array::push(xs, i * 2 + 3);
+        i = i + 1;
+    }
+    xs
+}
+
+/// Sum by `for` — the path that lowers `Rvalue::Len` plus a growable index.
+fn sum_for() -> Int {
+    var total = 0;
+    for x in build() {
+        total = total + x;
+    }
+    total
+}
+
+/// Sum by explicit index — the `HeapOp` path, an independent oracle for the
+/// `for` above. If the two disagree the loop lowering is wrong.
+fn sum_indexed() -> Int {
+    let xs = build();
+    let n = std::array::len(xs);
+    var total = 0;
+    var i = 0;
+    while i < n {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> Int {
+    let a = sum_for();
+    let b = sum_indexed();
+    if a == b {
+        a + std::array::len(build())
+    } else {
+        0
+    }
+}

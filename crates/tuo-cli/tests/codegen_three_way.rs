@@ -307,6 +307,8 @@ fn owned_heap_values_agree_across_all_three_engines() {
         "str_owned_concat.tuo", // concat: alloc + copy, len out
         "str_builder.tuo",      // push_byte loop: repeated growth
         "arr_grow.tuo",         // array push loop + get + len
+        "arr_for_len.tuo",      // `for` over a growable array: Rvalue::Len + heap index
+        "arr_for_owned.tuo",    // `for` over owned elements: deep copy + per-iteration drop
         "arr_pop.tuo",          // pop unwrapped via match (Some/None)
         "str_from_slice.tuo",   // from_str + slice (copy-out) + byte_at
         "str_as_str_view.tuo",  // as_str: zero-copy {ptr, len} view (ADR-0010)

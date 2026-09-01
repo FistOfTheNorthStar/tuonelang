@@ -2368,15 +2368,23 @@ impl FnLower<'_> {
         item: &Ty,
         body: &Block,
     ) -> Result<Option<()>, Skip> {
-        if !self.is_copy(item) {
-            return Err(
-                "iterating an array of non-`Copy` elements is not lowered in v0".to_owned(),
-            );
-        }
         // The iterable is either the growable `Array[T]` or the fixed
         // `[T; N]` (ADR-0004 Stage 2); the counted loop is identical, only
-        // the `len` source differs below.
+        // the `len` source and the per-element read differ below.
         let array_ty = self.expr_ty(iter)?;
+        // A non-`Copy` element cannot be read out with `Operand::Copy` — the
+        // loop would alias the array's own storage and then drop it twice. The
+        // growable `Array[T]` has the `HeapOp::ArrayGet` deep-copy read for
+        // exactly this (the same operation `std::array::get` lowers to, so the
+        // two agree element for element, and both backends already lower it).
+        // A fixed `[T; N]` has no header to read through, so an owned element
+        // there stays unlowered until it gains one.
+        let owned_element = !self.is_copy(item);
+        if owned_element && matches!(array_ty, Ty::FixedArray(_, _)) {
+            return Err(
+                "iterating a fixed `[T; N]` of non-`Copy` elements is not lowered in v0".to_owned(),
+            );
+        }
         let Some(value) = self.expr(iter)? else {
             return Ok(None);
         };
@@ -2405,9 +2413,19 @@ impl FnLower<'_> {
             _ => Rvalue::Len(array.clone()),
         };
         let len = self.assign_temp(len_rvalue, Ty::Int(IntKind::Usize), iter.span)?;
-        let element = match binding {
-            Some(symbol) => self.local_for(symbol, iter.span)?,
-            None => self.temp(item.clone(), iter.span),
+        // A `Copy` binding is an ordinary local of the enclosing scope: it is
+        // overwritten each iteration and needs no drop. An owned binding is
+        // declared *inside* a per-iteration scope opened in the body below, so
+        // its element is dropped at the end of every iteration and its
+        // initialization state never crosses the back edge (which must agree
+        // with the loop head).
+        let element = if owned_element {
+            None
+        } else {
+            Some(match binding {
+                Some(symbol) => self.local_for(symbol, iter.span)?,
+                None => self.temp(item.clone(), iter.span),
+            })
         };
         let head = self.new_block();
         self.terminate(Terminator::Goto(head));
@@ -2440,15 +2458,54 @@ impl FnLower<'_> {
             exit_state: Some(head_state.clone()),
         });
         self.switch_to(body_block);
-        let mut element_source = array.clone();
-        element_source
-            .projection
-            .push(Projection::Index(index.local));
-        self.store(
-            &Place::local(element),
-            Rvalue::Use(Operand::Copy(element_source)),
-        )?;
-        let live = self.block(body)?.is_some();
+        let live = if let Some(element) = element {
+            let mut element_source = array.clone();
+            element_source
+                .projection
+                .push(Projection::Index(index.local));
+            self.store(
+                &Place::local(element),
+                Rvalue::Use(Operand::Copy(element_source)),
+            )?;
+            self.block(body)?.is_some()
+        } else {
+            // The per-iteration scope: declare the owned binding, fill it with
+            // the `get(xs, i)` deep copy (the same operation `std::array::get`
+            // lowers to, so the loop and an indexed read agree element for
+            // element), run the body, then close the scope so the element's
+            // drop glue runs before the back edge.
+            self.push_scope();
+            let element = match binding {
+                Some(symbol) => self.local_for(symbol, iter.span)?,
+                None => self.temp(item.clone(), iter.span),
+            };
+            // `array_get`'s index operand is an `I64` (the builtin's declared
+            // parameter type); the loop cursor is a `Usize`, so it is cast.
+            let get_index = self.assign_temp(
+                Rvalue::Cast {
+                    kind: CastKind::IntToInt,
+                    operand: Operand::Copy(index.clone()),
+                    to: Ty::int(),
+                },
+                Ty::int(),
+                iter.span,
+            )?;
+            self.store(
+                &Place::local(element),
+                Rvalue::HeapOp {
+                    op: HeapOp::ArrayGet,
+                    subject: Some(array.clone()),
+                    args: vec![Operand::Copy(get_index)],
+                },
+            )?;
+            let live = self.block(body)?.is_some();
+            if live {
+                self.end_scope()?;
+            } else {
+                self.discard_scope();
+            }
+            live
+        };
         if live {
             self.expect_state(&head_state)?;
             self.terminate(Terminator::Goto(step_block));

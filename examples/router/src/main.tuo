@@ -1,0 +1,375 @@
+module router;
+
+// router — a declarative request router, dogfooded against the limits of v0.
+//
+// Every web framework a programmer arrives from — FastAPI, Flask, Express,
+// Axum — is built on ONE idea: a table mapping a route to a **handler
+// function**, consulted at runtime to decide which code answers a request.
+// `http-service` already routes, but it routes with a hand-written `if`/`else`
+// chain over integer tags: adding a route there means editing the decision
+// function. That is not a router, it is a switch statement. A router stores
+// its handlers as *data*.
+//
+// This example is that table, and it works: since ADR-0008 Tier 1 landed
+// first-class non-capturing function values, a handler is an ordinary value
+// (`fn(in Request) -> Int`), and since ADR-0011 landed the hash map, a path
+// can be looked up in one probe. The dispatch is real — `main` resolves a
+// path at runtime and calls through the resulting function value, exercising a
+// native indirect call, not a branch the compiler folded away.
+//
+// It exists to answer a question honestly: how close can v0 get to the
+// declarative router shape, and exactly where does it stop? The answer is the
+// SPLIT TABLE below, and the seam it forced is this example's real finding.
+//
+// --- The finding: why the table is split -----------------------------------
+//
+// The shape every framework uses is ONE table of route records:
+//
+//     struct Route { path: String, handler: fn(in Request) -> Int }
+//     var routes = std::array::empty();          // Array[Route]
+//     std::array::push(routes, Route { ... });   // register a route
+//
+// v0 refuses that, and refuses it *loudly* rather than mis-compiling it:
+//
+//     error[T0001]: `Array[Route]` is not supported in v0
+//       the growable `Array` element type must be a scalar
+//       (`Int`/`Float`/`Bool`/`Str`/`String`) or a supported struct/enum,
+//       not `Route`
+//
+// A function value is not in ADR-0012's growable-element set, so a struct
+// carrying one cannot be an `Array` element. The registry therefore splits in
+// two, joined by an index:
+//
+//   * `Map[Str, Int]` — path to handler SLOT. Growable, so routes are
+//     registered at runtime, in any order, by ordinary calls (`register`).
+//   * `[fn(in Request) -> Int; ROUTE_COUNT]` — the handlers themselves, a
+//     FIXED array, because a fixed array's element set does admit a function
+//     value.
+//
+// The split costs exactly what the fixed half costs: `ROUTE_COUNT` is a
+// compile-time constant, so the handler set is closed — a program cannot
+// accept a handler it did not name in its source. Registration order must also
+// agree with the array literal by hand, which `routes()` centralizes and the
+// specs pin (`every_route_dispatches_to_its_own_handler`), because nothing in
+// the type system relates the two halves. That unchecked correspondence is the
+// finding: it is a real invariant this example maintains with tests because v0
+// cannot state it in a type.
+//
+// Per the project's rule — every language change discovered by dogfooding gets
+// an ADR and a benchmark plan, never an ad-hoc feature to make one example
+// compile — this example does NOT propose syntax. It runs, it documents the
+// seam, and it is the evidence a future ADR on function-valued `Array`
+// elements would be argued from.
+//
+// --- What is deliberately NOT here -----------------------------------------
+//
+// The decorator spelling (`@app.get("/users")`) needs three things v0 does not
+// have and this example does not fake: decorators, method-call syntax (`app.get`
+// — v0 has FREE FUNCTIONS only), and capturing closures. Registration is
+// therefore a plain call, which is the tuonelang-native spelling of the same
+// idea. FastAPI's other half — `async` — has no analogue either: tuonelang's
+// concurrency is structured fork-join, so a server here is an accept loop, not
+// an event loop. Nothing below pretends otherwise.
+//
+// Everything in this file is PURE, so every function is spec-checked and the
+// whole router runs inside the spec sandbox — no sockets, no effects. Wiring
+// it to a real connection is `http-service`'s `serve_once`, already live; this
+// example is deliberately the dispatch layer alone.
+//
+// It compiles with `tuo check`, its specs run under `tuo test`, and it runs
+// natively with `tuo run`, exiting with `report()` — 74.
+
+// --- The request ------------------------------------------------------------
+
+/// A parsed request, reduced to what the router decides on. `path` is a
+/// borrowed `Str` because the router never owns it — it is a slice of the
+/// request line the socket layer read.
+struct Request {
+    method: Int,
+    path: Str,
+}
+
+/// Method tags. v0 has no string enum, and comparing method *names* on every
+/// dispatch would byte-compare a `Str` per route, so the parse layer decodes a
+/// method once into a tag and the router compares integers.
+fn method_get() -> Int {
+    1
+}
+fn method_post() -> Int {
+    2
+}
+fn method_delete() -> Int {
+    3
+}
+
+/// Decode a method token into its tag (0 = unknown), the one place method
+/// spellings are compared.
+fn method_tag(in token: Str) -> Int {
+    if token == "GET" {
+        method_get()
+    } else if token == "POST" {
+        method_post()
+    } else if token == "DELETE" {
+        method_delete()
+    } else {
+        0
+    }
+}
+
+// --- Status codes -----------------------------------------------------------
+
+fn status_ok() -> Int {
+    200
+}
+fn status_created() -> Int {
+    201
+}
+fn status_no_content() -> Int {
+    204
+}
+fn status_not_found() -> Int {
+    404
+}
+fn status_method_not_allowed() -> Int {
+    405
+}
+
+// --- The handlers -----------------------------------------------------------
+//
+// Each handler is an ordinary top-level `fn` with ONE shared signature —
+// `fn(in Request) -> Int` — which is what makes them interchangeable values
+// storable in a single array. This uniform signature is the router's real
+// contract; a handler with a different shape could not sit in the table.
+
+/// `GET /` — the service root.
+fn handle_root(in request: Request) -> Int {
+    if request.method == method_get() {
+        status_ok()
+    } else {
+        status_method_not_allowed()
+    }
+}
+
+/// `GET /health` — a liveness probe, which answers with no body.
+fn handle_health(in request: Request) -> Int {
+    if request.method == method_get() {
+        status_no_content()
+    } else {
+        status_method_not_allowed()
+    }
+}
+
+/// `GET /users` lists, `POST /users` creates — the one route in this table
+/// whose answer depends on the method, so it proves the handler really
+/// receives the request rather than just its path.
+fn handle_users(in request: Request) -> Int {
+    if request.method == method_get() {
+        status_ok()
+    } else if request.method == method_post() {
+        status_created()
+    } else {
+        status_method_not_allowed()
+    }
+}
+
+/// The fallback handler, dispatched to whenever no route matches. A router
+/// answering an unknown path is a normal outcome, not an error path: making
+/// 404 an ordinary slot in the table means `dispatch` has exactly one exit and
+/// never needs an `Option` the caller must unwrap.
+fn handle_not_found(in request: Request) -> Int {
+    status_not_found()
+}
+
+// --- The split table --------------------------------------------------------
+
+/// The number of handler slots — the FIXED half of the split table. Adding a
+/// route means adding a handler, extending `handler_table`, and registering
+/// the path in `routes`; the specs pin all three agreeing.
+fn route_count() -> Int {
+    4
+}
+
+/// The slot every unmatched path falls through to. It is the LAST slot by
+/// convention, so the real routes occupy `0..3` in registration order.
+fn not_found_slot() -> Int {
+    3
+}
+
+/// The handler table: the fixed array a function value may live in.
+///
+/// This is the half ADR-0012 constrains. A `[fn(in Request) -> Int; N]` is
+/// fine — a fixed array's elements may be function values — while the
+/// growable `Array[Route]` this would rather be is refused. Slot order is
+/// load-bearing and matches `routes()` exactly.
+fn handler_table() -> [fn(in Request) -> Int; 4] {
+    [handle_root, handle_health, handle_users, handle_not_found]
+}
+
+/// Register one route: bind `path` to a handler `slot`. This is the
+/// tuonelang-native spelling of `@app.get("/users")` — a plain call, made
+/// while the table is being built, with no decorator and no method syntax.
+fn register(mut routes: Map[Str, Int], in path: Str, take slot: Int) -> Int {
+    std::map::insert(routes, path, slot);
+    slot
+}
+
+/// Build the route registry — the growable half of the split table.
+///
+/// The map is populated at RUNTIME by ordinary calls, which is the property
+/// that makes this a router rather than a switch: routes are data, registered
+/// in any order, and a program could register them from a config file just as
+/// easily. Each slot must match `handler_table`'s index, an invariant the
+/// specs check rather than the type system.
+fn routes() -> Map[Str, Int] {
+    var table = std::map::empty();
+    register(table, "/", 0);
+    register(table, "/health", 1);
+    register(table, "/users", 2);
+    table
+}
+
+/// Resolve a path to a handler slot, falling back to `not_found_slot()`.
+///
+/// One hash probe, regardless of how many routes are registered — the reason
+/// the registry is a map and not a scan. `http-service`'s `if`/`else` chain
+/// compares every route in turn; this does not.
+fn slot_for(in table: Map[Str, Int], in path: Str) -> Int {
+    match std::map::get(table, path) {
+        Some { value } => value,
+        None => not_found_slot(),
+    }
+}
+
+/// Dispatch a request through the table: resolve its path to a slot, then
+/// **call the handler stored there**.
+///
+/// The call through `handler` is a genuine indirect call (ADR-0008 Tier 1) —
+/// the target is a value read out of an array at an index computed at
+/// runtime, so no compiler pass can turn it back into a direct call. That is
+/// what makes this a real dispatch table.
+fn dispatch(in table: Map[Str, Int], in request: Request) -> Int {
+    let slot = slot_for(table, request.path);
+    let handler = handler_table()[slot as Usize];
+    handler(request)
+}
+
+/// Route a raw (method, path) pair — the whole router in one call, the entry
+/// point a connection handler would use after parsing a request line.
+fn route(in method: Str, in path: Str) -> Int {
+    let table = routes();
+    dispatch(table, Request { method: method_tag(method), path: path })
+}
+
+// --- The acceptance oracle --------------------------------------------------
+
+/// A synthetic traffic sample driven through the full table, summed so a
+/// single integer proves every dispatch path executed: a root GET (200), a
+/// health GET (204), a users GET (200), a users POST (201), an unknown path
+/// (404), and a method the route refuses (405).
+///
+/// 200 + 204 + 200 + 201 + 404 + 405 = 1614, and the report is
+/// `1614 - 1540 = 74` — a value chosen to land inside one byte so the process
+/// exit status carries it exactly, with no `& 0xff` truncation to explain.
+fn report() -> Int {
+    let a = route("GET", "/");
+    let b = route("GET", "/health");
+    let c = route("GET", "/users");
+    let d = route("POST", "/users");
+    let e = route("GET", "/missing");
+    let f = route("DELETE", "/health");
+    ((((a + b) + c) + d) + (e + f)) - 1540
+}
+
+/// Exit with the router's report: 74.
+fn main() -> Int {
+    report()
+}
+
+// --- Executable specs -------------------------------------------------------
+
+spec method_tag {
+    then method_tag("GET") == method_get();
+    then method_tag("POST") == method_post();
+    then method_tag("DELETE") == method_delete();
+    then method_tag("PATCH") == 0;
+    then method_tag("") == 0;
+    // Decoding is exact, not a prefix match.
+    then method_tag("GETX") == 0;
+}
+
+spec slot_for {
+    then slot_for(routes(), "/") == 0;
+    then slot_for(routes(), "/health") == 1;
+    then slot_for(routes(), "/users") == 2;
+    // An unregistered path resolves to the fallback slot, never a stale hit.
+    then slot_for(routes(), "/missing") == not_found_slot();
+    then slot_for(routes(), "") == not_found_slot();
+    // Paths are matched exactly: no prefix or suffix match leaks through.
+    then slot_for(routes(), "/users/1") == not_found_slot();
+    then slot_for(routes(), "health") == not_found_slot();
+}
+
+spec "the split table's two halves agree" {
+    // The load-bearing invariant v0 cannot state in a type: every registered
+    // path must resolve to a slot that is in range, and the table must hold
+    // exactly `route_count()` handlers. If a route were registered with a slot
+    // past the end, `dispatch` would trap on the bounds check at runtime.
+    then slot_for(routes(), "/") < route_count();
+    then slot_for(routes(), "/health") < route_count();
+    then slot_for(routes(), "/users") < route_count();
+    then not_found_slot() < route_count();
+    then std::map::len(routes()) == route_count() - 1;
+}
+
+spec "every route dispatches to its own handler" {
+    // Each registered path reaches the handler that path is *for* — the
+    // check that catches a registration whose slot drifted from
+    // `handler_table`'s order, which is the split table's real failure mode.
+    then route("GET", "/") == status_ok();
+    then route("GET", "/health") == status_no_content();
+    then route("GET", "/users") == status_ok();
+    // Distinct handlers really are distinct: `/` and `/health` both answer a
+    // GET, but with different statuses, so a swapped registration is visible.
+    then route("GET", "/") != route("GET", "/health");
+}
+
+spec "handlers receive the request, not just the path" {
+    // Same path, different method, different status: proof the handler is
+    // called with the request rather than selected by path alone.
+    then route("POST", "/users") == status_created();
+    then route("GET", "/users") == status_ok();
+    then route("POST", "/users") != route("GET", "/users");
+}
+
+spec "an unmatched path dispatches to the fallback handler" {
+    then route("GET", "/missing") == status_not_found();
+    then route("POST", "/nope") == status_not_found();
+    // The fallback answers regardless of method — 404 precedes any method
+    // policy, because an unknown path has no policy to consult.
+    then route("DELETE", "/missing") == status_not_found();
+    then route("PATCH", "/missing") == status_not_found();
+}
+
+spec "a known path refuses a method it does not allow" {
+    // 405, not 404: the path exists, the method is wrong. Getting this
+    // backwards is the classic router bug, so it is pinned explicitly.
+    then route("DELETE", "/health") == status_method_not_allowed();
+    then route("POST", "/health") == status_method_not_allowed();
+    then route("POST", "/") == status_method_not_allowed();
+    // An unknown method on a known path is refused, not dispatched.
+    then route("PATCH", "/users") == status_method_not_allowed();
+}
+
+spec handle_not_found {
+    // The fallback is total: every method reaches the same answer.
+    then handle_not_found(Request { method: method_get(), path: "/x" }) == status_not_found();
+    then handle_not_found(Request { method: 0, path: "" }) == status_not_found();
+}
+
+spec report {
+    then report() == 74;
+    // The report fits in one byte, so the process exit status carries it
+    // exactly — no truncation for a reader to account for.
+    then report() < 256;
+    then report() > 0;
+}
