@@ -138,8 +138,9 @@ fn comma_list1<'a>(item: BP<'a>) -> Boxed<'a, 'a, Stream<'a>, Vec<SyntaxElement>
 
 /// The item-leading token kinds (grammar NOTES §2): recovery stops before
 /// these so a broken item cannot swallow the next one.
-pub(crate) const ITEM_START: [K; 11] = [
+pub(crate) const ITEM_START: [K; 12] = [
     K::DocComment,
+    K::Hash,
     K::KwPub,
     K::KwImport,
     K::KwFn,
@@ -529,7 +530,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
             choice((
                 node!(
                     SyntaxKind::UnaryExpr,
-                    one_of([t(K::Minus), t(K::Bang), t(K::KwMove)])
+                    one_of([t(K::Minus), t(K::Bang), t(K::Tilde), t(K::KwMove)])
                         .map(elt)
                         .then(unary),
                 ),
@@ -555,6 +556,14 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
                 Some(rest) => make(SyntaxKind::RangeExpr, (lhs, rest)),
             })
             .boxed();
+        // ADR-0019's bitwise levels sit between the shifts and comparison,
+        // tightest first: `<<`/`>>`, then `&`, then `^`, then `|`. Must match
+        // `handwritten::shift_expr`..`bit_or_expr` exactly — the oracle
+        // differential compares the two parsers' trees.
+        let shift = binary(range, vec![t(K::LtLt), t(K::GtGt)]);
+        let bit_and = binary(shift, vec![t(K::Amp)]);
+        let bit_xor = binary(bit_and, vec![t(K::Caret)]);
+        let range = binary(bit_xor, vec![t(K::Pipe)]);
         // Comparison is non-associative: `a < b < c` is a parse error.
         let compare = range
             .clone()
@@ -707,6 +716,25 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
 
     // ----- declarations (E) -----------------------------------------------
     let docs = tok(K::DocComment).repeated().collect::<Vec<_>>();
+    // ADR-0020 Stage C: `#[IDENT]`. Recognizing the name is the checker's
+    // job, so the grammar accepts any identifier here.
+    let attribute = node!(
+        SyntaxKind::Attribute,
+        tok(K::Hash)
+            .then(tok(K::OpenBracket))
+            .then(tok(K::Ident))
+            .then(tok(K::CloseBracket)),
+    )
+    .boxed();
+    // An attribute may be followed by further doc comments, matching the
+    // handwritten parser's loop exactly — the differential test requires the
+    // two to agree on tree shape, not merely on acceptance.
+    let attributes = attribute
+        .then(tok(K::DocComment).repeated().collect::<Vec<_>>())
+        .map(children)
+        .repeated()
+        .collect::<Vec<_>>()
+        .map(|groups: Vec<Vec<SyntaxElement>>| groups.into_iter().flatten().collect::<Vec<_>>());
     let vis = tok(K::KwPub).or_not();
     let bound_list = node!(
         SyntaxKind::BoundList,
@@ -961,11 +989,12 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
     .boxed();
     // Docs and `pub` belong inside the item node they precede.
     let item = docs
+        .then(attributes)
         .then(vis)
         .then(item_body)
-        .map(|((docs, vis), body)| match body {
+        .map(|(((docs, attributes), vis), body)| match body {
             SyntaxElement::Node(mut node) => {
-                let mut prefix = children((docs, vis));
+                let mut prefix = children(((docs, attributes), vis));
                 prefix.append(&mut node.children);
                 node.children = prefix;
                 SyntaxElement::Node(node)

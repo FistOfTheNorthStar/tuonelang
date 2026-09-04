@@ -139,3 +139,113 @@ fn comparison_is_non_associative() {
     let result = parse(map.source(source));
     assert!(result.has_errors(), "chained comparison must not parse");
 }
+
+// ----------------------------------------------------------------------------
+// ADR-0019 — the bitwise levels.
+//
+// Precedence, loosest to tightest: `|`, `^`, `&`, the shifts, then the
+// arithmetic operators. These are the conventional bindings, so an expression
+// copied from C/Rust/Go parses the same way here.
+// ----------------------------------------------------------------------------
+
+#[test]
+fn shifts_bind_tighter_than_bitwise_and() {
+    assert_eq!(
+        expr_shape("1 & 2 << 3"),
+        "(BinaryExpr (Literal '1') '&' (BinaryExpr (Literal '2') '<<' (Literal '3')))"
+    );
+}
+
+#[test]
+fn bitwise_and_binds_tighter_than_xor_which_binds_tighter_than_or() {
+    assert_eq!(
+        expr_shape("1 | 2 ^ 3"),
+        "(BinaryExpr (Literal '1') '|' (BinaryExpr (Literal '2') '^' (Literal '3')))"
+    );
+    assert_eq!(
+        expr_shape("1 ^ 2 & 3"),
+        "(BinaryExpr (Literal '1') '^' (BinaryExpr (Literal '2') '&' (Literal '3')))"
+    );
+}
+
+#[test]
+fn arithmetic_binds_tighter_than_the_shifts() {
+    assert_eq!(
+        expr_shape("1 << 2 + 3"),
+        "(BinaryExpr (Literal '1') '<<' (BinaryExpr (Literal '2') '+' (Literal '3')))"
+    );
+}
+
+#[test]
+fn comparison_binds_looser_than_every_bitwise_operator() {
+    // `a & b == c` groups as `(a & b) == c` — the conventional reading, and
+    // the reason the bitwise levels sit between comparison and arithmetic.
+    assert_eq!(
+        expr_shape("1 & 2 == 3"),
+        "(BinaryExpr (BinaryExpr (Literal '1') '&' (Literal '2')) '==' (Literal '3'))"
+    );
+}
+
+#[test]
+fn the_bitwise_levels_are_left_associative() {
+    assert_eq!(
+        expr_shape("1 | 2 | 3"),
+        "(BinaryExpr (BinaryExpr (Literal '1') '|' (Literal '2')) '|' (Literal '3'))"
+    );
+    assert_eq!(
+        expr_shape("1 >> 2 >> 3"),
+        "(BinaryExpr (BinaryExpr (Literal '1') '>>' (Literal '2')) '>>' (Literal '3'))"
+    );
+}
+
+#[test]
+fn bitwise_not_is_a_prefix_operator() {
+    assert_eq!(
+        expr_shape("~1 & 2"),
+        "(BinaryExpr (UnaryExpr '~' (Literal '1')) '&' (Literal '2'))"
+    );
+}
+
+/// The load-bearing ADR-0019 disambiguation: `|` is one token serving two
+/// roles. In a match arm's *pattern* position it separates alternatives; in
+/// any *expression* position it is bitwise or. The two productions are
+/// disjoint, so a single program can use both spellings without ambiguity —
+/// if this ever regressed, `1 | 2` in a pattern would start parsing as an
+/// expression and every match-with-alternatives program would break.
+#[test]
+fn pipe_is_pattern_alternation_in_patterns_and_bitwise_or_in_expressions() {
+    let source = "fn t(take n: Int) -> Int {\n\
+                  match n {\n\
+                      1 | 2 => n | 8,\n\
+                      _ => 0,\n\
+                  }\n\
+                  }\n";
+    let mut map = SourceMap::new();
+    let file = map.intern_file("pipe.tuo");
+    let source_id = map.add_source(file, source).expect("test source fits");
+    let result = parse(map.source(source_id));
+    assert!(
+        !result.has_errors(),
+        "a program mixing both roles of `|` must parse cleanly, got {:#?}",
+        result.all_diagnostics()
+    );
+
+    // The arm's pattern is an alternation node, NOT a binary expression...
+    let alts = result
+        .tree
+        .root
+        .descendants_of_kind(SyntaxKind::OrPattern)
+        .len();
+    assert_eq!(alts, 1, "`1 | 2` in pattern position must be one OrPattern");
+
+    // ...while the arm's body is a binary expression using the same token.
+    let binaries = result
+        .tree
+        .root
+        .descendants_of_kind(SyntaxKind::BinaryExpr)
+        .len();
+    assert_eq!(
+        binaries, 1,
+        "`n | 8` in expression position must be one BinaryExpr"
+    );
+}

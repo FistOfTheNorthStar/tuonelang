@@ -1,0 +1,11 @@
+// ADR-0019: a shift amount >= the operand's width traps rather than
+// producing a target-dependent value. Unguarded, x86 masks the amount to 6
+// bits, so `1 << 64` would silently be `1` natively while the interpreter
+// trapped — exactly the divergence the guard removes.
+fn shift_by(take x: Int, take n: Int) -> Int {
+    x << n
+}
+
+fn main() -> Int {
+    shift_by(1, 64)
+}

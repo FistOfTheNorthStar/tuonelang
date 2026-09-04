@@ -99,6 +99,66 @@ pub const MATH: Module = Module {
     source: include_str!("std/math.tuo"),
 };
 
+/// `std::bits` — fixed-width bit and byte-order operations over `Int`
+/// (ADR-0019 Stage B): width masking (`low32`/`low8`), the **modular**
+/// arithmetic hashes are defined over (`add32`/`mul32` — plain `+` traps on
+/// overflow, which is wrong for a checksum), rotation and logical shifts
+/// (`rotr32`/`rotl32`/`shr32`/`shl32`), big-endian assembly and splitting
+/// (`be32`/`be16`/`byte_of_be32`/`byte_of_be16` — the wire-protocol framing
+/// ADR-0019 was opened for), and inspection (`test_bit`/`count_ones32`).
+/// Entirely executable.
+pub const BITS: Module = Module {
+    path: "std::bits",
+    name: "std/bits.tuo",
+    source: include_str!("std/bits.tuo"),
+};
+
+/// `std::bignum` — arbitrary-precision non-negative integer arithmetic over
+/// 28-bit limbs (ADR-0019 successor work): construction/normalization,
+/// comparison and `bit_length`, `add`/`sub` (saturating at zero — there is no
+/// sign), schoolbook `mul` and `mul_small`, bit shifts, division by a small
+/// `Int`, and the text/byte conversions cryptographic protocols transmit
+/// large numbers in (`to_decimal`/`from_decimal`, `to_hex`,
+/// `from_be_bytes`/`to_be_bytes`). Entirely executable. **Not constant time**
+/// — safe for public values, unsafe for secrets.
+pub const BIGNUM: Module = Module {
+    path: "std::bignum",
+    name: "std/bignum.tuo",
+    source: include_str!("std/bignum.tuo"),
+};
+
+/// `std::ct` — the branchless subset, for code whose timing must not reveal
+/// its data (ADR-0020 Stage A): masks and branchless choice (`mask`/`select`),
+/// fixed-time tests (`nonzero`/`is_zero`/`eq`/`ne`/`is_negative`/`lt`/`gt`),
+/// and the array operations that scan rather than index
+/// (`select_array`/`bytes_eq` — the fixed-time tag comparison whose
+/// early-returning form is a textbook vulnerability). Entirely executable and
+/// self-contained.
+/// Written with no arithmetic whose overflow check could depend on secret
+/// data, since a trap is a branch. It provides primitives that are branchless
+/// **as emitted today**, pinned by a disassembly test on both backends — not a
+/// constant-time guarantee, which awaits ADR-0020 Stage C.
+pub const CT: Module = Module {
+    path: "std::ct",
+    name: "std/ct.tuo",
+    source: include_str!("std/ct.tuo"),
+};
+
+/// `std::crypto` — cryptographic hashing and the primitives built on it
+/// (ADR-0019 Stage B): SHA-256 (`sha256`/`sha256_bytes`), HMAC-SHA-256
+/// (`hmac_sha256`), PBKDF2-HMAC-SHA-256 (`pbkdf2_sha256` — SCRAM's key
+/// derivation), Base64 (`base64_encode`/`base64_decode`), hex rendering
+/// (`to_hex`), and the byte/text bridge (`bytes_of_str`/`str_of_bytes`).
+/// Entirely executable, and uniquely in this catalog its specs assert
+/// **published** vectors (FIPS 180-4, RFC 4231, RFC 4648) rather than the
+/// module's own reasoning. It is a hashing library, not a TLS stack: it
+/// authenticates but does not encrypt.
+pub const CRYPTO: Module = Module {
+    path: "std::crypto",
+    name: "std/crypto.tuo",
+    source: include_str!("std/crypto.tuo"),
+};
+
 /// `std::str` — string algorithms over the byte-level `Str`/`String` builtins:
 /// search (`index_of_byte`/`find`/`contains`/`starts_with`/`ends_with`/
 /// `count`), trimming (`trim`), ASCII case/classification (`to_upper`/
@@ -183,12 +243,18 @@ pub const TEST: Module = Module {
 /// Every standard-library module, in dependency-friendly order (`core` first).
 ///
 /// The order is stable: hosts that load the whole library into one program can
-/// rely on it. No module imports another today, so any order type-checks, but
-/// `core` leads by convention.
+/// rely on it, and it is a topological order of the catalog's declared
+/// dependency graph — `std::crypto` uses `std::bits`, so a module always
+/// follows what it needs. Every other module stands alone. The graph is
+/// declared and proven acyclic by `tuo-cli`'s `stdlib.rs`.
 pub const MODULES: &[Module] = &[
     CORE,
     COLLECTIONS,
     MATH,
+    BITS,
+    BIGNUM,
+    CT,
+    CRYPTO,
     STR,
     JSON,
     IO,

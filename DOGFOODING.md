@@ -297,7 +297,9 @@ function pointer — so the indirect-call overhead is a recorded number, not a
 guess, and the later ADRs kept the pattern: `map-lookup` (ADR-0011), `file-io`
 (ADR-0013), `channels` (ADR-0015, whose Go peer is Go's native buffered
 `chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`), then
-`udp-echo` and `connect-timeout` (ADR-0017). All **fifteen** workloads now
+`udp-echo` and `connect-timeout` (ADR-0017), then `sha256-hash` and
+`wire-decode` (ADR-0019, whose Go peers are `crypto/sha256` and
+`encoding/binary`). All **seventeen** workloads now
 measure, each against equivalent-semantics C *and* Go peers; none is
 unsupported. No new runtime figure is invented here; the lab
 remains the one measurement of record.
@@ -375,7 +377,8 @@ stdlib module (index-arena `parse`/`render` with positioned errors). The
 perf-lab entries the three ADRs gated all measure: `networking` flipped from
 the lab's last `Unsupported`, and `channels` and `json-parse` landed
 supported — thirteen workloads at that point, each with C and Go peers
-(ADR-0017 has since taken the catalog to fifteen). Still deferred,
+(ADR-0017 has since taken the catalog to fifteen, and ADR-0019 to
+seventeen). Still deferred,
 honestly: recursive nominal types (`T0016` is the boundary until a successor
 ADR gives the backends runtime-recursive clone/drop glue), DNS and TLS,
 `\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building JSON from
@@ -396,8 +399,87 @@ server side gains `listen6`/`peer_family`), and UDP (`udp_bind`/`send`/
 its boundary) all landed across three stages at ABI v10. Two gating lab
 workloads came with them, taking the catalog to **fifteen** measured:
 `udp-echo` and `connect-timeout`, the latter measuring a *bounded failure* —
-a program that could not have been written before the ADR. **DNS and TLS stay
-out**, and deliberately so: TLS would need a cryptographic dependency this
-workspace avoids on purpose, and DNS is properly written *in tuonelang* on
-the UDP primitives this ADR just added, rather than bolted into the runtime
-shim.
+a program that could not have been written before the ADR. (ADR-0019 has
+since added `sha256-hash` and `wire-decode`, taking the catalog to
+**seventeen**.) **DNS stays out**, and so does TLS — though for a narrower
+reason since ADR-0019 Stage B: SHA-256/HMAC are now written *in tuonelang*
+and need no cryptographic dependency at all, but TLS additionally needs
+X.509, a certificate store, and AEAD ciphers. (The original framing here —
+that TLS would need a cryptographic dependency this workspace avoids on
+purpose — was true when written and is recorded as superseded rather than
+silently rewritten.) DNS is properly written *in tuonelang* on the UDP
+primitives this ADR added, rather than bolted into the runtime shim.
+
+### ADR-0019 — bitwise operations and the crypto primitives
+
+The first dogfooding target the language could not express **at all**, rather
+than merely express awkwardly: a PostgreSQL client. Two separable gaps blocked
+it, and only the first was a language change.
+
+The absence of bitwise operators was not an oversight but a documented v0
+commitment, stated in three places — `grammar.ebnf`'s punctuation table (`|`
+is "pattern alternative only; NOT a bitwise operator"), the lexer's
+`TokenKind::Pipe` doc, and the grammar's note that `<`/`>` are "shift-free".
+Reversing a deliberate commitment is exactly what an ADR is for.
+
+The sharpest statement of the gap was internal: **this workspace already
+contained a SHA-256**, hand-rolled in Rust (`tuo-package/src/sha256.rs`)
+precisely so the workspace need not take a crypto dependency — and tuonelang
+could not express its own package manager's checksum function, because
+SHA-256 is *defined* in rotations, xors, and shifts. The framing question the
+ADR had to get right was what the framing workaround actually cost: on
+well-formed input `b0*16777216 + b1*65536 + b2*256 + b3` is genuinely
+equivalent to the shift form (a spec proves it), so the honest argument is not
+that the arithmetic form is *wrong* but that it **does not generalize** —
+masking, field extraction, and rotation have no arithmetic spelling at all.
+
+Stage A added six operators at `GRAMMAR-VERSION` 0.2. Three things were worth
+the care they took. The `|` overload works because `pattern` and the
+expression chain are disjoint productions, proven by parsing `1 | 2 => n | 8`
+and asserting one `OrPattern` and one `BinaryExpr` in the same program. `>>`
+is signedness-directed rather than a second operator, which is what makes the
+existing `IntKind` signedness carry weight. And an out-of-range shift
+**traps**: x86 masks the amount to 6 bits, so an unguarded `1 << 64` would be
+`1` natively while the interpreter trapped — a silent three-way divergence,
+now pinned by the differential suites.
+
+Three real bugs surfaced by testing paths that had been reasoned about but
+not exercised, each invisible to the tests that existed at the time. The C
+trap shim built its message table from a hand-maintained array *and the test
+meant to catch drift hardcoded the same list*, so a new trap printed
+`unknown` natively while the test passed; both now iterate one
+`TrapCode::ALL`. The interpreter's operand-kind `debug_assert` predated
+shifts not unifying their operands, so `U32 >> Int` panicked — invisible in
+release builds and invisible for `Int` operands. And an unsigned shift amount
+with its top bit set bypassed the guard, because a signed comparison read it
+as negative; that one was found by re-reading the guard rather than by a
+failing test.
+
+Stage B wrote `std::bits` and `std::crypto` *in tuonelang* on the new
+operators. Their specs are unique in the catalog for asserting **published
+vectors** (FIPS 180-4, RFC 4231, RFC 4648) rather than the module's own
+reasoning — a spec that reproduces a published vector cannot be
+self-consistently wrong. The headline claim is discharged by a real test: a
+native tuonelang binary's SHA-256 agrees byte-for-byte with the toolchain's
+Rust `sha256` across nine padding-boundary inputs. Two decisions were forced
+by the language rather than chosen: `+` traps on overflow but every hash is
+defined over modular arithmetic, so `add32` is the named way to ask for
+wraparound (made once, in the library, rather than rediscovered per call
+site); and drawing entropy cannot be pure, so `random_byte`/`nonce` are the
+effect tier and `R0007` refuses them in a spec with no new mechanism.
+
+One catalog invariant changed deliberately. `std::crypto` uses `std::bits`,
+making it the first non-standalone module; rather than ship two copies of
+`rotr32`/`add32`/`be32` free to drift, the stdlib test gained a
+`DECLARED_DEPENDENCIES` table and the invariant weakened from "every module
+stands alone" to "the dependency graph is declared and acyclic" — the honest
+statement of what is now true.
+
+The end-to-end proof is a **full SCRAM-SHA-256 client proof** computed
+natively and checked against RFC 7677's published vector: Base64 both ways,
+PBKDF2 over 4096 iterations, two HMACs, a SHA-256, and a byte-wise XOR. Since
+PostgreSQL has defaulted `password_encryption` to `scram-sha-256` since
+version 14, that is the exchange a connector actually needs. **`md5` remains
+unimplemented**, so the legacy challenge is unsupported — acceptable only
+because SCRAM is the default on every current server, and worth revisiting if
+a real connector meets an older one.

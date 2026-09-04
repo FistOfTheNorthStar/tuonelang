@@ -17,7 +17,10 @@ tuo-diagnostics.workspace = true
 tuo-lexer.workspace = true
 tuo-ast.workspace = true
 tuo-resolve.workspace = true
+# ADR-0020 Stage C: the constant-time gate walks raw CST nodes, so it needs
+# the syntax kinds. tuo-syntax is layer 25 and tuo-types is layer 50, so this
+# edge points downward, as the dependency policy requires.
+tuo-syntax.workspace = true
 
 [dev-dependencies]
-tuo-syntax.workspace = true
 tuo-parser.workspace = true

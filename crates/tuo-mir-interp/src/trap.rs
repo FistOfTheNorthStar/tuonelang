@@ -36,6 +36,10 @@ pub enum TrapKind {
     /// together with the native `TrapCode::InvalidByte` — the taxonomy is
     /// append-only.
     InvalidByte,
+    /// A shift amount was negative or >= the operand's width in bits
+    /// (`BinOp::Shl`/`Shr`, ADR-0019). Appended together with the native
+    /// `TrapCode::InvalidShift`.
+    InvalidShift,
     /// Control reached a point the front end proved unreachable — a
     /// [`tuo_mir::Trap::Unreachable`] or a failed exhaustiveness assumption.
     Unreachable,
@@ -61,6 +65,7 @@ impl TrapKind {
             Self::DivisionByZero => "division_by_zero",
             Self::IndexOutOfBounds => "index_out_of_bounds",
             Self::InvalidByte => "invalid_byte",
+            Self::InvalidShift => "invalid_shift",
             Self::Unreachable => "unreachable",
             Self::OutOfFuel => "out_of_fuel",
             Self::RecursionLimit => "recursion_limit",
@@ -79,6 +84,7 @@ impl TrapKind {
                 | Self::DivisionByZero
                 | Self::IndexOutOfBounds
                 | Self::InvalidByte
+                | Self::InvalidShift
                 | Self::Unreachable
         )
     }

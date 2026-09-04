@@ -154,6 +154,8 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
     // two cannot drift out of sync.
     Some(match label {
         "startup" => include_str!("../../../../benchmarks/runtime/programs/c/startup.c"),
+        "sha256-hash" => include_str!("../../../../benchmarks/runtime/programs/c/sha256-hash.c"),
+        "wire-decode" => include_str!("../../../../benchmarks/runtime/programs/c/wire-decode.c"),
         "integer-computation" => {
             include_str!("../../../../benchmarks/runtime/programs/c/integer-computation.c")
         }
@@ -193,6 +195,8 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
     // and the three cannot drift out of sync.
     Some(match label {
         "startup" => include_str!("../../../../benchmarks/runtime/programs/go/startup.go"),
+        "sha256-hash" => include_str!("../../../../benchmarks/runtime/programs/go/sha256-hash.go"),
+        "wire-decode" => include_str!("../../../../benchmarks/runtime/programs/go/wire-decode.go"),
         "integer-computation" => {
             include_str!("../../../../benchmarks/runtime/programs/go/integer-computation.go")
         }

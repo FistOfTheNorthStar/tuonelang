@@ -151,9 +151,27 @@ pub enum TokenKind {
     AmpAmp,
     /// `||`
     PipePipe,
-    /// `|` — the pattern-alternative separator (§17). Not a bitwise
-    /// operator: v0 has no bitwise expression operators.
+    /// `|` — the pattern-alternative separator (§17) and, since ADR-0019,
+    /// the bitwise-or operator. One token, disambiguated by grammatical
+    /// context: `pattern` and the expression chain are disjoint productions,
+    /// so the parser always knows which it is reading.
     Pipe,
+    /// `&` — bitwise and (ADR-0019).
+    Amp,
+    /// `^` — bitwise xor (ADR-0019).
+    Caret,
+    /// `~` — bitwise not, unary (ADR-0019).
+    Tilde,
+    /// `#` — introduces an attribute, as `#[name]` (ADR-0020 Stage C).
+    ///
+    /// Only ever appears immediately before `[` in an attribute prefix; it is
+    /// not an operator and has no meaning in an expression.
+    Hash,
+    /// `<<` — left shift (ADR-0019).
+    LtLt,
+    /// `>>` — right shift (ADR-0019); arithmetic on signed operands,
+    /// logical on unsigned.
+    GtGt,
     /// `!`
     Bang,
     /// `+`

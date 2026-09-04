@@ -206,7 +206,14 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   (`udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` — a
   datagram is a *message*, so a receive reports its boundary and stages the
   payload, which `udp_byte_at` indexes; the stream-side `read_byte` is
-  deliberately untouched) — and *refuse* — never
+  deliberately untouched); and — since ADR-0019 Stage A — the **bitwise
+  operators** `&`/`|`/`^`/`~`/`<<`/`>>` on integers (conventional
+  precedence, integers-only — never `Float` or `Bool`; `>>` is arithmetic on
+  a signed type and logical on an unsigned one; a shift amount outside
+  `0..width` **traps** `InvalidShift` rather than adopting the target's
+  shift-masking, so all three engines agree; `|` is one token serving both
+  pattern alternation and bitwise-or, disambiguated by grammatical context;
+  no new type, no ABI change) — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
@@ -314,7 +321,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   diagnostics, the agent protocol, the corpus, the codegen benchmark). Its five
   sections are assembled from compiler-owned sources: the syntax skeleton
   carries `grammar.ebnf`'s own `GRAMMAR-VERSION`; the standard-library section
-  drives the twelve `tuo-stdlib` catalog modules through the **real** front end
+  drives the sixteen `tuo-stdlib` catalog modules through the **real** front end
   (`check_sources` is the acceptance gate — the brief refuses to describe a
   library that does not compile) and lists each public `fn` as its *declaration*,
   parameter names and written type spellings included, because that is the form
@@ -355,7 +362,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: all **fifteen**
+  honesty rule the prompt demands is enforced structurally: all **seventeen**
   runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
@@ -388,7 +395,15 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   listens on, each required to come back rather than hang (C peer
   non-blocking `connect`+`poll`, Go peer `net.DialTimeout`) — a workload that
   **could not be written before ADR-0017**, since a blocking `connect` has no
-  bounded outcome to measure) carry a real program and are
+  bounded outcome to measure), and — since ADR-0019 — **sha256-hash**, the
+  full FIPS 180-4 compression function over a fixed 64-byte message (C peer
+  on `uint32_t`, Go peer its standard **`crypto/sha256`**), and
+  **wire-decode**, the length-prefixed framing walk that motivated the ADR —
+  a big-endian length and type decoded, re-encoded, and round-trip checked
+  per frame (C peer the identical shifts, Go peer **`encoding/binary`**) —
+  both workloads that **could not be written before ADR-0019**, since
+  SHA-256 is *defined* in rotations and shifts and masking has no arithmetic
+  spelling at all) carry a real program and are
   `Support::Supported` —
   none remains `Unsupported`, and the mechanism (an entry with the *exact
   reason* and **no number**, flipping the moment its feature lands) stays as
@@ -582,8 +597,30 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   ABI v10 with the gating `udp-echo` and `connect-timeout` workloads;
   **TLS and DNS stay out** — TLS needs a crypto dependency this workspace
   avoids, and DNS is properly written *in tuonelang* on the new UDP
-  primitives). **No ADR remains `proposed`.** Resolved `examples/**/tdg.lock` files embed
-  machine-absolute dependency paths and are therefore gitignored, not committed.
+  primitives). `ADR-0019` (bitwise operations and crypto) is **accepted, both
+  stages landed**: the PostgreSQL-connector target was the first dogfooding
+  case the language could not express *at all*, and it needed two separable
+  things — Stage A the operator surface (see the runnable-core entry above),
+  Stage B the `std::bits`/`std::crypto` library written *in tuonelang* on it.
+  Its headline claim is discharged by a real test: a **native** tuonelang
+  binary's SHA-256 agrees byte-for-byte with `tuo-package`'s own **Rust**
+  `sha256`, so the language reproduces its own package manager's checksum
+  function. The entropy primitive
+  `std::rt::random_byte` (ABI v12) landed with it, so a **full
+  SCRAM-SHA-256 client proof** now computes natively and is pinned against
+  RFC 7677's published vector — the PostgreSQL authentication path the ADR
+  was opened for. Its two gating benchmark
+  workloads landed too — **`sha256-hash`** (against a `uint32_t` C peer and
+  Go's `crypto/sha256`) and **`wire-decode`** (against `encoding/binary`) —
+  both unwritable before Stage A, taking the lab catalog to seventeen
+  workloads with none `Unsupported`. Only `md5` remains outstanding, so the
+  legacy PostgreSQL challenge is unsupported — acceptable only because SCRAM
+  is the default on every current server. Note Stage B weakens but does not overturn the TLS
+  exclusion above: SHA-256/HMAC written *in tuonelang* need no external
+  dependency, but TLS additionally needs X.509, a certificate store, and AEAD
+  ciphers, so it stays out. Resolved
+  `examples/**/tdg.lock` files embed machine-absolute dependency paths and
+  are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
@@ -797,8 +834,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   into three honest tiers — executable, effect, and contract — it never
   advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
-  compiler machinery, layer 90): each of the twelve modules — `std::core`,
-  `std::collections`, `std::math`, `std::str`, `std::json`, `std::io`,
+  compiler machinery, layer 90): each of the sixteen modules — `std::core`,
+  `std::collections`, `std::math`, `std::bits`, `std::bignum`, `std::ct`,
+  `std::crypto`,
+  `std::str`,
+  `std::json`, `std::io`,
   `std::fs`, `std::net`, `std::time`, `std::process`, `std::sync`,
   `std::test` — is a `.tuo` source
   file under `src/std/`, embedded
@@ -833,7 +873,49 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   decode/navigate/render over an index arena (parallel arrays in DFS
   pre-order; positioned parse errors; documented `Float`-number and
   escape-set limits), entirely pure and spec-checked, plus natively pinned
-  on both backends), an **effect
+  on both backends, and — since ADR-0019 Stage B — the whole of
+  **`std::bits`** (width masking, the **modular** `add32`/`mul32` hashes are
+  defined over — plain `+` traps, which is right for arithmetic and wrong for
+  a checksum — rotation/logical shifts, and big-endian assembly/splitting)
+  **`std::bignum`** (arbitrary-precision non-negative integers over **28-bit
+  limbs** — the size is a correctness property, not a tuning knob: schoolbook
+  multiplication accumulates `limb + limb*limb + carry`, which is 56 bits at
+  28-bit limbs and would overflow — i.e. *trap* — at 32; deliberately **not
+  constant time**, so it is safe for public values and unsafe for secrets),
+  — since ADR-0020 Stage A —
+  **`std::ct`** (the branchless subset, for code whose timing must not
+  reveal its data: `mask`/`select`, the fixed-time tests
+  `nonzero`/`is_zero`/`eq`/`ne`/`is_negative`/`lt`/`gt`, and the array
+  operations that scan rather than index — `select_array` and `bytes_eq`,
+  the fixed-time tag comparison whose early-returning form is a textbook
+  vulnerability; written with **no arithmetic whose overflow check could
+  depend on secret data**, since a trap is a branch and `0 - bit` traps on
+  `i64::MIN`, so `mask` is the sign-smearing `(bit << 63) >> 63` instead.
+  Its claim is deliberately narrow and *pinned* at two levels: the ten
+  scalar primitives carry **`#[constant_time]`** (ADR-0020 Stage C) so the
+  **compiler** verifies the source contains no data-dependent construct
+  (`T0017`–`T0021` — branches, indexing, trapping arithmetic, and calls to
+  unmarked functions are all refused), and
+  `tuo-cli/tests/constant_time.rs` disassembles the native binary on
+  **both** backends to check the *emitted* code is branchless too, since an
+  optimizer may rewrite a branchless idiom into a conditional. Whether those
+  instructions execute in data-independent time is a hardware property beyond
+  a compiler's reach, so this is still short of a constant-time *guarantee*
+  and says so.
+  The array scans are honestly weaker and **deliberately unmarked**: a scan
+  needs a loop and indexing by nature, and there is no `#[allow]` escape
+  hatch — a function that cannot satisfy the checker simply goes unmarked, so
+  the attribute's presence is what tells a reader the compiler verified it.
+  They promise only that their control flow depends on array *lengths*, never
+  on contents),
+  and **`std::crypto`** (SHA-256, HMAC-SHA-256, PBKDF2-HMAC-SHA-256, Base64,
+  hex, and the byte/text bridge), whose specs are unique in the catalog for
+  asserting **published vectors** (FIPS 180-4, RFC 4231, RFC 4648) rather
+  than the module's own reasoning — and whose headline pin,
+  `tuo-cli/tests/crypto_cross_check.rs`, compares a **native** tuonelang
+  binary's digests against `tuo-package`'s own **Rust** `sha256` across nine
+  padding-boundary inputs, so the language demonstrably reproduces its own
+  package manager's checksum function), an **effect
   tier** (`std::io::print`/`println` over `std::rt::write`, `std::process::exit`
   over `std::rt::exit`, — since ADR-0009 — `std::io::read_line`, which builds
   an owned `String` from the bytes `std::rt::read_byte` yields, — since
@@ -845,7 +927,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   ADR-0014 — the whole `std::net` socket tier
   `listen`/`bound_port`/`accept`/`connect`/`close`, — since ADR-0015 —
   `std::sync`'s channels `channel`/`send`/`recv`/`close` and mutexes
-  `mutex`/`lock`/`unlock`, and — since ADR-0017 — `std::net`'s bounded
+  `mutex`/`lock`/`unlock`, — since ADR-0019 Stage B — `std::crypto`'s
+  `random_byte`/`nonce` over `std::rt::random_byte` (the platform CSPRNG via
+  `getentropy`; drawing randomness is an effect by nature, since a function
+  whose purpose is to differ on every call cannot be pure, so `R0007` refuses
+  it in a spec with no new mechanism), and — since ADR-0017 — `std::net`'s bounded
   waits `accept_timeout`/`connect_timeout`/`read_byte_timeout`, its IPv6
   pair `listen6`/`peer_family`, and its UDP tier
   `udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` (joined in
@@ -860,7 +946,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   marker, exact signature, no spec) for any future entry, and a CLI test
   pins the tier's emptiness so nothing re-enters silently. The promise
   is enforced, not asserted: `tuo-cli/tests/stdlib.rs` really compiles every
-  module (alone and together) with zero errors, runs every shipped spec to
+  module (with exactly its **declared** dependencies, and together) with zero
+  errors, runs every shipped spec to
   green with **no skips** (a skipped spec would mean a dishonest, unrunnable
   contract slipped into the executable tier), enforces the three-tier rule
   textually per public function (pure ⇒ spec'd; `EFFECT:` ⇒ no spec + a named
@@ -869,7 +956,15 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   status's code; `now` never runs backwards; `arg`/`arg_count` read a real
   command line; the `std::fs` roundtrip really touches the disk; the
   `std::net` roundtrip really touches the network over loopback; the
-  `std::sync` channels/mutexes really synchronize), and
+  `std::sync` channels/mutexes really synchronize). Since ADR-0019 Stage B
+  the catalog is no longer flat: `std::crypto` uses `std::bits`, so rather
+  than ship two copies of `rotr32`/`add32`/`be32` free to drift, the test
+  carries a `DECLARED_DEPENDENCIES` table — each module is checked with
+  exactly its declared dependencies and **nothing else**, so an undeclared
+  use still fails to resolve, and `the_dependency_graph_is_declared_and_acyclic`
+  proves the listed edges are the only ones and form no cycle. The invariant
+  is therefore "the dependency graph is declared and acyclic", not the older
+  "every module stands alone". And
   `tuo-cli/tests/stdlib_hallucination.rs` (`--nocapture`) is the API-hallucination
   benchmark — a deterministic Compile@1 proxy over a corpus whose naive guess is a
   plausible-but-wrong name (`maximum`/`unwrap`/`sum_range`/`is_abs`), scored by

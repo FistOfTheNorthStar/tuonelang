@@ -1,0 +1,5 @@
+fn main() -> I64 {
+    let a: I64 = (1 << 6) | 3;
+    let b: I64 = (a & 255) ^ 5;
+    return ~b & 127;
+}

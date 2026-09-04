@@ -352,6 +352,12 @@ pub enum EffectOp {
     /// arbitrary process-local epoch; only differences are meaningful.
     /// Never traps. (ADR-0013.)
     NowNanos,
+    /// `random_byte() -> I64` — one cryptographically-secure random byte in
+    /// `0..=255`, or `-1` when the platform CSPRNG is unavailable
+    /// (ADR-0019 Stage B). Never traps. Deliberately non-deterministic: two
+    /// evaluations need not agree, which is why it is an effect and why the
+    /// interpreter refuses it like every other effect.
+    RandomByte,
     /// `arg_count() -> I64` — the number of process arguments, including
     /// the program name (argv\[0\]). Never traps. (ADR-0013.)
     ArgCount,
@@ -472,6 +478,7 @@ impl EffectOp {
             Self::WriteString => "write_string",
             Self::ParMap => "par_map",
             Self::NowNanos => "now_nanos",
+            Self::RandomByte => "random_byte",
             Self::ArgCount => "arg_count",
             Self::ArgByte => "arg_byte",
             Self::Open => "open",
@@ -505,7 +512,9 @@ impl EffectOp {
     #[must_use]
     pub const fn arg_count(self) -> usize {
         match self {
-            Self::NowNanos | Self::ArgCount | Self::ChanNew | Self::MutexNew => 0,
+            Self::NowNanos | Self::ArgCount | Self::ChanNew | Self::MutexNew | Self::RandomByte => {
+                0
+            }
             Self::ReadByte
             | Self::Exit
             | Self::Close
@@ -889,6 +898,10 @@ pub enum UnOp {
     Neg,
     /// Boolean negation.
     Not,
+    /// Bitwise complement of an integer (ADR-0019). Never traps: `~x` is
+    /// defined on every bit pattern of every width. Distinct from
+    /// [`UnOp::Not`], which is `Bool -> Bool`.
+    BitNot,
 }
 
 /// A binary operator. Integer arithmetic is two's complement with
@@ -911,6 +924,25 @@ pub enum BinOp {
     /// traps on a zero divisor and on `MIN % -1`. Float: IEEE 754
     /// remainder with the sign of the dividend (as `fmod`).
     Rem,
+    /// Bitwise and of two integers of the same type (ADR-0019). Never
+    /// traps.
+    BitAnd,
+    /// Bitwise or of two integers of the same type (ADR-0019). Never traps.
+    BitOr,
+    /// Bitwise xor of two integers of the same type (ADR-0019). Never
+    /// traps.
+    BitXor,
+    /// Left shift (ADR-0019). **Traps `InvalidShift`** when the shift
+    /// amount is negative or >= the left operand's width in bits, so the
+    /// result never depends on a target's shift-masking behavior. Bits
+    /// shifted out are discarded — a shift does *not* trap on overflow,
+    /// unlike `Mul`.
+    Shl,
+    /// Right shift (ADR-0019). **Arithmetic** (sign-extending) when the
+    /// left operand's type is signed, **logical** (zero-filling) when it
+    /// is unsigned. Traps `InvalidShift` on the same out-of-range amounts
+    /// as [`BinOp::Shl`].
+    Shr,
     /// Equality. Integers, floats (IEEE: `NaN == x` is `false`), `Bool`,
     /// `Char` (scalar values), and `Str` (byte-wise content equality).
     Eq,

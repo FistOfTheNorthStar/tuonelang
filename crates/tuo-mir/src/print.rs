@@ -156,6 +156,7 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
             let name = match op {
                 crate::mir::UnOp::Neg => "neg",
                 crate::mir::UnOp::Not => "not",
+                crate::mir::UnOp::BitNot => "bitnot",
             };
             format!("{name}({})", render_operand(operand))
         }
@@ -172,6 +173,11 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
                 crate::mir::BinOp::Le => "le",
                 crate::mir::BinOp::Gt => "gt",
                 crate::mir::BinOp::Ge => "ge",
+                crate::mir::BinOp::BitAnd => "bitand",
+                crate::mir::BinOp::BitOr => "bitor",
+                crate::mir::BinOp::BitXor => "bitxor",
+                crate::mir::BinOp::Shl => "shl",
+                crate::mir::BinOp::Shr => "shr",
             };
             format!("{name}({}, {})", render_operand(lhs), render_operand(rhs))
         }

@@ -261,9 +261,15 @@ between two spellings, the more explicit one is the real one.
   }
 
 Operators: + - * / % on numbers; == != < <= > >= for comparison; && || ! for
-Bool. There are NO bitwise operators (`|` appears only in or-patterns), NO
-compound assignment, and comparisons DO NOT chain (`a < b < c` is a parse
-error). Integer overflow TRAPS — wraparound does not exist.
+Bool; & | ^ ~ << >> on integers (ADR-0019). Bitwise precedence is the
+conventional one — ~ then << >> then & then ^ then | — and all six are
+integers-only (never Float, never Bool: use && || ! there). `>>` is
+arithmetic on a signed type and logical on an unsigned one, and a shift
+amount outside 0..width TRAPS rather than wrapping, so `x << 64` is an abort,
+not `x`. Note `|` does double duty: alternation inside a match pattern,
+bitwise-or everywhere else. There is NO compound assignment (`+=`, `|=`), and
+comparisons DO NOT chain (`a < b < c` is a parse error). Integer overflow
+TRAPS — wraparound does not exist.
 
 "#;
 

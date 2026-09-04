@@ -1,0 +1,995 @@
+// std::bignum — arbitrary-precision non-negative integer arithmetic.
+//
+// This module is entirely executable: every function is pure computation over
+// `Int` and `Array[Int]`, runs through the reference interpreter, and every
+// spec below proves it. It exists because `Int` is a fixed 64-bit integer that
+// **traps** on overflow, so the numbers public-key cryptography is defined
+// over — a 255-bit X25519 scalar, a 2048-bit RSA modulus — have no
+// representation at all in the scalar core.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`a.add(b)`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+//
+// REPRESENTATION. A bignum is an `Array[Int]` of **28-bit limbs**, least
+// significant first, each holding a value in `0 ..= 268435455`. The empty
+// array and `[0]` both denote zero; `normalized` puts any value into the
+// canonical form (no leading zero limbs, zero as an empty array), and every
+// function here returns a normalized result.
+//
+// WHY 28 BITS, which is the load-bearing choice in this module. Schoolbook
+// multiplication accumulates `existing_limb + a*b + carry`. With 28-bit limbs
+// that worst case is 56 bits, leaving 7 bits of headroom inside the signed
+// 64-bit `Int` — so no intermediate can overflow and no operation here traps.
+// A 32-bit limb would make `a*b` alone 64 bits and overflow immediately, which
+// in tuonelang is not a wraparound but an abort. The limb size is therefore a
+// correctness property, not a tuning knob.
+//
+// WHAT THIS MODULE IS NOT. Non-negative values only: there is no sign, so
+// `sub` saturates at zero rather than producing a negative result, and the
+// caller tracks sign separately if it needs one. There is no division by a
+// bignum (only by a small `Int`), no modular exponentiation, and no primality
+// testing. Those are the next increment, and each is a real algorithm rather
+// than a line of glue — they are absent rather than half-implemented.
+//
+// NOT CONSTANT TIME. Every operation here branches and loops on the *values*
+// it is given, so its running time reveals information about them. That is
+// fine for parsing, formatting, and protocol arithmetic on public values, and
+// it is **not** safe for a secret: a key, a nonce, or a private exponent
+// processed with these functions is exposed to a timing attack. tuonelang has
+// no way to express or verify constant-time code today, so this module states
+// the limit rather than implying a guarantee it cannot keep.
+
+module std::bignum;
+
+// ----------------------------------------------------------------------------
+// The limb base.
+// ----------------------------------------------------------------------------
+
+/// The number of bits in one limb: 28.
+///
+/// # Example
+/// ```tuo
+/// let bits = std::bignum::limb_bits(); // 28
+/// ```
+pub fn limb_bits() -> Int {
+    28
+}
+
+/// The limb base, `2^28` (268435456). Every limb holds `0 ..= base - 1`.
+///
+/// # Example
+/// ```tuo
+/// let base = std::bignum::base(); // 268435456
+/// ```
+pub fn base() -> Int {
+    268435456
+}
+
+/// The largest value one limb can hold, `2^28 - 1`.
+///
+/// # Example
+/// ```tuo
+/// let m = std::bignum::limb_mask(); // 268435455
+/// ```
+pub fn limb_mask() -> Int {
+    268435455
+}
+
+// ----------------------------------------------------------------------------
+// Construction and canonical form.
+// ----------------------------------------------------------------------------
+
+/// Zero, as the canonical empty limb array.
+///
+/// # Example
+/// ```tuo
+/// let z = std::bignum::zero(); // []
+/// ```
+pub fn zero() -> Array[Int] {
+    std::array::empty()
+}
+
+/// `value` as a bignum. A negative `value` yields zero, since this module
+/// represents non-negative integers only.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::from_int(268435456); // two limbs: [0, 1]
+/// ```
+pub fn from_int(take value: Int) -> Array[Int] {
+    var out = std::array::empty();
+    if value <= 0 {
+        return out;
+    }
+    var remaining = value;
+    while remaining > 0 {
+        std::array::push(out, remaining & 268435455);
+        remaining = remaining >> 28;
+    }
+    out
+}
+
+/// `a` with its leading zero limbs removed, so zero is the empty array.
+///
+/// Every function in this module returns a normalized value, so a caller
+/// needs this only when building limbs by hand.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::normalized(std::bignum::from_int(0)); // []
+/// ```
+pub fn normalized(in a: Array[Int]) -> Array[Int] {
+    var last = std::array::len(a);
+    while last > 0 && std::array::get(a, last - 1) == 0 {
+        last = last - 1;
+    }
+    var out = std::array::empty();
+    var i = 0;
+    while i < last {
+        std::array::push(out, std::array::get(a, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// Whether `a` is zero.
+///
+/// # Example
+/// ```tuo
+/// let yes = std::bignum::is_zero(std::bignum::zero()); // true
+/// ```
+pub fn is_zero(in a: Array[Int]) -> Bool {
+    var i = 0;
+    while i < std::array::len(a) {
+        if std::array::get(a, i) != 0 {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// `a` as an `Int`, or `None` when it does not fit in 63 bits.
+///
+/// The inverse of [`from_int`] where the value is small enough. Returning
+/// `Option` rather than saturating keeps the failure visible: a silently
+/// truncated modulus is a security bug, not a rounding error.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::to_int(std::bignum::from_int(42)); // Some { value: 42 }
+/// ```
+pub fn to_int(in a: Array[Int]) -> Option[Int] {
+    let n = std::array::len(normalized(a));
+    // Three 28-bit limbs is 84 bits, which cannot fit; two is 56, which
+    // always does.
+    if n > 3 {
+        return Option::None;
+    }
+    var value = 0;
+    var i = n;
+    while i > 0 {
+        let limb = std::array::get(a, i - 1);
+        // Guard the shift before performing it: `value << 28` would trap on
+        // overflow, and a trap is not the answer to "does not fit".
+        if value > 34359738367 {
+            return Option::None;
+        }
+        value = (value << 28) + limb;
+        i = i - 1;
+    }
+    Option::Some { value: value }
+}
+
+// ----------------------------------------------------------------------------
+// Comparison.
+// ----------------------------------------------------------------------------
+
+/// `-1`, `0`, or `1` as `a` is less than, equal to, or greater than `b`.
+///
+/// # Example
+/// ```tuo
+/// let c = std::bignum::compare(std::bignum::from_int(5), std::bignum::from_int(3)); // 1
+/// ```
+pub fn compare(in a: Array[Int], in b: Array[Int]) -> Int {
+    let x = normalized(a);
+    let y = normalized(b);
+    let nx = std::array::len(x);
+    let ny = std::array::len(y);
+    if nx != ny {
+        if nx < ny {
+            return 0 - 1;
+        }
+        return 1;
+    }
+    var i = nx;
+    while i > 0 {
+        let lx = std::array::get(x, i - 1);
+        let ly = std::array::get(y, i - 1);
+        if lx != ly {
+            if lx < ly {
+                return 0 - 1;
+            }
+            return 1;
+        }
+        i = i - 1;
+    }
+    0
+}
+
+/// Whether `a` and `b` denote the same value.
+///
+/// # Example
+/// ```tuo
+/// let same = std::bignum::equals(std::bignum::from_int(7), std::bignum::from_int(7)); // true
+/// ```
+pub fn equals(in a: Array[Int], in b: Array[Int]) -> Bool {
+    compare(a, b) == 0
+}
+
+/// The number of significant bits in `a`; zero has zero bits.
+///
+/// # Example
+/// ```tuo
+/// let bits = std::bignum::bit_length(std::bignum::from_int(255)); // 8
+/// ```
+pub fn bit_length(in a: Array[Int]) -> Int {
+    let x = normalized(a);
+    let n = std::array::len(x);
+    if n == 0 {
+        return 0;
+    }
+    var top = std::array::get(x, n - 1);
+    var bits = 0;
+    while top > 0 {
+        bits = bits + 1;
+        top = top >> 1;
+    }
+    ((n - 1) * 28) + bits
+}
+
+// ----------------------------------------------------------------------------
+// Addition and subtraction.
+// ----------------------------------------------------------------------------
+
+/// `a + b`.
+///
+/// # Example
+/// ```tuo
+/// let s = std::bignum::add(std::bignum::from_int(1), std::bignum::from_int(2)); // 3
+/// ```
+pub fn add(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    let na = std::array::len(a);
+    let nb = std::array::len(b);
+    let n = if na > nb { na } else { nb };
+    var carry = 0;
+    var i = 0;
+    while i < n {
+        var sum = carry;
+        if i < na {
+            sum = sum + std::array::get(a, i);
+        }
+        if i < nb {
+            sum = sum + std::array::get(b, i);
+        }
+        std::array::push(out, sum & 268435455);
+        carry = sum >> 28;
+        i = i + 1;
+    }
+    if carry > 0 {
+        std::array::push(out, carry);
+    }
+    normalized(out)
+}
+
+/// `a - b`, **saturating at zero**: if `b > a` the result is zero rather than
+/// a negative value, since this module has no sign.
+///
+/// A caller that needs signed subtraction compares first (`compare`) and
+/// tracks the sign itself. Saturation is chosen over trapping because a
+/// borrow is a normal intermediate in modular arithmetic.
+///
+/// # Example
+/// ```tuo
+/// let d = std::bignum::sub(std::bignum::from_int(5), std::bignum::from_int(3)); // 2
+/// ```
+pub fn sub(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    if compare(a, b) < 0 {
+        return std::array::empty();
+    }
+    var out = std::array::empty();
+    let na = std::array::len(a);
+    let nb = std::array::len(b);
+    var borrow = 0;
+    var i = 0;
+    while i < na {
+        var diff = std::array::get(a, i) - borrow;
+        if i < nb {
+            diff = diff - std::array::get(b, i);
+        }
+        if diff < 0 {
+            diff = diff + 268435456;
+            borrow = 1;
+        } else {
+            borrow = 0;
+        }
+        std::array::push(out, diff);
+        i = i + 1;
+    }
+    normalized(out)
+}
+
+// ----------------------------------------------------------------------------
+// Multiplication.
+// ----------------------------------------------------------------------------
+
+/// `a * b`, by schoolbook long multiplication.
+///
+/// Quadratic in the operand lengths — no Karatsuba or FFT. That is the honest
+/// choice for the sizes this module targets (a few dozen limbs), where the
+/// constant factor of a subquadratic algorithm dominates its asymptotic win.
+///
+/// The accumulator holds at most `limb + limb*limb + carry`, which is 56 bits
+/// with 28-bit limbs, so no step can overflow `Int` and none traps.
+///
+/// # Example
+/// ```tuo
+/// let p = std::bignum::mul(std::bignum::from_int(1000), std::bignum::from_int(1000)); // 1000000
+/// ```
+pub fn mul(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    let na = std::array::len(a);
+    let nb = std::array::len(b);
+    if na == 0 || nb == 0 {
+        return std::array::empty();
+    }
+    // A zero-filled result of the maximum possible width.
+    var out = std::array::empty();
+    var k = 0;
+    while k < na + nb {
+        std::array::push(out, 0);
+        k = k + 1;
+    }
+    var i = 0;
+    while i < na {
+        let ai = std::array::get(a, i);
+        if ai != 0 {
+            var carry = 0;
+            var j = 0;
+            while j < nb {
+                let at = i + j;
+                let acc = std::array::get(out, at) + (ai * std::array::get(b, j)) + carry;
+                std::array::set(out, at, acc & 268435455);
+                carry = acc >> 28;
+                j = j + 1;
+            }
+            // Propagate the final carry through the remaining limbs.
+            var at = i + nb;
+            while carry > 0 {
+                let acc = std::array::get(out, at) + carry;
+                std::array::set(out, at, acc & 268435455);
+                carry = acc >> 28;
+                at = at + 1;
+            }
+        }
+        i = i + 1;
+    }
+    normalized(out)
+}
+
+/// `a * m` where `m` is a non-negative `Int` smaller than the limb base.
+///
+/// The common case in radix conversion and scaling, avoiding the allocation
+/// [`mul`] would need for a one-limb operand. An `m` outside
+/// `0 ..= limb_mask()` yields zero rather than a wrong answer, since the
+/// accumulator's overflow bound assumes a single-limb multiplier.
+///
+/// # Example
+/// ```tuo
+/// let p = std::bignum::mul_small(std::bignum::from_int(100), 7); // 700
+/// ```
+pub fn mul_small(in a: Array[Int], take m: Int) -> Array[Int] {
+    if m <= 0 || m > 268435455 {
+        return std::array::empty();
+    }
+    var out = std::array::empty();
+    var carry = 0;
+    var i = 0;
+    while i < std::array::len(a) {
+        let acc = (std::array::get(a, i) * m) + carry;
+        std::array::push(out, acc & 268435455);
+        carry = acc >> 28;
+        i = i + 1;
+    }
+    while carry > 0 {
+        std::array::push(out, carry & 268435455);
+        carry = carry >> 28;
+    }
+    normalized(out)
+}
+
+// ----------------------------------------------------------------------------
+// Shifts and division by a small Int.
+// ----------------------------------------------------------------------------
+
+/// `a << n` — `a` multiplied by `2^n`. A negative `n` yields `a` unchanged.
+///
+/// # Example
+/// ```tuo
+/// let s = std::bignum::shift_left(std::bignum::from_int(1), 30); // 2^30
+/// ```
+pub fn shift_left(in a: Array[Int], take n: Int) -> Array[Int] {
+    if n <= 0 {
+        return normalized(a);
+    }
+    if is_zero(a) {
+        return std::array::empty();
+    }
+    let whole = n / 28;
+    let part = n % 28;
+    var out = std::array::empty();
+    var i = 0;
+    while i < whole {
+        std::array::push(out, 0);
+        i = i + 1;
+    }
+    var carry = 0;
+    var j = 0;
+    while j < std::array::len(a) {
+        let acc = (std::array::get(a, j) << part) + carry;
+        std::array::push(out, acc & 268435455);
+        carry = acc >> 28;
+        j = j + 1;
+    }
+    if carry > 0 {
+        std::array::push(out, carry);
+    }
+    normalized(out)
+}
+
+/// `a >> n` — `a` divided by `2^n`, truncating. A negative `n` yields `a`.
+///
+/// # Example
+/// ```tuo
+/// let s = std::bignum::shift_right(std::bignum::from_int(1024), 10); // 1
+/// ```
+pub fn shift_right(in a: Array[Int], take n: Int) -> Array[Int] {
+    if n <= 0 {
+        return normalized(a);
+    }
+    let whole = n / 28;
+    let part = n % 28;
+    let len = std::array::len(a);
+    if whole >= len {
+        return std::array::empty();
+    }
+    var out = std::array::empty();
+    var i = whole;
+    while i < len {
+        var limb = std::array::get(a, i) >> part;
+        if part > 0 && i + 1 < len {
+            limb = limb | ((std::array::get(a, i + 1) << (28 - part)) & 268435455);
+        }
+        std::array::push(out, limb);
+        i = i + 1;
+    }
+    normalized(out)
+}
+
+/// `a / d` where `d` is a positive `Int` smaller than the limb base, and the
+/// remainder, as a pair. A `d` outside `1 ..= limb_mask()` yields zero and a
+/// remainder of `-1`, so an invalid divisor is visible rather than silent.
+///
+/// Returns the quotient; use [`rem_small`] for the remainder alone. They are
+/// separate functions because v0 has no tuple syntax and a struct for one
+/// division would be heavier than the two calls.
+///
+/// # Example
+/// ```tuo
+/// let q = std::bignum::div_small(std::bignum::from_int(100), 7); // 14
+/// ```
+pub fn div_small(in a: Array[Int], take d: Int) -> Array[Int] {
+    if d <= 0 || d > 268435455 {
+        return std::array::empty();
+    }
+    var out = std::array::empty();
+    let n = std::array::len(a);
+    // Build the quotient most-significant first, then reverse.
+    var scratch = std::array::empty();
+    var remainder = 0;
+    var i = n;
+    while i > 0 {
+        let acc = (remainder << 28) + std::array::get(a, i - 1);
+        std::array::push(scratch, acc / d);
+        remainder = acc % d;
+        i = i - 1;
+    }
+    var j = std::array::len(scratch);
+    while j > 0 {
+        std::array::push(out, std::array::get(scratch, j - 1));
+        j = j - 1;
+    }
+    normalized(out)
+}
+
+/// `a % d` where `d` is a positive `Int` smaller than the limb base, or `-1`
+/// when `d` is out of range.
+///
+/// # Example
+/// ```tuo
+/// let r = std::bignum::rem_small(std::bignum::from_int(100), 7); // 2
+/// ```
+pub fn rem_small(in a: Array[Int], take d: Int) -> Int {
+    if d <= 0 || d > 268435455 {
+        return 0 - 1;
+    }
+    var remainder = 0;
+    var i = std::array::len(a);
+    while i > 0 {
+        let acc = (remainder << 28) + std::array::get(a, i - 1);
+        remainder = acc % d;
+        i = i - 1;
+    }
+    remainder
+}
+
+// ----------------------------------------------------------------------------
+// Text conversion.
+// ----------------------------------------------------------------------------
+
+/// `a` rendered in decimal.
+///
+/// Repeated division by a large power of ten, so the cost is quadratic in the
+/// digit count — acceptable for the sizes this module targets, and the
+/// obvious implementation to audit.
+///
+/// # Example
+/// ```tuo
+/// let text = std::bignum::to_decimal(std::bignum::from_int(12345)); // "12345"
+/// ```
+pub fn to_decimal(in a: Array[Int]) -> String {
+    var out = std::string::empty();
+    if is_zero(a) {
+        std::string::push_byte(out, 48);
+        return out;
+    }
+    // Collect decimal digits least-significant first.
+    var digits = std::array::empty();
+    var value = normalized(a);
+    while !is_zero(value) {
+        std::array::push(digits, rem_small(value, 10));
+        value = div_small(value, 10);
+    }
+    var i = std::array::len(digits);
+    while i > 0 {
+        std::string::push_byte(out, 48 + std::array::get(digits, i - 1));
+        i = i - 1;
+    }
+    out
+}
+
+/// `text` parsed as a non-negative decimal integer, or `None` if it is empty
+/// or holds any non-digit byte.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::from_decimal("12345"); // Some
+/// ```
+pub fn from_decimal(in text: Str) -> Option[Array[Int]] {
+    let n = std::str::len(text);
+    if n == 0 {
+        return Option::None;
+    }
+    var value = std::array::empty();
+    var i = 0;
+    while i < n {
+        let byte = std::str::byte_at(text, i);
+        if byte < 48 || byte > 57 {
+            return Option::None;
+        }
+        value = mul_small(value, 10);
+        value = add(value, from_int(byte - 48));
+        i = i + 1;
+    }
+    Option::Some { value: normalized(value) }
+}
+
+/// `a` rendered as lowercase hexadecimal, with no leading zeros; zero renders
+/// as `"0"`.
+///
+/// # Example
+/// ```tuo
+/// let text = std::bignum::to_hex(std::bignum::from_int(255)); // "ff"
+/// ```
+pub fn to_hex(in a: Array[Int]) -> String {
+    var out = std::string::empty();
+    if is_zero(a) {
+        std::string::push_byte(out, 48);
+        return out;
+    }
+    var digits = std::array::empty();
+    var value = normalized(a);
+    while !is_zero(value) {
+        std::array::push(digits, rem_small(value, 16));
+        value = div_small(value, 16);
+    }
+    var i = std::array::len(digits);
+    while i > 0 {
+        let digit = std::array::get(digits, i - 1);
+        if digit < 10 {
+            std::string::push_byte(out, 48 + digit);
+        } else {
+            std::string::push_byte(out, 87 + digit);
+        }
+        i = i - 1;
+    }
+    out
+}
+
+/// `bytes` read as one big-endian non-negative integer.
+///
+/// The form every cryptographic protocol transmits a large number in: an RSA
+/// modulus, a Diffie-Hellman public value, a certificate serial number.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::from_be_bytes(std::collections::of2(1, 0)); // 256
+/// ```
+pub fn from_be_bytes(in bytes: Array[Int]) -> Array[Int] {
+    var value = std::array::empty();
+    var i = 0;
+    while i < std::array::len(bytes) {
+        value = mul_small(value, 256);
+        value = add(value, from_int(std::array::get(bytes, i) & 255));
+        i = i + 1;
+    }
+    normalized(value)
+}
+
+/// `a` as big-endian bytes, with no leading zero byte; zero yields `[0]`.
+///
+/// The inverse of [`from_be_bytes`].
+///
+/// # Example
+/// ```tuo
+/// let bytes = std::bignum::to_be_bytes(std::bignum::from_int(256)); // [1, 0]
+/// ```
+pub fn to_be_bytes(in a: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    if is_zero(a) {
+        std::array::push(out, 0);
+        return out;
+    }
+    var reversed = std::array::empty();
+    var value = normalized(a);
+    while !is_zero(value) {
+        std::array::push(reversed, rem_small(value, 256));
+        value = div_small(value, 256);
+    }
+    var i = std::array::len(reversed);
+    while i > 0 {
+        std::array::push(out, std::array::get(reversed, i - 1));
+        i = i - 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter.
+// ----------------------------------------------------------------------------
+
+spec limb_bits {
+    then limb_bits() == 28;
+    then base() == 268435456;
+    then limb_mask() == 268435455;
+    // The invariant the whole module rests on: a full-width product plus a
+    // carry must stay inside Int, or an operation would trap.
+    then (limb_mask() * limb_mask()) + limb_mask() + limb_mask() < 9223372036854775807;
+}
+
+spec base {
+    then base() == 268435456;
+    then base() - 1 == limb_mask();
+}
+
+spec limb_mask {
+    then limb_mask() == 268435455;
+}
+
+spec zero {
+    then is_zero(zero());
+    then std::array::len(zero()) == 0;
+}
+
+spec from_int {
+    then std::array::len(from_int(0)) == 0;
+    then std::array::get(from_int(5), 0) == 5;
+    then std::array::len(from_int(5)) == 1;
+    // One limb short of the base, then exactly the base (two limbs).
+    then std::array::len(from_int(268435455)) == 1;
+    then std::array::len(from_int(268435456)) == 2;
+    then std::array::get(from_int(268435456), 0) == 0;
+    then std::array::get(from_int(268435456), 1) == 1;
+    // A negative input is not representable and yields zero.
+    then is_zero(from_int(0 - 5));
+}
+
+spec normalized {
+    then std::array::len(normalized(from_int(0))) == 0;
+    then std::array::len(normalized(from_int(1))) == 1;
+    // Round-trips are already normalized.
+    then equals(normalized(from_int(12345)), from_int(12345));
+}
+
+spec is_zero {
+    then is_zero(zero());
+    then is_zero(from_int(0));
+    then !is_zero(from_int(1));
+}
+
+spec to_int {
+    then int_or(to_int(from_int(42)), 0 - 1) == 42;
+    then int_or(to_int(from_int(0)), 0 - 1) == 0;
+    then int_or(to_int(from_int(268435456)), 0 - 1) == 268435456;
+    // Round-trips with from_int across the limb boundary.
+    then int_or(to_int(from_int(1000000007)), 0 - 1) == 1000000007;
+    // A four-limb value cannot fit in 63 bits.
+    then is_int_absent(to_int(shift_left(from_int(1), 100)));
+}
+
+spec compare {
+    then compare(from_int(5), from_int(3)) == 1;
+    then compare(from_int(3), from_int(5)) == 0 - 1;
+    then compare(from_int(5), from_int(5)) == 0;
+    then compare(zero(), zero()) == 0;
+    // Differing limb counts compare by magnitude, not by length alone.
+    then compare(from_int(268435456), from_int(268435455)) == 1;
+}
+
+spec equals {
+    then equals(from_int(7), from_int(7));
+    then !equals(from_int(7), from_int(8));
+    then equals(zero(), from_int(0));
+}
+
+spec bit_length {
+    then bit_length(zero()) == 0;
+    then bit_length(from_int(1)) == 1;
+    then bit_length(from_int(255)) == 8;
+    then bit_length(from_int(256)) == 9;
+    // Exactly one limb, and one bit past it.
+    then bit_length(from_int(268435455)) == 28;
+    then bit_length(from_int(268435456)) == 29;
+}
+
+spec add {
+    then equals(add(from_int(1), from_int(2)), from_int(3));
+    then equals(add(zero(), from_int(5)), from_int(5));
+    then equals(add(from_int(5), zero()), from_int(5));
+    // A carry across the limb boundary.
+    then equals(add(from_int(268435455), from_int(1)), from_int(268435456));
+    then std::array::len(add(from_int(268435455), from_int(1))) == 2;
+    // Commutative.
+    then equals(add(from_int(123456), from_int(654321)),
+                add(from_int(654321), from_int(123456)));
+}
+
+spec sub {
+    then equals(sub(from_int(5), from_int(3)), from_int(2));
+    then equals(sub(from_int(5), from_int(5)), zero());
+    // Saturates rather than going negative.
+    then is_zero(sub(from_int(3), from_int(5)));
+    // A borrow across the limb boundary.
+    then equals(sub(from_int(268435456), from_int(1)), from_int(268435455));
+    // add and sub are inverses.
+    then equals(sub(add(from_int(999999), from_int(123456)), from_int(123456)),
+                from_int(999999));
+}
+
+spec mul {
+    then equals(mul(from_int(1000), from_int(1000)), from_int(1000000));
+    then is_zero(mul(zero(), from_int(5)));
+    then is_zero(mul(from_int(5), zero()));
+    then equals(mul(from_int(1), from_int(12345)), from_int(12345));
+    // A product that needs more limbs than either operand.
+    then equals(mul(from_int(268435455), from_int(268435455)),
+                sub(add(shift_left(from_int(1), 56), from_int(1)),
+                    shift_left(from_int(2), 28)));
+    // Commutative, and distributes over addition.
+    then equals(mul(from_int(65536), from_int(65537)),
+                mul(from_int(65537), from_int(65536)));
+    then equals(mul(from_int(7), add(from_int(11), from_int(13))),
+                add(mul(from_int(7), from_int(11)), mul(from_int(7), from_int(13))));
+}
+
+spec mul_small {
+    then equals(mul_small(from_int(100), 7), from_int(700));
+    then is_zero(mul_small(from_int(100), 0));
+    // Agrees with the general multiply.
+    then equals(mul_small(from_int(123456789), 1000), mul(from_int(123456789), from_int(1000)));
+    // An out-of-range multiplier is refused rather than answered wrongly.
+    then is_zero(mul_small(from_int(100), 268435456));
+}
+
+spec shift_left {
+    then equals(shift_left(from_int(1), 0), from_int(1));
+    then equals(shift_left(from_int(1), 10), from_int(1024));
+    then equals(shift_left(from_int(1), 28), from_int(268435456));
+    then is_zero(shift_left(zero(), 100));
+    // Shifting by n is multiplying by 2^n.
+    then equals(shift_left(from_int(3), 30), mul(from_int(3), shift_left(from_int(1), 30)));
+    then bit_length(shift_left(from_int(1), 255)) == 256;
+}
+
+spec shift_right {
+    then equals(shift_right(from_int(1024), 10), from_int(1));
+    then equals(shift_right(from_int(1), 0), from_int(1));
+    then is_zero(shift_right(from_int(1), 100));
+    // Left then right is the identity.
+    then equals(shift_right(shift_left(from_int(12345), 61), 61), from_int(12345));
+}
+
+spec div_small {
+    then equals(div_small(from_int(100), 7), from_int(14));
+    then equals(div_small(from_int(100), 1), from_int(100));
+    then is_zero(div_small(from_int(100), 0));
+    // Division and remainder reconstruct the dividend.
+    then equals(add(mul_small(div_small(from_int(1000003), 97), 97),
+                    from_int(rem_small(from_int(1000003), 97))),
+                from_int(1000003));
+}
+
+spec rem_small {
+    then rem_small(from_int(100), 7) == 2;
+    then rem_small(from_int(100), 10) == 0;
+    then rem_small(from_int(100), 0) == 0 - 1;
+    // A multi-limb dividend.
+    then rem_small(shift_left(from_int(1), 56), 3) == 1;
+}
+
+spec to_decimal {
+    then std::string::as_str(to_decimal(zero())) == "0";
+    then std::string::as_str(to_decimal(from_int(12345))) == "12345";
+    then std::string::as_str(to_decimal(from_int(268435456))) == "268435456";
+    // 2^64, which no Int can hold.
+    then std::string::as_str(to_decimal(shift_left(from_int(1), 64)))
+        == "18446744073709551616";
+}
+
+spec from_decimal {
+    then equals(num_or_zero(from_decimal("0")), zero());
+    then equals(num_or_zero(from_decimal("12345")), from_int(12345));
+    then is_absent(from_decimal(""));
+    then is_absent(from_decimal("12a45"));
+    // Round-trips with to_decimal on a value far beyond Int's range.
+    then std::string::as_str(to_decimal(num_or_zero(
+        from_decimal("340282366920938463463374607431768211456"))))
+        == "340282366920938463463374607431768211456";
+}
+
+spec to_hex {
+    then std::string::as_str(to_hex(zero())) == "0";
+    then std::string::as_str(to_hex(from_int(255))) == "ff";
+    then std::string::as_str(to_hex(from_int(4096))) == "1000";
+    // 2^128 in hex is 1 followed by 32 zeros.
+    then std::str::len(std::string::as_str(to_hex(shift_left(from_int(1), 128)))) == 33;
+}
+
+spec from_be_bytes {
+    then is_zero(from_be_bytes(std::array::empty()));
+    then equals(from_be_bytes(byte_pair(1, 0)), from_int(256));
+    then equals(from_be_bytes(byte_pair(0, 255)), from_int(255));
+    // Round-trips with to_be_bytes.
+    then equals(from_be_bytes(to_be_bytes(from_int(1000000007))), from_int(1000000007));
+}
+
+spec to_be_bytes {
+    then std::array::len(to_be_bytes(zero())) == 1;
+    then std::array::get(to_be_bytes(zero()), 0) == 0;
+    then std::array::len(to_be_bytes(from_int(256))) == 2;
+    then std::array::get(to_be_bytes(from_int(256)), 0) == 1;
+    then std::array::get(to_be_bytes(from_int(256)), 1) == 0;
+    // A 2048-bit value is exactly 256 bytes — the RSA modulus size that
+    // motivated this module.
+    then std::array::len(to_be_bytes(shift_left(from_int(1), 2047))) == 256;
+}
+
+/// The `Int` inside `value`, or `fallback` when it is `None`.
+///
+/// A local helper rather than `std::core::unwrap_or`: `std::bignum` depends on
+/// no other catalog module, so the specs cannot reach one.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::int_or(std::bignum::to_int(std::bignum::from_int(7)), 0); // 7
+/// ```
+pub fn int_or(take value: Option[Int], take fallback: Int) -> Int {
+    match value {
+        Option::Some { value } => value,
+        Option::None => fallback,
+    }
+}
+
+spec int_or {
+    then int_or(to_int(from_int(7)), 0) == 7;
+    then int_or(Option::None, 0 - 9) == 0 - 9;
+}
+
+/// Whether an optional bignum is absent.
+///
+/// # Example
+/// ```tuo
+/// let absent = std::bignum::is_absent(std::bignum::from_decimal("")); // true
+/// ```
+pub fn is_absent(take value: Option[Array[Int]]) -> Bool {
+    match value {
+        Option::Some { value } => false,
+        Option::None => true,
+    }
+}
+
+spec is_absent {
+    then is_absent(from_decimal(""));
+    then !is_absent(from_decimal("1"));
+}
+
+/// Whether an optional `Int` is absent.
+///
+/// # Example
+/// ```tuo
+/// let absent = std::bignum::is_int_absent(std::bignum::to_int(std::bignum::zero())); // false
+/// ```
+pub fn is_int_absent(take value: Option[Int]) -> Bool {
+    match value {
+        Option::Some { value } => false,
+        Option::None => true,
+    }
+}
+
+spec is_int_absent {
+    then !is_int_absent(to_int(from_int(1)));
+    then is_int_absent(to_int(shift_left(from_int(1), 100)));
+}
+
+/// The bignum inside `value`, or zero when it is `None`.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bignum::num_or_zero(std::bignum::from_decimal("42"));
+/// ```
+pub fn num_or_zero(take value: Option[Array[Int]]) -> Array[Int] {
+    match value {
+        Option::Some { value } => value,
+        Option::None => std::array::empty(),
+    }
+}
+
+spec num_or_zero {
+    then equals(num_or_zero(from_decimal("42")), from_int(42));
+    then is_zero(num_or_zero(from_decimal("")));
+}
+
+/// A two-element byte array, for the specs above.
+///
+/// A spec helper: `std::bignum` depends on no other catalog module, so it
+/// cannot reach `std::collections`.
+///
+/// # Example
+/// ```tuo
+/// let bytes = std::bignum::byte_pair(1, 0); // [1, 0]
+/// ```
+pub fn byte_pair(take a: Int, take b: Int) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, a & 255);
+    std::array::push(out, b & 255);
+    out
+}
+
+spec byte_pair {
+    then std::array::len(byte_pair(1, 2)) == 2;
+    then std::array::get(byte_pair(1, 2), 0) == 1;
+    then std::array::get(byte_pair(1, 2), 1) == 2;
+}

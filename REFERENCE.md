@@ -198,8 +198,23 @@ Lowest to highest:
 ?  .field  f(args)  a[i]  x as T    postfix
 ```
 
-Things that deliberately **do not exist** in v0: bitwise operators and shifts
-(`| & ^ << >>`), compound assignment (`+=`), the `<>` generic syntax.
+Bitwise operators on integers (ADR-0019), loosest to tightest:
+
+```
+|                   bitwise or (also the pattern-alternative separator)
+^                   bitwise xor
+&                   bitwise and
+<< >>               left / right shift
+~                   prefix: bitwise complement
+```
+
+They are integers-only — never `Float`, and never `Bool` (use `&& || !`). `>>`
+is **arithmetic** on a signed type and **logical** on an unsigned one, and a
+shift amount outside `0..width` **traps** rather than wrapping, so `x << 64` is
+an abort rather than `x`.
+
+Things that deliberately **do not exist** in v0: compound assignment (`+=`,
+`|=`), the `<>` generic syntax.
 
 Integer arithmetic **traps** (deterministic abort — no wraparound, no
 unwinding) on: overflow of `+ - *`, negation of `MIN`, `MIN / -1`, and division
@@ -911,7 +926,9 @@ Copy element.
    contexts requiring a literal (array lengths, suffixed forms) need a
    non-negative INT_LITERAL.
 5. **Comparisons don't chain**: `a < b < c` is a parse error.
-6. **No bitwise operators** — `|` appears only in or-patterns.
+6. **`|` does double duty** — pattern alternation inside a match pattern,
+   bitwise-or in any expression (ADR-0019). Both spellings can appear in one
+   program; the context decides.
 7. **The last expression of a block (no semicolon) is its value**; adding a `;`
    turns it into a `()`-valued statement (usually a `T0001` at the return).
 8. **`xs[i]` is not assignable** — on a growable `Array[T]` use

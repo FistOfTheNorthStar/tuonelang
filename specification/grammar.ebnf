@@ -1,7 +1,7 @@
 (* ==========================================================================
    tuonelang v0 — normative surface grammar (EBNF)
 
-   GRAMMAR-VERSION: 0.1
+   GRAMMAR-VERSION: 0.3
    EDITION: 2024
    (* This grammar is versioned. Any change to a [FROZEN] production is a
       breaking change requiring a new edition and an ADR (Constitution §30);
@@ -71,6 +71,53 @@
    existing tokens (`fn`, the modes `in`/`mut`/`take`, `->`); no [FROZEN]
    production's surface changed and no token was added, so GRAMMAR-VERSION
    stays 0.1 per this file's own versioning rule.
+
+   2026-09-01: ADR-0019 Stage A adds the additive [EXPERIMENTAL] bitwise
+   levels `bit_or_expr`/`bit_xor_expr`/`bit_and_expr`/`shift_expr` (G) and
+   the prefix `~` (G). Unlike the two entries above this DOES add tokens —
+   `&`, `^`, `~`, `<<`, `>>` — and gives the existing `|` a second role.
+   GRAMMAR-VERSION therefore moves 0.1 -> 0.2. The bump records that the token
+   table grew; it is deliberately NOT an edition bump, and the distinction is
+   worth stating precisely, since Constitution §30 attaches a *breaking* change
+   to a [FROZEN] production's *surface*, not to the token table:
+
+     - No [FROZEN] production changed. The new levels are inserted between
+       `compare_expr` and `range_expr`, so every previously-valid expression
+       still parses to the identical tree (each new level is a `{ ... }`
+       repetition that matches zero times when its operator is absent).
+     - The five new tokens were previously LEXICAL ERRORS — no valid v0
+       program could contain `&`, `^`, `~`, `<<`, or `>>` outside a string or
+       comment. Reserving a character that was an error is a strict
+       extension: it cannot invalidate an existing program.
+     - `|` gains a second role but loses none. It is one terminal read in two
+       disjoint contexts (pattern vs expression), so `1 | 2` in a pattern
+       position still means exactly what it meant before.
+
+   That is, the change is additive in the sense that matters — no existing
+   program changes meaning or stops compiling — so EDITION stays 2024 and no
+   migration is owed. The grammar version tracks *this file*, not the release,
+   so it advances within the 0.1 release line; release-gate criterion G1 pins
+   whatever value the marker carries and stays MET. A change that altered a
+   [FROZEN] production's surface would require an edition bump per
+   Constitution §30 instead — that is the line this change does not cross.
+
+   0.2 -> 0.3 (ADR-0020 Stage C): `item` gains an optional attribute prefix,
+   `attribute` (E), and the token `#`. This is the same shape of change as the
+   entry above, and passes the same three tests:
+
+     - No [FROZEN] production's surface changed. `item` is not [FROZEN]; the
+       attribute prefix is a `{ ... }` repetition that matches zero times when
+       absent, so every previously-valid item still parses to the identical
+       tree.
+     - `#` was previously a LEXICAL ERROR — no valid v0 program could contain
+       it outside a string or comment — so reserving it is a strict extension.
+     - No existing token gains or loses a role.
+
+   EDITION therefore stays 2024. Attributes are a fixed, compiler-known set,
+   not an open annotation space: an unrecognized name is a semantic error
+   (`T0021`), never a silently-ignored decoration. That is a deliberate choice
+   — a misspelled `#[constant_tim]` that compiled clean would leave an author
+   believing in a guarantee the compiler never checked.
    ========================================================================== *)
 
 
@@ -179,14 +226,19 @@ STRING_LITERAL = '"', { ? any char except '"' or '\\' or newline ? | escape }, '
 
 punct =
       "->" | "=>" | "::" | ".." | "==" | "!=" | "<=" | ">=" | "&&" | "||"
+    | "<<" | ">>"       (* shifts, ADR-0019; matched before "<"/">" by maximal munch *)
     | "+" | "-" | "*" | "/" | "%"
+    | "&" | "^" | "~"   (* bitwise and/xor/complement, ADR-0019 *)
     | "<" | ">" | "!" | "=" | "?" | "."
     | "(" | ")" | "{" | "}" | "[" | "]"
     | "," | ";" | ":"
-    | "|" ;             (* pattern alternative only, (H); NOT a bitwise operator *)
-(* NOTE on angle brackets: `<`/`>` are ONLY comparison/shift-free relational
-   operators — generics use square brackets `[T]` [§18], so there is no
-   `<`-as-generic ambiguity. This is a deliberate minimal-lookahead choice. *)
+    | "|" ;             (* pattern alternative (H) AND bitwise or (G), ADR-0019 —
+                           one terminal, disambiguated by grammatical context *)
+(* NOTE on angle brackets: `<`/`>` are relational operators and `<<`/`>>` the
+   shifts (ADR-0019, matched by maximal munch); generics use square brackets
+   `[T]` [§18], so there is no `<`-as-generic ambiguity and therefore no
+   `>>`-must-be-split-to-close-two-generics problem either. This is a
+   deliberate minimal-lookahead choice. *)
 
 
 (* ==========================================================================
@@ -202,6 +254,7 @@ compilation_unit = [ module_decl ], { item } ;                      (* [§6] *)
 module_decl    = "module", path, ";" ;                              (* optional self-naming [§6] *)
 
 item           = { doc_comment },                                   (* docs attach to the item [§3] *)
+                 { attribute, { doc_comment } },                     (* ADR-0020 Stage C *)
                  [ "pub" ],                                          (* visibility [§6] *)
                  ( import_item
                  | function_item
@@ -288,6 +341,15 @@ generic_param  = IDENT, [ ":", bound_list ] ;                       (* T or T: B
 bound_list     = type_path, { "+", type_path } ;                    (* Interface bounds; `+` joins [§18] *)
 where_clause   = "where", where_pred, { ",", where_pred }, [ "," ] ; (* [§18] *)
 where_pred     = type, ":", bound_list ;
+
+(* --- attributes ---------------------------------------------------------- *)
+
+(* An attribute prefixing an item (ADR-0020 Stage C). The set of attribute
+   names is fixed and compiler-known — the grammar accepts any IDENT here and
+   the checker reports an unrecognized one (`T0021`), so a typo earns a precise
+   diagnostic instead of a parse error that explains nothing. v0 defines
+   exactly one: `#[constant_time]`, which is valid only on a function. *)
+attribute      = "#", "[", IDENT, "]" ;
 
 (* --- functions ---------------------------------------------------------- *)
 
@@ -389,12 +451,28 @@ assign_op      = "=" ;                                             (* v0 has no 
 
 or_expr        = and_expr, { "||", and_expr } ;
 and_expr       = compare_expr, { "&&", compare_expr } ;
-compare_expr   = range_expr, [ compare_op, range_expr ] ;          (* non-associative: a<b<c is a parse error *)
+compare_expr   = bit_or_expr, [ compare_op, bit_or_expr ] ;        (* non-associative: a<b<c is a parse error *)
 compare_op     = "==" | "!=" | "<" | ">" | "<=" | ">=" ;
+
+(* --- bitwise levels [EXPERIMENTAL] --------------------------------------- *)
+(* ADR-0019. Loosest to tightest: `|`, `^`, `&`, then the shifts — the
+   conventional order, so an expression copied from C/Rust/Go parses the same
+   way. Integers only; the type checker rejects every other operand type.
+
+   The `|` here is the SAME terminal as the pattern-alternative separator in
+   (H). The two never collide: `pattern` is a disjoint production that the
+   expression chain never descends into, so the parser always knows which it
+   is reading. `1 | 2` is two pattern alternatives in a match arm's pattern
+   position and a bitwise-or expression everywhere else. *)
+bit_or_expr    = bit_xor_expr, { "|", bit_xor_expr } ;
+bit_xor_expr   = bit_and_expr, { "^", bit_and_expr } ;
+bit_and_expr   = shift_expr, { "&", shift_expr } ;
+shift_expr     = range_expr, { ( "<<" | ">>" ), range_expr } ;     (* ">>" is arithmetic on signed, logical on unsigned *)
+
 range_expr     = add_expr, [ "..", add_expr ] ;                    (* half-open range (for/iteration) [§16] *)
 add_expr       = mul_expr, { ( "+" | "-" ), mul_expr } ;
 mul_expr       = unary_expr, { ( "*" | "/" | "%" ), unary_expr } ;
-unary_expr     = ( "-" | "!" | "move" ), unary_expr                (* prefix neg/not/explicit-move [§21] *)
+unary_expr     = ( "-" | "!" | "~" | "move" ), unary_expr          (* prefix neg/not/complement/explicit-move [§21] *)
                | postfix_expr ;
 
 postfix_expr   = primary_expr, { postfix_op } ;

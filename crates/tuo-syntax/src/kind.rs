@@ -22,6 +22,13 @@ pub enum SyntaxKind {
     /// `segment :: segment :: …` (C).
     Path,
 
+    /// `#[name]` — an attribute prefixing an item (ADR-0020 Stage C).
+    ///
+    /// Attributes are a fixed, compiler-known set; an unrecognized name is a
+    /// diagnostic rather than a silently-ignored annotation, so an attribute
+    /// can never look applied when it is not.
+    Attribute,
+
     /// `fn name [generics] (params) [-> type] [where] block` (E).
     FunctionItem,
     /// `fn name [generics] (params) [-> type] [where]` with no body (E).

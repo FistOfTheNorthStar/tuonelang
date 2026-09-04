@@ -66,8 +66,24 @@ pub struct Function {
     pub params: Vec<Param>,
     /// The return type; an omitted `-> ()` is made explicit here.
     pub ret: Ty,
+    /// The attributes written on this function, with their spans, in source
+    /// order (ADR-0020 Stage C).
+    ///
+    /// Names are carried verbatim — an unrecognized attribute survives to the
+    /// checker, which reports it, rather than being dropped during lowering
+    /// where it would silently look applied.
+    pub attributes: Vec<Attribute>,
     /// The body (`None` for interface signatures).
     pub body: Option<Block>,
+}
+
+/// One attribute written on a declaration (ADR-0020 Stage C).
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Attribute {
+    /// The attribute's name, exactly as written.
+    pub name: String,
+    /// The span of the name, for diagnostics.
+    pub span: Span,
 }
 
 /// One declared type parameter.
@@ -468,6 +484,9 @@ pub enum UnOp {
     Neg,
     /// Logical negation `!`.
     Not,
+    /// Bitwise complement `~` (ADR-0019). Distinct from [`UnOp::Not`]:
+    /// `!` is `Bool -> Bool`, `~` is integer -> integer.
+    BitNot,
     /// An explicit `move`.
     Move,
 }
@@ -479,6 +498,7 @@ impl UnOp {
         match self {
             Self::Neg => "-",
             Self::Not => "!",
+            Self::BitNot => "~",
             Self::Move => "move",
         }
     }
@@ -513,6 +533,17 @@ pub enum BinOp {
     And,
     /// `||`
     Or,
+    /// `&` — bitwise and (ADR-0019).
+    BitAnd,
+    /// `|` — bitwise or (ADR-0019).
+    BitOr,
+    /// `^` — bitwise xor (ADR-0019).
+    BitXor,
+    /// `<<` — left shift (ADR-0019).
+    Shl,
+    /// `>>` — right shift (ADR-0019); arithmetic on signed, logical on
+    /// unsigned.
+    Shr,
 }
 
 impl BinOp {
@@ -533,6 +564,11 @@ impl BinOp {
             Self::Ge => ">=",
             Self::And => "&&",
             Self::Or => "||",
+            Self::BitAnd => "&",
+            Self::BitOr => "|",
+            Self::BitXor => "^",
+            Self::Shl => "<<",
+            Self::Shr => ">>",
         }
     }
 }

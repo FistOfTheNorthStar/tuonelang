@@ -1,0 +1,906 @@
+// std::crypto — cryptographic hashing and the primitives built on it.
+//
+// Almost all of this module is executable: pure computation over `Int`, `Str`,
+// `String`, and `Array[Int]`, running through the reference interpreter with a
+// spec below proving each function. It exists because ADR-0019 Stage A gave the
+// language the bitwise operators these algorithms are *defined* in terms of —
+// SHA-256 is rotations, xors, and shifts, and cannot be written without them at
+// all.
+//
+// The two exceptions are `random_byte` and `nonce`, which are the **effect
+// tier**: drawing entropy is an effect by nature — two calls must NOT agree —
+// so they carry no spec (`R0007` keeps effects out of the deterministic
+// sandbox, which is the correct answer rather than a limitation) and are
+// marked `EFFECT:` and pinned by a native CLI test instead.
+//
+// CORRECTNESS IS EXTERNALLY DEFINED, which is unusual here and is the point.
+// Every function below has published test vectors (FIPS 180-4 for SHA-256,
+// RFC 2104/4231 for HMAC, RFC 6070 for PBKDF2, RFC 4648 for Base64), and the
+// specs assert those vectors rather than this module's own reasoning. A spec
+// that reproduces a published vector cannot be self-consistently wrong, which
+// is a stronger guarantee than the rest of the standard library can offer.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`x.sha256()`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+//
+// BYTES ARE `Array[Int]`, each element in `0 ..= 255`. v0 has no `[u8]` type,
+// and `String` is UTF-8 text rather than an arbitrary byte container, so a
+// digest — which is 32 arbitrary bytes, most of them not valid text — is an
+// `Array[Int]`. `sha256` returns the conventional lowercase hex `String` for
+// display and comparison; `sha256_bytes` returns the raw bytes for feeding
+// into another primitive.
+//
+// WHAT THIS MODULE IS NOT. It is a hashing library, not a TLS stack and not a
+// general cryptography toolkit. There is no symmetric cipher, no public-key
+// operation, and no certificate handling here, and adding them is a decision
+// for a future ADR rather than an incremental commit. In particular: this
+// module lets a program *authenticate* (prove it knows a password) but does
+// not let it *encrypt*, so a protocol built on it alone is readable by anyone
+// on the wire.
+
+module std::crypto;
+
+// ----------------------------------------------------------------------------
+// SHA-256 (FIPS 180-4).
+//
+// The compression function is defined over 32-bit modular arithmetic and
+// rotations, which is exactly what `std::bits` provides. Nothing here uses a
+// bare `+` on a hash word: `std::bits::add32` is the modular add the standard
+// specifies, and plain `+` would trap on carry.
+// ----------------------------------------------------------------------------
+
+/// The 64 SHA-256 round constants (the first 32 bits of the fractional parts
+/// of the cube roots of the first 64 primes), as a fresh array.
+///
+/// Internal to the compression loop; exposed because v0 has no module-private
+/// items and no `const` arrays, not because callers want it.
+///
+/// # Example
+/// ```tuo
+/// let k = std::crypto::sha256_round_constants(); // 64 entries
+/// ```
+pub fn sha256_round_constants() -> Array[Int] {
+    var k = std::array::empty();
+    std::array::push(k, 1116352408); std::array::push(k, 1899447441);
+    std::array::push(k, 3049323471); std::array::push(k, 3921009573);
+    std::array::push(k, 961987163);  std::array::push(k, 1508970993);
+    std::array::push(k, 2453635748); std::array::push(k, 2870763221);
+    std::array::push(k, 3624381080); std::array::push(k, 310598401);
+    std::array::push(k, 607225278);  std::array::push(k, 1426881987);
+    std::array::push(k, 1925078388); std::array::push(k, 2162078206);
+    std::array::push(k, 2614888103); std::array::push(k, 3248222580);
+    std::array::push(k, 3835390401); std::array::push(k, 4022224774);
+    std::array::push(k, 264347078);  std::array::push(k, 604807628);
+    std::array::push(k, 770255983);  std::array::push(k, 1249150122);
+    std::array::push(k, 1555081692); std::array::push(k, 1996064986);
+    std::array::push(k, 2554220882); std::array::push(k, 2821834349);
+    std::array::push(k, 2952996808); std::array::push(k, 3210313671);
+    std::array::push(k, 3336571891); std::array::push(k, 3584528711);
+    std::array::push(k, 113926993);  std::array::push(k, 338241895);
+    std::array::push(k, 666307205);  std::array::push(k, 773529912);
+    std::array::push(k, 1294757372); std::array::push(k, 1396182291);
+    std::array::push(k, 1695183700); std::array::push(k, 1986661051);
+    std::array::push(k, 2177026350); std::array::push(k, 2456956037);
+    std::array::push(k, 2730485921); std::array::push(k, 2820302411);
+    std::array::push(k, 3259730800); std::array::push(k, 3345764771);
+    std::array::push(k, 3516065817); std::array::push(k, 3600352804);
+    std::array::push(k, 4094571909); std::array::push(k, 275423344);
+    std::array::push(k, 430227734);  std::array::push(k, 506948616);
+    std::array::push(k, 659060556);  std::array::push(k, 883997877);
+    std::array::push(k, 958139571);  std::array::push(k, 1322822218);
+    std::array::push(k, 1537002063); std::array::push(k, 1747873779);
+    std::array::push(k, 1955562222); std::array::push(k, 2024104815);
+    std::array::push(k, 2227730452); std::array::push(k, 2361852424);
+    std::array::push(k, 2428436474); std::array::push(k, 2756734187);
+    std::array::push(k, 3204031479); std::array::push(k, 3329325298);
+    k
+}
+
+/// The SHA-256 message bytes for `data`: its bytes, the `0x80` terminator,
+/// zero padding, and the 64-bit big-endian bit length.
+///
+/// Padding brings the total to a multiple of 64 bytes, which is what lets the
+/// compression loop read whole blocks. Split out from [`sha256_bytes`] so the
+/// padding rule can be spec'd on its own.
+///
+/// # Example
+/// ```tuo
+/// let padded = std::crypto::sha256_pad("abc"); // 64 bytes
+/// ```
+pub fn sha256_pad(in data: Str) -> Array[Int] {
+    let length = std::str::len(data);
+    var message = std::array::empty();
+    var i = 0;
+    while i < length {
+        std::array::push(message, std::str::byte_at(data, i));
+        i = i + 1;
+    }
+    // The mandatory 1 bit, as a whole byte since the input is byte-aligned.
+    std::array::push(message, 128);
+    // Zero-pad until the length is 56 mod 64, leaving room for the 8-byte
+    // length field that completes the final block.
+    while (std::array::len(message) % 64) != 56 {
+        std::array::push(message, 0);
+    }
+    // The message length in BITS, as a 64-bit big-endian integer. The high
+    // four bytes are zero for any input this implementation can hold.
+    let bits = length * 8;
+    std::array::push(message, 0);
+    std::array::push(message, 0);
+    std::array::push(message, 0);
+    std::array::push(message, 0);
+    std::array::push(message, std::bits::byte_of_be32(bits, 0));
+    std::array::push(message, std::bits::byte_of_be32(bits, 1));
+    std::array::push(message, std::bits::byte_of_be32(bits, 2));
+    std::array::push(message, std::bits::byte_of_be32(bits, 3));
+    message
+}
+
+/// The SHA-256 digest of `data`, as 32 raw bytes.
+///
+/// The bytes are the digest itself, most of which are not valid text — use
+/// [`sha256`] for a displayable form. This is the function to feed into
+/// [`hmac_sha256`] or a protocol that transmits the raw digest.
+///
+/// # Example
+/// ```tuo
+/// let digest = std::crypto::sha256_bytes("abc"); // 32 bytes, first is 0xBA
+/// ```
+pub fn sha256_bytes(in data: Str) -> Array[Int] {
+    let message = sha256_pad(data);
+    let k = sha256_round_constants();
+
+    // The initial hash values: the first 32 bits of the fractional parts of
+    // the square roots of the first eight primes.
+    var h0 = 1779033703;
+    var h1 = 3144134277;
+    var h2 = 1013904242;
+    var h3 = 2773480762;
+    var h4 = 1359893119;
+    var h5 = 2600822924;
+    var h6 = 528734635;
+    var h7 = 1541459225;
+
+    let blocks = std::array::len(message) / 64;
+    var block = 0;
+    while block < blocks {
+        let base = block * 64;
+
+        // The message schedule: 16 words read from the block, then 48 more
+        // derived from them.
+        var w = std::array::empty();
+        var t = 0;
+        while t < 16 {
+            let at = base + (t * 4);
+            std::array::push(w, std::bits::be32(
+                std::array::get(message, at),
+                std::array::get(message, at + 1),
+                std::array::get(message, at + 2),
+                std::array::get(message, at + 3)
+            ));
+            t = t + 1;
+        }
+        t = 16;
+        while t < 64 {
+            let w15 = std::array::get(w, t - 15);
+            let w2 = std::array::get(w, t - 2);
+            let s0 = std::bits::rotr32(w15, 7)
+                ^ std::bits::rotr32(w15, 18)
+                ^ std::bits::shr32(w15, 3);
+            let s1 = std::bits::rotr32(w2, 17)
+                ^ std::bits::rotr32(w2, 19)
+                ^ std::bits::shr32(w2, 10);
+            let next = std::bits::add32(
+                std::bits::add32(std::array::get(w, t - 16), s0),
+                std::bits::add32(std::array::get(w, t - 7), s1)
+            );
+            std::array::push(w, next);
+            t = t + 1;
+        }
+
+        var a = h0;
+        var b = h1;
+        var c = h2;
+        var d = h3;
+        var e = h4;
+        var f = h5;
+        var g = h6;
+        var h = h7;
+
+        var round = 0;
+        while round < 64 {
+            let big1 = std::bits::rotr32(e, 6)
+                ^ std::bits::rotr32(e, 11)
+                ^ std::bits::rotr32(e, 25);
+            let choose = (e & f) ^ ((~e) & g & 4294967295);
+            let temp1 = std::bits::add32(
+                std::bits::add32(h, big1),
+                std::bits::add32(
+                    std::bits::add32(choose, std::array::get(k, round)),
+                    std::array::get(w, round)
+                )
+            );
+            let big0 = std::bits::rotr32(a, 2)
+                ^ std::bits::rotr32(a, 13)
+                ^ std::bits::rotr32(a, 22);
+            let major = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = std::bits::add32(big0, major);
+
+            h = g;
+            g = f;
+            f = e;
+            e = std::bits::add32(d, temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = std::bits::add32(temp1, temp2);
+            round = round + 1;
+        }
+
+        h0 = std::bits::add32(h0, a);
+        h1 = std::bits::add32(h1, b);
+        h2 = std::bits::add32(h2, c);
+        h3 = std::bits::add32(h3, d);
+        h4 = std::bits::add32(h4, e);
+        h5 = std::bits::add32(h5, f);
+        h6 = std::bits::add32(h6, g);
+        h7 = std::bits::add32(h7, h);
+        block = block + 1;
+    }
+
+    var digest = std::array::empty();
+    push_be32(digest, h0);
+    push_be32(digest, h1);
+    push_be32(digest, h2);
+    push_be32(digest, h3);
+    push_be32(digest, h4);
+    push_be32(digest, h5);
+    push_be32(digest, h6);
+    push_be32(digest, h7);
+    digest
+}
+
+/// Append `value`'s four big-endian bytes to `out`.
+///
+/// # Example
+/// ```tuo
+/// var bytes = std::array::empty();
+/// std::crypto::push_be32(bytes, 258); // bytes is now [0, 0, 1, 2]
+/// ```
+pub fn push_be32(mut out: Array[Int], take value: Int) {
+    std::array::push(out, std::bits::byte_of_be32(value, 0));
+    std::array::push(out, std::bits::byte_of_be32(value, 1));
+    std::array::push(out, std::bits::byte_of_be32(value, 2));
+    std::array::push(out, std::bits::byte_of_be32(value, 3));
+}
+
+/// The SHA-256 digest of `data`, as 64 lowercase hexadecimal characters.
+///
+/// The conventional display form, and the one to compare against a digest
+/// quoted in a protocol document or a test vector.
+///
+/// # Example
+/// ```tuo
+/// let hex = std::crypto::sha256("abc");
+/// // "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+/// ```
+pub fn sha256(in data: Str) -> String {
+    to_hex(sha256_bytes(data))
+}
+
+// ----------------------------------------------------------------------------
+// Hex encoding.
+// ----------------------------------------------------------------------------
+
+/// `bytes` rendered as lowercase hexadecimal, two characters per byte.
+///
+/// # Example
+/// ```tuo
+/// let hex = std::crypto::to_hex(std::crypto::bytes_of_str("abc")); // "616263"
+/// ```
+pub fn to_hex(in bytes: Array[Int]) -> String {
+    var out = std::string::empty();
+    let n = std::array::len(bytes);
+    var i = 0;
+    while i < n {
+        let byte = std::array::get(bytes, i) & 255;
+        std::string::push_byte(out, hex_digit(byte >> 4));
+        std::string::push_byte(out, hex_digit(byte & 15));
+        i = i + 1;
+    }
+    out
+}
+
+/// The ASCII byte of the lowercase hex digit for `value` (`0 ..= 15`).
+///
+/// A `value` outside the range yields `'0'`, since there is no digit to name.
+///
+/// # Example
+/// ```tuo
+/// let c = std::crypto::hex_digit(10); // 97, the byte for 'a'
+/// ```
+pub fn hex_digit(take value: Int) -> Int {
+    if value < 0 || value > 15 {
+        return 48;
+    }
+    if value < 10 {
+        return 48 + value;
+    }
+    87 + value
+}
+
+// ----------------------------------------------------------------------------
+// HMAC-SHA-256 (RFC 2104).
+// ----------------------------------------------------------------------------
+
+/// The HMAC-SHA-256 of `message` under `key`, as 32 raw bytes.
+///
+/// The keyed authentication code SCRAM and countless protocols are built on.
+/// Per RFC 2104 a key longer than the 64-byte block is replaced by its own
+/// digest, and a shorter one is zero-padded to the block length.
+///
+/// Takes and returns `Array[Int]` rather than `Str` because both a key and a
+/// message may be arbitrary bytes (a derived key usually is), and `Str` is
+/// UTF-8 text. Use [`bytes_of_str`] to hash textual input.
+///
+/// # Example
+/// ```tuo
+/// let key = std::crypto::bytes_of_str("key");
+/// let msg = std::crypto::bytes_of_str("The quick brown fox jumps over the lazy dog");
+/// let mac = std::crypto::hmac_sha256(key, msg); // 32 bytes, first is 0xF7
+/// ```
+pub fn hmac_sha256(in key: Array[Int], in message: Array[Int]) -> Array[Int] {
+    // Reduce an over-long key to its digest, then zero-pad to the block size.
+    var block_key = std::array::empty();
+    if std::array::len(key) > 64 {
+        let hashed = sha256_bytes(std::string::as_str(str_of_bytes(key)));
+        var i = 0;
+        while i < std::array::len(hashed) {
+            std::array::push(block_key, std::array::get(hashed, i));
+            i = i + 1;
+        }
+    } else {
+        var i = 0;
+        while i < std::array::len(key) {
+            std::array::push(block_key, std::array::get(key, i));
+            i = i + 1;
+        }
+    }
+    while std::array::len(block_key) < 64 {
+        std::array::push(block_key, 0);
+    }
+
+    // inner = H((key ^ 0x36) || message); outer = H((key ^ 0x5c) || inner).
+    var inner_input = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        std::array::push(inner_input, std::array::get(block_key, i) ^ 54);
+        i = i + 1;
+    }
+    i = 0;
+    while i < std::array::len(message) {
+        std::array::push(inner_input, std::array::get(message, i));
+        i = i + 1;
+    }
+    let inner = sha256_bytes(std::string::as_str(str_of_bytes(inner_input)));
+
+    var outer_input = std::array::empty();
+    i = 0;
+    while i < 64 {
+        std::array::push(outer_input, std::array::get(block_key, i) ^ 92);
+        i = i + 1;
+    }
+    i = 0;
+    while i < std::array::len(inner) {
+        std::array::push(outer_input, std::array::get(inner, i));
+        i = i + 1;
+    }
+    sha256_bytes(std::string::as_str(str_of_bytes(outer_input)))
+}
+
+// ----------------------------------------------------------------------------
+// Byte/text bridging.
+//
+// SHA-256 hashes bytes, but `sha256_bytes` takes a `Str` because that is the
+// common case and `Str` is what a literal produces. These two functions cross
+// the boundary in both directions for the arbitrary-byte cases.
+// ----------------------------------------------------------------------------
+
+/// The bytes of `text`, as an `Array[Int]` with each element in `0 ..= 255`.
+///
+/// # Example
+/// ```tuo
+/// let bytes = std::crypto::bytes_of_str("abc"); // [97, 98, 99]
+/// ```
+pub fn bytes_of_str(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    let n = std::str::len(text);
+    var i = 0;
+    while i < n {
+        std::array::push(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// `bytes` as a `String` whose bytes are exactly those values.
+///
+/// The inverse of [`bytes_of_str`], used internally to feed arbitrary bytes to
+/// the `Str`-taking hash. Each element is masked to `0 ..= 255`.
+///
+/// Note that the result is a byte container, not necessarily valid UTF-8 text:
+/// a digest byte sequence usually is not. It is safe to hash and to index by
+/// byte, and it must not be printed as if it were text.
+///
+/// # Example
+/// ```tuo
+/// let s = std::crypto::str_of_bytes(std::crypto::bytes_of_str("abc")); // "abc"
+/// ```
+pub fn str_of_bytes(in bytes: Array[Int]) -> String {
+    var out = std::string::empty();
+    let n = std::array::len(bytes);
+    var i = 0;
+    while i < n {
+        std::string::push_byte(out, std::array::get(bytes, i) & 255);
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// PBKDF2-HMAC-SHA-256 (RFC 2898 / RFC 8018), the SCRAM key derivation.
+// ----------------------------------------------------------------------------
+
+/// `iterations` rounds of PBKDF2-HMAC-SHA-256 over `password` and `salt`,
+/// producing 32 bytes (one SHA-256 block worth).
+///
+/// This is SCRAM-SHA-256's `Hi()` function and the reason the iteration count
+/// exists: each round is a full HMAC, so a high count makes brute-forcing a
+/// stolen salt expensive. PostgreSQL's server default is 4096.
+///
+/// The output is fixed at 32 bytes because that is what SCRAM needs and what
+/// one HMAC-SHA-256 block yields; a multi-block variant would add a loop over
+/// block indices and is deliberately not written until something needs it.
+/// `iterations` below 1 is treated as 1, since zero rounds would return the
+/// unstretched HMAC and silently defeat the function's purpose.
+///
+/// # Example
+/// ```tuo
+/// let key = std::crypto::pbkdf2_sha256("password", "salt", 1); // 32 bytes
+/// ```
+pub fn pbkdf2_sha256(in password: Str, in salt: Str, take iterations: Int) -> Array[Int] {
+    let key = bytes_of_str(password);
+
+    // U1 = HMAC(password, salt || INT_BE(1)) — block index 1, the only block.
+    var first_input = bytes_of_str(salt);
+    std::array::push(first_input, 0);
+    std::array::push(first_input, 0);
+    std::array::push(first_input, 0);
+    std::array::push(first_input, 1);
+
+    var u = hmac_sha256(key, first_input);
+    var result = std::array::empty();
+    var i = 0;
+    while i < std::array::len(u) {
+        std::array::push(result, std::array::get(u, i));
+        i = i + 1;
+    }
+
+    var round = 1;
+    let total = if iterations < 1 { 1 } else { iterations };
+    while round < total {
+        u = hmac_sha256(key, u);
+        i = 0;
+        while i < std::array::len(u) {
+            std::array::set(result, i, std::array::get(result, i) ^ std::array::get(u, i));
+            i = i + 1;
+        }
+        round = round + 1;
+    }
+    result
+}
+
+// ----------------------------------------------------------------------------
+// Base64 (RFC 4648), the SCRAM message framing.
+// ----------------------------------------------------------------------------
+
+/// The ASCII byte of the Base64 alphabet character for `value` (`0 ..= 63`).
+///
+/// # Example
+/// ```tuo
+/// let c = std::crypto::base64_char(0); // 65, the byte for 'A'
+/// ```
+pub fn base64_char(take value: Int) -> Int {
+    if value < 0 || value > 63 {
+        return 61;
+    }
+    if value < 26 {
+        return 65 + value;
+    }
+    if value < 52 {
+        return 97 + (value - 26);
+    }
+    if value < 62 {
+        return 48 + (value - 52);
+    }
+    if value == 62 {
+        return 43;
+    }
+    47
+}
+
+/// The Base64 value of ASCII byte `c`, or `-1` if it is not an alphabet
+/// character.
+///
+/// `=` (padding) also yields `-1`; [`base64_decode`] stops at padding rather
+/// than decoding it.
+///
+/// # Example
+/// ```tuo
+/// let v = std::crypto::base64_value(65); // 0, for 'A'
+/// ```
+pub fn base64_value(take c: Int) -> Int {
+    if c >= 65 && c <= 90 {
+        return c - 65;
+    }
+    if c >= 97 && c <= 122 {
+        return (c - 97) + 26;
+    }
+    if c >= 48 && c <= 57 {
+        return (c - 48) + 52;
+    }
+    if c == 43 {
+        return 62;
+    }
+    if c == 47 {
+        return 63;
+    }
+    0 - 1
+}
+
+/// `bytes` encoded as standard Base64 with `=` padding.
+///
+/// # Example
+/// ```tuo
+/// let encoded = std::crypto::base64_encode(std::crypto::bytes_of_str("Man")); // "TWFu"
+/// ```
+pub fn base64_encode(in bytes: Array[Int]) -> String {
+    var out = std::string::empty();
+    let n = std::array::len(bytes);
+    var i = 0;
+    while i + 3 <= n {
+        let b0 = std::array::get(bytes, i) & 255;
+        let b1 = std::array::get(bytes, i + 1) & 255;
+        let b2 = std::array::get(bytes, i + 2) & 255;
+        std::string::push_byte(out, base64_char(b0 >> 2));
+        std::string::push_byte(out, base64_char(((b0 & 3) << 4) | (b1 >> 4)));
+        std::string::push_byte(out, base64_char(((b1 & 15) << 2) | (b2 >> 6)));
+        std::string::push_byte(out, base64_char(b2 & 63));
+        i = i + 3;
+    }
+    let remaining = n - i;
+    if remaining == 1 {
+        let b0 = std::array::get(bytes, i) & 255;
+        std::string::push_byte(out, base64_char(b0 >> 2));
+        std::string::push_byte(out, base64_char((b0 & 3) << 4));
+        std::string::push_byte(out, 61);
+        std::string::push_byte(out, 61);
+    }
+    if remaining == 2 {
+        let b0 = std::array::get(bytes, i) & 255;
+        let b1 = std::array::get(bytes, i + 1) & 255;
+        std::string::push_byte(out, base64_char(b0 >> 2));
+        std::string::push_byte(out, base64_char(((b0 & 3) << 4) | (b1 >> 4)));
+        std::string::push_byte(out, base64_char((b1 & 15) << 2));
+        std::string::push_byte(out, 61);
+    }
+    out
+}
+
+/// `text` decoded from standard Base64 into its bytes.
+///
+/// Characters outside the alphabet — padding, whitespace, anything else — are
+/// skipped rather than rejected, so this decodes wrapped or padded input
+/// without a caller pre-cleaning it. It is therefore lenient by design: it
+/// reports no error for malformed input, and a caller needing strict
+/// validation must check the input itself first.
+///
+/// # Example
+/// ```tuo
+/// let bytes = std::crypto::base64_decode("TWFu"); // [77, 97, 110]
+/// ```
+pub fn base64_decode(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    var accumulator = 0;
+    var bits = 0;
+    let n = std::str::len(text);
+    var i = 0;
+    while i < n {
+        let value = base64_value(std::str::byte_at(text, i));
+        if value >= 0 {
+            accumulator = ((accumulator << 6) | value) & 16777215;
+            bits = bits + 6;
+            if bits >= 8 {
+                bits = bits - 8;
+                std::array::push(out, (accumulator >> bits) & 255);
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Entropy — the effect tier.
+//
+// A nonce, salt, or key drawn from a predictable stream silently voids the
+// property it exists to provide, so these read the platform CSPRNG and never
+// a seeded PRNG. That makes them effects: a function whose whole purpose is to
+// return something different each call cannot be pure, so neither carries a
+// spec and `R0007` refuses either inside one.
+// ----------------------------------------------------------------------------
+
+/// EFFECT (executable and effectful): one cryptographically-secure random byte
+/// in `0 ..= 255`, or `-1` if the platform CSPRNG is unavailable.
+///
+/// Implemented over the `std::rt::random_byte` effect primitive (ADR-0019
+/// Stage B), which reads the OS entropy source (`getentropy`). Effectful, so
+/// no spec (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// A caller must check for `-1` rather than assume success: entropy can fail,
+/// and treating the error as a byte would put the value `255` — or worse, a
+/// predictable one — into a key.
+///
+/// # Example
+/// ```tuo
+/// // let b = std::crypto::random_byte();
+/// ```
+pub fn random_byte() -> Int {
+    std::rt::random_byte()
+}
+
+/// EFFECT (executable and effectful): `length` cryptographically-secure random
+/// bytes, or an empty array if the platform CSPRNG is unavailable.
+///
+/// The client nonce a SCRAM exchange opens with, and the salt any password
+/// hashing needs. An **empty result signals failure**, and it is deliberately
+/// not a partial one: a short nonce is a weak nonce, so a caller that ignores
+/// the length gets something obviously unusable rather than something subtly
+/// insecure. Check `std::array::len` against what you asked for.
+///
+/// A `length` of zero or less yields an empty array. Effectful, so no spec
+/// (`R0007`); pinned by the native CLI tests in
+/// `crates/tuo-cli/tests/stdlib.rs`.
+///
+/// # Example
+/// ```tuo
+/// // let client_nonce = std::crypto::nonce(18); // 18 bytes, then base64 it
+/// ```
+pub fn nonce(take length: Int) -> Array[Int] {
+    var out = std::array::empty();
+    if length <= 0 {
+        return out;
+    }
+    var i = 0;
+    while i < length {
+        let byte = std::rt::random_byte();
+        if byte < 0 {
+            // Entropy failed: return nothing rather than a short or
+            // partially-predictable nonce.
+            return std::array::empty();
+        }
+        std::array::push(out, byte);
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter.
+//
+// The vectors below are PUBLISHED values, not this module's own output:
+// FIPS 180-4 (SHA-256), RFC 4231 (HMAC-SHA-256), RFC 6070 adapted to SHA-256
+// (PBKDF2), and RFC 4648 (Base64). That is what makes them proof rather than
+// self-agreement.
+// ----------------------------------------------------------------------------
+
+spec sha256_round_constants {
+    // The 64 constants, spot-checked against FIPS 180-4's published table at
+    // the boundaries and one interior point.
+    then std::array::len(sha256_round_constants()) == 64;
+    then std::array::get(sha256_round_constants(), 0) == 1116352408;
+    then std::array::get(sha256_round_constants(), 1) == 1899447441;
+    then std::array::get(sha256_round_constants(), 32) == 666307205;
+    then std::array::get(sha256_round_constants(), 63) == 3329325298;
+    // Every constant is a 32-bit value, as the standard requires.
+    then std::array::get(sha256_round_constants(), 0) <= 4294967295;
+    then std::array::get(sha256_round_constants(), 63) <= 4294967295;
+}
+
+spec push_be32 {
+    // `push_be32` mutates its argument and returns `()`, so it is called
+    // directly here (the `when` step) and its effect observed through the
+    // array it appended to.
+    when var out = std::array::empty();
+    when push_be32(out, 258);
+    then std::array::len(out) == 4;
+    then std::array::get(out, 0) == 0;
+    then std::array::get(out, 2) == 1;
+    then std::array::get(out, 3) == 2;
+}
+
+spec str_of_bytes {
+    then std::string::as_str(str_of_bytes(bytes_of_str("abc"))) == "abc";
+    then std::str::len(std::string::as_str(str_of_bytes(std::array::empty()))) == 0;
+    // Values are masked into a byte, so an over-wide element cannot corrupt
+    // the result's length.
+    then std::str::len(std::string::as_str(str_of_bytes(repeated_byte(300, 2)))) == 2;
+}
+
+spec sha256_bytes {
+    // The raw-byte form of the FIPS 180-4 "abc" vector.
+    then std::array::len(sha256_bytes("abc")) == 32;
+    then std::array::get(sha256_bytes("abc"), 0) == 186;
+    then std::array::get(sha256_bytes("abc"), 31) == 173;
+    then std::array::len(sha256_bytes("")) == 32;
+}
+
+spec hex_digit {
+    then hex_digit(0) == 48;
+    then hex_digit(9) == 57;
+    then hex_digit(10) == 97;
+    then hex_digit(15) == 102;
+    then hex_digit(16) == 48;
+    then hex_digit(0 - 1) == 48;
+}
+
+spec to_hex {
+    // Built with `repeated_byte`/`bytes_of_str` rather than
+    // `std::collections`: every catalog module compiles standalone, so
+    // `std::crypto` depends on no other library module.
+    then std::string::as_str(to_hex(repeated_byte(255, 1))) == "ff";
+    then std::string::as_str(to_hex(repeated_byte(0, 2))) == "0000";
+    then std::string::as_str(to_hex(bytes_of_str("abc"))) == "616263";
+    then std::str::len(std::string::as_str(to_hex(std::array::empty()))) == 0;
+}
+
+spec bytes_of_str {
+    then std::array::get(bytes_of_str("abc"), 0) == 97;
+    then std::array::get(bytes_of_str("abc"), 2) == 99;
+    then std::array::len(bytes_of_str("abc")) == 3;
+    then std::array::len(bytes_of_str("")) == 0;
+    // Round-trips with str_of_bytes.
+    then std::string::as_str(str_of_bytes(bytes_of_str("hello"))) == "hello";
+}
+
+spec sha256_pad {
+    // "abc" is 3 bytes, so one 64-byte block after padding.
+    then std::array::len(sha256_pad("abc")) == 64;
+    then std::array::get(sha256_pad("abc"), 3) == 128;
+    // The bit length, 24, lands in the final byte.
+    then std::array::get(sha256_pad("abc"), 63) == 24;
+    // The empty input still produces exactly one block.
+    then std::array::len(sha256_pad("")) == 64;
+    then std::array::get(sha256_pad(""), 0) == 128;
+    // A 56-byte input needs a second block, since the length no longer fits.
+    then std::array::len(sha256_pad("01234567890123456789012345678901234567890123456789012345")) == 128;
+}
+
+spec sha256 {
+    // FIPS 180-4 published vectors.
+    then std::string::as_str(sha256("abc"))
+        == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    then std::string::as_str(sha256(""))
+        == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+    then std::string::as_str(sha256("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))
+        == "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1";
+    // A two-block input, so the compression loop really iterates.
+    then std::string::as_str(sha256("abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"))
+        == "cf5b16a778af8380036ce59e7b0492370b249b11e8f07a51afac45037afee9d1";
+    // The digest is 32 bytes, hence 64 hex characters.
+    then std::str::len(std::string::as_str(sha256("abc"))) == 64;
+    then std::array::len(sha256_bytes("abc")) == 32;
+    then std::array::get(sha256_bytes("abc"), 0) == 186;
+}
+
+spec hmac_sha256 {
+    // RFC 4231 test case 1: 20 bytes of 0x0b as the key, "Hi There".
+    then std::string::as_str(to_hex(hmac_sha256(repeated_byte(11, 20), bytes_of_str("Hi There"))))
+        == "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7";
+    // RFC 4231 test case 2: key "Jefe", message "what do ya want for nothing?".
+    then std::string::as_str(to_hex(hmac_sha256(bytes_of_str("Jefe"), bytes_of_str("what do ya want for nothing?"))))
+        == "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843";
+    // RFC 4231 test case 6: a 131-byte key, longer than the block, so the
+    // key-shortening path really runs.
+    then std::string::as_str(to_hex(hmac_sha256(
+        repeated_byte(170, 131),
+        bytes_of_str("Test Using Larger Than Block-Size Key - Hash Key First")
+    ))) == "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54";
+    then std::array::len(hmac_sha256(bytes_of_str("k"), bytes_of_str("m"))) == 32;
+}
+
+/// `count` copies of `byte`, as an `Array[Int]`.
+///
+/// Used by the HMAC specs to build the RFC 4231 fixed-byte keys.
+///
+/// # Example
+/// ```tuo
+/// let key = std::crypto::repeated_byte(11, 20); // 20 bytes of 0x0b
+/// ```
+pub fn repeated_byte(take byte: Int, take count: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < count {
+        std::array::push(out, byte & 255);
+        i = i + 1;
+    }
+    out
+}
+
+spec repeated_byte {
+    then std::array::len(repeated_byte(11, 20) ) == 20;
+    then std::array::get(repeated_byte(11, 20), 0) == 11;
+    then std::array::len(repeated_byte(1, 0)) == 0;
+}
+
+spec pbkdf2_sha256 {
+    // RFC 6070's vectors are for PBKDF2-HMAC-SHA1; these are the widely
+    // published PBKDF2-HMAC-SHA256 counterparts for the same inputs.
+    then std::string::as_str(to_hex(pbkdf2_sha256("password", "salt", 1)))
+        == "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b";
+    then std::string::as_str(to_hex(pbkdf2_sha256("password", "salt", 2)))
+        == "ae4d0c95af6b46d32d0adff928f06dd02a303f8ef3c251dfd6e2d85a95474c43";
+    then std::array::len(pbkdf2_sha256("password", "salt", 1)) == 32;
+    // Zero and negative counts clamp to one round rather than returning the
+    // unstretched value.
+    then std::string::as_str(to_hex(pbkdf2_sha256("password", "salt", 0)))
+        == std::string::as_str(to_hex(pbkdf2_sha256("password", "salt", 1)));
+}
+
+spec base64_char {
+    then base64_char(0) == 65;
+    then base64_char(25) == 90;
+    then base64_char(26) == 97;
+    then base64_char(51) == 122;
+    then base64_char(52) == 48;
+    then base64_char(61) == 57;
+    then base64_char(62) == 43;
+    then base64_char(63) == 47;
+}
+
+spec base64_value {
+    then base64_value(65) == 0;
+    then base64_value(97) == 26;
+    then base64_value(48) == 52;
+    then base64_value(43) == 62;
+    then base64_value(47) == 63;
+    // Padding and other characters are not alphabet values.
+    then base64_value(61) == 0 - 1;
+    then base64_value(32) == 0 - 1;
+}
+
+spec base64_encode {
+    // RFC 4648 section 10 vectors.
+    then std::string::as_str(base64_encode(bytes_of_str(""))) == "";
+    then std::string::as_str(base64_encode(bytes_of_str("f"))) == "Zg==";
+    then std::string::as_str(base64_encode(bytes_of_str("fo"))) == "Zm8=";
+    then std::string::as_str(base64_encode(bytes_of_str("foo"))) == "Zm9v";
+    then std::string::as_str(base64_encode(bytes_of_str("foob"))) == "Zm9vYg==";
+    then std::string::as_str(base64_encode(bytes_of_str("fooba"))) == "Zm9vYmE=";
+    then std::string::as_str(base64_encode(bytes_of_str("foobar"))) == "Zm9vYmFy";
+}
+
+spec base64_decode {
+    then std::string::as_str(str_of_bytes(base64_decode(""))) == "";
+    then std::string::as_str(str_of_bytes(base64_decode("Zg=="))) == "f";
+    then std::string::as_str(str_of_bytes(base64_decode("Zm8="))) == "fo";
+    then std::string::as_str(str_of_bytes(base64_decode("Zm9v"))) == "foo";
+    then std::string::as_str(str_of_bytes(base64_decode("Zm9vYmFy"))) == "foobar";
+    // Round-trips with the encoder over a non-text byte sequence.
+    then std::string::as_str(to_hex(base64_decode(std::string::as_str(base64_encode(sha256_bytes("abc"))))))
+        == std::string::as_str(to_hex(sha256_bytes("abc")));
+}

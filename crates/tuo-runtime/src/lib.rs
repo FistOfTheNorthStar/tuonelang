@@ -96,9 +96,26 @@ pub enum TrapCode {
     /// (`std::string::push_byte`, ADR-0009). Appended together with the
     /// interpreter's `TrapKind::InvalidByte` — the taxonomy is append-only.
     InvalidByte = 4,
+    /// A shift amount was negative or >= the operand's width in bits
+    /// (`BinOp::Shl`/`Shr`, ADR-0019). Appended to the taxonomy, which is
+    /// append-only.
+    InvalidShift = 5,
 }
 
 impl TrapCode {
+    /// Every trap code, in discriminant order. The C generator and its
+    /// mirroring test both iterate this, so a newly appended code cannot be
+    /// left out of the emitted runtime (which would make a native trap print
+    /// `unknown` while the interpreter named it).
+    pub const ALL: &'static [Self] = &[
+        Self::IntegerOverflow,
+        Self::DivisionByZero,
+        Self::IndexOutOfBounds,
+        Self::Unreachable,
+        Self::InvalidByte,
+        Self::InvalidShift,
+    ];
+
     /// The stable integer a backend passes to [`TRAP_SYMBOL`].
     #[must_use]
     pub const fn as_i32(self) -> i32 {
@@ -114,6 +131,7 @@ impl TrapCode {
             2 => Some(Self::IndexOutOfBounds),
             3 => Some(Self::Unreachable),
             4 => Some(Self::InvalidByte),
+            5 => Some(Self::InvalidShift),
             _ => None,
         }
     }
@@ -127,6 +145,7 @@ impl TrapCode {
             Self::IndexOutOfBounds => "tuo: trap: index out of bounds",
             Self::Unreachable => "tuo: trap: reached unreachable code",
             Self::InvalidByte => "tuo: trap: byte value out of range",
+            Self::InvalidShift => "tuo: trap: shift amount out of range",
         }
     }
 }
@@ -168,23 +187,11 @@ pub fn trap_runtime_c_source() -> String {
     source.push_str("void tuo_rt_trap(int code) {\n");
     source.push_str("    const char *message;\n");
     source.push_str("    switch (code) {\n");
-    for (code, message) in [
-        (
-            TrapCode::IntegerOverflow,
-            TrapCode::IntegerOverflow.message(),
-        ),
-        (TrapCode::DivisionByZero, TrapCode::DivisionByZero.message()),
-        (
-            TrapCode::IndexOutOfBounds,
-            TrapCode::IndexOutOfBounds.message(),
-        ),
-        (TrapCode::Unreachable, TrapCode::Unreachable.message()),
-        (TrapCode::InvalidByte, TrapCode::InvalidByte.message()),
-    ] {
+    for code in TrapCode::ALL {
         source.push_str(&format!(
             "        case {}: message = \"{}\"; break;\n",
             code.as_i32(),
-            message
+            code.message()
         ));
     }
     source.push_str("        default: message = \"tuo: trap: unknown\"; break;\n");
@@ -219,13 +226,8 @@ mod tests {
         // and code-for-code, or a native trap would print differently from the
         // interpreter's. Assert each pair appears in the emitted C.
         let source = trap_runtime_c_source();
-        for code in [
-            TrapCode::IntegerOverflow,
-            TrapCode::DivisionByZero,
-            TrapCode::IndexOutOfBounds,
-            TrapCode::Unreachable,
-            TrapCode::InvalidByte,
-        ] {
+        for code in TrapCode::ALL {
+            let code = *code;
             let arm = format!("case {}: message = \"{}\";", code.as_i32(), code.message());
             assert!(
                 source.contains(&arm),
@@ -234,5 +236,26 @@ mod tests {
         }
         assert!(source.contains("void tuo_rt_trap(int code)"));
         assert!(source.contains("abort();"));
+    }
+
+    #[test]
+    fn all_lists_every_trap_code_in_discriminant_order() {
+        // `ALL` is what the C generator iterates, so a code missing from it
+        // would silently print `unknown` natively while the interpreter named
+        // the trap. Walking the discriminants via `from_i32` proves the list
+        // is complete without a second hand-maintained copy.
+        for (index, code) in TrapCode::ALL.iter().enumerate() {
+            let expected = i32::try_from(index).expect("the taxonomy is small");
+            assert_eq!(
+                code.as_i32(),
+                expected,
+                "TrapCode::ALL must be in discriminant order with no gaps"
+            );
+        }
+        let next = i32::try_from(TrapCode::ALL.len()).expect("the taxonomy is small");
+        assert!(
+            TrapCode::from_i32(next).is_none(),
+            "TrapCode::{next} exists but is missing from TrapCode::ALL"
+        );
     }
 }
