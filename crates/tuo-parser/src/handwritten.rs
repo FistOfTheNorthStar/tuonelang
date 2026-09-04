@@ -238,6 +238,17 @@ impl Parser<'_> {
         while self.at(K::DocComment) {
             prefix.push(self.bump());
         }
+        // Attributes (ADR-0020 Stage C) sit between the docs and `pub`, and
+        // are collected into the item node like the other prefix elements.
+        // Which attributes exist, and which items may carry them, is a
+        // *semantic* question answered by the checker — the grammar only says
+        // an item may be prefixed by `#[IDENT]`.
+        while self.at(K::Hash) {
+            prefix.push(self.attribute()?);
+            while self.at(K::DocComment) {
+                prefix.push(self.bump());
+            }
+        }
         if self.at(K::KwPub) {
             prefix.push(self.bump());
         }
@@ -325,6 +336,20 @@ impl Parser<'_> {
     }
 
     // ----- declarations (E) -----------------------------------------------
+
+    /// `#[IDENT]` — one attribute.
+    ///
+    /// The name is left as a plain identifier here; recognizing it is the
+    /// checker's job, so an unknown attribute parses cleanly and then earns a
+    /// precise diagnostic rather than a parse error that says nothing useful.
+    fn attribute(&mut self) -> R {
+        let mut els = Els::new();
+        self.expect(K::Hash, &mut els)?;
+        self.expect(K::OpenBracket, &mut els)?;
+        self.expect(K::Ident, &mut els)?;
+        self.expect(K::CloseBracket, &mut els)?;
+        Ok(node(SyntaxKind::Attribute, els))
+    }
 
     fn function_item(&mut self) -> R {
         let mut els = Els::new();
@@ -928,19 +953,39 @@ impl Parser<'_> {
 
     /// Comparison is non-associative: at most one operator per level.
     fn compare_expr(&mut self, ns: bool) -> R {
-        let lhs = self.range_expr(ns)?;
+        let lhs = self.bit_or_expr(ns)?;
         if matches!(
             self.peek(),
             K::EqEq | K::NotEq | K::Lt | K::Gt | K::LtEq | K::GtEq
         ) {
             let mark = self.mark();
             let op = self.bump();
-            if let Ok(rhs) = self.range_expr(ns) {
+            if let Ok(rhs) = self.bit_or_expr(ns) {
                 return Ok(node(SyntaxKind::BinaryExpr, vec![lhs, op, rhs]));
             }
             self.rollback(mark);
         }
         Ok(lhs)
+    }
+
+    // ADR-0019's bitwise levels, loosest first: `|` then `^` then `&` then
+    // the shifts. `|` here is the same token as the pattern-alternative
+    // separator; the two never meet, because `pattern` is a disjoint
+    // production that never descends into the expression chain.
+    fn bit_or_expr(&mut self, ns: bool) -> R {
+        self.binary_level(ns, &[K::Pipe], Self::bit_xor_expr)
+    }
+
+    fn bit_xor_expr(&mut self, ns: bool) -> R {
+        self.binary_level(ns, &[K::Caret], Self::bit_and_expr)
+    }
+
+    fn bit_and_expr(&mut self, ns: bool) -> R {
+        self.binary_level(ns, &[K::Amp], Self::shift_expr)
+    }
+
+    fn shift_expr(&mut self, ns: bool) -> R {
+        self.binary_level(ns, &[K::LtLt, K::GtGt], Self::range_expr)
     }
 
     /// Ranges do not chain: at most one `..` per level.
@@ -966,7 +1011,7 @@ impl Parser<'_> {
     }
 
     fn unary_expr(&mut self, ns: bool) -> R {
-        if matches!(self.peek(), K::Minus | K::Bang | K::KwMove) {
+        if matches!(self.peek(), K::Minus | K::Bang | K::Tilde | K::KwMove) {
             let op = self.bump();
             let inner = self.unary_expr(ns)?;
             return Ok(node(SyntaxKind::UnaryExpr, vec![op, inner]));

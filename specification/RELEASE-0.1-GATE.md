@@ -46,11 +46,18 @@ artifact that decides it, and its current status with a one-line justification.
 
 - **Requirement:** the surface grammar carries an explicit version, and a change to
   a frozen production is a breaking change tied to that version.
-- **Proving artifact:** `specification/grammar.ebnf` (the `GRAMMAR-VERSION: 0.1`
+- **Proving artifact:** `specification/grammar.ebnf` (the `GRAMMAR-VERSION: 0.3`
   marker) + Constitution §30 (edition/breaking-change rule).
 - **Status:** **MET.** The EBNF is the single authoritative CFG, now stamped
-  `GRAMMAR-VERSION: 0.1 / EDITION: 2024`; the release-gate checker asserts the
-  marker is present and pins the value it expects.
+  `GRAMMAR-VERSION: 0.3 / EDITION: 2024`; the release-gate checker asserts the
+  marker is present and pins the value it expects. The marker moved from `0.1`
+  to `0.2` when ADR-0019 Stage A added the bitwise tokens, and to `0.3` when
+  ADR-0020 Stage C added the attribute prefix and the `#` token — the *grammar*
+  version tracks the surface grammar, not the release, so it may advance
+  within a release line; the **edition** stays `2024` because no `[FROZEN]`
+  production's surface changed and no existing program's meaning moved (both
+  times, the new tokens were previously lexical errors), which is the condition
+  Constitution §30 attaches a breaking change to.
 
 ### G2 — Formatter is canonical and idempotent
 

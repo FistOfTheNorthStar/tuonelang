@@ -189,13 +189,15 @@ fn supported_workloads_run_natively_and_match() {
     let results = run_supported(&TuoRunNativeRunner);
     assert_eq!(
         results.len(),
-        15,
-        "exactly the thirteen supported workloads run (the scalar core plus the \
+        17,
+        "exactly the seventeen supported workloads run (the scalar core plus the \
          fixed-array collections workload, the borrowed-Str string-processing \
          workload, the allocator-core allocation workload, the function-value \
          indirect-calls workload, the hash-map map-lookup workload, the \
          OS-boundary file-io workload, the socket networking workload, the \
-         channel workload, and the json-parse workload)"
+         channel workload, the json-parse workload, the ADR-0017 udp-echo and \
+         connect-timeout pair, and the ADR-0019 sha256-hash and wire-decode \
+         pair)"
     );
     for (label, outcome) in results {
         let outcome = outcome.unwrap_or_else(|e| panic!("workload `{label}` failed to run: {e}"));
@@ -251,7 +253,7 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     }
     // Either the toolchain was present (comparisons measured) or it was not
     // (all skipped) — but every supported workload was accounted for.
-    assert_eq!(measured + skipped, 15);
+    assert_eq!(measured + skipped, 17);
     // On CI and dev machines `cc` is present, so we expect real measurements;
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {
@@ -306,7 +308,7 @@ fn go_comparison_agrees_where_the_toolchain_exists() {
             }
         }
     }
-    assert_eq!(measured + skipped, 15);
+    assert_eq!(measured + skipped, 17);
     if measured == 0 {
         eprintln!("note: no Go toolchain found; all Go comparisons recorded as skipped");
     }

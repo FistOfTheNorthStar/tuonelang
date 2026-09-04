@@ -56,6 +56,27 @@ pub const PAR_MAP_SYMBOL: &str = "tuo_rt_par_map";
 pub const NOW_NANOS_SYMBOL: &str = "tuo_rt_now_nanos";
 
 /// The name of the C-ABI symbol generated code calls for
+/// `std::rt::random_byte` (ADR-0019 Stage B): `long long
+/// tuo_rt_random_byte(void)` — one cryptographically-secure random byte in
+/// `0..=255`, or [`RANDOM_ERROR`] when the platform CSPRNG is unavailable.
+///
+/// A **byte at a time** rather than a buffer, because the effect seam moves
+/// scalars: the same shape as `read_byte`, needing no new ABI concept. A
+/// caller wanting sixteen bytes calls it sixteen times, which is what
+/// `std::crypto::nonce` does.
+///
+/// The source is the platform CSPRNG (`getentropy`), never a seeded PRNG:
+/// a nonce or key generated from a predictable stream silently voids the
+/// security property it exists to provide, so a failure is reported as an
+/// error rather than papered over with a fallback.
+pub const RANDOM_BYTE_SYMBOL: &str = "tuo_rt_random_byte";
+
+/// The value [`RANDOM_BYTE_SYMBOL`] returns when the platform CSPRNG cannot
+/// be read. Negative, so it can never be mistaken for a byte value, and
+/// distinct from the byte range by construction.
+pub const RANDOM_ERROR: i64 = -1;
+
+/// The name of the C-ABI symbol generated code calls for
 /// `std::rt::arg_count` (ADR-0013): `long long tuo_rt_arg_count(void)` — the
 /// number of process arguments including the program name. The runtime
 /// captures `argc`/`argv` before `main` runs via the platform's initializer
@@ -443,6 +464,39 @@ pub fn effect_runtime_c_source() -> String {
          \x20   struct timespec ts;\n\
          \x20   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) return 0;\n\
          \x20   return (long long)ts.tv_sec * 1000000000LL + (long long)ts.tv_nsec;\n\
+         }}\n\
+         \n\
+         /* `getentropy` is declared in <sys/random.h> on macOS, the BSDs, and\n\
+         \x20  glibc >= 2.25; older glibc has no declaration at all. Reading\n\
+         \x20  /dev/urandom is the portable fallback that needs no header and\n\
+         \x20  no version test, and it is the same kernel CSPRNG. */\n\
+         #if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__)\n\
+         #include <sys/random.h>\n\
+         #define TUO_RT_HAVE_GETENTROPY 1\n\
+         #elif defined(__GLIBC__) && (__GLIBC__ > 2 || (__GLIBC__ == 2 && __GLIBC_MINOR__ >= 25))\n\
+         #include <sys/random.h>\n\
+         #define TUO_RT_HAVE_GETENTROPY 1\n\
+         #endif\n\
+         \n\
+         /* ADR-0019 Stage B: one byte from the platform CSPRNG. This is\n\
+         \x20  deliberately NOT a seeded PRNG — a nonce drawn from a\n\
+         \x20  predictable stream voids the property it exists to provide, so\n\
+         \x20  a failure is reported rather than substituted. */\n\
+         long long {RANDOM_BYTE_SYMBOL}(void) {{\n\
+         \x20   unsigned char byte;\n\
+         #if defined(TUO_RT_HAVE_GETENTROPY)\n\
+         \x20   if (getentropy(&byte, 1) != 0) return {RANDOM_ERROR};\n\
+         \x20   return (long long)byte;\n\
+         #else\n\
+         \x20   /* The same kernel source, read directly. */\n\
+         \x20   int fd = open(\"/dev/urandom\", O_RDONLY);\n\
+         \x20   if (fd < 0) return {RANDOM_ERROR};\n\
+         \x20   ssize_t n;\n\
+         \x20   do {{ n = read(fd, &byte, 1); }} while (n < 0 && errno == EINTR);\n\
+         \x20   close(fd);\n\
+         \x20   if (n != 1) return {RANDOM_ERROR};\n\
+         \x20   return (long long)byte;\n\
+         #endif\n\
          }}\n\
          \n\
          /* The process arguments, captured before `main` runs: macOS exposes\n\

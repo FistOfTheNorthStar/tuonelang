@@ -1,0 +1,4 @@
+fn main() -> I64 {
+bb0:
+    return const 57_i64
+}

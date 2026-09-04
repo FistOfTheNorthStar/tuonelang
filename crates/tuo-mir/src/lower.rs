@@ -1502,6 +1502,21 @@ impl FnLower<'_> {
                 )?;
                 Ok(Some(Value::Place(place)))
             }
+            tuo_hir::UnOp::BitNot => {
+                let Some(value) = self.expr(operand)? else {
+                    return Ok(None);
+                };
+                let inner = Self::read_value(value);
+                let place = self.assign_temp(
+                    Rvalue::Unary {
+                        op: UnOp::BitNot,
+                        operand: inner,
+                    },
+                    ty,
+                    expr.span,
+                )?;
+                Ok(Some(Value::Place(place)))
+            }
         }
     }
 
@@ -1523,6 +1538,11 @@ impl FnLower<'_> {
             H::Le => BinOp::Le,
             H::Gt => BinOp::Gt,
             H::Ge => BinOp::Ge,
+            H::BitAnd => BinOp::BitAnd,
+            H::BitOr => BinOp::BitOr,
+            H::BitXor => BinOp::BitXor,
+            H::Shl => BinOp::Shl,
+            H::Shr => BinOp::Shr,
             H::And | H::Or => unreachable!("handled above"),
         };
         let Some(lhs_value) = self.expr(lhs)? else {
@@ -1791,6 +1811,7 @@ impl FnLower<'_> {
             | Builtin::RtWriteString
             | Builtin::RtParMap
             | Builtin::RtNowNanos
+            | Builtin::RtRandomByte
             | Builtin::RtArgCount
             | Builtin::RtArgByte
             | Builtin::RtOpen
@@ -1823,6 +1844,7 @@ impl FnLower<'_> {
                     Builtin::RtExit => EffectOp::Exit,
                     Builtin::RtParMap => EffectOp::ParMap,
                     Builtin::RtNowNanos => EffectOp::NowNanos,
+                    Builtin::RtRandomByte => EffectOp::RandomByte,
                     Builtin::RtArgCount => EffectOp::ArgCount,
                     Builtin::RtArgByte => EffectOp::ArgByte,
                     Builtin::RtOpen => EffectOp::Open,

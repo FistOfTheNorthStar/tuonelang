@@ -53,6 +53,11 @@ use crate::ty::{
 ///   through `Array`/`Map`/`Option`/`Result`/tuple/fixed-array components),
 ///   which v0 cannot represent — only a `Box`/`Shared`/`Weak` indirection
 ///   breaks a cycle (ADR-0016).
+/// - `T0017`–`T0021` — the constant-time gate (ADR-0020 Stage C): inside a
+///   `#[constant_time]` function, data-dependent control flow (`T0017`),
+///   array indexing (`T0018`), trapping arithmetic (`T0019`), and calls to
+///   unmarked functions (`T0020`) are all refused; `T0021` reports an
+///   attribute this compiler does not recognize.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -202,6 +207,8 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     }
     let effectful = checker.compute_effectful();
     checker.check_spec_purity(&effectful);
+    let constant_time = checker.collect_constant_time_marks(files);
+    checker.check_constant_time(files, &constant_time);
     let struct_shapes = checker
         .structs
         .iter()
@@ -274,7 +281,9 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         // ADR-0013: the OS effect boundary — clock, argv, and file
         // open/close/remove. All scalar-or-`Str` in, `Int` out; errors are
         // negative return values, never traps.
-        Builtin::RtNowNanos | Builtin::RtArgCount => (Vec::new(), Ty::int()),
+        Builtin::RtNowNanos | Builtin::RtArgCount | Builtin::RtRandomByte => {
+            (Vec::new(), Ty::int())
+        }
         Builtin::RtArgByte => (vec![Ty::int(), Ty::int()], Ty::int()),
         Builtin::RtOpen => (vec![Ty::Str, Ty::int()], Ty::int()),
         Builtin::RtClose => (vec![Ty::int()], Ty::int()),
@@ -344,6 +353,22 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
 
 /// The fully qualified display name of a module-level symbol
 /// (`std::rt::write`; a root-module symbol is just its name).
+/// The source span of a raw CST node.
+fn node_span(ast: Ast<'_>, node: &::tuo_syntax::SyntaxNode) -> Option<Span> {
+    node.span(&ast.tree().lex.tokens)
+}
+
+/// The operator token of a `BinaryExpr` or `UnaryExpr`, as written.
+fn binary_or_unary_op<'a>(ast: Ast<'a>, node: &'a ::tuo_syntax::SyntaxNode) -> Option<&'a str> {
+    use ::tuo_syntax::SyntaxKind as S;
+    let expr = Expr::cast(ast, node)?;
+    match expr {
+        Expr::Binary(binary) if node.kind == S::BinaryExpr => binary.op(),
+        Expr::Unary(unary) if node.kind == S::UnaryExpr => unary.op(),
+        _ => None,
+    }
+}
+
 fn qualified_name(resolution: &Resolution, symbol: SymbolId) -> String {
     let data = resolution.symbol(symbol);
     let path = &resolution.module(data.module).path;
@@ -495,6 +520,210 @@ impl<'a> Checker<'a> {
                 return effectful;
             }
         }
+    }
+
+    /// The constant-time gate (`T0017`–`T0020`, ADR-0020 Stage C): a
+    /// function marked `#[constant_time]` may contain no construct whose
+    /// execution time or control flow can depend on its inputs.
+    ///
+    /// The rule is deliberately syntactic and conservative. It rejects, inside
+    /// a marked function:
+    ///
+    /// * **data-dependent control flow** — `if`, `match`, `while`, `loop`,
+    ///   `for` (`T0017`);
+    /// * **array indexing** — `xs[i]` and `std::array::get`, whose bounds
+    ///   check is a conditional branch on an index (`T0018`);
+    /// * **trapping arithmetic** — `+`, `-`, `*`, `/`, `%`, and unary `-`,
+    ///   whose overflow check is a conditional branch on the operands
+    ///   (`T0019`);
+    /// * **calls to unmarked functions** (`T0020`), since the callee could
+    ///   contain any of the above.
+    ///
+    /// What remains is exactly the branchless subset: shifts, bitwise
+    /// operators, comparisons used as values, `let` bindings, literals, and
+    /// calls to other marked functions.
+    ///
+    /// Being syntactic, it is a *sufficient* condition rather than a
+    /// necessary one: a function it rejects is not necessarily variable-time
+    /// (`lt`'s halved subtraction provably cannot overflow, yet `-` is
+    /// refused). The checker cannot prove that, and accepting on an unproven
+    /// argument is the failure mode this whole ADR exists to prevent — so it
+    /// refuses and the author restructures or drops the marking.
+    fn check_constant_time(&mut self, files: &[Ast<'a>], marked: &BTreeSet<SymbolId>) {
+        for &ast in files {
+            for item in ast.file().items() {
+                let Item::Fn(decl) = item else { continue };
+                let Some(symbol) = self.declared_at(decl.name_ref()) else {
+                    continue;
+                };
+                if !marked.contains(&symbol) {
+                    continue;
+                }
+                let Some(body) = decl.body() else { continue };
+                self.walk_constant_time(ast, body.syntax(), marked);
+            }
+        }
+    }
+
+    /// Walk `node`'s subtree, reporting every construct a `#[constant_time]`
+    /// function may not contain.
+    ///
+    /// The walk is over **syntax kinds** rather than a typed `match` on
+    /// expression variants: a new expression form added later shows up here as
+    /// an unlisted kind that is simply traversed, and the load-bearing
+    /// rejections (branch, index, arithmetic, call) are named explicitly. A
+    /// typed match would silently gain an accepting arm instead.
+    fn walk_constant_time(
+        &mut self,
+        ast: Ast<'_>,
+        node: &'a ::tuo_syntax::SyntaxNode,
+        marked: &BTreeSet<SymbolId>,
+    ) {
+        use ::tuo_syntax::SyntaxKind as S;
+
+        let span = node_span(ast, node).unwrap_or(self.fallback);
+        match node.kind {
+            S::IfExpr | S::MatchExpr | S::WhileExpr | S::LoopExpr | S::ForExpr => {
+                let form = match node.kind {
+                    S::IfExpr => "if",
+                    S::MatchExpr => "match",
+                    S::WhileExpr => "while",
+                    S::LoopExpr => "loop",
+                    _ => "for",
+                };
+                self.push(
+                    Diagnostic::error(
+                        code(17),
+                        format!(
+                            "`{form}` is not allowed in a `#[constant_time]` function: its \
+                             control flow can depend on the data"
+                        ),
+                        span,
+                    )
+                    .with_primary_label("data-dependent control flow")
+                    .with_help(
+                        "compute both alternatives and combine them with `std::ct::select`, \
+                         which chooses without branching",
+                    )
+                    .with_actual(StructuredValue::Name(form.to_string())),
+                );
+            }
+            S::IndexExpr => {
+                self.push(
+                    Diagnostic::error(
+                        code(18),
+                        "indexing is not allowed in a `#[constant_time]` function: the bounds \
+                         check is a branch on the index"
+                            .to_string(),
+                        span,
+                    )
+                    .with_primary_label("bounds-checked index")
+                    .with_help(
+                        "scan the whole array and select, as `std::ct::select_array` does, so \
+                         the time taken does not reveal the index",
+                    ),
+                );
+            }
+            S::BinaryExpr | S::UnaryExpr => {
+                if let Some(op) = binary_or_unary_op(ast, node)
+                    && matches!(op, "+" | "-" | "*" | "/" | "%")
+                {
+                    self.push(
+                        Diagnostic::error(
+                            code(19),
+                            format!(
+                                "`{op}` is not allowed in a `#[constant_time]` function: it \
+                                 traps on overflow, and a trap check is a branch on the operands"
+                            ),
+                            span,
+                        )
+                        .with_primary_label("trapping arithmetic")
+                        .with_help(
+                            "use the shift and bitwise operators, which cannot trap; a mask is \
+                             `(bit << 63) >> 63` rather than `0 - bit`",
+                        )
+                        .with_actual(StructuredValue::Name(op.to_string())),
+                    );
+                }
+            }
+            _ => {}
+        }
+
+        // A call must reach only marked functions. `MethodCall` is refused
+        // outright: method dispatch is not lowered in v0, so there is nothing
+        // to verify about the callee.
+        if node.kind == S::CallExpr
+            && let Some(expr) = Expr::cast(ast, node)
+            && let Expr::Call(call) = expr
+            && let Some(Expr::Path(path)) = call.callee()
+            && let Some(name) = path.segment_names().last()
+        {
+            let callee = self.resolution.resolved_at(name.span);
+            let allowed = callee.is_some_and(|symbol| marked.contains(&symbol));
+            if !allowed {
+                let target = callee.map_or_else(
+                    || name.text.to_string(),
+                    |symbol| qualified_name(self.resolution, symbol),
+                );
+                self.push(
+                    Diagnostic::error(
+                        code(20),
+                        format!(
+                            "`{target}` is not marked `#[constant_time]`, so it may not be \
+                             called from a function that is"
+                        ),
+                        name.span,
+                    )
+                    .with_primary_label("callee carries no constant-time guarantee")
+                    .with_help(
+                        "mark the callee `#[constant_time]` too, or inline the part this \
+                         function needs",
+                    )
+                    .with_actual(StructuredValue::Name(target)),
+                );
+            }
+        }
+
+        for child in &node.children {
+            if let ::tuo_syntax::SyntaxElement::Node(nested) = child {
+                self.walk_constant_time(ast, nested, marked);
+            }
+        }
+    }
+
+    /// The set of functions marked `#[constant_time]`, and a diagnostic for
+    /// every attribute that is not one this compiler knows (`T0021`).
+    ///
+    /// An unknown attribute is an **error**, never a warning that is ignored:
+    /// a misspelled `#[constant_tim]` that compiled clean would leave the
+    /// author believing in a guarantee the compiler never checked, which is
+    /// the exact failure this ADR was opened to prevent.
+    fn collect_constant_time_marks(&mut self, files: &[Ast<'a>]) -> BTreeSet<SymbolId> {
+        let mut marked = BTreeSet::new();
+        for &ast in files {
+            for item in ast.file().items() {
+                let Item::Fn(decl) = item else { continue };
+                for attribute in decl.attributes() {
+                    if attribute.text == "constant_time" {
+                        if let Some(symbol) = self.declared_at(decl.name_ref()) {
+                            marked.insert(symbol);
+                        }
+                        continue;
+                    }
+                    self.push(
+                        Diagnostic::error(
+                            code(21),
+                            format!("unknown attribute `{}`", attribute.text),
+                            attribute.span,
+                        )
+                        .with_primary_label("not an attribute this compiler recognizes")
+                        .with_help("the only attribute in v0 is `#[constant_time]` (ADR-0020)")
+                        .with_actual(StructuredValue::Name(attribute.text.to_string())),
+                    );
+                }
+            }
+        }
+        marked
     }
 
     /// The spec-purity gate (`R0007`, ADR-0006): a spec whose executed
@@ -1787,6 +2016,18 @@ impl<'a> Checker<'a> {
                         self.expect_ty(&Ty::Bool, &operand, span);
                         Ty::Bool
                     }
+                    // ADR-0019: `~` complements an integer's bits. Integers
+                    // only — `!` remains the Bool operator.
+                    Some("~") => {
+                        let applied = self.icx.apply(&operand);
+                        match applied {
+                            Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never => operand,
+                            other => {
+                                self.unsupported_op("~", &other, span);
+                                Ty::Error
+                            }
+                        }
+                    }
                     // `move` is an ownership operator; the type passes
                     // through.
                     _ => operand,
@@ -2057,6 +2298,39 @@ impl<'a> Checker<'a> {
                 self.expect_ty(&Ty::Bool, lhs, span);
                 self.expect_ty(&Ty::Bool, rhs, rhs_span);
                 Ty::Bool
+            }
+            // ADR-0019. Bitwise `&`/`|`/`^` are integers-only and
+            // same-type — unlike arithmetic, floats are excluded, since a
+            // bit pattern is not defined on an IEEE-754 value here.
+            "&" | "|" | "^" => {
+                self.expect_ty(lhs, rhs, rhs_span);
+                let applied = self.icx.apply(lhs);
+                match applied {
+                    Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never => lhs.clone(),
+                    other => {
+                        self.unsupported_op(op, &other, span);
+                        Ty::Error
+                    }
+                }
+            }
+            // Shifts are deliberately NOT `expect_ty`: the shift amount is
+            // independent of the value's type, so `x: U32 << 3` needs no
+            // cast on the literal. Both sides must still be integers, and
+            // the result takes the *left* operand's type.
+            "<<" | ">>" => {
+                let applied = self.icx.apply(lhs);
+                let amount = self.icx.apply(rhs);
+                if !matches!(amount, Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never) {
+                    self.unsupported_op(op, &amount, rhs_span);
+                    return Ty::Error;
+                }
+                match applied {
+                    Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never => lhs.clone(),
+                    other => {
+                        self.unsupported_op(op, &other, span);
+                        Ty::Error
+                    }
+                }
             }
             _ => Ty::Error,
         }

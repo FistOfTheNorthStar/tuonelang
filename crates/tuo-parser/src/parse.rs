@@ -125,7 +125,7 @@ fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
     /// Left-associative binary operators that chain (each one deepens the
     /// expression tree by one level). Comparison and range are excluded — the
     /// grammar makes them non-associative, so they cannot chain.
-    const BINARY: [K; 7] = [
+    const BINARY: [K; 12] = [
         K::Plus,
         K::Minus,
         K::Star,
@@ -133,6 +133,15 @@ fn nests_too_deeply(toks: &[Tok]) -> Option<usize> {
         K::Percent,
         K::AmpAmp,
         K::PipePipe,
+        // ADR-0019's bitwise levels chain left-associatively exactly as the
+        // arithmetic ones do, so they deepen the tree the same way and must
+        // be counted here too — otherwise `x & x & ... & 0` rebuilds the
+        // stack overflow the fuzz sweep found on `+` chains.
+        K::Amp,
+        K::Pipe,
+        K::Caret,
+        K::LtLt,
+        K::GtGt,
     ];
     let mut delims = 0usize;
     let mut prefix_run = 0usize;

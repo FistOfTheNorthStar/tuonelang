@@ -196,11 +196,11 @@ fn main_may_be_effectful_without_any_diagnostic() {
     assert!(types.is_effectful(function(&resolution, "main")));
     assert_eq!(
         types.effectful_functions().count(),
-        33,
-        "the thirty-two `std::rt` effect builtins (ADR-0006's three plus \
+        34,
+        "the thirty-three `std::rt` effect builtins (ADR-0006's three plus \
          ADR-0009's `write_string` plus ADR-0007's `par_map` plus ADR-0013's \
          six OS-boundary primitives plus ADR-0014's four socket primitives \
          plus ADR-0015's seven channel/mutex primitives plus ADR-0017's three \
-         bounded-wait, two IPv6, and five UDP primitives) plus `main`"
+         bounded-wait, two IPv6, and five UDP primitives, plus ADR-0019 Stage B's entropy primitive) plus `main`"
     );
 }

@@ -1,0 +1,8 @@
+fn main() -> I64 {
+    let _0: I64;
+    let _1: I64;
+bb0:
+    _0 = shl(const 1_i64, const 64_i64)
+    _1 = bitand(copy _0, const 255_i64)
+    return copy _1
+}

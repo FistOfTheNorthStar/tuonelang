@@ -1,0 +1,16 @@
+// ADR-0019: an UNSIGNED shift amount whose top bit is set. As a signed 64-bit
+// value that bit pattern reads as negative, so a guard comparing it with a
+// SIGNED `>= width` test would let it through — after which x86 masks the
+// amount to 0 and the shift silently becomes a no-op, while the interpreter
+// traps. Both backends must compare using the amount's own signedness, so all
+// three engines trap here.
+//
+// This case is not reachable with an `Int` amount, which is why it needs its
+// own fixture: only a `U64` (or `Usize`) amount can carry that bit pattern.
+fn shift_u64_amount(take x: Int, take n: U64) -> Int {
+    x << n
+}
+
+fn main() -> Int {
+    shift_u64_amount(1, 9223372036854775808)
+}

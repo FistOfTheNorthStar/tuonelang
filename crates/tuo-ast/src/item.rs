@@ -205,6 +205,20 @@ macro_rules! decl_accessors {
                 self.ast.has_token(self.node, TokenKind::KwPub)
             }
 
+            /// The attributes written before this declaration, with their
+            /// spans, in source order (ADR-0020 Stage C).
+            ///
+            /// The name is returned verbatim: deciding whether an attribute
+            /// exists, and whether it is allowed here, is the checker's job,
+            /// so an unknown one reaches a diagnostic rather than being
+            /// silently dropped.
+            pub fn attributes(self) -> impl Iterator<Item = Name<'a>> {
+                let ast = self.ast;
+                crate::item::child_nodes(self.node)
+                    .filter(|node| node.kind == SyntaxKind::Attribute)
+                    .filter_map(move |node| ast.direct_token_name(node, TokenKind::Ident))
+            }
+
             /// The declared name.
             #[must_use]
             pub fn name(self) -> Option<&'a str> {

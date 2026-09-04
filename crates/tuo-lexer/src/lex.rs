@@ -94,6 +94,18 @@ enum Raw {
     PipePipe,
     #[token("|")]
     Pipe,
+    #[token("&")]
+    Amp,
+    #[token("^")]
+    Caret,
+    #[token("~")]
+    Tilde,
+    #[token("#")]
+    Hash,
+    #[token("<<")]
+    LtLt,
+    #[token(">>")]
+    GtGt,
     #[token("<")]
     Lt,
     #[token(">")]
@@ -269,6 +281,12 @@ fn classify(raw: Raw, slice: &str, span: Span, diagnostics: &mut Vec<Diagnostic>
         Raw::AmpAmp => TokenKind::AmpAmp,
         Raw::PipePipe => TokenKind::PipePipe,
         Raw::Pipe => TokenKind::Pipe,
+        Raw::Amp => TokenKind::Amp,
+        Raw::Caret => TokenKind::Caret,
+        Raw::Tilde => TokenKind::Tilde,
+        Raw::Hash => TokenKind::Hash,
+        Raw::LtLt => TokenKind::LtLt,
+        Raw::GtGt => TokenKind::GtGt,
         Raw::Lt => TokenKind::Lt,
         Raw::Gt => TokenKind::Gt,
         Raw::Bang => TokenKind::Bang,

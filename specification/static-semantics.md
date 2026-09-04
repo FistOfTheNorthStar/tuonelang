@@ -262,6 +262,11 @@ the trait system will own.
 | `T0014` | Invalid fixed-size array length: suffixed, unparsable, or over `MAX_FIXED_ARRAY_LEN` (ADR-0004 Stage 2). |
 | `T0015` | Not first-class: a builtin or generic function used as a value (ADR-0008 Tier 1, §3.8). Only ordinary top-level user `fn`s become function values. |
 | `T0016` | Recursive type without a heap-wrapper indirection (ADR-0016, §3.7): a struct/enum reaches itself through its own fields/payloads. Only `Box`/`Shared`/`Weak` break a cycle. |
+| `T0017` | Data-dependent control flow in a `#[constant_time]` function (ADR-0020 Stage C, §3.10): `if`, `match`, `while`, `loop`, or `for`. |
+| `T0018` | Array indexing in a `#[constant_time]` function (§3.10): the bounds check is a conditional branch on the index. |
+| `T0019` | Trapping arithmetic (`+ - * / %`) in a `#[constant_time]` function (§3.10): the overflow check is a conditional branch on the operands. |
+| `T0020` | A `#[constant_time]` function calls a function that is not marked (§3.10), so the callee carries no checked guarantee. |
+| `T0021` | Unknown attribute (§3.10). v0 defines exactly one, `#[constant_time]`; an unrecognized name is an error, never a silently-ignored annotation. |
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
@@ -498,6 +503,79 @@ revisit this.)
 
 Tier 1 has **no closures, no capture, and no heap**; capturing closures are a
 later ADR increment.
+
+### 3.9 Bitwise operators (`[EXPERIMENTAL]`, ADR-0019 Stage A)
+
+The six bitwise operators — `&`, `|`, `^`, `~`, `<<`, `>>` — are checked by
+three rules, all of which produce `T0006` ("operation not supported for a
+type") when violated.
+
+1. **Integers only.** Every bitwise operator requires integer operands. Floats
+   are rejected: a bit pattern is not defined on an IEEE-754 value in v0, so
+   `a & b` on `Float` is a type error rather than a reinterpreted operation.
+   `Bool` is rejected too — `&&`/`||`/`!` are its operators, and keeping the
+   two families apart is what makes `!` (logical) and `~` (bitwise) distinct.
+2. **`&`, `|`, `^` unify their operands** exactly as arithmetic does, and the
+   expression's type is that shared operand type.
+3. **Shifts do *not* unify their operands.** `<<` and `>>` take an integer
+   value and an independent integer *amount* — a bit count, not a value of the
+   shifted type — so `x << 3` needs no cast on the literal even when `x` is
+   `U32`. The expression's type is the **left** operand's type. Both sides
+   must still be integers.
+
+Two further facts are *dynamic* rather than static, and so are enforced by a
+trap rather than the checker (see [`mir.md`](mir.md) §5.3): `>>` is arithmetic
+on a signed type and logical on an unsigned one, and a shift amount outside
+`0..width` traps `InvalidShift`.
+
+The surface grammar's `|` is one terminal serving two roles — pattern
+alternation and bitwise-or. That is a *syntactic* disambiguation, decided by
+grammatical context and owned by the parser (see §4), not a type rule.
+
+### 3.10 Constant-time checking (`[EXPERIMENTAL]`, ADR-0020 Stage C)
+
+A function may carry the attribute `#[constant_time]`, which asks the compiler
+to verify that **neither its control flow nor its running time can depend on
+the values it is given**. This is the only attribute v0 defines; an
+unrecognized one is `T0021` rather than a decoration the compiler ignores,
+because a misspelled `#[constant_tim]` that compiled clean would leave an
+author believing in a guarantee that was never checked.
+
+Inside a marked function the checker rejects:
+
+| Construct | Code | Why |
+|-----------|------|-----|
+| `if`, `match`, `while`, `loop`, `for` | `T0017` | control flow branches on data |
+| `xs[i]` | `T0018` | the bounds check is a branch on the index |
+| `+`, `-`, `*`, `/`, `%` (binary or unary) | `T0019` | the overflow check is a branch on the operands |
+| a call to an unmarked function | `T0020` | the callee could contain any of the above |
+
+What remains is the branchless subset: shifts, the bitwise operators
+(§3.9), comparisons used as values, `let` bindings, literals, and calls to
+other marked functions. `std::ct` is written in exactly this subset.
+
+**The rule is sufficient, not necessary, and that asymmetry is deliberate.**
+Some rejected code is genuinely constant time — a subtraction of halved
+operands provably cannot overflow, so its trap is unreachable — but the checker
+cannot follow that argument, and accepting on an argument it cannot verify is
+precisely the unbacked claim this discipline exists to prevent. The intended
+response to a rejection is to restructure (as `std::ct::lt` was, to need no
+arithmetic at all) or to drop the marking and state plainly that the function
+carries no machine-checked guarantee.
+
+**What the attribute does *not* promise.** It constrains the *source*. Whether
+the emitted machine code is branch-free is a separate question, checked
+separately by disassembling real binaries on both backends
+(`crates/tuo-cli/tests/constant_time.rs`), because an optimizer may rewrite a
+branchless idiom into a conditional. And whether branch-free instructions
+execute in data-independent time is a *hardware* property beyond any compiler's
+reach. The attribute is one of three links, and none of the three alone is the
+guarantee.
+
+There is deliberately **no escape hatch** — no `#[allow]`, no override. A
+function that cannot satisfy the checker simply goes unmarked, which is visible
+in the source: `std::ct`'s array scans carry no attribute, because a scan needs
+a loop (`T0017`) and indexing (`T0018`) by its nature.
 
 ---
 

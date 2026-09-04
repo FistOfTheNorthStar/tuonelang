@@ -53,26 +53,24 @@ fn load_all() -> (SourceMap, Vec<SourceId>) {
     (map, sources)
 }
 
-/// Intern one module into a fresh source map.
-fn load_one(module: tuo_stdlib::Module) -> (SourceMap, SourceId) {
-    let mut map = SourceMap::new();
-    let file = map.intern_file(module.name);
-    let id = map
-        .add_source(file, module.source)
-        .expect("a stdlib module is not too large");
-    (map, id)
-}
-
 #[test]
 fn the_catalog_lists_exactly_its_modules() {
-    // The eight initial modules the prompt named, plus the two pure modules
-    // grown on top of the runnable core — `std::math` (Int/Float arithmetic)
-    // and `std::str` (byte-level string algorithms + integer⇄text
-    // conversion) — plus `std::net` (ADR-0014's TCP socket tier).
+    // The eight initial modules the prompt named, plus the pure modules grown
+    // on top of the runnable core — `std::math` (Int/Float arithmetic),
+    // `std::str` (byte-level string algorithms + integer⇄text conversion),
+    // and ADR-0019 Stage B's `std::bits` (fixed-width bit/byte-order
+    // operations), `std::crypto` (SHA-256, HMAC, PBKDF2, Base64), and
+    // `std::bignum` (arbitrary-precision integers over 28-bit limbs) — plus
+    // `std::ct` (ADR-0020 Stage A's branchless subset) and `std::net`
+    // (ADR-0014's TCP socket tier).
     let expected = [
         "std::core",
         "std::collections",
         "std::math",
+        "std::bits",
+        "std::bignum",
+        "std::ct",
+        "std::crypto",
         "std::str",
         "std::json",
         "std::io",
@@ -98,16 +96,66 @@ fn the_catalog_lists_exactly_its_modules() {
     );
 }
 
+/// The catalog's declared intra-library dependency edges, as
+/// `(module, the modules it may use)`.
+///
+/// Most modules stand alone. `std::crypto` is the first that does not: its
+/// algorithms are *defined* over the fixed-width bit and byte-order operations
+/// `std::bits` owns (ADR-0019 Stage B), and the alternative — a second copy of
+/// `rotr32`/`add32`/`be32` inside `std::crypto` — would be two implementations
+/// of one specification, free to drift apart. One audited copy is worth the
+/// edge.
+///
+/// This table is the *whole* permitted graph: a module absent from it must
+/// still compile alone, and `the_dependency_graph_is_declared_and_acyclic`
+/// proves the edges listed here are the only ones and that they form no cycle.
+const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[("std::crypto", &["std::bits"])];
+
+/// The modules `module` may use, or an empty slice if it must stand alone.
+fn declared_dependencies_of(path: &str) -> &'static [&'static str] {
+    DECLARED_DEPENDENCIES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map_or(&[], |(_, deps)| *deps)
+}
+
+/// Intern `module` together with its declared dependencies, dependencies
+/// first. The returned ids are what a per-module check or spec run needs: the
+/// module under test plus exactly what it is allowed to use, and nothing else,
+/// so an undeclared dependency still fails to resolve.
+fn load_with_dependencies(module: tuo_stdlib::Module) -> (SourceMap, Vec<SourceId>) {
+    let mut map = SourceMap::new();
+    let mut ids = Vec::new();
+    for &path in declared_dependencies_of(module.path) {
+        let dependency =
+            tuo_stdlib::module(path).expect("a declared dependency is a catalog module");
+        let file = map.intern_file(dependency.name);
+        ids.push(
+            map.add_source(file, dependency.source)
+                .expect("a stdlib module is not too large"),
+        );
+    }
+    let file = map.intern_file(module.name);
+    ids.push(
+        map.add_source(file, module.source)
+            .expect("a stdlib module is not too large"),
+    );
+    (map, ids)
+}
+
 #[test]
 fn every_module_checks_cleanly_on_its_own() {
-    // Each module must stand alone: no module depends on another today, so each
-    // type-checks in isolation with zero errors.
+    // A module with no declared dependency must type-check in isolation with
+    // zero errors; one that declares dependencies is checked together with
+    // exactly those, and nothing else. Either way the module cannot quietly
+    // acquire a dependency: an undeclared use fails to resolve here.
     for &module in tuo_stdlib::MODULES {
-        let (map, id) = load_one(module);
-        let result = check_sources(&map, &[id]);
+        let dependencies = declared_dependencies_of(module.path);
+        let (map, ids) = load_with_dependencies(module);
+        let result = check_sources(&map, &ids);
         assert!(
             !result.has_errors(),
-            "{} has front-end errors:\n{:#?}",
+            "{} has front-end errors (checked with its declared dependencies {dependencies:?}):\n{:#?}",
             module.path,
             result
                 .diagnostics
@@ -115,6 +163,37 @@ fn every_module_checks_cleanly_on_its_own() {
                 .filter(|d| d.severity == tuo_compiler::diagnostics::Severity::Error)
                 .collect::<Vec<_>>()
         );
+    }
+}
+
+#[test]
+fn the_dependency_graph_is_declared_and_acyclic() {
+    // Every declared edge must name real modules, and the graph must have no
+    // cycle — otherwise no build order exists and "compiles with its
+    // dependencies" would be meaningless.
+    for (module, dependencies) in DECLARED_DEPENDENCIES {
+        assert!(
+            tuo_stdlib::module(module).is_some(),
+            "declared dependency table names `{module}`, which is not a catalog module"
+        );
+        for dependency in *dependencies {
+            assert!(
+                tuo_stdlib::module(dependency).is_some(),
+                "`{module}` declares a dependency on `{dependency}`, which is not a catalog module"
+            );
+            assert_ne!(
+                module, dependency,
+                "`{module}` declares a dependency on itself"
+            );
+            // One level is all the catalog has; a dependency that itself has
+            // dependencies would need a real topological sort here, so refuse
+            // it rather than silently mis-order the check above.
+            assert!(
+                declared_dependencies_of(dependency).is_empty(),
+                "`{dependency}` has its own dependencies; extend this test to a \
+                 topological sort before adding a second level"
+            );
+        }
     }
 }
 
@@ -333,7 +412,10 @@ fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
     // primitives, which made the whole of `std::net`'s TCP tier real;
     // ADR-0017 added the bounded-wait counterparts to the three operations
     // that otherwise block forever, plus the IPv6 server-side pair and the
-    // UDP datagram tier. The
+    // UDP datagram tier; and ADR-0019 Stage B added the entropy primitive,
+    // which makes `std::crypto`'s `random_byte`/`nonce` real — drawing
+    // randomness is an effect by nature, since a function whose purpose is to
+    // differ on every call cannot be pure. The
     // effect tier must list exactly the functions those primitives can
     // implement — no more (an over-claim) and no fewer (a stale contract).
     let mut effect_fns = Vec::new();
@@ -348,6 +430,8 @@ fn the_effect_tier_is_exactly_the_os_boundary_wrappers() {
     assert_eq!(
         effect_fns,
         vec![
+            "std::crypto::nonce".to_string(),
+            "std::crypto::random_byte".to_string(),
             "std::fs::exists".to_string(),
             "std::fs::read".to_string(),
             "std::fs::remove".to_string(),
@@ -410,9 +494,12 @@ fn the_contract_tier_is_empty() {
 #[test]
 fn each_module_runs_its_own_specs_green() {
     // A per-module view of the same guarantee, so a failure names the module.
+    // A module with declared dependencies is loaded with them (its specs
+    // cannot run otherwise); the dependency's own specs run in its own turn of
+    // this loop, so they are still each attributed to their own module.
     for &module in tuo_stdlib::MODULES {
-        let (map, id) = load_one(module);
-        match tuo_spec::run(&map, &[id], &Selection::All, Limits::default()) {
+        let (map, ids) = load_with_dependencies(module);
+        match tuo_spec::run(&map, &ids, &Selection::All, Limits::default()) {
             RunOutcome::Ran(report) => {
                 assert!(
                     report.skipped.is_empty(),
@@ -468,6 +555,33 @@ fn run_with_module(dir: &Path, module: tuo_stdlib::Module, caller: &str, release
     }
     command
         .arg(&module_path)
+        .arg(&caller_path)
+        .output()
+        .expect("the tuo binary runs")
+}
+
+/// As [`run_with_module`], but writing several catalog modules — for a module
+/// whose declared dependencies must be present too (see
+/// `DECLARED_DEPENDENCIES`).
+fn run_with_modules(
+    dir: &Path,
+    modules: &[tuo_stdlib::Module],
+    caller: &str,
+    release: bool,
+) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+    command.arg("run");
+    if release {
+        command.arg("--release");
+    }
+    for module in modules {
+        let path = dir.join(module.name.replace('/', "_"));
+        std::fs::write(&path, module.source).expect("module source is writable");
+        command.arg(path);
+    }
+    let caller_path = dir.join("caller.tuo");
+    std::fs::write(&caller_path, caller).expect("caller source is writable");
+    command
         .arg(&caller_path)
         .output()
         .expect("the tuo binary runs")
@@ -1063,6 +1177,81 @@ fn main() -> Int {
             "{which}: split(\"a,bb,ccc\", \",\") has 3 parts (30) with a 3-byte \
              third part, and join([\"x\", \"yz\"], \"-\") is \"x-yz\" (4 bytes); \
              stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `std::crypto::random_byte`/`nonce` really draw from the platform CSPRNG.
+/// Both backends. This is the native pin `std::crypto`'s `EFFECT:` docs name.
+///
+/// What this can and cannot assert is worth being precise about. Randomness
+/// has no expected value to compare against, so the test checks the
+/// properties a *broken* implementation would violate: every byte is in
+/// range, a nonce is exactly the requested length, and two independently
+/// drawn 32-byte nonces differ. That last check is probabilistic in principle
+/// — two random 32-byte strings collide with probability 2^-256 — but it is
+/// the check that catches the realistic failures: a stubbed constant, a
+/// zero-filled buffer, or an unseeded PRNG returning the same stream twice.
+#[test]
+fn stdlib_crypto_entropy_really_draws_randomness_natively() {
+    let dir = native_workspace("crypto_entropy");
+    let caller = "\
+module caller;
+
+import std::crypto;
+
+fn main() -> Int {
+    // Every drawn byte must be a real byte, never the -1 error and never out
+    // of range.
+    var i = 0;
+    while i < 64 {
+        let b = std::crypto::random_byte();
+        if b < 0 || b > 255 {
+            return 1;
+        }
+        i = i + 1;
+    }
+
+    // A nonce is exactly as long as asked for.
+    let a = std::crypto::nonce(32);
+    if std::array::len(a) != 32 {
+        return 2;
+    }
+    // A non-positive length yields an empty nonce rather than a trap.
+    if std::array::len(std::crypto::nonce(0)) != 0 {
+        return 3;
+    }
+
+    // Two independent nonces must differ. A constant, a zeroed buffer, or a
+    // repeated PRNG stream would fail here.
+    let b = std::crypto::nonce(32);
+    var same = true;
+    var j = 0;
+    while j < 32 {
+        if std::array::get(a, j) != std::array::get(b, j) {
+            same = false;
+        }
+        j = j + 1;
+    }
+    if same {
+        return 4;
+    }
+    42
+}
+";
+    for release in [false, true] {
+        let output = run_with_modules(
+            &dir,
+            &[tuo_stdlib::BITS, tuo_stdlib::CRYPTO],
+            caller,
+            release,
+        );
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(42),
+            "{which}: entropy must be in range, correctly sized, and non-repeating; stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }

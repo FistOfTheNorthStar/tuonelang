@@ -1,0 +1,23 @@
+// ADR-0019: shifts on narrow integer types, where the amount's type differs
+// from the shifted value's. This pins two things the `Int`-only cases cannot:
+//   * the signedness rule — `>>` is logical (zero-filling) on U32 and
+//     arithmetic (sign-extending) on I32;
+//   * the width conversion — the amount is a 64-bit `Int` while the value is
+//     32-bit, so LLVM must narrow it (both operands must share an IR type)
+//     while the interpreter must NOT assert the two kinds match.
+// The interpreter's operand-kind assertion originally did assert that, which
+// this case caught.
+fn narrow_shift(take x: U32, take n: Int) -> U32 {
+    x >> n
+}
+fn signed_narrow(take x: I32, take n: Int) -> I32 {
+    x >> n
+}
+fn main() -> Int {
+    // Logical shift on U32: 0xFFFFFFFF >> 24 == 255 (zero-filled).
+    let logical = narrow_shift(4294967295, 24) as Int;
+    // Arithmetic shift on I32: -256 >> 4 == -16 (sign-extended).
+    let arith = signed_narrow(0 - 256, 4) as Int;
+    // 255 + (-16) + 11 = 250
+    logical + arith + 11
+}

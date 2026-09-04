@@ -357,3 +357,56 @@ fn local_consts_lower_inside_blocks() {
     let body = function.body.as_ref().expect("has body");
     assert!(matches!(body.stmts[0].kind, StmtKind::Const(_)));
 }
+
+/// Attributes survive lowering, verbatim and in source order (ADR-0020
+/// Stage C).
+///
+/// Lowering is where an unrecognized attribute would most plausibly be
+/// dropped — the HIR has no notion of what `constant_time` means — and a
+/// dropped attribute is the dangerous failure: the function would look
+/// checked while carrying no guarantee at all. So the name is carried through
+/// untouched and the checker, not the lowering, decides what it means.
+#[test]
+fn attributes_survive_lowering() {
+    let (hir, _) = build(&["#[constant_time]\nfn marked(take x: Int) -> Int { x }\n"]);
+    let attributes: Vec<&str> = hir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Fn(function) => Some(function),
+            _ => None,
+        })
+        .flat_map(|function| {
+            function
+                .attributes
+                .iter()
+                .map(|attribute| attribute.name.as_str())
+        })
+        .collect();
+    assert_eq!(attributes, ["constant_time"]);
+}
+
+/// An unknown attribute reaches the HIR rather than being silently discarded.
+///
+/// This is the property that lets the checker report it. Were lowering to drop
+/// what it does not recognize, a typo like `#[constant_tim]` would compile
+/// clean and the author would believe a guarantee they never got.
+#[test]
+fn an_unknown_attribute_is_carried_not_dropped() {
+    let (hir, _) = build(&["#[not_a_real_attribute]\nfn f(take x: Int) -> Int { x }\n"]);
+    let attributes: Vec<&str> = hir
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Fn(function) => Some(function),
+            _ => None,
+        })
+        .flat_map(|function| {
+            function
+                .attributes
+                .iter()
+                .map(|attribute| attribute.name.as_str())
+        })
+        .collect();
+    assert_eq!(attributes, ["not_a_real_attribute"]);
+}

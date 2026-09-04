@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `10` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `12` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -362,7 +362,9 @@ struct tuo_weak { tuo_shared_block[T] *ptr; }   // one word, never null
 A **trap** is the native counterpart of the interpreter's structured abort
 (Constitution §24). At each trap site — integer overflow, division by zero, an
 out-of-bounds index, an out-of-range byte value (ADR-0009's `InvalidByte`,
-appended to the taxonomy with its interpreter counterpart), or a
+appended to the taxonomy with its interpreter counterpart), an out-of-range
+shift amount (ADR-0019's `InvalidShift`, appended the same way — the guard is
+what keeps a shift from silently adopting the target's shift-masking), or a
 proved-unreachable point — generated code calls the
 runtime symbol `tuo_rt_trap(i32 code)` with a stable `TrapCode`. The runtime:
 
@@ -778,7 +780,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `10`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `12`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -810,5 +812,12 @@ bounded-wait symbols (`tuo_rt_accept_timeout`, `tuo_rt_connect_timeout`,
 symbols (`tuo_rt_listen6`, `tuo_rt_peer_family`, plus a family-inferring
 `tuo_rt_connect`), and the UDP symbols (`tuo_rt_udp_bind`/`send`/`recv`/
 `byte_at`/`peer_port`); no layout changed, but the new sentinel gives a
-previously-unused return value a meaning, so the version bumps. The version is asserted by the crate's
+previously-unused return value a meaning, so the version bumps. Version `11`
+(ADR-0019 Stage A) appended the `InvalidShift` trap code (`5`) for an
+out-of-range shift amount; no layout changed and the trap taxonomy is
+append-only, so no existing code is reinterpreted — the version bumps because
+the set of integers `tuo_rt_trap` accepts, and therefore the meaning a backend
+may give a runtime symbol's argument, grew. Version `12` (ADR-0019 Stage B)
+added the entropy symbol `tuo_rt_random_byte`, which reads the platform
+CSPRNG (`getentropy`) and returns one byte or `-1`; no layout changed. The version is asserted by the crate's
 tests so a silent reinterpretation of bytes is impossible.

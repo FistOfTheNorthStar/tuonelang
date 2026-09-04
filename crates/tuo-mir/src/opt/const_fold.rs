@@ -109,6 +109,9 @@ fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
             (*value != min).then(|| Const::Int(-value, *kind))
         }
         (UnOp::Neg, Const::Float(value, kind)) => Some(Const::Float(-value, *kind)),
+        // ADR-0019: complementing never traps, so it always folds.
+        // `wrap_int` renormalizes into the operand's width.
+        (UnOp::BitNot, Const::Int(value, kind)) => Some(Const::Int(wrap_int(!value, *kind), *kind)),
         _ => None,
     }
 }
@@ -119,10 +122,16 @@ fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
 fn fold_binary(op: BinOp, lhs: &Const, rhs: &Const) -> Option<Const> {
     match (lhs, rhs) {
         (Const::Int(a, ka), Const::Int(b, kb)) => {
-            debug_assert_eq!(ka, kb, "verifier guarantees matching integer kinds");
+            // A shift's amount is an independent bit count (ADR-0019), so it
+            // is the one binary op whose operand kinds may differ — the
+            // verifier exempts it from the same-type rule too.
+            debug_assert!(
+                ka == kb || matches!(op, BinOp::Shl | BinOp::Shr),
+                "verifier guarantees matching integer kinds (except a shift amount)"
+            );
             fold_int_binary(op, *a, *b, *ka)
         }
-        (Const::Float(a, ka), Const::Float(b, _kb)) => Some(fold_float_binary(op, *a, *b, *ka)),
+        (Const::Float(a, ka), Const::Float(b, _kb)) => fold_float_binary(op, *a, *b, *ka),
         (Const::Bool(a), Const::Bool(b)) => match op {
             BinOp::Eq => Some(Const::Bool(a == b)),
             BinOp::Ne => Some(Const::Bool(a != b)),
@@ -179,12 +188,55 @@ fn fold_int_binary(op: BinOp, a: i128, b: i128, kind: IntKind) -> Option<Const> 
         BinOp::Le => Some(Const::Bool(a <= b)),
         BinOp::Gt => Some(Const::Bool(a > b)),
         BinOp::Ge => Some(Const::Bool(a >= b)),
+        // ADR-0019. `&`/`|`/`^` operate on the two's-complement bit pattern
+        // and never trap, so they always fold; `wrap_int` re-normalizes the
+        // `i128` result into the operand's width (an unsigned operand's
+        // pattern is already non-negative, so this is a no-op there).
+        BinOp::BitAnd => Some(Const::Int(wrap_int(a & b, kind), kind)),
+        BinOp::BitOr => Some(Const::Int(wrap_int(a | b, kind), kind)),
+        BinOp::BitXor => Some(Const::Int(wrap_int(a ^ b, kind), kind)),
+        // Shifts trap when the amount is out of range, so — exactly as
+        // `Div`/`Rem` above — an out-of-range amount folds to `None`,
+        // leaving the operation in place so the trap still happens. Folding
+        // it would erase an observable abort.
+        BinOp::Shl => {
+            let width = i128::from(int_width_bits(kind));
+            if b < 0 || b >= width {
+                None
+            } else {
+                Some(Const::Int(wrap_int(a << b, kind), kind))
+            }
+        }
+        BinOp::Shr => {
+            let width = i128::from(int_width_bits(kind));
+            if b < 0 || b >= width {
+                None
+            } else if kind.is_signed() {
+                // Arithmetic: `i128`'s `>>` sign-extends, and `a` is already
+                // the sign-correct value for a signed kind.
+                Some(Const::Int(wrap_int(a >> b, kind), kind))
+            } else {
+                // Logical: `a` is non-negative for an unsigned kind, so
+                // `i128`'s `>>` zero-fills within the operand's width.
+                Some(Const::Int(wrap_int(a >> b, kind), kind))
+            }
+        }
+    }
+}
+
+/// The width in bits of an integer kind — the shift-amount bound (ADR-0019).
+fn int_width_bits(kind: IntKind) -> u32 {
+    match kind {
+        IntKind::I8 | IntKind::U8 => 8,
+        IntKind::I16 | IntKind::U16 => 16,
+        IntKind::I32 | IntKind::U32 => 32,
+        IntKind::I64 | IntKind::U64 | IntKind::Isize | IntKind::Usize => 64,
     }
 }
 
 /// Fold float arithmetic/comparison (IEEE 754, never traps).
-fn fold_float_binary(op: BinOp, a: f64, b: f64, kind: FloatKind) -> Const {
-    match op {
+fn fold_float_binary(op: BinOp, a: f64, b: f64, kind: FloatKind) -> Option<Const> {
+    Some(match op {
         BinOp::Add => Const::Float(normalize_float(a + b, kind), kind),
         BinOp::Sub => Const::Float(normalize_float(a - b, kind), kind),
         BinOp::Mul => Const::Float(normalize_float(a * b, kind), kind),
@@ -196,7 +248,14 @@ fn fold_float_binary(op: BinOp, a: f64, b: f64, kind: FloatKind) -> Const {
         BinOp::Le => Const::Bool(a <= b),
         BinOp::Gt => Const::Bool(a > b),
         BinOp::Ge => Const::Bool(a >= b),
-    }
+        // Bitwise operators are integers-only (the type checker rejects
+        // them on floats), so they are unreachable here. Leaving the
+        // operation unfolded is the conservative, meaning-preserving
+        // answer for any MIR that somehow carries one.
+        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            return None;
+        }
+    })
 }
 
 /// Fold a numeric cast (casts never trap; §MIR `CastKind`).
@@ -352,6 +411,55 @@ mod tests {
         assert!(matches!(folded, Some(Const::Bool(true))));
     }
 
+    /// ADR-0019: the bit operations never trap, so they always fold.
+    #[test]
+    fn folds_the_bitwise_operations() {
+        let k = IntKind::I64;
+        let folded = |op, a, b, kind| match super::fold_int_binary(op, a, b, kind) {
+            Some(Const::Int(value, _)) => Some(value),
+            _ => None,
+        };
+        assert_eq!(folded(BinOp::BitAnd, 12, 10, k), Some(8));
+        assert_eq!(folded(BinOp::BitOr, 12, 10, k), Some(14));
+        assert_eq!(folded(BinOp::BitXor, 12, 10, k), Some(6));
+
+        let complement = |value, kind| match fold_unary(UnOp::BitNot, &int(value, kind)) {
+            Some(Const::Int(result, _)) => Some(result),
+            _ => None,
+        };
+        assert_eq!(complement(0, k), Some(-1));
+        // Complement renormalizes into a narrow width rather than leaving an
+        // out-of-range `i128`: `~0u8` is 255, not -1.
+        assert_eq!(complement(0, IntKind::U8), Some(255));
+    }
+
+    /// `>>` is arithmetic on a signed kind and logical on an unsigned one,
+    /// and the folder must reproduce the interpreter's choice exactly.
+    #[test]
+    fn folds_shifts_with_the_signedness_rule() {
+        let folded = |op, a, b, kind| match super::fold_int_binary(op, a, b, kind) {
+            Some(Const::Int(value, _)) => Some(value),
+            _ => None,
+        };
+        assert_eq!(folded(BinOp::Shl, 1, 10, IntKind::I64), Some(1024));
+        // Arithmetic: the sign bit is extended.
+        assert_eq!(folded(BinOp::Shr, -8, 1, IntKind::I64), Some(-4));
+        // Logical: an unsigned value zero-fills.
+        assert_eq!(folded(BinOp::Shr, 255, 4, IntKind::U8), Some(15));
+    }
+
+    /// A trapping shift must NOT fold — folding it would erase an observable
+    /// abort, exactly as folding `1 / 0` would. The bound is per-width.
+    #[test]
+    fn refuses_to_fold_an_out_of_range_shift() {
+        assert!(super::fold_int_binary(BinOp::Shl, 1, 64, IntKind::I64).is_none());
+        assert!(super::fold_int_binary(BinOp::Shr, 1, 64, IntKind::I64).is_none());
+        assert!(super::fold_int_binary(BinOp::Shl, 1, -1, IntKind::I64).is_none());
+        // 32 is in range for I64 but out of range for the 32-bit kinds.
+        assert!(super::fold_int_binary(BinOp::Shl, 1, 32, IntKind::U32).is_none());
+        assert!(super::fold_int_binary(BinOp::Shl, 1, 32, IntKind::I64).is_some());
+    }
+
     #[test]
     fn refuses_to_fold_negating_the_minimum() {
         let min = i128::from(i8::MIN);
@@ -395,7 +503,8 @@ mod tests {
     fn f32_folding_rounds_to_f32_precision() {
         // 0.1 + 0.2 at f32 precision differs from the f64 result; the fold
         // must round to f32 exactly as the interpreter does.
-        let folded = super::fold_float_binary(BinOp::Add, 0.1, 0.2, FloatKind::F32);
+        let folded = super::fold_float_binary(BinOp::Add, 0.1, 0.2, FloatKind::F32)
+            .expect("float add folds");
         if let Const::Float(value, FloatKind::F32) = folded {
             assert_eq!(value, f64::from(0.1_f32 + 0.2_f32));
         } else {

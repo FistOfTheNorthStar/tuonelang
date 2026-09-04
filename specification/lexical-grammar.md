@@ -163,18 +163,22 @@ before their single-character prefixes are considered.
 | Range | `..` |
 | Comparison | `==` `!=` `<` `>` `<=` `>=` |
 | Logical | `&&` `\|\|` `!` |
-| Pattern alternative | `\|` (or-patterns `A \| B` and interface bounds use it/`+`; **not** a bitwise operator) |
+| Pattern alternative / bitwise or | `\|` (or-patterns `A \| B` and interface bounds use it/`+`; **also** bitwise-or in expression position, ADR-0019 — one token, two grammatical contexts) |
 | Arithmetic | `+` `-` `*` `/` `%` |
+| Bitwise | `&` `^` `~` `<<` `>>` (ADR-0019) |
+| Attribute | `#` (ADR-0020 Stage C; only ever before `[`) |
 | Assignment | `=` |
 | Propagation | `?` |
 | Member | `.` |
 | Delimiters | `(` `)` `{` `}` `[` `]` |
 | Separators | `,` `;` `:` |
 
-**No angle-bracket generics.** `<` and `>` are *only* comparison operators;
-generics use square brackets `[T]` (§18). This is why the parser needs no
-special handling for the `<`/`>` “is this a generic or a comparison?” ambiguity
-that complicates C++/Rust-family parsers.
+**No angle-bracket generics.** `<` and `>` are comparison operators and `<<`/`>>`
+the shifts (ADR-0019, matched by maximal munch); generics use square brackets
+`[T]` (§18). This is why the parser needs no special handling for the `<`/`>`
+“is this a generic or a comparison?” ambiguity that complicates C++/Rust-family
+parsers — and equally why `>>` never has to be split to close two nested
+generic arguments.
 
 **Fixed-capacity arrays add no tokens** (ADR-0004 Stage 2): the `[T; N]` type
 and the `[a, b, c]` / `[x; N]` literals are built entirely from the existing
@@ -182,10 +186,24 @@ and the `[a, b, c]` / `[x; N]` literals are built entirely from the existing
 The `;`-inside-brackets disambiguation (`;` after the first expression selects
 the repeat form) is a parser concern, not a lexical one.
 
-**No compound-assignment, no bitwise-operator tokens in v0.** `+=`, `|`, `&`,
-`^`, `<<`, `>>` are intentionally absent from the token set; the `|` glyph exists
-only inside patterns (`A | B`) and bounds (`T + U` uses `+`). These omissions are
-deliberate and revisited only via a future edition (§30).
+**No compound assignment in v0.** `+=`, `-=`, `|=` and friends are intentionally
+absent from the token set; that omission is deliberate and revisited only via a
+future edition (§30).
+
+**Bitwise tokens arrived with ADR-0019.** `&`, `^`, `~`, `<<`, and `>>` were
+previously absent — a source file containing one was a *lexical error* — which
+is precisely why adding them could not invalidate an existing program. The `|`
+glyph now serves both patterns (`A | B`) and bitwise-or in expressions; because
+the two are disjoint grammatical contexts, the lexer still emits one `Pipe`
+token and never consults parser state (§4's rule is intact).
+
+**The attribute sigil arrived with ADR-0020 Stage C.** `#` was likewise absent
+— a source file containing one outside a string or comment was a *lexical
+error* — so reserving it is a strict extension by the same argument. It is not
+an operator: it appears only in the prefix `#[IDENT]` before an item, and the
+lexer emits it unconditionally without consulting parser state. Attribute
+*names* are ordinary identifiers to the lexer; which names exist is a semantic
+question (`T0021`).
 
 ## 7. The `label` sigil (Experimental, §16)
 

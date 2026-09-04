@@ -50,7 +50,7 @@ fn gate_doc() -> PathBuf {
 }
 
 /// The version this gate is written for; G1's grammar marker must match it.
-const GATE_GRAMMAR_VERSION: &str = "0.1";
+const GATE_GRAMMAR_VERSION: &str = "0.3";
 
 /// The number of criteria the prompt fixes.
 const CRITERIA_COUNT: usize = 16;

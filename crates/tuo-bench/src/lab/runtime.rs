@@ -269,6 +269,40 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             54,
         ),
         RuntimeWorkload::supported(
+            "sha256-hash",
+            "cryptographic hashing throughput over the ADR-0019 bitwise \
+             operators: per round, the full FIPS 180-4 SHA-256 compression \
+             function over a fixed 64-byte message (two padded blocks), \
+             every hash word combined with a masked modular add since a bare \
+             `+` traps on the carry a checksum requires — measured against a \
+             uint32_t C peer making the identical rotations and shifts and \
+             Go's standard crypto/sha256 (the parity target). This workload \
+             could not be written before ADR-0019 Stage A: SHA-256 is \
+             *defined* in rotations, xors, and shifts, so without them it \
+             has no expression at all",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/sha256-hash.tuo"),
+            // 200 rounds; each round's first digest byte (reassigned, not
+            // accumulated) is 0x96 = 150; exit byte 150.
+            150,
+        ),
+        RuntimeWorkload::supported(
+            "wire-decode",
+            "binary protocol framing throughput over the ADR-0019 bitwise \
+             operators: per round, walk a fixed 256-byte buffer of 16 \
+             length-prefixed frames, decoding a big-endian 4-byte length and \
+             2-byte type per frame, re-encoding the length to verify the \
+             round-trip, and folding the payload — the shape of every binary \
+             wire protocol, and the concrete PostgreSQL message header \
+             ADR-0019 was opened for — measured against a uint32_t C peer \
+             making the identical shifts and masks and a Go peer using \
+             encoding/binary's BigEndian.Uint32/PutUint32 (the parity \
+             target)",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/wire-decode.tuo"),
+            // 200 rounds; each round's checksum (reassigned, not
+            // accumulated) is 120; exit byte 120.
+            120,
+        ),
+        RuntimeWorkload::supported(
             "udp-echo",
             "datagram round-trip throughput over the ADR-0017 UDP effects: \
              per round, bind two ephemeral loopback UDP sockets, then for \
@@ -434,6 +468,8 @@ mod tests {
                 "networking".to_string(),
                 "channels".to_string(),
                 "json-parse".to_string(),
+                "sha256-hash".to_string(),
+                "wire-decode".to_string(),
                 "udp-echo".to_string(),
                 "connect-timeout".to_string(),
             ]
@@ -456,7 +492,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 15, "exactly the supported workloads run");
+        assert_eq!(results.len(), 17, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

@@ -173,6 +173,42 @@ fn integer_division_agrees_across_all_three_engines() {
     assert_three_way_agreement("division.tuo");
 }
 
+/// ADR-0019's bitwise operators. All six (`&`, `|`, `^`, `~`, `<<`, `>>`)
+/// contribute to the exit byte, so a backend that lowered any one of them
+/// differently from the interpreter fails here.
+#[test]
+fn bitwise_operators_agree_across_all_three_engines() {
+    assert_three_way_agreement("bitwise.tuo");
+}
+
+/// Shifts on narrow types: the signedness rule (`>>` logical on `U32`,
+/// arithmetic on `I32`) and the amount/value width mismatch, which each
+/// engine resolves differently — LLVM converts the amount, Cranelift accepts
+/// the mismatch, and the interpreter must not assert the kinds match.
+#[test]
+fn narrow_width_shifts_agree_across_all_three_engines() {
+    assert_three_way_agreement("bitwise_narrow.tuo");
+}
+
+/// An out-of-range *unsigned* shift amount. Its top bit is set, so a guard
+/// that compared it as signed would read it as negative and pass it — the
+/// backend would then shift by a masked amount while the interpreter
+/// trapped. Only a `U64`/`Usize` amount can reach this, so the `Int` cases
+/// above cannot cover it.
+#[test]
+fn an_out_of_range_unsigned_shift_amount_traps_across_all_three_engines() {
+    assert_three_way_agreement("bitwise_unsigned_amount.tuo");
+}
+
+/// An out-of-range shift amount traps in all three engines. This is the
+/// load-bearing case for ADR-0019's bounds check: x86's shift instructions
+/// mask the amount to 6 bits, so *without* the guard `1 << 64` would be `1`
+/// natively and a trap in the interpreter — a silent three-way divergence.
+#[test]
+fn an_out_of_range_shift_traps_across_all_three_engines() {
+    assert_three_way_agreement("bitwise_shift_trap.tuo");
+}
+
 #[test]
 fn a_deterministic_trap_agrees_across_all_three_engines() {
     // The interpreter traps on division by zero; both native backends must also

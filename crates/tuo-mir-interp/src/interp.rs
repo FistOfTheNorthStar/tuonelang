@@ -849,6 +849,13 @@ impl Machine<'_, '_> {
                 Value::Bool(b) => Ok(Value::Bool(!b)),
                 other => Err(self.type_bug(function, "unary `!` on a non-Bool", &other)),
             },
+            // ADR-0019: complement the bit pattern, then re-normalize into
+            // the operand's width. Never traps — every bit pattern is a
+            // value of the type.
+            UnOp::BitNot => match value {
+                Value::Int(v, kind) => Ok(Value::Int(wrap_int(!v, kind), kind)),
+                other => Err(self.type_bug(function, "unary `~` on a non-integer", &other)),
+            },
             UnOp::Neg => match value {
                 Value::Int(v, kind) => {
                     // Two's-complement negation traps on the minimum (§24).
@@ -871,10 +878,20 @@ impl Machine<'_, '_> {
     fn eval_binary(&mut self, function: &Function, op: BinOp, lhs: Value, rhs: Value) -> RunResult {
         match (lhs, rhs) {
             (Value::Int(a, ka), Value::Int(b, kb)) => {
-                debug_assert_eq!(ka, kb, "verifier guarantees matching operand kinds");
+                // Shifts are the one binary op whose operands may differ in
+                // kind: ADR-0019 makes the amount an independent bit count,
+                // so `U32 >> Int` is well-formed and the verifier's same-type
+                // rule exempts it (`check_shift_types`). Every other operator
+                // still has its operands unified by the type checker.
+                debug_assert!(
+                    ka == kb || matches!(op, BinOp::Shl | BinOp::Shr),
+                    "verifier guarantees matching operand kinds (except a shift amount)"
+                );
                 self.int_binary(function, op, a, b, ka)
             }
-            (Value::Float(a, ka), Value::Float(b, _kb)) => Ok(self.float_binary(op, a, b, ka)),
+            (Value::Float(a, ka), Value::Float(b, _kb)) => {
+                self.float_binary(function, op, a, b, ka)
+            }
             (Value::Bool(a), Value::Bool(b)) => match op {
                 BinOp::Eq => Ok(Value::Bool(a == b)),
                 BinOp::Ne => Ok(Value::Bool(a != b)),
@@ -973,11 +990,47 @@ impl Machine<'_, '_> {
             BinOp::Le => Ok(Value::Bool(a <= b)),
             BinOp::Gt => Ok(Value::Bool(a > b)),
             BinOp::Ge => Ok(Value::Bool(a >= b)),
+            // ADR-0019. Bit operations act on the two's-complement pattern
+            // and never trap; `wrap_int` renormalizes into the width.
+            BinOp::BitAnd => Ok(Value::Int(wrap_int(a & b, kind), kind)),
+            BinOp::BitOr => Ok(Value::Int(wrap_int(a | b, kind), kind)),
+            BinOp::BitXor => Ok(Value::Int(wrap_int(a ^ b, kind), kind)),
+            BinOp::Shl | BinOp::Shr => {
+                // The amount is bounds-checked so the result never depends
+                // on a host's shift-masking. This is the reference
+                // semantics both backends must reproduce.
+                let width = i128::from(int_width_bits(kind));
+                if b < 0 || b >= width {
+                    return Err(self.abort(
+                        TrapKind::InvalidShift,
+                        format!(
+                            "shift amount {b} is out of range for {} (0..{width})",
+                            kind.name()
+                        ),
+                        function.span,
+                    ));
+                }
+                if matches!(op, BinOp::Shl) {
+                    Ok(Value::Int(wrap_int(a << b, kind), kind))
+                } else {
+                    // `a` already carries the kind's sign, so `i128`'s `>>`
+                    // sign-extends for a signed kind and zero-fills for an
+                    // unsigned one (whose values are non-negative).
+                    Ok(Value::Int(wrap_int(a >> b, kind), kind))
+                }
+            }
         }
     }
 
-    fn float_binary(&self, op: BinOp, a: f64, b: f64, kind: FloatKind) -> Value {
-        match op {
+    fn float_binary(
+        &mut self,
+        function: &Function,
+        op: BinOp,
+        a: f64,
+        b: f64,
+        kind: FloatKind,
+    ) -> RunResult {
+        Ok(match op {
             BinOp::Add => Value::Float(normalize_float(a + b, kind), kind),
             BinOp::Sub => Value::Float(normalize_float(a - b, kind), kind),
             BinOp::Mul => Value::Float(normalize_float(a * b, kind), kind),
@@ -989,7 +1042,19 @@ impl Machine<'_, '_> {
             BinOp::Le => Value::Bool(a <= b),
             BinOp::Gt => Value::Bool(a > b),
             BinOp::Ge => Value::Bool(a >= b),
-        }
+            // ADR-0019's bitwise operators are integers-only — the type
+            // checker rejects them on floats and the verifier re-checks —
+            // so reaching here means the MIR is malformed. Surface it as
+            // the interpreter's own impossible-state signal rather than
+            // inventing a bit pattern for an IEEE-754 value.
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                return Err(self.type_bug(
+                    function,
+                    "bitwise operator on a Float",
+                    &Value::Float(a, kind),
+                ));
+            }
+        })
     }
 
     fn eval_cast(
@@ -1673,6 +1738,16 @@ fn write_projected(
 }
 
 /// The inclusive `(min, max)` value range of an integer kind, as `i128`.
+/// The width in bits of an integer kind — the ADR-0019 shift-amount bound.
+fn int_width_bits(kind: IntKind) -> u32 {
+    match kind {
+        IntKind::I8 | IntKind::U8 => 8,
+        IntKind::I16 | IntKind::U16 => 16,
+        IntKind::I32 | IntKind::U32 => 32,
+        IntKind::I64 | IntKind::U64 | IntKind::Isize | IntKind::Usize => 64,
+    }
+}
+
 fn int_bounds(kind: IntKind) -> (i128, i128) {
     match kind {
         IntKind::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),

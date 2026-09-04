@@ -1,0 +1,217 @@
+// The sha256-hash workload (ADR-0019): cryptographic hashing throughput. Each
+// round computes the SHA-256 of a fixed 64-byte message — exactly one
+// compression block after padding, so the measurement is one block's worth of
+// the compression function and nothing else.
+//
+// The lab's workloads are single-file by design, so the compression function
+// is inlined here rather than imported; `std::crypto` itself is pinned
+// natively by the stdlib suite and cross-checked against the toolchain's Rust
+// SHA-256 in `tuo-cli/tests/crypto_cross_check.rs`. The C peer makes the
+// identical computation with `uint32_t` and `>>`/`<<`/`^`; the Go peer is the
+// parity target itself — the standard library's `crypto/sha256`.
+//
+// Every hash word is combined with `add32` (masked addition), never a bare
+// `+`: tuonelang's `+` traps on overflow, which is correct for arithmetic and
+// wrong for a checksum defined over modular arithmetic. That distinction is
+// the reason ADR-0019 Stage B's `std::bits` exists.
+//
+// The message is 64 ASCII '0'..'9' bytes, whose SHA-256 is
+// 9674d9e0...; its first byte, 0x96 = 150, is the value main returns. 200
+// rounds, the last round's byte returned (reassigned, not accumulated).
+// Exit byte: 150.
+
+fn mask32() -> Int {
+    4294967295
+}
+
+fn add32(take a: Int, take b: Int) -> Int {
+    ((a & 4294967295) + (b & 4294967295)) & 4294967295
+}
+
+fn rotr32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    let amount = n % 32;
+    if amount == 0 {
+        return masked;
+    }
+    ((masked >> amount) | (masked << (32 - amount))) & 4294967295
+}
+
+fn shr32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    if n >= 32 {
+        return 0;
+    }
+    (masked >> n) & 4294967295
+}
+
+fn be32(take b0: Int, take b1: Int, take b2: Int, take b3: Int) -> Int {
+    ((b0 & 255) << 24) | ((b1 & 255) << 16) | ((b2 & 255) << 8) | (b3 & 255)
+}
+
+fn round_constants() -> Array[Int] {
+    var k = std::array::empty();
+    std::array::push(k, 1116352408); std::array::push(k, 1899447441);
+    std::array::push(k, 3049323471); std::array::push(k, 3921009573);
+    std::array::push(k, 961987163);  std::array::push(k, 1508970993);
+    std::array::push(k, 2453635748); std::array::push(k, 2870763221);
+    std::array::push(k, 3624381080); std::array::push(k, 310598401);
+    std::array::push(k, 607225278);  std::array::push(k, 1426881987);
+    std::array::push(k, 1925078388); std::array::push(k, 2162078206);
+    std::array::push(k, 2614888103); std::array::push(k, 3248222580);
+    std::array::push(k, 3835390401); std::array::push(k, 4022224774);
+    std::array::push(k, 264347078);  std::array::push(k, 604807628);
+    std::array::push(k, 770255983);  std::array::push(k, 1249150122);
+    std::array::push(k, 1555081692); std::array::push(k, 1996064986);
+    std::array::push(k, 2554220882); std::array::push(k, 2821834349);
+    std::array::push(k, 2952996808); std::array::push(k, 3210313671);
+    std::array::push(k, 3336571891); std::array::push(k, 3584528711);
+    std::array::push(k, 113926993);  std::array::push(k, 338241895);
+    std::array::push(k, 666307205);  std::array::push(k, 773529912);
+    std::array::push(k, 1294757372); std::array::push(k, 1396182291);
+    std::array::push(k, 1695183700); std::array::push(k, 1986661051);
+    std::array::push(k, 2177026350); std::array::push(k, 2456956037);
+    std::array::push(k, 2730485921); std::array::push(k, 2820302411);
+    std::array::push(k, 3259730800); std::array::push(k, 3345764771);
+    std::array::push(k, 3516065817); std::array::push(k, 3600352804);
+    std::array::push(k, 4094571909); std::array::push(k, 275423344);
+    std::array::push(k, 430227734);  std::array::push(k, 506948616);
+    std::array::push(k, 659060556);  std::array::push(k, 883997877);
+    std::array::push(k, 958139571);  std::array::push(k, 1322822218);
+    std::array::push(k, 1537002063); std::array::push(k, 1747873779);
+    std::array::push(k, 1955562222); std::array::push(k, 2024104815);
+    std::array::push(k, 2227730452); std::array::push(k, 2361852424);
+    std::array::push(k, 2428436474); std::array::push(k, 2756734187);
+    std::array::push(k, 3204031479); std::array::push(k, 3329325298);
+    k
+}
+
+// The 64-byte message: ASCII digits cycling 0..9.
+fn message() -> Array[Int] {
+    var m = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        std::array::push(m, 48 + (i % 10));
+        i = i + 1;
+    }
+    m
+}
+
+// A 64-byte input pads to exactly two blocks: the message, then 0x80, zeros,
+// and the 64-bit big-endian bit length (512 = 0x200).
+fn padded() -> Array[Int] {
+    var m = message();
+    std::array::push(m, 128);
+    while (std::array::len(m) % 64) != 56 {
+        std::array::push(m, 0);
+    }
+    var i = 0;
+    while i < 6 {
+        std::array::push(m, 0);
+        i = i + 1;
+    }
+    std::array::push(m, 2);
+    std::array::push(m, 0);
+    m
+}
+
+fn first_digest_byte(in msg: Array[Int], in k: Array[Int]) -> Int {
+    var h0 = 1779033703;
+    var h1 = 3144134277;
+    var h2 = 1013904242;
+    var h3 = 2773480762;
+    var h4 = 1359893119;
+    var h5 = 2600822924;
+    var h6 = 528734635;
+    var h7 = 1541459225;
+
+    let blocks = std::array::len(msg) / 64;
+    var block = 0;
+    while block < blocks {
+        let base = block * 64;
+        var w = std::array::empty();
+        var t = 0;
+        while t < 16 {
+            let at = base + (t * 4);
+            std::array::push(w, be32(
+                std::array::get(msg, at),
+                std::array::get(msg, at + 1),
+                std::array::get(msg, at + 2),
+                std::array::get(msg, at + 3)
+            ));
+            t = t + 1;
+        }
+        t = 16;
+        while t < 64 {
+            let w15 = std::array::get(w, t - 15);
+            let w2 = std::array::get(w, t - 2);
+            let s0 = rotr32(w15, 7) ^ rotr32(w15, 18) ^ shr32(w15, 3);
+            let s1 = rotr32(w2, 17) ^ rotr32(w2, 19) ^ shr32(w2, 10);
+            std::array::push(w, add32(
+                add32(std::array::get(w, t - 16), s0),
+                add32(std::array::get(w, t - 7), s1)
+            ));
+            t = t + 1;
+        }
+
+        var a = h0;
+        var b = h1;
+        var c = h2;
+        var d = h3;
+        var e = h4;
+        var f = h5;
+        var g = h6;
+        var h = h7;
+
+        var r = 0;
+        while r < 64 {
+            let big1 = rotr32(e, 6) ^ rotr32(e, 11) ^ rotr32(e, 25);
+            let choose = (e & f) ^ ((~e) & g & 4294967295);
+            let temp1 = add32(
+                add32(h, big1),
+                add32(add32(choose, std::array::get(k, r)), std::array::get(w, r))
+            );
+            let big0 = rotr32(a, 2) ^ rotr32(a, 13) ^ rotr32(a, 22);
+            let major = (a & b) ^ (a & c) ^ (b & c);
+            let temp2 = add32(big0, major);
+            h = g;
+            g = f;
+            f = e;
+            e = add32(d, temp1);
+            d = c;
+            c = b;
+            b = a;
+            a = add32(temp1, temp2);
+            r = r + 1;
+        }
+
+        h0 = add32(h0, a);
+        h1 = add32(h1, b);
+        h2 = add32(h2, c);
+        h3 = add32(h3, d);
+        h4 = add32(h4, e);
+        h5 = add32(h5, f);
+        h6 = add32(h6, g);
+        h7 = add32(h7, h);
+        block = block + 1;
+    }
+
+    (h0 >> 24) & 255
+}
+
+fn main() -> Int {
+    let k = round_constants();
+    var byte = 0;
+    var round = 0;
+    while round < 200 {
+        byte = first_digest_byte(padded(), k);
+        round = round + 1;
+    }
+    byte
+}

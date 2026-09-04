@@ -29,10 +29,10 @@ use tuo_resolve::{Resolution, SymbolId, is_builtin_type};
 use tuo_source::Span;
 
 use crate::hir::{
-    Arm, BinOp, BindingDef, Block, ConstDef, EnumDef, Expr, ExprKind, Field, FieldInit, FieldPat,
-    FnTyParam, Function, GivenBinding, Hir, ImplDef, InterfaceDef, Item, Lit, Param, ParamMode,
-    Pat, PatKind, Res, SpecDef, SpecStmt, Stmt, StmtKind, StructDef, Ty, TyKind, TypeParam, UnOp,
-    Variant, Wrapper,
+    Arm, Attribute, BinOp, BindingDef, Block, ConstDef, EnumDef, Expr, ExprKind, Field, FieldInit,
+    FieldPat, FnTyParam, Function, GivenBinding, Hir, ImplDef, InterfaceDef, Item, Lit, Param,
+    ParamMode, Pat, PatKind, Res, SpecDef, SpecStmt, Stmt, StmtKind, StructDef, Ty, TyKind,
+    TypeParam, UnOp, Variant, Wrapper,
 };
 
 /// Lower one resolved program snapshot into HIR.
@@ -173,6 +173,13 @@ impl Cx {
             type_params,
             params: decl.params().map(|param| self.param(param, span)).collect(),
             ret,
+            attributes: decl
+                .attributes()
+                .map(|name| Attribute {
+                    name: name.text.to_string(),
+                    span: name.span,
+                })
+                .collect(),
             body: decl.body().map(|body| self.block(body, span)),
         }
     }
@@ -716,6 +723,7 @@ impl Cx {
                 let op = match unary.op() {
                     Some("-") => Some(UnOp::Neg),
                     Some("!") => Some(UnOp::Not),
+                    Some("~") => Some(UnOp::BitNot),
                     Some("move") => Some(UnOp::Move),
                     _ => None,
                 };
@@ -998,6 +1006,11 @@ fn bin_op(op: &str) -> Option<BinOp> {
         "<=" => BinOp::Le,
         ">" => BinOp::Gt,
         ">=" => BinOp::Ge,
+        "&" => BinOp::BitAnd,
+        "|" => BinOp::BitOr,
+        "^" => BinOp::BitXor,
+        "<<" => BinOp::Shl,
+        ">>" => BinOp::Shr,
         "&&" => BinOp::And,
         "||" => BinOp::Or,
         _ => return None,

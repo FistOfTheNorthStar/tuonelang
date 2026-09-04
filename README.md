@@ -30,7 +30,7 @@ the interpreter.
   or pinned by a native test.
 - ✅ Tooling: canonical formatter, package system (manifest + lockfile + path
   deps), LSP core, an agent protocol server, a compiler-validated corpus, and
-  benchmark harnesses — including a performance lab whose fifteen runtime
+  benchmark harnesses — including a performance lab whose seventeen runtime
   workloads all measure against equivalent C and Go peers.
 - 📋 The **0.1 release gate** (`specification/RELEASE-0.1-GATE.md`) currently
   reads **READY** — all sixteen criteria are `MET`, each backed by a committed

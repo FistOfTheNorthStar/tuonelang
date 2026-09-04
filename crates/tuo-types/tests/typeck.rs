@@ -521,6 +521,63 @@ fn types_are_not_values_and_payload_variants_need_braces() {
 // Negative: matches
 // ----------------------------------------------------------------------
 
+/// ADR-0019. `&`/`|`/`^` are integers-only and same-type; the result is the
+/// operand type, so a bitwise expression can be returned as `Int`.
+#[test]
+fn bitwise_operators_type_check_on_integers() {
+    let (_, result) = check_one(
+        "fn f(take a: Int, take b: Int) -> Int {\n\
+             (a & b) | (a ^ b)\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), Vec::<String>::new());
+}
+
+/// A shift's amount is deliberately NOT unified with the shifted value's
+/// type (ADR-0019) — it is a bit count, not a value of that type — while the
+/// result still takes the *left* operand's type.
+#[test]
+fn a_shift_takes_the_left_operand_type_and_an_independent_amount() {
+    let (_, result) = check_one(
+        "fn f(take a: Int, take n: Int) -> Int {\n\
+             (a << n) >> 2\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), Vec::<String>::new());
+}
+
+/// Bitwise operators are refused on floats: a bit pattern is not defined on
+/// an IEEE-754 value in v0, so this must be a type error rather than a
+/// silently reinterpreted operation.
+#[test]
+fn bitwise_operators_are_refused_on_floats() {
+    let (_, result) = check_one(
+        "fn f(take a: Float, take b: Float) -> Float {\n\
+             a & b\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), ["T0006"]);
+}
+
+/// `~` complements an integer and `!` negates a `Bool`; neither accepts the
+/// other's operand, so the two stay distinct operators (ADR-0019).
+#[test]
+fn bitwise_not_and_logical_not_have_distinct_operand_types() {
+    let (_, result) = check_one(
+        "fn f(take a: Int) -> Int {\n\
+             ~a\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), Vec::<String>::new());
+
+    let (_, bad) = check_one(
+        "fn f(take a: Bool) -> Bool {\n\
+             ~a\n\
+         }\n",
+    );
+    assert_eq!(codes(&bad), ["T0006"]);
+}
+
 #[test]
 fn non_exhaustive_matches_name_the_missing_variants() {
     let (_, result) = check_one(

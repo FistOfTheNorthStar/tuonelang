@@ -380,10 +380,15 @@ value of a statically known type.
   **traps** on the minimum value (two's complement, §24); float negation flips the
   sign bit (IEEE 754, never traps).
 - **`Not`** — boolean negation.
+- **`BitNot`** — (ADR-0019) bitwise complement of an integer. Never traps: every
+  bit pattern is a value of the type. Distinct from `Not`, which is `Bool -> Bool`.
 
 ### 5.3 Binary operations (`BinOp`)
 
-Both operands of a binary operation have the same type. Integer arithmetic is
+Both operands of a binary operation have the same type, with one deliberate
+exception: a shift's amount (`Shl`/`Shr`, ADR-0019) is an integer independent of
+the shifted value's type, since it is a bit count rather than a value of that
+type. Integer arithmetic is
 two's complement with **trapping overflow** (Constitution §24): a trap is a
 deterministic abort, exactly as if a failed `Assert` were reached. Float
 arithmetic is IEEE 754 (round to nearest even) and **never traps**.
@@ -401,6 +406,17 @@ arithmetic is IEEE 754 (round to nearest even) and **never traps**.
 | `Le` | as `Lt` | as `Lt` |
 | `Gt` | as `Lt` | as `Lt` |
 | `Ge` | as `Lt` | as `Lt` |
+| `BitAnd` (ADR-0019) | bitwise and | *(rejected by the front end)* |
+| `BitOr` (ADR-0019) | bitwise or | *(rejected by the front end)* |
+| `BitXor` (ADR-0019) | bitwise xor | *(rejected by the front end)* |
+| `Shl` (ADR-0019) | left shift; **traps `InvalidShift`** when the amount is negative or `>=` the left operand's width in bits | *(rejected by the front end)* |
+| `Shr` (ADR-0019) | right shift — **arithmetic** (sign-extending) on a signed type, **logical** (zero-filling) on an unsigned one; traps as `Shl` | *(rejected by the front end)* |
+
+The bitwise operators are integers-only: the type checker rejects them on floats,
+so a backend reaching its float path with one has been handed malformed MIR. The
+shift bound is checked rather than masked, so the result never depends on a
+target's shift-masking behavior (x86 masks to 6 bits; the trap makes every engine
+agree).
 
 `Eq`/`Ne` are also defined on `Bool`, `Char` (scalar values), `Str` (byte-wise
 content equality) and — since ADR-0009 — `String` (the same byte-wise content
@@ -651,6 +667,7 @@ execution. The `TrapKind` variants fall into three groups:
 | `DivisionByZero` | Integer division or remainder by zero. |
 | `IndexOutOfBounds` | An array, `Str`, or `String` index was out of bounds (a failed bounds-check assert, an out-of-range `Index` projection, or an out-of-range `StrOp`/`HeapOp` argument). |
 | `InvalidByte` | (ADR-0009) A byte-valued argument was outside `0..=255` (`HeapMutate::PushByte`, §4.3). Appended to the taxonomy together with the native `TrapCode` — the taxonomy is append-only. |
+| `InvalidShift` | (ADR-0019) A shift amount was negative or `>=` the operand's width in bits (`Shl`/`Shr`, §5.3). Appended to the taxonomy together with the native `TrapCode` — the taxonomy is append-only. |
 | `Unreachable` | Control reached a point the front end proved unreachable. |
 
 **Resource aborts** — the sandbox ceilings (§8.1); not part of the language, but

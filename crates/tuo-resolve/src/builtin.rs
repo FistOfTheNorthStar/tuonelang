@@ -56,6 +56,11 @@ pub enum Builtin {
     /// meaningful. Never traps. **Effectful** (non-deterministic).
     /// (ADR-0013.)
     RtNowNanos,
+    /// `std::rt::random_byte() -> Int` — one cryptographically-secure random
+    /// byte in `0..=255`, or `-1` when the platform CSPRNG is unavailable
+    /// (ADR-0019 Stage B). Effectful: two calls need not agree, which is
+    /// exactly the point, so `R0007` keeps it out of the spec sandbox.
+    RtRandomByte,
     /// `std::rt::arg_count() -> Int` — the number of process arguments,
     /// including the program name (argv\[0\]). Never traps. **Effectful.**
     /// (ADR-0013.)
@@ -305,13 +310,14 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 57] = [
+    pub const ALL: [Self; 58] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
         Self::RtWriteString,
         Self::RtParMap,
         Self::RtNowNanos,
+        Self::RtRandomByte,
         Self::RtArgCount,
         Self::RtArgByte,
         Self::RtOpen,
@@ -375,6 +381,7 @@ impl Builtin {
             | Self::RtWriteString
             | Self::RtParMap
             | Self::RtNowNanos
+            | Self::RtRandomByte
             | Self::RtArgCount
             | Self::RtArgByte
             | Self::RtOpen
@@ -437,6 +444,7 @@ impl Builtin {
             Self::RtWriteString => "write_string",
             Self::RtParMap => "par_map",
             Self::RtNowNanos => "now_nanos",
+            Self::RtRandomByte => "random_byte",
             Self::RtArgCount => "arg_count",
             Self::RtArgByte => "arg_byte",
             Self::RtOpen => "open",
@@ -493,6 +501,7 @@ impl Builtin {
             Self::RtWriteString => "std::rt::write_string",
             Self::RtParMap => "std::rt::par_map",
             Self::RtNowNanos => "std::rt::now_nanos",
+            Self::RtRandomByte => "std::rt::random_byte",
             Self::RtArgCount => "std::rt::arg_count",
             Self::RtArgByte => "std::rt::arg_byte",
             Self::RtOpen => "std::rt::open",
@@ -561,6 +570,7 @@ impl Builtin {
                 | Self::RtWriteString
                 | Self::RtParMap
                 | Self::RtNowNanos
+                | Self::RtRandomByte
                 | Self::RtArgCount
                 | Self::RtArgByte
                 | Self::RtOpen
@@ -599,7 +609,7 @@ impl Builtin {
             Self::RtReadByte | Self::RtExit => &[Take],
             Self::RtWriteString => &[Take, In],
             Self::RtParMap => &[Take, In, Take],
-            Self::RtNowNanos | Self::RtArgCount => &[],
+            Self::RtNowNanos | Self::RtArgCount | Self::RtRandomByte => &[],
             Self::RtArgByte => &[Take, Take],
             Self::RtOpen => &[In, Take],
             Self::RtClose => &[Take],

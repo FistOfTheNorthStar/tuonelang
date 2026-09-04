@@ -1,0 +1,8 @@
+// ADR-0019: a constant but TRAPPING shift must NOT be folded. Folding it
+// would erase an observable abort, exactly as folding `1 / 0` would — so the
+// `shl` survives into the optimized MIR and the trap still happens at run
+// time. This is the same rule the div/rem folder already obeys.
+fn main() -> I64 {
+    let a: I64 = 1 << 64;
+    return a & 255;
+}

@@ -442,7 +442,7 @@ impl Verifier<'_> {
                 (false, Ty::Array(Box::new(Ty::int()))),
             ],
             // ADR-0013: the OS-boundary effects — all by-value operands.
-            EffectOp::NowNanos | EffectOp::ArgCount => Vec::new(),
+            EffectOp::NowNanos | EffectOp::ArgCount | EffectOp::RandomByte => Vec::new(),
             EffectOp::ArgByte => vec![(true, Ty::int()), (true, Ty::int())],
             EffectOp::Open => vec![(true, Ty::Str), (true, Ty::int())],
             EffectOp::Close => vec![(true, Ty::int())],
@@ -790,11 +790,38 @@ impl Verifier<'_> {
         }
     }
 
+    /// A shift's operands must both be integers (ADR-0019). Their *widths*
+    /// deliberately need not agree — the amount is a count, not a value of
+    /// the shifted type — so this replaces the same-type rule rather than
+    /// adding to it.
+    fn check_shift_types(&mut self, block: usize, op: BinOp, lhs: &Operand, rhs: &Operand) {
+        for (operand, which) in [(lhs, "value"), (rhs, "amount")] {
+            if let Some(ty) = self.operand_ty(operand)
+                && !matches!(ty, Ty::Int(_) | Ty::Error)
+            {
+                let name = self.fn_name().to_owned();
+                self.error(
+                    code::TYPE_MISMATCH,
+                    format!(
+                        "fn `{name}`: bb{block} applies {} to a non-integer {which}",
+                        bin_name(op)
+                    ),
+                );
+            }
+        }
+    }
+
     fn check_assign_types(&mut self, block: usize, place: &Place, rvalue: &Rvalue) {
         // A binary op's two operands must share a type; comparisons still
         // require the operands to agree with each other.
         if let Rvalue::Binary { op, lhs, rhs } = rvalue {
-            if let (Some(l), Some(r)) = (self.operand_ty(lhs), self.operand_ty(rhs))
+            // Shifts are the one exception: ADR-0019 makes the shift amount
+            // independent of the shifted value's type, so `U32 << Int` is
+            // well-formed by construction. Both must still be integers,
+            // which `check_shift_types` enforces.
+            if matches!(op, BinOp::Shl | BinOp::Shr) {
+                self.check_shift_types(block, *op, lhs, rhs);
+            } else if let (Some(l), Some(r)) = (self.operand_ty(lhs), self.operand_ty(rhs))
                 && !types_agree(&l, &r)
             {
                 let name = self.fn_name().to_owned();
@@ -1745,6 +1772,11 @@ fn bin_name(op: BinOp) -> &'static str {
         BinOp::Le => "le",
         BinOp::Gt => "gt",
         BinOp::Ge => "ge",
+        BinOp::BitAnd => "bitand",
+        BinOp::BitOr => "bitor",
+        BinOp::BitXor => "bitxor",
+        BinOp::Shl => "shl",
+        BinOp::Shr => "shr",
     }
 }
 
@@ -1951,6 +1983,53 @@ mod tests {
                     place: Place::local(LocalId(1)),
                     rvalue: Rvalue::Binary {
                         op: BinOp::Add,
+                        lhs: int(1),
+                        rhs: Operand::Const(Const::Bool(true)),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(1)))),
+            }],
+            Ty::int(),
+        );
+        assert_eq!(codes(&program), vec![super::code::TYPE_MISMATCH]);
+    }
+
+    /// ADR-0019: a shift's operands may differ in *integer* kind (the amount
+    /// is a bit count, not a value of the shifted type), so the same-type
+    /// rule must not fire on `U32 << I64`.
+    #[test]
+    fn a_shift_may_mix_integer_kinds() {
+        let program = func(
+            vec![],
+            vec![local(Ty::Int(IntKind::U32)), local(Ty::Int(IntKind::U32))],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::Binary {
+                        op: BinOp::Shl,
+                        lhs: Operand::Const(Const::Int(1, IntKind::U32)),
+                        rhs: int(3),
+                    },
+                }],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(1)))),
+            }],
+            Ty::Int(IntKind::U32),
+        );
+        assert!(codes(&program).is_empty());
+    }
+
+    /// The same-type rule is *replaced* for shifts, not dropped: both sides
+    /// must still be integers, so a `Bool` amount is still rejected.
+    #[test]
+    fn a_shift_by_a_non_integer_is_reported() {
+        let program = func(
+            vec![],
+            vec![local(Ty::int()), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::Binary {
+                        op: BinOp::Shl,
                         lhs: int(1),
                         rhs: Operand::Const(Const::Bool(true)),
                     },

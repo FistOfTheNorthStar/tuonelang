@@ -1160,7 +1160,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 let l = self.lower_operand(lhs)?;
                 let r = self.lower_operand(rhs)?;
-                self.lower_binary(*op, lhs, l, r)
+                self.lower_binary(*op, lhs, rhs, l, r)
             }
             Rvalue::Cast { kind, operand, to } => {
                 let value = self.lower_operand(operand)?;
@@ -1289,6 +1289,19 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     .map_err(builder_err("emitting boolean not"))?
                     .into())
             }
+            UnOp::BitNot => {
+                // ADR-0019: complement every bit. `xor -1` is LLVM's `not`
+                // and is width-exact, matching the interpreter's
+                // `wrap_int(!v)`.
+                self.operand_int_kind(operand)?;
+                let value = value.into_int_value();
+                let all_ones = value.get_type().const_all_ones();
+                Ok(self
+                    .builder
+                    .build_xor(value, all_ones, "bitnot")
+                    .map_err(builder_err("emitting bitwise not"))?
+                    .into())
+            }
             UnOp::Neg if matches!(self.operand_ty(operand), Some(Ty::Float(_))) => {
                 // Float negation flips the sign bit (IEEE 754, works on NaN
                 // too) and never traps — exactly the interpreter's `-v`.
@@ -1323,6 +1336,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         &mut self,
         op: BinOp,
         lhs: &Operand,
+        rhs: &Operand,
         l: BasicValueEnum<'ctx>,
         r: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
@@ -1355,6 +1369,23 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             BinOp::Mul => self.checked_arith(kind, l, r, ArithOp::Mul)?,
             BinOp::Div => self.checked_divrem(kind, l, r, true)?,
             BinOp::Rem => self.checked_divrem(kind, l, r, false)?,
+            // ADR-0019. Bit operations are width-exact and never trap.
+            BinOp::BitAnd => self
+                .builder
+                .build_and(l, r, "bitand")
+                .map_err(builder_err("emitting bitwise and"))?,
+            BinOp::BitOr => self
+                .builder
+                .build_or(l, r, "bitor")
+                .map_err(builder_err("emitting bitwise or"))?,
+            BinOp::BitXor => self
+                .builder
+                .build_xor(l, r, "bitxor")
+                .map_err(builder_err("emitting bitwise xor"))?,
+            BinOp::Shl | BinOp::Shr => {
+                let amount_kind = self.operand_int_kind(rhs)?;
+                self.checked_shift(kind, amount_kind, l, r, matches!(op, BinOp::Shl))?
+            }
             // Comparisons handled above; reaching here is impossible.
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 return Err(CodegenError::backend(
@@ -1414,6 +1445,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 .builder
                 .build_float_rem(l, r, "frem")
                 .map_err(builder_err("emitting float remainder"))?,
+            // ADR-0019's bitwise operators are integers-only, so the type
+            // checker rejects them on floats and this arm is unreachable.
+            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+                return Err(CodegenError::backend(
+                    "bitwise operator reached the float path",
+                ));
+            }
             // Comparisons handled above; reaching here is impossible.
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 return Err(CodegenError::backend(
@@ -1474,6 +1512,78 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
     /// Lower a trapping div (`is_div`) or rem: trap on a zero divisor, and on
     /// the signed `MIN / -1` overflow case (matching the interpreter).
+    /// A shift with ADR-0019's bounds check. The amount is trapped when it
+    /// is negative or >= the value's width — which also removes LLVM's
+    /// `shl`/`lshr`/`ashr` poison on an out-of-range amount, so the native
+    /// result always matches the interpreter's trap.
+    fn checked_shift(
+        &mut self,
+        kind: IntKind,
+        amount_kind: IntKind,
+        l: IntValue<'ctx>,
+        r: IntValue<'ctx>,
+        is_left: bool,
+    ) -> Result<IntValue<'ctx>, CodegenError> {
+        let amount_ty = int_type(self.ctx, amount_kind);
+        let width = u64::from(int_width_bits(kind));
+
+        // `amount >= width` traps. The comparison must use the AMOUNT's own
+        // signedness: an unsigned amount whose top bit is set (e.g. `U64`
+        // 0x8000_0000_0000_0000) is a huge positive number, and comparing it
+        // as signed would read it as negative and let it through. A signed
+        // amount additionally needs the explicit negative check below, since
+        // `-1 >= 64` is false.
+        let width_const = amount_ty.const_int(width, false);
+        let signed_amount = is_signed(amount_kind);
+        let out_of_range = if signed_amount {
+            IntPredicate::SGE
+        } else {
+            IntPredicate::UGE
+        };
+        let too_big = self
+            .builder
+            .build_int_compare(out_of_range, r, width_const, "shift_too_big")
+            .map_err(builder_err("comparing the shift amount to the width"))?;
+        self.guard(too_big, TrapCode::InvalidShift)?;
+        if signed_amount {
+            let zero = amount_ty.const_zero();
+            let negative = self
+                .builder
+                .build_int_compare(IntPredicate::SLT, r, zero, "shift_negative")
+                .map_err(builder_err("comparing the shift amount to zero"))?;
+            self.guard(negative, TrapCode::InvalidShift)?;
+        }
+
+        // LLVM requires both shift operands to share a type; the amount is
+        // independent of the value's type (ADR-0019), so convert it here.
+        // The guards above already proved it is in `0..width`, so this
+        // truncation/extension cannot change its value.
+        let value_ty = int_type(self.ctx, kind);
+        let amount = if amount_ty.get_bit_width() == value_ty.get_bit_width() {
+            r
+        } else if amount_ty.get_bit_width() > value_ty.get_bit_width() {
+            self.builder
+                .build_int_truncate(r, value_ty, "shift_amount")
+                .map_err(builder_err("narrowing the shift amount"))?
+        } else {
+            self.builder
+                .build_int_z_extend(r, value_ty, "shift_amount")
+                .map_err(builder_err("widening the shift amount"))?
+        };
+
+        if is_left {
+            self.builder
+                .build_left_shift(l, amount, "shl")
+                .map_err(builder_err("emitting a left shift"))
+        } else {
+            // `sign_extend = true` is an arithmetic (`ashr`) shift, `false`
+            // a logical (`lshr`) one — ADR-0019's signedness rule.
+            self.builder
+                .build_right_shift(l, amount, is_signed(kind), "shr")
+                .map_err(builder_err("emitting a right shift"))
+        }
+    }
+
     fn checked_divrem(
         &mut self,
         kind: IntKind,
@@ -2471,7 +2581,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             // open/close/remove calls — every one a plain call whose `I64`
             // result lands in `dest`; a `Str` path passes as `{ptr, len}`
             // exactly as `write`'s text does.
-            EffectOp::NowNanos | EffectOp::ArgCount => {
+            EffectOp::NowNanos | EffectOp::ArgCount | EffectOp::RandomByte => {
                 let call = self
                     .builder
                     .build_call(self.effect_function(op), &[], "rt_os_query")
@@ -2766,6 +2876,8 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             ),
             // ADR-0013: the OS-boundary effect symbols.
             EffectOp::NowNanos => (effect::NOW_NANOS_SYMBOL, i64_ty.fn_type(&[], false)),
+            // Same shape as NowNanos: nullary, returns i64.
+            EffectOp::RandomByte => (effect::RANDOM_BYTE_SYMBOL, i64_ty.fn_type(&[], false)),
             EffectOp::ArgCount => (effect::ARG_COUNT_SYMBOL, i64_ty.fn_type(&[], false)),
             EffectOp::ArgByte => (
                 effect::ARG_BYTE_SYMBOL,
@@ -4624,7 +4736,16 @@ fn comparison_pred(op: BinOp, signed: bool) -> Option<IntPredicate> {
         BinOp::Gt => IntPredicate::UGT,
         BinOp::Ge if signed => IntPredicate::SGE,
         BinOp::Ge => IntPredicate::UGE,
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => return None,
     })
 }
 
@@ -4642,7 +4763,16 @@ fn float_comparison_pred(op: BinOp) -> Option<FloatPredicate> {
         BinOp::Le => FloatPredicate::OLE,
         BinOp::Gt => FloatPredicate::OGT,
         BinOp::Ge => FloatPredicate::OGE,
-        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem => return None,
+        BinOp::Add
+        | BinOp::Sub
+        | BinOp::Mul
+        | BinOp::Div
+        | BinOp::Rem
+        | BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr => return None,
     })
 }
 

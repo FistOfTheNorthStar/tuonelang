@@ -1,0 +1,108 @@
+// The wire-decode workload (ADR-0019): binary protocol framing throughput.
+// Each round walks a fixed 256-byte buffer as a sequence of length-prefixed
+// messages — the shape every binary wire protocol uses, and the concrete case
+// ADR-0019 was opened for: a PostgreSQL protocol message is a type byte plus a
+// big-endian Int32 length.
+//
+// Per message the round reads a 4-byte big-endian length, a 2-byte big-endian
+// type, folds the payload bytes, and re-encodes the length back to bytes to
+// check the round-trip — so both directions of the byte-order conversion are
+// measured, not just decoding. The C peer makes the identical shifts and masks
+// on `uint32_t`; the Go peer uses `encoding/binary`'s `BigEndian.Uint32`/
+// `PutUint32` (the parity target).
+//
+// This is the workload that could not be written before ADR-0019 Stage A. The
+// arithmetic form `b0*16777216 + b1*65536 + b2*256 + b3` computes the same
+// value for well-formed input, but masking (`x & 0xFF`), field extraction
+// (`x >> 24`), and the type/flag tests below have no arithmetic spelling at
+// all — the operation being measured simply had no expression.
+//
+// The buffer holds 16 messages of 16 bytes each (a 4-byte length, a 2-byte
+// type, and a 10-byte payload). The checksum folds every decoded field mod
+// 256; main runs 200 rounds and returns the last round's checksum
+// (reassigned, not accumulated). Exit byte: 120.
+
+fn be32(take b0: Int, take b1: Int, take b2: Int, take b3: Int) -> Int {
+    ((b0 & 255) << 24) | ((b1 & 255) << 16) | ((b2 & 255) << 8) | (b3 & 255)
+}
+
+fn be16(take b0: Int, take b1: Int) -> Int {
+    ((b0 & 255) << 8) | (b1 & 255)
+}
+
+fn byte_of_be32(take value: Int, take index: Int) -> Int {
+    ((value & 4294967295) >> ((3 - index) * 8)) & 255
+}
+
+// A 256-byte buffer: 16 frames of 16 bytes. Each frame is
+// [0, 0, 0, 16] (the big-endian length), [0, type], then 10 payload bytes.
+fn buffer() -> Array[Int] {
+    var b = std::array::empty();
+    var frame = 0;
+    while frame < 16 {
+        std::array::push(b, 0);
+        std::array::push(b, 0);
+        std::array::push(b, 0);
+        std::array::push(b, 16);
+        std::array::push(b, 0);
+        std::array::push(b, 64 + frame);
+        var i = 0;
+        while i < 10 {
+            std::array::push(b, (frame * 7 + i) & 255);
+            i = i + 1;
+        }
+        frame = frame + 1;
+    }
+    b
+}
+
+fn decode(in buf: Array[Int]) -> Int {
+    var checksum = 0;
+    var pos = 0;
+    let n = std::array::len(buf);
+    while pos + 6 <= n {
+        let length = be32(
+            std::array::get(buf, pos),
+            std::array::get(buf, pos + 1),
+            std::array::get(buf, pos + 2),
+            std::array::get(buf, pos + 3)
+        );
+        let kind = be16(std::array::get(buf, pos + 4), std::array::get(buf, pos + 5));
+
+        // The round-trip: re-encoding the length must reproduce the bytes
+        // that were read, which is what makes this measure both directions.
+        var rebuilt = 0;
+        var j = 0;
+        while j < 4 {
+            if byte_of_be32(length, j) == std::array::get(buf, pos + j) {
+                rebuilt = rebuilt + 1;
+            }
+            j = j + 1;
+        }
+        checksum = (checksum + rebuilt) & 255;
+
+        // Fold the payload, and the decoded header fields.
+        checksum = (checksum + (length & 255) + (kind & 255)) & 255;
+        var p = pos + 6;
+        while p < pos + length && p < n {
+            checksum = (checksum ^ std::array::get(buf, p)) & 255;
+            p = p + 1;
+        }
+        if length <= 0 {
+            return checksum;
+        }
+        pos = pos + length;
+    }
+    checksum
+}
+
+fn main() -> Int {
+    let buf = buffer();
+    var checksum = 0;
+    var round = 0;
+    while round < 200 {
+        checksum = decode(buf);
+        round = round + 1;
+    }
+    checksum
+}

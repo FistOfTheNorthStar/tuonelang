@@ -259,8 +259,8 @@ mod tests {
     fn new_report_carries_the_full_workload_catalog() {
         let report = LabReport::new(Environment::capture());
         assert_eq!(report.schema_version, SCHEMA_VERSION);
-        assert_eq!(report.runtime_workloads.len(), 15);
-        assert_eq!(report.supported_workload_count(), 15);
+        assert_eq!(report.runtime_workloads.len(), 17);
+        assert_eq!(report.supported_workload_count(), 17);
     }
 
     #[test]

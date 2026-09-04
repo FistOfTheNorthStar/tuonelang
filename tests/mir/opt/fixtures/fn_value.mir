@@ -9,7 +9,7 @@ fn main() -> I64 {
     let _0: fn(take I64, take I64) -> I64; // g
     let _1: I64;
 bb0:
-    _0 = const fn sym71
+    _0 = const fn sym72
     _1 = call copy _0(const 2_i64, const 3_i64)
     return copy _1
 }
