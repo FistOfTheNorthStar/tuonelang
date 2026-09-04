@@ -34,6 +34,7 @@ Nothing here pretends to do what the language cannot.
 | [`router/`](router/) | declarative request router *(runtime dispatch table, indirect calls)* | runs natively | 74 |
 | [`log-analytics/`](log-analytics/) | log aggregation *(one-pass keyed rollup over `Map[Int, Int]`)* | runs natively | 42 |
 | [`file-report/`](file-report/) | report generator *(renders, writes, reads back, verifies, cleans up)* | runs natively | 7 |
+| [`postgres-auth/`](postgres-auth/) | PostgreSQL v3 auth handshake *(wire framing + SCRAM-SHA-256 vs RFC 7677, and the legacy MD5 challenge)* | runs natively | 48 |
 
 ## Running them
 

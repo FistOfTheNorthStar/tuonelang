@@ -172,6 +172,35 @@ fn cli_stats_vendored_std_io_matches_the_catalog() {
     );
 }
 
+/// postgres-auth vendors four catalog modules, and each must equal the
+/// `tuo-stdlib` original byte-for-byte.
+///
+/// The pin matters more here than elsewhere: `std_crypto.tuo` and
+/// `std_ct.tuo` carry the code that decides whether an authentication proof is
+/// correct and whether a signature comparison leaks timing. A vendored copy
+/// that silently diverged from the catalog would keep passing this example's
+/// own specs while no longer being the library the rest of the suite verifies.
+#[test]
+fn postgres_auth_vendored_modules_match_the_catalog() {
+    let dir = example_dir("postgres-auth");
+    for (file, module) in [
+        ("std_bits.tuo", tuo_stdlib::BITS),
+        ("std_ct.tuo", tuo_stdlib::CT),
+        ("std_crypto.tuo", tuo_stdlib::CRYPTO),
+        ("std_str.tuo", tuo_stdlib::STR),
+    ] {
+        let vendored = dir.join("src").join(file);
+        let on_disk = std::fs::read_to_string(&vendored)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+        assert_eq!(
+            on_disk, module.source,
+            "examples/postgres-auth/src/{file} drifted from tuo-stdlib's {}; \
+             re-copy the catalog module",
+            module.name
+        );
+    }
+}
+
 /// data-pipeline: a runnable record-processing pipeline. Since ADR-0009 landed
 /// the allocator, the file carries the **growable-collection oracle** — it
 /// `push`es the filtered subset (a data-dependent size a fixed `[Int; N]`
@@ -322,6 +351,38 @@ fn file_report_checks_specs_runs_and_roundtrips_a_real_file() {
         !scratch.join("file-report-output.txt").exists(),
         "file-report left its scratch file behind; it must clean up after itself"
     );
+}
+
+/// postgres-auth: the PostgreSQL v3 authentication handshake, computed end to
+/// end in tuonelang.
+///
+/// This is ADR-0019's motivating case as a whole program rather than one
+/// assertion. The connector was the first dogfooding target the language could
+/// not express *at all* — the wire protocol is big-endian length prefixes and
+/// its authentication is rotations and xors, and v0 had neither operator. The
+/// program frames a startup packet, parses the server's SASL challenge off the
+/// wire format, derives the SCRAM-SHA-256 client proof, and verifies the
+/// server's signature with the constant-time `std::crypto::verify`.
+///
+/// The exit byte is load-bearing: 4 of it counts SCRAM handshake steps that
+/// each compare against **RFC 7677's published vector**, 40 counts a framing
+/// round-trip, and 4 counts the legacy MD5 challenge against its own pinned
+/// vector. A wrong proof, a misparsed attribute, or an off-by-one in the
+/// self-counting length field all lower it, so 48 is reachable only if both
+/// authentication paths and the framing are right. This caught a real bug while being written: the
+/// `n=` username field was hardcoded empty, which is invisible to every
+/// structural check but produces a proof the server rejects.
+#[test]
+fn postgres_auth_checks_specs_and_completes_the_rfc_7677_handshake() {
+    let dir = example_dir("postgres-auth");
+    let sources: Vec<PathBuf> = ["main", "std_bits", "std_ct", "std_crypto", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+    assert_runs_to(&refs, 48);
 }
 
 /// The medium multi-package workspace: `app → geometry → numeric`. Every

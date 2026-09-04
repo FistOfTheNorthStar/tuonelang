@@ -299,9 +299,18 @@ guess, and the later ADRs kept the pattern: `map-lookup` (ADR-0011), `file-io`
 `chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`), then
 `udp-echo` and `connect-timeout` (ADR-0017), then `sha256-hash` and
 `wire-decode` (ADR-0019, whose Go peers are `crypto/sha256` and
-`encoding/binary`). All **seventeen** workloads now
+`encoding/binary`), and `constant-time` (ADR-0020, whose Go peer is
+`crypto/subtle.ConstantTimeCompare`). All **eighteen** workloads now
 measure, each against equivalent-semantics C *and* Go peers; none is
-unsupported. No new runtime figure is invented here; the lab
+unsupported.
+
+`constant-time` is the odd one out and deliberately so: it measures a cost
+*deliberately paid* rather than a throughput to improve. A 32-byte tag
+comparison done branchlessly against the same comparison done with an early
+return — the textbook timing vulnerability — over rounds alternating between
+the naive form's best case and its worst, so the gap is not read off one
+extreme. On this host tuonelang lands at parity with Go and roughly 2.2× the
+hand-written C peer, and the lab records that without an aggregate verdict. No new runtime figure is invented here; the lab
 remains the one measurement of record.
 
 ---
@@ -377,8 +386,8 @@ stdlib module (index-arena `parse`/`render` with positioned errors). The
 perf-lab entries the three ADRs gated all measure: `networking` flipped from
 the lab's last `Unsupported`, and `channels` and `json-parse` landed
 supported — thirteen workloads at that point, each with C and Go peers
-(ADR-0017 has since taken the catalog to fifteen, and ADR-0019 to
-seventeen). Still deferred,
+(ADR-0017 has since taken the catalog to fifteen, ADR-0019 to
+seventeen, and ADR-0020 to eighteen). Still deferred,
 honestly: recursive nominal types (`T0016` is the boundary until a successor
 ADR gives the backends runtime-recursive clone/drop glue), DNS and TLS,
 `\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building JSON from
@@ -400,8 +409,8 @@ its boundary) all landed across three stages at ABI v10. Two gating lab
 workloads came with them, taking the catalog to **fifteen** measured:
 `udp-echo` and `connect-timeout`, the latter measuring a *bounded failure* —
 a program that could not have been written before the ADR. (ADR-0019 has
-since added `sha256-hash` and `wire-decode`, taking the catalog to
-**seventeen**.) **DNS stays out**, and so does TLS — though for a narrower
+since added `sha256-hash` and `wire-decode`, and ADR-0020
+`constant-time`, taking the catalog to **eighteen**.) **DNS stays out**, and so does TLS — though for a narrower
 reason since ADR-0019 Stage B: SHA-256/HMAC are now written *in tuonelang*
 and need no cryptographic dependency at all, but TLS additionally needs
 X.509, a certificate store, and AEAD ciphers. (The original framing here —
@@ -479,7 +488,35 @@ The end-to-end proof is a **full SCRAM-SHA-256 client proof** computed
 natively and checked against RFC 7677's published vector: Base64 both ways,
 PBKDF2 over 4096 iterations, two HMACs, a SHA-256, and a byte-wise XOR. Since
 PostgreSQL has defaulted `password_encryption` to `scram-sha-256` since
-version 14, that is the exchange a connector actually needs. **`md5` remains
-unimplemented**, so the legacy challenge is unsupported — acceptable only
-because SCRAM is the default on every current server, and worth revisiting if
-a real connector meets an older one.
+version 14, that is the exchange a connector actually needs.
+
+That proof has since become **library surface and a running program**.
+`std::crypto` carries the SCRAM exchange
+(`scram_salted_password`/`scram_client_proof`/`scram_server_signature`) plus
+the constant-time `verify`, and `examples/postgres-auth` computes the whole v3
+handshake — big-endian framing, the startup packet, the SASL challenge parsed
+off the wire format, the proof, and the server's signature verified in
+constant time.
+
+Two findings came out of writing it, both worth recording:
+
+* **A library that offers no comparison is not neutral.** Before `verify`,
+  `std::crypto` exposed no way to compare two digests at all, which sounds
+  safe and is not: the caller writes the comparison instead, and the obvious
+  spelling returns early on the first mismatched byte — the exact timing leak
+  `std::ct::bytes_eq` exists to prevent. The fix was to make the safe
+  comparison the *convenient* one, in the module the caller already imports.
+* **A published vector caught a bug no self-consistent spec would have.** The
+  example's client-first message hardcoded an empty username. Every structural
+  property still held — the message parses, the proof is 32 bytes, the XOR
+  round-trip recovers the client key — but the auth message both sides sign
+  differed, so a real server would reject the proof with no useful diagnostic.
+  This is the argument for external vectors in one concrete instance.
+
+**`md5` has since landed too**, so the legacy `AuthenticationMD5Password`
+challenge is supported for servers too old for SCRAM — shipped documented as
+broken for security (ADR-0019's own requirement), spec'd against RFC 1321's
+published suite, and with `md5_password` pinning the protocol composition
+against an independent implementation. SCRAM stays the primary path: it is the
+default on every current server, and MD5 auth is disabled outright on several
+managed providers.

@@ -81,7 +81,7 @@ fn tuonelang_sha256_agrees_with_the_toolchains_rust_sha256() {
     let main_path = dir.join("main.tuo");
     std::fs::write(&main_path, program()).expect("write the cross-check program");
     let mut sources = vec![main_path];
-    for path in ["std::crypto", "std::bits", "std::str", "std::io"] {
+    for path in ["std::crypto", "std::bits", "std::ct", "std::str", "std::io"] {
         let module = tuo_stdlib::module(path).expect("a catalog module");
         let file = dir.join(module.name.replace('/', "_"));
         std::fs::write(&file, module.source).expect("write a catalog module");
@@ -145,40 +145,43 @@ fn a_native_scram_sha256_client_proof_matches_the_rfc_7677_vector() {
 
 import std::crypto;
 
-fn xor_bytes(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
-    var out = std::array::empty();
-    var i = 0;
-    while i < std::array::len(a) {
-        std::array::push(out, std::array::get(a, i) ^ std::array::get(b, i));
-        i = i + 1;
-    }
-    out
-}
-
-fn client_proof(in password: Str, in salt_b64: Str, take iters: Int, in auth_message: Str) -> String {
-    let salt = std::crypto::base64_decode(salt_b64);
-    let salt_str = std::crypto::str_of_bytes(salt);
-    let salted = std::crypto::pbkdf2_sha256(password, std::string::as_str(salt_str), iters);
-    let client_key = std::crypto::hmac_sha256(salted, std::crypto::bytes_of_str("Client Key"));
-    let stored_key = std::crypto::sha256_bytes(std::string::as_str(std::crypto::str_of_bytes(client_key)));
-    let client_sig = std::crypto::hmac_sha256(stored_key, std::crypto::bytes_of_str(auth_message));
-    std::crypto::base64_encode(xor_bytes(client_key, client_sig))
-}
-
 fn main() -> Int {
+    // RFC 7677 section 3's exchange, assembled the way a connector assembles
+    // it: the salt arrives base64-encoded in the server's first message, the
+    // auth message is the three protocol messages joined by commas.
     let auth = "n=user,r=rOprNGfwEbeRWgbNEkqO,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096,c=biws,r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0";
-    let proof = client_proof("pencil", "W22ZaJ0SNY7soEsUEjb6gQ==", 4096, auth);
-    if std::string::as_str(proof) == "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=" {
-        return 42;
+    let salt = std::crypto::base64_decode("W22ZaJ0SNY7soEsUEjb6gQ==");
+    let salted = std::crypto::scram_salted_password("pencil", salt, 4096);
+
+    let proof = std::crypto::scram_client_proof(salted, auth);
+    if std::string::as_str(proof) != "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=" {
+        return 1;
     }
-    1
+
+    // The server signature the client must check before trusting the server.
+    let server = std::crypto::scram_server_signature(salted, auth);
+    if std::string::as_str(server) != "6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=" {
+        return 2;
+    }
+
+    // And it must be checked with the constant-time comparison, which is what
+    // `verify` exists to make the convenient spelling.
+    let expected = std::crypto::base64_decode("6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=");
+    if std::crypto::verify(std::crypto::base64_decode(std::string::as_str(server)), expected) == false {
+        return 3;
+    }
+    // A wrong signature must be rejected.
+    if std::crypto::verify(std::crypto::base64_decode(std::string::as_str(proof)), expected) {
+        return 4;
+    }
+    42
 }
 "#;
 
     let main_path = dir.join("scram.tuo");
     std::fs::write(&main_path, program).expect("write the SCRAM program");
     let mut sources = vec![main_path];
-    for path in ["std::crypto", "std::bits"] {
+    for path in ["std::crypto", "std::bits", "std::ct"] {
         let module = tuo_stdlib::module(path).expect("a catalog module");
         let file = dir.join(module.name.replace('/', "_"));
         std::fs::write(&file, module.source).expect("write a catalog module");
@@ -265,7 +268,7 @@ fn main() -> Int {
     let main_path = dir.join("doc_examples.tuo");
     std::fs::write(&main_path, program).expect("write the doc-example program");
     let mut sources = vec![main_path];
-    for path in ["std::crypto", "std::bits"] {
+    for path in ["std::crypto", "std::bits", "std::ct"] {
         let module = tuo_stdlib::module(path).expect("a catalog module");
         let file = dir.join(module.name.replace('/', "_"));
         std::fs::write(&file, module.source).expect("write a catalog module");

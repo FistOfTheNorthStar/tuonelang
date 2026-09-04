@@ -1,0 +1,603 @@
+module postgres_auth;
+
+// postgres-auth — the PostgreSQL v3 wire protocol's authentication handshake,
+// dogfooded on ADR-0019 (bitwise operators, SHA-256/HMAC/PBKDF2/Base64) and
+// ADR-0020 (the constant-time subset).
+//
+// WHY THIS EXAMPLE EXISTS. ADR-0019 was opened because a PostgreSQL connector
+// was the first dogfooding target the language could not express *at all*: the
+// protocol is defined in big-endian length prefixes and its authentication is
+// defined in rotations and xors, and v0 had no operator for either. This
+// program is the payoff — the handshake written end to end in tuonelang, with
+// every byte it puts on the wire decided by spec-checked code.
+//
+// WHAT IT COVERS. The parts of the protocol that are pure computation over
+// bytes, which is the whole authentication path:
+//
+//   * MESSAGE FRAMING — every backend message is a one-byte tag, a
+//     four-byte big-endian length that counts itself, and a payload. Encoding
+//     and decoding that frame is `std::bits::be32` and `byte_of_be32`, which
+//     is precisely what ADR-0019 Stage A added.
+//   * THE STARTUP PACKET — the one frame with no tag, carrying
+//     null-terminated key/value pairs.
+//   * THE SASL EXCHANGE — RFC 7677's SCRAM-SHA-256, whose messages are
+//     comma-separated `key=value` attributes. Parsing them is `std::str`;
+//     computing the proof is `std::crypto`.
+//   * THE SERVER'S PROOF — checked with `std::crypto::verify`, the
+//     constant-time comparison, because a client that skips this check
+//     authenticates happily against an impostor.
+//
+// WHAT IT DELIBERATELY DOES NOT COVER. There is no socket traffic here. A real
+// connector would send these frames over `std::net`, and the ADR-0014 socket
+// primitives make that possible — `http-service` already serves a live request
+// that way. What is missing for a *usable* driver is not I/O but the rest of
+// the protocol: the extended query flow, the type system that maps PostgreSQL
+// OIDs onto tuonelang types, and TLS (which ADR-0019 explicitly leaves out,
+// since it needs X.509, a certificate store, and AEAD ciphers). Framing plus
+// authentication is the part that was *blocked on the language*, and it is the
+// part this example proves. Everything here is pure and spec-checked, so the
+// program is hermetic and its exit byte is decided by the specs, not the
+// network.
+
+import std::crypto;
+import std::str;
+
+// ----------------------------------------------------------------------------
+// Message framing.
+//
+// A PostgreSQL v3 frame is: tag (1 byte), length (4 bytes, big-endian,
+// counting the length field itself but NOT the tag), then length-4 payload
+// bytes. Getting that self-counting length wrong by one is the classic
+// implementation bug, so it is spec'd from both directions.
+// ----------------------------------------------------------------------------
+
+/// The encoded frame for a message with tag `tag` and payload `payload`.
+///
+/// The length field counts itself and the payload, but not the tag — that is
+/// the protocol's rule and the source of most off-by-one bugs against it.
+///
+/// ```tuo
+/// let f = postgres_auth::frame(112, std::crypto::bytes_of_str("x"));
+/// std::array::len(f)  // 6: tag + 4 length + 1 payload
+/// ```
+pub fn frame(take tag: Int, in payload: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, tag);
+    let length = std::array::len(payload) + 4;
+    std::array::push(out, std::bits::byte_of_be32(length, 0));
+    std::array::push(out, std::bits::byte_of_be32(length, 1));
+    std::array::push(out, std::bits::byte_of_be32(length, 2));
+    std::array::push(out, std::bits::byte_of_be32(length, 3));
+    var i = 0;
+    while i < std::array::len(payload) {
+        std::array::push(out, std::array::get(payload, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// The declared payload length of the frame beginning at `offset`, or -1 when
+/// there are not enough bytes to hold a header.
+///
+/// This is the length a reader uses to know how many more bytes to await, so
+/// it returns the *payload* size with the self-counted 4 already subtracted.
+///
+/// ```tuo
+/// let f = postgres_auth::frame(82, std::crypto::bytes_of_str("abc"));
+/// postgres_auth::frame_payload_len(f, 0)  // 3
+/// ```
+pub fn frame_payload_len(in bytes: Array[Int], take offset: Int) -> Int {
+    if std::array::len(bytes) < (offset + 5) {
+        return 0 - 1;
+    }
+    let length = std::bits::be32(std::array::get(bytes, offset + 1), std::array::get(bytes, offset + 2), std::array::get(bytes, offset + 3), std::array::get(bytes, offset + 4));
+    length - 4
+}
+
+/// The tag byte of the frame beginning at `offset`, or -1 if absent.
+///
+/// ```tuo
+/// let f = postgres_auth::frame(82, std::crypto::bytes_of_str("x"));
+/// postgres_auth::frame_tag(f, 0)  // 82, 'R' for authentication
+/// ```
+pub fn frame_tag(in bytes: Array[Int], take offset: Int) -> Int {
+    if std::array::len(bytes) <= offset {
+        return 0 - 1;
+    }
+    std::array::get(bytes, offset)
+}
+
+/// The payload of the frame beginning at `offset`, as its own array.
+///
+/// ```tuo
+/// let f = postgres_auth::frame(112, std::crypto::bytes_of_str("hi"));
+/// std::array::len(postgres_auth::frame_payload(f, 0))  // 2
+/// ```
+pub fn frame_payload(in bytes: Array[Int], take offset: Int) -> Array[Int] {
+    var out = std::array::empty();
+    let n = frame_payload_len(bytes, offset);
+    if n < 0 {
+        return out;
+    }
+    var i = 0;
+    while i < n {
+        let at = offset + 5 + i;
+        if at < std::array::len(bytes) {
+            std::array::push(out, std::array::get(bytes, at));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The startup packet for `user` and `database`.
+///
+/// The startup message is the one frame with no tag: a self-counting length,
+/// the protocol version (3.0 as 196608), then null-terminated key/value pairs
+/// and a final null. It is what a connection opens with.
+///
+/// ```tuo
+/// let s = postgres_auth::startup_packet("postgres", "app");
+/// postgres_auth::frame_payload_len(s, 0 - 1)  // the length counts itself
+/// ```
+pub fn startup_packet(in user: Str, in database: Str) -> Array[Int] {
+    var body = std::array::empty();
+    // Protocol version 3.0 = (3 << 16) | 0.
+    std::array::push(body, std::bits::byte_of_be32(196608, 0));
+    std::array::push(body, std::bits::byte_of_be32(196608, 1));
+    std::array::push(body, std::bits::byte_of_be32(196608, 2));
+    std::array::push(body, std::bits::byte_of_be32(196608, 3));
+    push_cstring(body, "user");
+    push_cstring(body, user);
+    push_cstring(body, "database");
+    push_cstring(body, database);
+    // The terminating null that ends the parameter list.
+    std::array::push(body, 0);
+
+    var out = std::array::empty();
+    let length = std::array::len(body) + 4;
+    std::array::push(out, std::bits::byte_of_be32(length, 0));
+    std::array::push(out, std::bits::byte_of_be32(length, 1));
+    std::array::push(out, std::bits::byte_of_be32(length, 2));
+    std::array::push(out, std::bits::byte_of_be32(length, 3));
+    var i = 0;
+    while i < std::array::len(body) {
+        std::array::push(out, std::array::get(body, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// Append `text` to `out` as a null-terminated C string.
+///
+/// ```tuo
+/// var b = std::array::empty();
+/// postgres_auth::push_cstring(b, "ab");
+/// std::array::len(b)  // 3
+/// ```
+pub fn push_cstring(mut out: Array[Int], in text: Str) {
+    var i = 0;
+    while i < std::str::len(text) {
+        std::array::push(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+    std::array::push(out, 0);
+}
+
+// ----------------------------------------------------------------------------
+// The SASL / SCRAM-SHA-256 exchange.
+//
+// The server's first message is `r=<nonce>,s=<salt-base64>,i=<iterations>`.
+// The client answers with `c=biws,r=<nonce>,p=<proof>`, and the server's final
+// message is `v=<signature>`, which the client MUST verify.
+// ----------------------------------------------------------------------------
+
+/// The value of attribute `key` in a comma-separated SCRAM message, or an
+/// empty string when absent.
+///
+/// SCRAM messages are `k=v` pairs joined by commas; every field the client
+/// needs is read out this way.
+///
+/// ```tuo
+/// std::string::as_str(postgres_auth::scram_attr("r=abc,s=QQ==,i=4096", "i"))  // "4096"
+/// ```
+pub fn scram_attr(in message: Str, in key: Str) -> String {
+    let parts = std::str::split(message, ",");
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::array::len(parts) {
+        let part = std::array::get(parts, i);
+        let text = std::string::as_str(part);
+        // A `k=v` pair matches when it starts with the key followed by `=`.
+        if std::str::len(text) > std::str::len(key) {
+            if std::str::byte_at(text, std::str::len(key)) == 61 {
+                if starts_with_key(text, key) {
+                    out = substring_from(text, std::str::len(key) + 1);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// Whether `text` begins with `key`.
+///
+/// ```tuo
+/// postgres_auth::starts_with_key("r=abc", "r")  // true
+/// ```
+pub fn starts_with_key(in text: Str, in key: Str) -> Bool {
+    if std::str::len(text) < std::str::len(key) {
+        return false;
+    }
+    var i = 0;
+    var same = true;
+    while i < std::str::len(key) {
+        if std::str::byte_at(text, i) != std::str::byte_at(key, i) {
+            same = false;
+        }
+        i = i + 1;
+    }
+    same
+}
+
+/// The substring of `text` from `start` to its end.
+///
+/// ```tuo
+/// std::string::as_str(postgres_auth::substring_from("i=4096", 2))  // "4096"
+/// ```
+pub fn substring_from(in text: Str, take start: Int) -> String {
+    var out = std::string::empty();
+    var i = start;
+    while i < std::str::len(text) {
+        std::string::push_byte(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// The client's first SCRAM message, bare (without the GS2 header).
+///
+/// The `n=` field carries the username. PostgreSQL ignores it — the name was
+/// already sent in the startup packet — but it is part of the auth message
+/// both sides sign, so getting it wrong produces a proof the server rejects
+/// with no useful diagnostic. That is exactly the bug this example hit when
+/// first written with a hardcoded empty name.
+///
+/// ```tuo
+/// std::string::as_str(postgres_auth::client_first_bare("user", "abc"))  // "n=user,r=abc"
+/// ```
+pub fn client_first_bare(in user: Str, in nonce: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, "n=");
+    std::string::append(out, user);
+    std::string::append(out, ",r=");
+    std::string::append(out, nonce);
+    out
+}
+
+/// The SCRAM auth message: client-first-bare, server-first, and
+/// client-final-without-proof, joined by commas.
+///
+/// This is the string both sides sign, so both sides must build it
+/// identically — which is why it is one function rather than three inline
+/// concatenations.
+///
+/// ```tuo
+/// std::str::len(std::string::as_str(postgres_auth::auth_message("n=,r=a", "r=ab,s=QQ==,i=1", "c=biws,r=ab")))  // 30
+/// ```
+pub fn auth_message(in client_first: Str, in server_first: Str, in client_final: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, client_first);
+    std::string::append(out, ",");
+    std::string::append(out, server_first);
+    std::string::append(out, ",");
+    std::string::append(out, client_final);
+    out
+}
+
+/// The client-final message without its proof: the fixed GS2 header `biws`
+/// (base64 of `n,,`) and the combined nonce.
+///
+/// ```tuo
+/// std::string::as_str(postgres_auth::client_final_bare("xy"))  // "c=biws,r=xy"
+/// ```
+pub fn client_final_bare(in nonce: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, "c=biws,r=");
+    std::string::append(out, nonce);
+    out
+}
+
+/// The complete client-final message, proof included, ready to frame.
+///
+/// ```tuo
+/// let m = postgres_auth::client_final("xy", "AAAA");
+/// std::str::contains(std::string::as_str(m), "p=AAAA")  // true
+/// ```
+pub fn client_final(in nonce: Str, in proof: Str) -> String {
+    var out = client_final_bare(nonce);
+    std::string::append(out, ",p=");
+    std::string::append(out, proof);
+    out
+}
+
+/// Whether the server's final message proves it knew the stored credentials.
+///
+/// The server sends `v=<base64 signature>`; the client recomputes that
+/// signature and compares. The comparison uses `std::crypto::verify`, which is
+/// constant time — an early-returning comparison here would leak how many
+/// leading bytes of a forged signature were correct.
+///
+/// ```tuo
+/// let salted = std::crypto::scram_salted_password("pencil", std::crypto::bytes_of_str("salt"), 1);
+/// let expected = std::crypto::scram_server_signature(salted, "n=user,r=abc");
+/// var msg = std::string::empty();
+/// std::string::append(msg, "v=");
+/// std::string::append(msg, std::string::as_str(expected));
+/// postgres_auth::server_signature_ok(std::string::as_str(msg), salted, "n=user,r=abc")  // true
+/// ```
+pub fn server_signature_ok(in server_final: Str, in salted: Array[Int], in auth: Str) -> Bool {
+    let claimed = scram_attr(server_final, "v");
+    let expected = std::crypto::scram_server_signature(salted, auth);
+    // Both sides are decoded to bytes so the comparison is over the signature
+    // itself rather than its text encoding.
+    let claimed_bytes = std::crypto::base64_decode(std::string::as_str(claimed));
+    let expected_bytes = std::crypto::base64_decode(std::string::as_str(expected));
+    std::crypto::verify(claimed_bytes, expected_bytes)
+}
+
+// ----------------------------------------------------------------------------
+// The whole handshake, driven end to end.
+// ----------------------------------------------------------------------------
+
+/// The number of authentication steps that succeeded for the RFC 7677
+/// exchange, out of 4. `main` returns this, so the exit byte is decided by
+/// spec-checked computation.
+///
+/// The steps are: the startup packet frames correctly, the server's first
+/// message parses, the client's proof matches the published vector, and the
+/// server's signature verifies.
+///
+/// ```tuo
+/// postgres_auth::handshake_steps_passed()  // 4
+/// ```
+pub fn handshake_steps_passed() -> Int {
+    var passed = 0;
+
+    // Step 1: the startup packet is a well-formed, self-counting frame.
+    let startup = startup_packet("user", "postgres");
+    if std::array::len(startup) > 4 {
+        let declared = std::bits::be32(std::array::get(startup, 0), std::array::get(startup, 1), std::array::get(startup, 2), std::array::get(startup, 3));
+        if declared == std::array::len(startup) {
+            passed = passed + 1;
+        }
+    }
+
+    // Step 2: the server's first message parses into its three attributes.
+    let server_first = "r=rOprNGfwEbeRWgbNEkqO%hvYDpWUa2RaTCAfuxFIlj)hNlF$k0,s=W22ZaJ0SNY7soEsUEjb6gQ==,i=4096";
+    let salt_b64 = scram_attr(server_first, "s");
+    let iters_text = scram_attr(server_first, "i");
+    let combined = scram_attr(server_first, "r");
+    if std::string::as_str(salt_b64) == "W22ZaJ0SNY7soEsUEjb6gQ==" {
+        if std::string::as_str(iters_text) == "4096" {
+            passed = passed + 1;
+        }
+    }
+
+    // Step 3: the client proof matches RFC 7677's published vector. The
+    // iteration count comes off the wire, parsed rather than assumed.
+    let iterations = unwrap_or(std::str::parse_int(std::string::as_str(iters_text)), 0);
+    let salt = std::crypto::base64_decode(std::string::as_str(salt_b64));
+    let salted = std::crypto::scram_salted_password("pencil", salt, iterations);
+    let client_first = client_first_bare("user", "rOprNGfwEbeRWgbNEkqO");
+    let final_bare = client_final_bare(std::string::as_str(combined));
+    let auth = auth_message(std::string::as_str(client_first), server_first, std::string::as_str(final_bare));
+    let proof = std::crypto::scram_client_proof(salted, std::string::as_str(auth));
+    if std::string::as_str(proof) == "dHzbZapWIk4jUhN+Ute9ytag9zjfMHgsqmmiz7AndVQ=" {
+        passed = passed + 1;
+    }
+
+    // Step 4: the server's signature verifies, in constant time.
+    let server_final = "v=6rriTRBi23WpRR/wtup+mMhUZUn/dB5nLTJRsjl95G4=";
+    if server_signature_ok(server_final, salted, std::string::as_str(auth)) {
+        passed = passed + 1;
+    }
+
+    passed
+}
+
+/// `value` when `result` is `Ok`, otherwise `fallback`.
+///
+/// ```tuo
+/// postgres_auth::unwrap_or(std::str::parse_int("12"), 0)  // 12
+/// ```
+pub fn unwrap_or(take result: Result[Int, Str], take fallback: Int) -> Int {
+    match result {
+        Result::Ok { value } => value,
+        Result::Err { error } => fallback,
+    }
+}
+
+/// The legacy `AuthenticationMD5Password` response for a server too old for
+/// SCRAM.
+///
+/// Present for the same reason `std::crypto::md5` is: PostgreSQL still offers
+/// this challenge, and a connector meeting an old server has no alternative.
+/// **It is not a fallback to prefer** — `password_encryption` has defaulted to
+/// `scram-sha-256` since PostgreSQL 14 and MD5 auth is disabled outright on
+/// several managed providers, so a client should attempt SCRAM first and reach
+/// here only when the server's `AuthenticationRequest` leaves no choice.
+///
+/// ```tuo
+/// let salt = std::crypto::bytes_of_str("abcd");
+/// std::string::len(postgres_auth::md5_response("secret", "user", salt))  // 35
+/// ```
+pub fn md5_response(in password: Str, in user: Str, in salt: Array[Int]) -> String {
+    std::crypto::md5_password(password, user, salt)
+}
+
+spec md5_response {
+    // The exact PostgreSQL response for a known challenge, the same vector
+    // `std::crypto` pins — repeated here because this is the function a
+    // connector actually calls.
+    then std::string::as_str(md5_response("secret", "user", std::crypto::bytes_of_str("abcd"))) == "md5fd7c993d0b0386ed609939ae4ac157ce";
+    // The salt is what makes each challenge unique; a different one must give
+    // a different response, or replay would be trivial.
+    then std::string::as_str(md5_response("secret", "user", std::crypto::bytes_of_str("abcd"))) != std::string::as_str(md5_response("secret", "user", std::crypto::bytes_of_str("wxyz")));
+}
+
+fn main() -> Int {
+    // 4 steps + the framing round-trip below = the documented exit byte 44.
+    let steps = handshake_steps_passed();
+
+    // A framing round-trip over a SASLResponse ('p') message, proving the
+    // decoder reads back exactly what the encoder wrote.
+    let payload = std::crypto::bytes_of_str("SCRAM-SHA-256");
+    let framed = frame(112, payload);
+    var round_trip = 0;
+    if frame_tag(framed, 0) == 112 {
+        if frame_payload_len(framed, 0) == 13 {
+            if std::array::len(frame_payload(framed, 0)) == 13 {
+                round_trip = 40;
+            }
+        }
+    }
+    // The legacy MD5 challenge, proven natively rather than only in a spec:
+    // a connector must be able to answer it when a server is too old for
+    // SCRAM. Worth 4, so a break in either authentication path is visible in
+    // the exit byte.
+    var legacy = 0;
+    let md5_answer = md5_response("secret", "user", std::crypto::bytes_of_str("abcd"));
+    if std::string::as_str(md5_answer) == "md5fd7c993d0b0386ed609939ae4ac157ce" {
+        legacy = 4;
+    }
+
+    steps + round_trip + legacy
+}
+
+spec frame {
+    // The length field counts itself plus the payload, never the tag.
+    then std::array::len(frame(112, std::crypto::bytes_of_str(""))) == 5;
+    then std::array::len(frame(112, std::crypto::bytes_of_str("x"))) == 6;
+    then frame_tag(frame(82, std::crypto::bytes_of_str("abc")), 0) == 82;
+    // Encode then decode is the identity on the payload length.
+    then frame_payload_len(frame(112, std::crypto::bytes_of_str("abcde")), 0) == 5;
+    then frame_payload_len(frame(112, std::crypto::bytes_of_str("")), 0) == 0;
+    // A truncated buffer is reported rather than read past.
+    then frame_payload_len(std::crypto::bytes_of_str("ab"), 0) == 0 - 1;
+    then frame_tag(std::crypto::bytes_of_str(""), 0) == 0 - 1;
+}
+
+spec frame_payload {
+    // The payload survives the round trip byte for byte.
+    then std::string::as_str(std::crypto::str_of_bytes(frame_payload(frame(112, std::crypto::bytes_of_str("hello")), 0))) == "hello";
+    then std::array::len(frame_payload(frame(112, std::crypto::bytes_of_str("")), 0)) == 0;
+    // A frame that claims more than it holds yields only what is there.
+    then std::array::len(frame_payload(std::crypto::bytes_of_str("x"), 0)) == 0;
+}
+
+spec startup_packet {
+    // The startup packet is self-counting: its length field equals its size.
+    then std::bits::be32(std::array::get(startup_packet("u", "d"), 0), std::array::get(startup_packet("u", "d"), 1), std::array::get(startup_packet("u", "d"), 2), std::array::get(startup_packet("u", "d"), 3)) == std::array::len(startup_packet("u", "d"));
+    // It carries protocol version 3.0 immediately after the length.
+    then std::bits::be32(std::array::get(startup_packet("u", "d"), 4), std::array::get(startup_packet("u", "d"), 5), std::array::get(startup_packet("u", "d"), 6), std::array::get(startup_packet("u", "d"), 7)) == 196608;
+    // A longer user name makes a longer packet.
+    then std::array::len(startup_packet("longer", "d")) > std::array::len(startup_packet("u", "d"));
+}
+
+spec push_cstring {
+    then std::array::len(cstring_of("")) == 1;
+    then std::array::len(cstring_of("ab")) == 3;
+    // The terminator really is a zero byte.
+    then std::array::get(cstring_of("ab"), 2) == 0;
+    then std::array::get(cstring_of("ab"), 0) == 97;
+}
+
+/// `text` as a null-terminated byte array. Spec helper for [`push_cstring`],
+/// which writes through a `mut` parameter and so needs a buffer to write into.
+///
+/// ```tuo
+/// std::array::len(postgres_auth::cstring_of("ab"))  // 3
+/// ```
+pub fn cstring_of(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    push_cstring(out, text);
+    out
+}
+
+spec scram_attr {
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "i")) == "4096";
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "s")) == "QQ==";
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "r")) == "abc";
+    // An absent key yields the empty string rather than trapping.
+    then std::string::as_str(scram_attr("r=abc", "v")) == "";
+    // A key must match the whole attribute name, not a prefix of it.
+    then std::string::as_str(scram_attr("rs=x,r=y", "r")) == "y";
+}
+
+spec client_first_bare {
+    then std::string::as_str(client_first_bare("user", "abc")) == "n=user,r=abc";
+    // The username is part of the signed auth message, so an empty name and a
+    // real one must not produce the same message.
+    then std::string::as_str(client_first_bare("", "abc")) != std::string::as_str(client_first_bare("user", "abc"));
+}
+
+spec client_final_bare {
+    then std::string::as_str(client_final_bare("xy")) == "c=biws,r=xy";
+}
+
+spec client_final {
+    then std::string::as_str(client_final("xy", "AAAA")) == "c=biws,r=xy,p=AAAA";
+    // The proof is the last attribute, which is what the protocol requires.
+    then std::str::ends_with(std::string::as_str(client_final("xy", "AAAA")), "p=AAAA");
+}
+
+spec auth_message {
+    then std::string::as_str(auth_message("a", "b", "c")) == "a,b,c";
+}
+
+spec substring_from {
+    then std::string::as_str(substring_from("i=4096", 2)) == "4096";
+    then std::string::as_str(substring_from("abc", 0)) == "abc";
+    // Past the end is empty, not a trap.
+    then std::string::as_str(substring_from("abc", 9)) == "";
+}
+
+spec starts_with_key {
+    then starts_with_key("r=abc", "r");
+    then starts_with_key("rs=abc", "r");
+    then starts_with_key("s=abc", "r") == false;
+    then starts_with_key("", "r") == false;
+}
+
+spec unwrap_or {
+    then unwrap_or(std::str::parse_int("12"), 0) == 12;
+    then unwrap_or(std::str::parse_int("nope"), 7) == 7;
+}
+
+spec server_signature_ok {
+    // A correct signature verifies; a wrong one does not. Low iteration count
+    // so the spec sandbox can afford the PBKDF2 work — the published 4096-round
+    // vector is checked in `handshake_steps_passed`, which runs natively.
+    then server_signature_ok(std::string::as_str(signature_message("pencil", 1, "n=user,r=abc")), std::crypto::scram_salted_password("pencil", std::crypto::bytes_of_str("salt"), 1), "n=user,r=abc");
+    // A signature from a different auth message must be rejected.
+    then server_signature_ok(std::string::as_str(signature_message("pencil", 1, "n=user,r=xyz")), std::crypto::scram_salted_password("pencil", std::crypto::bytes_of_str("salt"), 1), "n=user,r=abc") == false;
+    // So must a missing one.
+    then server_signature_ok("no-signature-here", std::crypto::scram_salted_password("pencil", std::crypto::bytes_of_str("salt"), 1), "n=user,r=abc") == false;
+}
+
+/// A `v=<signature>` server-final message for the given credentials. Spec
+/// helper for [`server_signature_ok`].
+///
+/// ```tuo
+/// std::str::starts_with(std::string::as_str(postgres_auth::signature_message("pencil", 1, "n=user,r=abc")), "v=")  // true
+/// ```
+pub fn signature_message(in password: Str, take iterations: Int, in auth: Str) -> String {
+    let salted = std::crypto::scram_salted_password(password, std::crypto::bytes_of_str("salt"), iterations);
+    let signature = std::crypto::scram_server_signature(salted, auth);
+    var out = std::string::empty();
+    std::string::append(out, "v=");
+    std::string::append(out, std::string::as_str(signature));
+    out
+}

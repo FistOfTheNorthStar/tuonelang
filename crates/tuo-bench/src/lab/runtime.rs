@@ -286,6 +286,35 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             150,
         ),
         RuntimeWorkload::supported(
+            "constant-time",
+            "the price of branchless code (ADR-0020): per round, a 32-byte tag \
+             comparison — the size of the SHA-256 digest `std::crypto::verify` \
+             is actually called on — performed twice over the same inputs, \
+             once branchlessly (scan every byte, accumulate the bitwise \
+             difference, fold with masks and shifts) and once with the \
+             early-returning form that is the textbook timing vulnerability. \
+             Rounds alternate between tags differing at byte 0 (the naive \
+             form's best case) and equal tags (its worst), so the gap is \
+             averaged across both rather than measured at one extreme. Unlike \
+             every other workload here this one measures a cost deliberately \
+             paid rather than a throughput to improve: the branchless form \
+             does strictly more work, and the argument for it is that the \
+             extra work buys a security property. Measured against a C peer \
+             using the same masking idioms — including the sign-smearing \
+             `(bit << 63) >> 63` rather than the conventional `0 - bit`, \
+             which tuonelang cannot use because `-` traps on i64::MIN — and \
+             against Go's `crypto/subtle.ConstantTimeCompare`, the standard \
+             library's own answer and so the parity target",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/constant-time.tuo"),
+            // 500,000 rounds, each contributing one agreement between the
+            // two comparison forms; 500000 % 256 = 32. A single disagreement
+            // lowers the byte, so it checksums the whole run. The count is
+            // far above sha256-hash's 200 because one 32-byte comparison is
+            // a few dozen instructions: fewer rounds finish below the
+            // timer's resolution and would record a meaningless zero.
+            32,
+        ),
+        RuntimeWorkload::supported(
             "wire-decode",
             "binary protocol framing throughput over the ADR-0019 bitwise \
              operators: per round, walk a fixed 256-byte buffer of 16 \
@@ -469,6 +498,7 @@ mod tests {
                 "channels".to_string(),
                 "json-parse".to_string(),
                 "sha256-hash".to_string(),
+                "constant-time".to_string(),
                 "wire-decode".to_string(),
                 "udp-echo".to_string(),
                 "connect-timeout".to_string(),
@@ -492,7 +522,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 17, "exactly the supported workloads run");
+        assert_eq!(results.len(), 18, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

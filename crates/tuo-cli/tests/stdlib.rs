@@ -109,7 +109,7 @@ fn the_catalog_lists_exactly_its_modules() {
 /// This table is the *whole* permitted graph: a module absent from it must
 /// still compile alone, and `the_dependency_graph_is_declared_and_acyclic`
 /// proves the edges listed here are the only ones and that they form no cycle.
-const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[("std::crypto", &["std::bits"])];
+const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[("std::crypto", &["std::bits", "std::ct"])];
 
 /// The modules `module` may use, or an empty slice if it must stand alone.
 fn declared_dependencies_of(path: &str) -> &'static [&'static str] {
@@ -1243,7 +1243,7 @@ fn main() -> Int {
     for release in [false, true] {
         let output = run_with_modules(
             &dir,
-            &[tuo_stdlib::BITS, tuo_stdlib::CRYPTO],
+            &[tuo_stdlib::BITS, tuo_stdlib::CT, tuo_stdlib::CRYPTO],
             caller,
             release,
         );
