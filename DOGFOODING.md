@@ -553,3 +553,76 @@ published suite, and with `md5_password` pinning the protocol composition
 against an independent implementation. SCRAM stays the primary path: it is the
 default on every current server, and MD5 auth is disabled outright on several
 managed providers.
+
+## A finding that produced no ADR — `gguf-reader`
+
+Every dogfooding round above ends in an ADR, which risks reading as though
+dogfooding only ever *finds gaps*. This one deliberately did not, and recording
+it matters: an exercise that can only produce feature requests is not measuring
+the language, it is ratcheting it.
+
+**The question.** Every wire-format example in this tree is **big-endian** —
+PostgreSQL's frame length, the SHA-256 block, the `wire-decode` workload. That
+is not a coincidence: ADR-0019 Stage A was opened to serve a network protocol,
+and network byte order is big-endian by convention. So the operators it added
+and the `std::bits` helpers built on them (`be32`, `be16`, `byte_of_be32`) had
+only ever been exercised in one direction. Had the surface been quietly fitted
+to PostgreSQL rather than designed for byte manipulation generally?
+
+**The test.** GGUF — llama.cpp's model container — is the counter-case in every
+respect: **little-endian**, **64-bit**, and a **memory-mappable file format**
+rather than a stream of framed messages, its fields sized to be read straight
+into registers rather than delimited on a wire. `examples/gguf-reader/` parses
+its header, metadata table, and tensor descriptors: the whole structural walk a
+model loader performs before touching a single weight.
+
+**The result: it generalizes.** `le16_at`, `le32_at`, and `le64_at` are written
+in the shipped `<<`/`>>`/`&`/`|` with **no new language feature, no new builtin,
+and no compiler change**. Per the project's own rule — an ADR follows a gap a
+real program actually hit — this produced none. The 31 specs and the two-backend
+run are the evidence; there is nothing to propose.
+
+**The one boundary, and why it stayed a limit.** GGUF's counts, lengths, and
+offsets are `u64`; `Int` is signed `I64`. Values below 2^63 round-trip exactly —
+every real model file, 2^63 bytes being 9.2 exabytes — but bit 63 has no
+representation, and the compiler is consistent about that (`std::bits::test_bit`
+already documents excluding it; `1 << 63` type-checks and evaluates to
+`i64::MIN`, a *negative* number, useless as a length). `le64_at` **refuses** such
+a value with `-1` rather than wrapping it into a negative length a caller would
+use as an array bound, and assembles its high word with `* 4294967296` rather
+than `<< 32` precisely because multiplication **traps** on overflow — so the
+refusal is checked before it can be observed.
+
+Widening `Int` or adding an unsigned 64-bit type to make this example prettier
+would be exactly the ad-hoc feature the governing rule forbids: no program is
+blocked, so nothing has been demonstrated. The honest response is a refusal at
+the boundary plus a spec that pins it (`spec "sixty_four_bit_values"`). If a
+future dogfooding target genuinely needs the full `u64` range, *that* program
+earns the ADR — with a name, a benchmark, and a C peer.
+
+**What it says about the six axes.** On *diagnostic quality*, four diagnostics
+came up while writing it and all four were actionable without reading compiler
+source. One of them **independently corroborates D-5b from the opposite
+direction**: that finding recorded a missing parameter mode at a *declaration*
+degrading to a coarse `P0002` whole-item skip, and writing `mut` at a *call
+site* (`push_le(mut out, …)`) produces the same coarse recovery — "skipped 16
+tokens" — rather than a targeted "`mut` is a parameter mode, not a call-site
+annotation". Two independent programs reaching the same rough edge from
+different directions is what promotes a backlog diagnostics item over a
+one-off. The other three were exemplary: one carried its own fix (`"an
+identifier-named spec targets a module-level function; use a string name for a
+free-standing spec"`), one named the absent symbol precisely (`R0002: no `eq` in
+`std::str``), and one was caught by the ownership checker before any backend saw
+it (`M0005`, an owned `String` moved inside a loop).
+
+On *stdlib gaps*, the honest one is real but narrow: `std::bits` is
+big-endian-only, so the little-endian readers had to be written in the example.
+That is a plausible future `std::bits` addition —
+`le32`/`le64` alongside `be32`/`be16` — and it is a *library* change, needing no
+ADR at all.
+
+**What it deliberately does not do.** No tensor data is read and nothing is
+dequantized. A descriptor table is pure structure over bytes and is exactly what
+v0 expresses; reading the blob means `mmap` and SIMD over `f16`, which v0 does
+not have and this example does not pretend to. Running an actual model is a
+separate project that would *consume* tuonelang — not a reason to change it.

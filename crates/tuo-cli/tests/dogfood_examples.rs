@@ -513,3 +513,107 @@ fn workspace_graph_checks_specs_and_builds_to_a_runnable_binary() {
         run.status.code(),
     );
 }
+
+/// gguf-reader: the GGUF container format's header, metadata table, and tensor
+/// descriptors — the structural walk a model loader performs before it touches
+/// a single weight.
+///
+/// This example was written to answer a question empirically rather than to
+/// exercise a feature: every other wire-format example in this tree is
+/// **big-endian** (PostgreSQL's frame length, the SHA-256 block, the
+/// `wire-decode` workload), because ADR-0019 Stage A was opened to serve a
+/// network protocol. GGUF is the opposite case — a **little-endian, 64-bit,
+/// memory-mappable file format** — so it tests whether that operator surface
+/// generalizes past the protocol it was opened for, or had been fitted to it.
+/// It generalizes: `le16_at`/`le32_at`/`le64_at` are written in the shipped
+/// `<<`/`>>`/`&`/`|` with no new language feature, which is why this example
+/// produced **no ADR**.
+///
+/// It did find one real boundary, and the specs pin it as a *documented limit*
+/// rather than letting it become silent corruption: GGUF's counts, lengths and
+/// offsets are `u64` while `Int` is signed `I64`, so a value with bit 63 set
+/// has no representation. `le64_at` refuses such a value with `-1` instead of
+/// wrapping it to a negative length that a caller would then use as an array
+/// bound. Every value below 2^63 — i.e. every real model file, 2^63 bytes being
+/// 9.2 exabytes — round-trips exactly.
+///
+/// The parser is pure and spec-checked, so the program is hermetic: it parses a
+/// GGUF file it builds byte-by-byte from the format's own encoding rules, and
+/// its exit byte is the number of tensor descriptors whose name, shape, and
+/// file-absolute data offset were all recovered — 2 for the fixture.
+#[test]
+fn gguf_reader_checks_specs_and_walks_a_container() {
+    let dir = example_dir("gguf-reader");
+    let sources: Vec<PathBuf> = ["main", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+    assert_runs_to(&refs, 2);
+}
+
+/// gguf-reader vendors the catalog's `std::str`, which must equal the
+/// `tuo-stdlib` original byte-for-byte.
+#[test]
+fn gguf_reader_vendored_module_matches_the_catalog() {
+    let vendored = example_dir("gguf-reader").join("src/std_str.tuo");
+    let on_disk = std::fs::read_to_string(&vendored)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+    assert_eq!(
+        on_disk, tuo_stdlib::STR.source,
+        "examples/gguf-reader/src/std_str.tuo drifted from tuo-stdlib's std/str.tuo; \
+         re-copy the catalog module"
+    );
+}
+
+/// The fixture's byte layout is cross-checked against an **independent**
+/// implementation of the GGUF v3 spec (a short Python script using `struct`,
+/// recorded in the example's README workflow), so the example cannot be
+/// self-consistently wrong: its builder and its parser could share a bug, but
+/// they cannot also share one with a third implementation written from the
+/// format spec alone.
+///
+/// The independent implementation gives: descriptor table ends at byte 209,
+/// the data blob begins at 224 (209 rounded up to the declared alignment of
+/// 32), tensor 0 sits at 224, tensor 1 at 736 (224 + its blob-relative 512),
+/// and tensor 0 has 16x8 = 128 elements. Those exact numbers are asserted here
+/// through the real compiler, which pins the alignment rule and the
+/// blob-relative-to-file-absolute composition — the format's two classic bug
+/// sources — against an outside authority rather than against this example's
+/// own reasoning.
+#[test]
+fn gguf_reader_agrees_with_an_independent_implementation() {
+    let dir = example_dir("gguf-reader");
+    let probe = dir.join("src/cross_check.tuo");
+    let main = dir.join("src/main.tuo");
+    let std_str = dir.join("src/std_str.tuo");
+    assert_runs_to(&[&probe, &main, &std_str], 100);
+}
+
+/// The whole point of this example is bit manipulation, which is exactly where
+/// two backends are most likely to disagree — shift semantics, masking, and the
+/// 64-bit assembly in `le64_at` are all places an optimizer can differ from a
+/// straightforward lowering. So the same container walk is asserted to reach
+/// the same answer under the optimizing LLVM release backend as under the
+/// Cranelift debug backend.
+#[test]
+fn gguf_reader_runs_the_same_on_both_backends() {
+    let dir = example_dir("gguf-reader");
+    let main = dir.join("src/main.tuo");
+    let std_str = dir.join("src/std_str.tuo");
+    let out = tuo(&[
+        "run",
+        "--release",
+        &main.display().to_string(),
+        &std_str.display().to_string(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "gguf-reader under --release exited {:?}, expected 2\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
+    );
+}
