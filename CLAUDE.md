@@ -512,7 +512,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   **extended query protocol** (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`),
   which is what makes parameters *safe*: a value travels as its own
   length-prefixed field rather than interpolated into SQL text, demonstrated
-  with `'; DROP TABLE users; --` bound as a parameter and returned verbatim;
+  with `'; DROP TABLE users; --` bound as a parameter and returned verbatim,
+  and a **type map** driven by the `RowDescription`'s per-column type OIDs, so
+  decoding follows what the server said and an unrecognized OID is reported as
+  unknown rather than silently presented as text;
   its
   protocol layer is pure and spec-checked so `check`/`test` always run, while
   the live exchange skips cleanly when no server is reachable and its exit byte

@@ -4,7 +4,7 @@ A **real PostgreSQL client**: connects over TCP, authenticates with
 SCRAM-SHA-256, runs a query, and reads the rows back off the wire.
 
 ```bash
-tuo test --manifest .                        # 104 specs, 0 failed
+tuo test --manifest .                        # 112 specs, 0 failed
 tuo run src/main.tuo src/std_bits.tuo src/std_ct.tuo src/std_crypto.tuo src/std_str.tuo
 echo $?                                      # 42 (the answer SELECT 42 returned)
 ```
@@ -108,6 +108,7 @@ workaround; it is what those types are.
 | 5 | authenticated, but the simple query returned the wrong value |
 | 6 | the extended query's bound parameter did not round-trip |
 | 7 | a parameter containing SQL did not come back as literal text |
+| 8 | a column's type OID was not recognized from the `RowDescription` |
 | 20 | the client's proof was rejected — wrong password |
 | 21 | the **server's** signature failed verification |
 
@@ -141,9 +142,16 @@ in tuonelang and need no dependency, but TLS additionally needs X.509, a
 certificate store, and AEAD ciphers. Everything here is readable by anyone on
 the wire, which is fine over loopback and not fine over a network.
 
-**Only the first column of the first row**, as text. The simple query protocol
-returns everything in text format; mapping PostgreSQL OIDs onto tuonelang types
-is the type-map work a driver adds.
+**A partial type map.** The client reads each column's type OID from the
+`RowDescription` and decodes `bool`, the integer family, `text`/`varchar`, and
+`float8`. Anything else — `uuid`, `json`, `timestamptz`, arrays, composites —
+is reported as **unknown rather than guessed at**, because presenting an
+unrecognized type as text yields a value that looks plausible and may be wrong.
+A production driver's map covers the whole catalog and returns typed values
+rather than text; extending this one is table-filling, not new machinery.
+
+**NULL is not distinguished from an empty string.** Telling them apart needs an
+`Option` per column, which is the shape a driver returns.
 
 **A fixed client nonce**, so the dogfood test is reproducible. A real client
 uses `std::crypto::nonce` (the platform CSPRNG). The server's nonce is random

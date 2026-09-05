@@ -394,6 +394,14 @@ fn postgres_auth_checks_specs_and_completes_the_rfc_7677_handshake() {
 /// signature with the constant-time `std::crypto::verify` (ADR-0020), runs
 /// `SELECT 42`, and decodes the answer out of a `DataRow` frame.
 ///
+/// It then exercises the **extended query protocol**
+/// (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`) with the value sent as a
+/// parameter rather than interpolated into SQL — including one containing SQL,
+/// which must come back as literal text, proving the server treated it as data
+/// and never parsed it. Finally it reads a three-column row's type OIDs off the
+/// `RowDescription` and checks each against its type map, so decoding follows
+/// what the server said rather than an assumption.
+///
 /// **This test skips when no server is reachable**, and that is a deliberate
 /// trade rather than a hole. A developer without a local PostgreSQL must still
 /// get a green suite, so the program returns 3 for "could not connect" and the
@@ -441,7 +449,7 @@ fn postgres_client_checks_specs_and_authenticates_against_a_live_server() {
             "note: no PostgreSQL reachable on 127.0.0.1:55432;              the live SCRAM exchange was skipped (see this test's doc comment              for how to start one)"
         ),
         other => panic!(
-            "postgres-client reached a live server but failed at step {}:              exit {other:?} (20 = the client's proof was rejected,              21 = the server's signature failed verification,              5 = the query returned the wrong answer); stderr:\n{}",
+            "postgres-client reached a live server but failed at step {}: exit {other:?} (20 = the client's proof was rejected, 21 = the server's signature failed verification, 5 = the simple query returned the wrong answer, 6 = the bound parameter did not round-trip, 7 = a parameter containing SQL was not returned as literal text, 8 = a column's type OID was not recognized from the RowDescription); stderr:\n{}",
             other.map_or(-1, |c| c - 10),
             String::from_utf8_lossy(&out.stderr),
         ),
@@ -562,7 +570,8 @@ fn gguf_reader_vendored_module_matches_the_catalog() {
     let on_disk = std::fs::read_to_string(&vendored)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
     assert_eq!(
-        on_disk, tuo_stdlib::STR.source,
+        on_disk,
+        tuo_stdlib::STR.source,
         "examples/gguf-reader/src/std_str.tuo drifted from tuo-stdlib's std/str.tuo; \
          re-copy the catalog module"
     );

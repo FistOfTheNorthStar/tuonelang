@@ -34,13 +34,35 @@
 // testing. Those are the next increment, and each is a real algorithm rather
 // than a line of glue — they are absent rather than half-implemented.
 //
-// NOT CONSTANT TIME. Every operation here branches and loops on the *values*
-// it is given, so its running time reveals information about them. That is
-// fine for parsing, formatting, and protocol arithmetic on public values, and
-// it is **not** safe for a secret: a key, a nonce, or a private exponent
-// processed with these functions is exposed to a timing attack. tuonelang has
-// no way to express or verify constant-time code today, so this module states
-// the limit rather than implying a guarantee it cannot keep.
+// NOT CONSTANT TIME, AND NOT FIXABLE BY SUBSTITUTION. Every operation here
+// branches and loops on the *values* it is given, so its running time reveals
+// information about them. That is fine for parsing, formatting, and protocol
+// arithmetic on public values, and it is **not** safe for a secret: a key, a
+// nonce, or a private exponent processed with these functions is exposed to a
+// timing attack.
+//
+// Since ADR-0020 the language *does* have a constant-time subset (`std::ct`,
+// whose scalar primitives the compiler verifies via `#[constant_time]`), so it
+// is worth being exact about why this module does not use it. The problem is
+// not the spelling of individual operations — it is the algorithms:
+//
+//   * `mul` skips a limb when it is zero (`if ai != 0`), so its running time
+//     depends on how many zero limbs the operands contain.
+//   * `normalized` trims trailing zero limbs, so the *length* of every result
+//     depends on its value, and every later operation's loop count with it.
+//   * `div_small`, `cmp`, and the decimal conversions all short-circuit on the
+//     values they are given.
+//
+// Replacing these with masked selects would not make them constant time; it
+// would make them slower and still variable-time, because the loop bounds
+// themselves are data. A constant-time bignum is a different implementation —
+// fixed-width limb arrays with no normalization, schoolbook multiplication with
+// no zero-skip, and Montgomery reduction rather than division — which is a
+// successor ADR's work, not a substitution.
+//
+// So this module states the limit rather than implying a guarantee it cannot
+// keep, and the limit is a property of the algorithms rather than of the
+// language.
 
 module std::bignum;
 

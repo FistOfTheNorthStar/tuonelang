@@ -550,8 +550,8 @@ further evidence for it.
   ADR. It stays safe for public values and unsafe for secrets.
 - ~~**The `constant-time` benchmark workload is still not written.**~~
   *Resolved — see "The benchmark workload" below.*
-- **Cross-target behavior is still unverified** (ARM64 only), unchanged from
-  the Stage A/B note above.
+- ~~**Cross-target behavior is still unverified** (ARM64 only).~~
+  *Resolved — see "Cross-target verification" below.*
 - **There is still no taint discipline.** The attribute marks *functions*, not
   *data*: the compiler verifies how a marked function computes, never what
   flows into it, so passing a key to an unmarked function is not an error.
@@ -619,3 +619,83 @@ One 32-byte comparison is a few dozen instructions, so at a few hundred rounds
 every language finishes below the timer's resolution and the lab would record a
 meaningless zero. The first draft did exactly that, and the zeros were visible
 only because the figures were checked rather than assumed.
+
+---
+
+## Cross-target verification (2026-09-05)
+
+Every earlier note in this ADR recorded that the constant-time property was
+measured on ARM64 only, and gave the reason as "the workspace targets the host
+only". **That reason was wrong**, and the correction is more interesting than
+the gap.
+
+### What was actually true
+
+`TargetSpec` has always carried an arbitrary triple — it is a `String` field,
+not a host constant. Both backends then *refused* any triple that was not the
+host, with an explicit check and a clear "unsupported" message. So the
+restriction was a **deliberate policy** sitting one `if` away from being
+lifted, not an absent capability. The linked LLVM turned out to have the
+x86-64 and AArch64 targets registered already; only `initialize_native` was
+being called, which registers just the running architecture.
+
+The distinction matters because "we cannot" and "we have chosen not to" call
+for different work. This needed neither new plumbing nor an ABI change: the ABI
+is identical across the 64-bit targets v0 defines (`POINTER_SIZE` is 8 for all
+of them), so the object LLVM emits for another 64-bit triple is already
+correct.
+
+### What shipped
+
+The LLVM backend now emits objects for a non-host 64-bit triple, initializing
+all targets when one is requested and keeping `initialize_native` for the
+common path so the usual build's LLVM footprint is unchanged. For a non-host
+triple it selects the **generic** CPU with no extra features, since assuming
+the host's would emit instructions the target may not have.
+
+What is still host-only is **linking**: that needs a cross-linker and a target
+libc, neither of which the workspace has. `tuo build` is therefore unchanged —
+a caller asking for another triple gets a relocatable object and is responsible
+for linking it. This is the honest boundary: the compiler can now *say* what it
+would emit for another machine without pretending it can produce a runnable
+program for one.
+
+### The measurement
+
+`tuo-cli/tests/constant_time_cross_target.rs` compiles the ten
+`#[constant_time]` primitives for **x86-64 Linux** and **x86-64 Darwin**,
+disassembles the emitted objects, and asserts no conditional branch and no trap
+edge. Both pass: **the branchless idioms survive LLVM's O2 on x86-64 as well as
+on ARM64.**
+
+The open worry is settled in the direction one would hope but could not assume.
+`csel` on ARM64 and `cmov` on x86-64 are different instructions chosen by
+different heuristics, so a masking idiom staying branchless on one architecture
+was never evidence about the other.
+
+### Three design decisions in the test, each load-bearing
+
+**It compiles only the marked primitives, not the whole module.** `std::ct`
+also contains `select_array` and `bytes_eq`, which are deliberately unmarked
+because a scan needs a loop and a loop is a backward conditional branch. The
+first version of this test compiled the whole module and failed on exactly
+those two — correctly. Special-casing them by name is impossible, because
+symbol names do not survive into the object: every function appears as
+`tuo_fn_<n>`. Compiling exactly the marked set removes the ambiguity, so any
+branch found is a real violation.
+
+**The primitives are extracted from the catalog source, not transcribed.** A
+hand-written copy would keep passing while the shipped library regressed. The
+extraction asserts it found exactly ten, so adding or removing a marked
+function is a loud failure rather than a silently smaller check.
+
+**The "nothing was checked" guard is what caught the first two bugs.** The test
+asserts it found at least eight generated functions. That fired twice — once
+when the symbol matching was wrong, once on Mach-O's leading-underscore
+convention — and in both cases the alternative was a green test that had
+inspected nothing at all.
+
+Both properties were verified by sabotage: rewriting `select` with an `if`
+fails, and temporarily treating an ordinary `movq` as a branch produces the
+expected failure against real x86-64 disassembly, proving the check reads
+actual instructions rather than passing over an empty list.

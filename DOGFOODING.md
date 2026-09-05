@@ -536,6 +536,13 @@ version could have surfaced:
   server-signature check reports 21. Both were verified load-bearing by
   substituting a wrong password and by tampering with the expected signature;
   a single boolean would have said only "it didn't work".
+* **A type map's honest answer is sometimes "I don't know".** The client reads
+  each column's type OID off the `RowDescription` rather than assuming
+  everything is text, and reports an unrecognized OID as unknown. That is the
+  useful behaviour: presenting a `uuid` or a `timestamptz` as text yields a
+  value that looks plausible and may be wrong, and a caller cannot tell. The
+  live test proves it by asking for a `uuid` column and requiring the client to
+  refuse it.
 * **The extended query protocol is a safety feature, not a performance one.**
   The simple `Query` message carries SQL text, so a value can only reach it by
   interpolation — which is how SQL injection happens. `Parse`/`Bind` separates

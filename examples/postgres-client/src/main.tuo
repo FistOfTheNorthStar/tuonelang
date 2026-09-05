@@ -444,6 +444,230 @@ pub fn first_column(in payload: Str) -> String {
 // The wire (effect tier). No specs — `R0007` keeps the sandbox pure.
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// The type map (executable tier).
+//
+// A `RowDescription` gives each column a type OID — PostgreSQL's own integer
+// identifier for the type. The simple and unnamed-extended protocols both
+// return values in TEXT format, so decoding is "parse this text according to
+// what the OID says it is". The OID is what tells a driver whether "1" is an
+// integer, a boolean it should present as `true`, or a string that happens to
+// look numeric.
+//
+// The map here covers the types this client can honestly present. An unknown
+// OID is reported as unknown rather than guessed at, because a driver that
+// silently treats an unrecognized type as text will hand back something that
+// looks right and is not.
+// ----------------------------------------------------------------------------
+
+/// The `Bool` type OID (16).
+///
+/// ```tuo
+/// postgres_client::oid_bool()  // 16
+/// ```
+pub fn oid_bool() -> Int {
+    16
+}
+
+/// The `Int8` (bigint) type OID (20).
+///
+/// ```tuo
+/// postgres_client::oid_int8()  // 20
+/// ```
+pub fn oid_int8() -> Int {
+    20
+}
+
+/// The `Int2` (smallint) type OID (21).
+///
+/// ```tuo
+/// postgres_client::oid_int2()  // 21
+/// ```
+pub fn oid_int2() -> Int {
+    21
+}
+
+/// The `Int4` (integer) type OID (23).
+///
+/// ```tuo
+/// postgres_client::oid_int4()  // 23
+/// ```
+pub fn oid_int4() -> Int {
+    23
+}
+
+/// The `Text` type OID (25).
+///
+/// ```tuo
+/// postgres_client::oid_text()  // 25
+/// ```
+pub fn oid_text() -> Int {
+    25
+}
+
+/// The `Float8` (double precision) type OID (701).
+///
+/// ```tuo
+/// postgres_client::oid_float8()  // 701
+/// ```
+pub fn oid_float8() -> Int {
+    701
+}
+
+/// The `Varchar` type OID (1043).
+///
+/// ```tuo
+/// postgres_client::oid_varchar()  // 1043
+/// ```
+pub fn oid_varchar() -> Int {
+    1043
+}
+
+/// Whether `oid` names a type this client decodes as an integer.
+///
+/// ```tuo
+/// postgres_client::oid_is_integer(23)  // true
+/// ```
+pub fn oid_is_integer(take oid: Int) -> Bool {
+    oid == oid_int2() || oid == oid_int4() || oid == oid_int8()
+}
+
+/// Whether `oid` names a type this client decodes as text.
+///
+/// ```tuo
+/// postgres_client::oid_is_text(25)  // true
+/// ```
+pub fn oid_is_text(take oid: Int) -> Bool {
+    oid == oid_text() || oid == oid_varchar()
+}
+
+/// Whether `oid` is one this client can decode at all.
+///
+/// An unknown OID is reported rather than guessed: presenting an unrecognized
+/// type as text yields a value that looks plausible and may be wrong.
+///
+/// ```tuo
+/// postgres_client::oid_is_known(23)   // true
+/// postgres_client::oid_is_known(2950) // false — uuid, not in this map
+/// ```
+pub fn oid_is_known(take oid: Int) -> Bool {
+    oid_is_integer(oid) || oid_is_text(oid) || oid == oid_bool() || oid == oid_float8()
+}
+
+/// The name this client uses for `oid`, or `"unknown"`.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::oid_name(16))  // "bool"
+/// ```
+pub fn oid_name(take oid: Int) -> String {
+    var out = std::string::empty();
+    if oid == oid_bool() {
+        std::string::append(out, "bool");
+    } else {
+        if oid_is_integer(oid) {
+            std::string::append(out, "int");
+        } else {
+            if oid_is_text(oid) {
+                std::string::append(out, "text");
+            } else {
+                if oid == oid_float8() {
+                    std::string::append(out, "float");
+                } else {
+                    std::string::append(out, "unknown");
+                }
+            }
+        }
+    }
+    out
+}
+
+/// A `bool` column's text form (`"t"`/`"f"`) as a tuonelang `Bool`.
+///
+/// PostgreSQL sends booleans as a single character in text format, which is
+/// exactly the kind of detail a type map exists to hide from a caller.
+///
+/// ```tuo
+/// postgres_client::decode_bool("t")  // true
+/// ```
+pub fn decode_bool(in text: Str) -> Bool {
+    std::str::len(text) > 0 && std::str::byte_at(text, 0) == 116
+}
+
+/// The type OIDs named by a `RowDescription` payload, in column order.
+///
+/// The payload is a 2-byte field count, then per field: a null-terminated
+/// name, table OID (4), column attribute number (2), **type OID (4)**, type
+/// size (2), type modifier (4), and format code (2).
+///
+/// ```tuo
+/// std::array::len(postgres_client::row_description_oids(""))  // 0
+/// ```
+pub fn row_description_oids(in payload: Str) -> Array[Int] {
+    var out = std::array::empty();
+    if std::str::len(payload) < 2 {
+        return out;
+    }
+    let count = (std::str::byte_at(payload, 0) << 8) | std::str::byte_at(payload, 1);
+    var offset = 2;
+    var field = 0;
+    while field < count {
+        // Skip the null-terminated field name.
+        while offset < std::str::len(payload) && std::str::byte_at(payload, offset) != 0 {
+            offset = offset + 1;
+        }
+        offset = offset + 1;
+        // Table OID (4) and column number (2) precede the type OID.
+        let oid = be32_at(payload, offset + 6);
+        if oid < 0 {
+            return out;
+        }
+        std::array::push(out, oid);
+        // The whole fixed part after the name is 18 bytes.
+        offset = offset + 18;
+        field = field + 1;
+    }
+    out
+}
+
+/// The columns of a `DataRow` payload, as text, in order.
+///
+/// A `DataRow` is a 2-byte column count then, per column, a 4-byte length
+/// (`-1` for NULL) and that many bytes. A NULL is returned as an empty string
+/// here; distinguishing it from an empty value needs an `Option`, which is the
+/// type-map work a real driver does.
+///
+/// ```tuo
+/// std::array::len(postgres_client::row_columns(""))  // 0
+/// ```
+pub fn row_columns(in payload: Str) -> Array[String] {
+    var out = std::array::empty();
+    if std::str::len(payload) < 2 {
+        return out;
+    }
+    let count = (std::str::byte_at(payload, 0) << 8) | std::str::byte_at(payload, 1);
+    var offset = 2;
+    var column = 0;
+    while column < count {
+        let length = be32_at(payload, offset);
+        offset = offset + 4;
+        var value = std::string::empty();
+        if length > 0 {
+            var i = 0;
+            while i < length {
+                let at = offset + i;
+                if at < std::str::len(payload) {
+                    std::string::push_byte(value, std::str::byte_at(payload, at));
+                }
+                i = i + 1;
+            }
+            offset = offset + length;
+        }
+        std::array::push(out, value);
+        column = column + 1;
+    }
+    out
+}
+
 /// EFFECT: read `n` bytes from `fd`, returning them as a `String`. A short
 /// read (timeout or closed connection) returns what arrived.
 ///
@@ -652,6 +876,59 @@ fn run_extended(take fd: Int, in sql: Str, in value: Str) -> String {
     answer
 }
 
+/// EFFECT: run `sql` and return how many of its columns this client could
+/// decode with a *known* type, or a negative value on failure.
+///
+/// The point is the `RowDescription`: the client reads each column's type OID
+/// off the wire and consults its map, rather than assuming everything is text.
+/// A column whose OID it does not recognize is not counted, so the answer is
+/// how much of the row it can honestly present.
+///
+/// Effectful, so no spec; pinned by the dogfood test.
+fn run_typed(take fd: Int, in sql: Str) -> Int {
+    if std::rt::write_string(fd, query_message(sql)) < 0 {
+        return 0 - 1;
+    }
+    var oids = std::array::empty();
+    var known = 0 - 1;
+    var guard = 0;
+    while guard < 100 {
+        var tag_box = std::array::empty();
+        let payload = read_frame(fd, tag_box);
+        if std::array::len(tag_box) == 0 {
+            return 0 - 2;
+        }
+        let t = std::array::get(tag_box, 0);
+        // 'T' = RowDescription: the column types.
+        if t == 84 {
+            oids = row_description_oids(std::string::as_str(payload));
+        }
+        // 'D' = DataRow: check each column against the type its OID names.
+        if t == 68 {
+            if known < 0 {
+                let columns = row_columns(std::string::as_str(payload));
+                var count = 0;
+                var i = 0;
+                while i < std::array::len(columns) {
+                    if i < std::array::len(oids) {
+                        if oid_is_known(std::array::get(oids, i)) {
+                            count = count + 1;
+                        }
+                    }
+                    i = i + 1;
+                }
+                known = count;
+            }
+        }
+        // 'Z' = ReadyForQuery.
+        if t == 90 {
+            return known;
+        }
+        guard = guard + 1;
+    }
+    known
+}
+
 /// `value` when `result` is `Ok`, otherwise `fallback`.
 ///
 /// ```tuo
@@ -707,9 +984,17 @@ fn main() -> Int {
     // instead of bound. It must come back as the literal text it is, proving
     // the server treated it as data and never parsed it.
     let injection = run_extended(fd, "SELECT $1::text", "'; DROP TABLE users; --");
-    std::rt::close(fd);
     if std::string::as_str(injection) != "'; DROP TABLE users; --" {
+        std::rt::close(fd);
         return 7;
+    }
+
+    // The type map: a three-column row whose types the client reads off the
+    // RowDescription rather than assuming. All three OIDs must be recognized.
+    let typed = run_typed(fd, "SELECT 42::int4, 'hi'::text, true");
+    std::rt::close(fd);
+    if typed != 3 {
+        return 8;
     }
 
     42
@@ -920,4 +1205,99 @@ spec extended_query {
     // binding safe. A value containing SQL appears only in the Bind message.
     then std::str::contains(std::string::as_str(parse_message("SELECT $1")), "DROP") == false;
     then std::str::contains(std::string::as_str(bind_message("'; DROP TABLE users; --")), "DROP");
+}
+
+spec oid_name {
+    then std::string::as_str(oid_name(16)) == "bool";
+    then std::string::as_str(oid_name(23)) == "int";
+    then std::string::as_str(oid_name(20)) == "int";
+    then std::string::as_str(oid_name(25)) == "text";
+    then std::string::as_str(oid_name(1043)) == "text";
+    then std::string::as_str(oid_name(701)) == "float";
+    // An OID outside the map is reported as unknown, never guessed at.
+    then std::string::as_str(oid_name(2950)) == "unknown";
+}
+
+spec oid_is_known {
+    then oid_is_known(16);
+    then oid_is_known(23);
+    then oid_is_known(25);
+    then oid_is_known(701);
+    // uuid, json, and timestamptz are real types this client does not decode.
+    then oid_is_known(2950) == false;
+    then oid_is_known(114) == false;
+    then oid_is_known(1184) == false;
+}
+
+spec oid_is_integer {
+    then oid_is_integer(21);
+    then oid_is_integer(23);
+    then oid_is_integer(20);
+    then oid_is_integer(25) == false;
+    then oid_is_integer(16) == false;
+}
+
+spec oid_is_text {
+    then oid_is_text(25);
+    then oid_is_text(1043);
+    then oid_is_text(23) == false;
+}
+
+spec decode_bool {
+    // PostgreSQL sends booleans as "t"/"f" in text format.
+    then decode_bool("t");
+    then decode_bool("f") == false;
+    then decode_bool("") == false;
+}
+
+spec row_columns {
+    // A payload too short to hold a count yields nothing rather than trapping.
+    then std::array::len(row_columns("")) == 0;
+    // One column round-trips through the encoder.
+    then std::array::len(row_columns(std::string::as_str(data_row("42")))) == 1;
+    then std::string::as_str(std::array::get(row_columns(std::string::as_str(data_row("42"))), 0)) == "42";
+    // A longer value survives intact.
+    then std::string::as_str(std::array::get(row_columns(std::string::as_str(data_row("hello"))), 0)) == "hello";
+    // An empty value is an empty string, not a missing column.
+    then std::array::len(row_columns(std::string::as_str(data_row("")))) == 1;
+}
+
+spec row_description_oids {
+    then std::array::len(row_description_oids("")) == 0;
+    // One field named "n" of type int4 (23).
+    then std::array::len(row_description_oids(std::string::as_str(described("n", 23)))) == 1;
+    then std::array::get(row_description_oids(std::string::as_str(described("n", 23))), 0) == 23;
+    then std::array::get(row_description_oids(std::string::as_str(described("col", 25))), 0) == 25;
+}
+
+/// A one-field `RowDescription` payload naming `name` with type `oid`. Spec
+/// helper for [`row_description_oids`], which parses what a server sends.
+///
+/// ```tuo
+/// std::array::len(postgres_client::row_description_oids(std::string::as_str(postgres_client::described("n", 23))))  // 1
+/// ```
+pub fn described(in name: Str, take oid: Int) -> String {
+    var out = std::string::empty();
+    // One field.
+    std::string::push_byte(out, 0);
+    std::string::push_byte(out, 1);
+    push_cstring(out, name);
+    // Table OID and column number precede the type OID.
+    push_be32(out, 0);
+    std::string::push_byte(out, 0);
+    std::string::push_byte(out, 1);
+    push_be32(out, oid);
+    // Type size, modifier, and format code follow it.
+    std::string::push_byte(out, 0);
+    std::string::push_byte(out, 4);
+    push_be32(out, 0 - 1);
+    std::string::push_byte(out, 0);
+    std::string::push_byte(out, 0);
+    out
+}
+
+spec described {
+    // Two bytes of count, the name and its terminator, then 18 fixed bytes.
+    then std::string::len(described("n", 23)) == 22;
+    then std::string::byte_at(described("n", 23), 1) == 1;
 }
