@@ -4,7 +4,7 @@ A **real PostgreSQL client**: connects over TCP, authenticates with
 SCRAM-SHA-256, runs a query, and reads the rows back off the wire.
 
 ```bash
-tuo test --manifest .                        # 98 specs, 0 failed
+tuo test --manifest .                        # 104 specs, 0 failed
 tuo run src/main.tuo src/std_bits.tuo src/std_ct.tuo src/std_crypto.tuo src/std_str.tuo
 echo $?                                      # 42 (the answer SELECT 42 returned)
 ```
@@ -18,8 +18,8 @@ connection to an actual server. Together they are the connector that
 [ADR-0019](../../specification/adr/ADR-0019-bitwise-operations-and-crypto.md)
 was opened for, which at the time the language could not express **at all**.
 
-It is a *client*, not a driver. What a production driver adds — the extended
-query protocol, the full PostgreSQL type map, connection pooling, TLS — is
+It is a *client*, not a driver. What a production driver adds — the full
+PostgreSQL type map, connection pooling, named prepared statements, TLS — is
 breadth, not anything the language is missing. Every piece here is ordinary v0.
 
 ## The exchange it performs
@@ -36,6 +36,9 @@ breadth, not anything the language is missing. Every piece here is ordinary v0.
    the client **verifies that signature in constant time**.
 7. **`Query` / `DataRow` / `ReadyForQuery`** — `SELECT 42`, decoded from the
    frame.
+8. **`Parse` / `Bind` / `Describe` / `Execute` / `Sync`** — the extended query
+   protocol, with the value sent as a *parameter* rather than interpolated into
+   SQL text.
 
 Steps 6 and 7 are the ones worth dwelling on. A client that skips the server
 signature authenticates happily against an impostor; a client that checks it
@@ -60,6 +63,32 @@ Every read uses `read_byte_timeout` (ADR-0017), never the unbounded
 `read_byte`. A client that blocks forever on a server that stopped talking is a
 hung process.
 
+## Parameter binding is the point of the extended protocol
+
+The simple `Query` message carries SQL text, so a value can only get into it by
+being interpolated — and that is how SQL injection happens. The extended
+protocol separates the two: `Parse` sends the statement with `$1` placeholders,
+`Bind` sends the parameter *values* as length-prefixed byte fields, and the
+server never re-parses them as SQL. No quoting is involved, so none can be got
+wrong.
+
+The client demonstrates this against the live server with a value chosen to be
+catastrophic if it were interpolated:
+
+```tuo
+run_extended(fd, "SELECT $1::text", "'; DROP TABLE users; --")
+```
+
+It comes back as the literal text it is. `main` returns 7 if it does not, and
+that check is verified load-bearing — substituting a different expected value
+really produces 7. The specs additionally pin the structural property the
+runtime check cannot see: the dangerous text appears in the `Bind` message and
+**never** in the `Parse` message's SQL.
+
+A driver that speaks only the simple protocol cannot offer safe parameters at
+all, which is why this is the load-bearing half of a real client rather than a
+performance optimization.
+
 ## Bytes are `String`
 
 v0 has no `[u8]`, and `Str`/`String` are byte containers that hold zero bytes
@@ -76,7 +105,9 @@ workaround; it is what those types are.
 |-----:|---------|
 | 42 | success: authenticated and the query returned the right answer |
 | 3 | could not connect (no server) — the dogfood test treats this as a skip |
-| 5 | authenticated, but the query returned the wrong value |
+| 5 | authenticated, but the simple query returned the wrong value |
+| 6 | the extended query's bound parameter did not round-trip |
+| 7 | a parameter containing SQL did not come back as literal text |
 | 20 | the client's proof was rejected — wrong password |
 | 21 | the **server's** signature failed verification |
 
@@ -109,10 +140,6 @@ authenticating at all.
 in tuonelang and need no dependency, but TLS additionally needs X.509, a
 certificate store, and AEAD ciphers. Everything here is readable by anyone on
 the wire, which is fine over loopback and not fine over a network.
-
-**No extended query protocol**, so no parameter binding — and therefore no
-prepared statements. A real driver needs `Parse`/`Bind`/`Execute` for both
-performance and to keep query text and data separate.
 
 **Only the first column of the first row**, as text. The simple query protocol
 returns everything in text format; mapping PostgreSQL OIDs onto tuonelang types

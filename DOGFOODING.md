@@ -536,6 +536,15 @@ version could have surfaced:
   server-signature check reports 21. Both were verified load-bearing by
   substituting a wrong password and by tampering with the expected signature;
   a single boolean would have said only "it didn't work".
+* **The extended query protocol is a safety feature, not a performance one.**
+  The simple `Query` message carries SQL text, so a value can only reach it by
+  interpolation — which is how SQL injection happens. `Parse`/`Bind` separates
+  them: the statement carries `$1` placeholders and the value travels as its
+  own length-prefixed field the server never re-parses. The client proves this
+  against the live server by binding `'; DROP TABLE users; --` and requiring it
+  back verbatim; the server's log never shows the text as SQL. The specs pin
+  the structural half the runtime check cannot see — that the dangerous text
+  appears in the `Bind` message and never in `Parse`'s SQL.
 
 **`md5` has since landed too**, so the legacy `AuthenticationMD5Password`
 challenge is supported for servers too old for SCRAM — shipped documented as

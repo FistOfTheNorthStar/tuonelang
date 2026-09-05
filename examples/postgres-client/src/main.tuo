@@ -276,6 +276,123 @@ pub fn client_nonce(take seed: Int) -> String {
 }
 
 // ----------------------------------------------------------------------------
+// The extended query protocol (executable tier).
+//
+// The simple `Query` message above interpolates values into SQL text, which is
+// how SQL injection happens. The extended protocol separates the two: `Parse`
+// sends the statement with `$1`-style placeholders, `Bind` sends the parameter
+// VALUES as length-prefixed bytes, and the server never re-parses them as SQL.
+// A driver that only speaks the simple protocol cannot offer safe parameters at
+// all, which is why this is the load-bearing half of a real client.
+//
+// The sequence is Parse -> Bind -> Describe -> Execute -> Sync, pipelined in
+// one write, then the replies are read until ReadyForQuery.
+// ----------------------------------------------------------------------------
+
+/// The `Parse` message ('P'): an unnamed prepared statement for `sql`.
+///
+/// The placeholder types are left empty so the server infers them, which is
+/// what a client without its own type map should do.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::parse_message("SELECT $1"), 0)  // 80
+/// ```
+pub fn parse_message(in sql: Str) -> String {
+    var payload = std::string::empty();
+    // The unnamed statement: an empty name.
+    std::string::push_byte(payload, 0);
+    push_cstring(payload, sql);
+    // Zero parameter type OIDs: let the server infer them.
+    std::string::push_byte(payload, 0);
+    std::string::push_byte(payload, 0);
+    frame(80, std::string::as_str(payload))
+}
+
+/// The `Bind` message ('B') supplying one text parameter to the unnamed
+/// statement.
+///
+/// This is the message that makes parameters safe: `value` travels as a
+/// length-prefixed byte string in its own field, never as SQL text, so no
+/// quoting or escaping is involved and none can be got wrong.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::bind_message("42"), 0)  // 66
+/// ```
+pub fn bind_message(in value: Str) -> String {
+    var payload = std::string::empty();
+    // Unnamed portal, unnamed statement.
+    std::string::push_byte(payload, 0);
+    std::string::push_byte(payload, 0);
+    // Zero parameter format codes: all text.
+    std::string::push_byte(payload, 0);
+    std::string::push_byte(payload, 0);
+    // One parameter, sent as its length and bytes.
+    std::string::push_byte(payload, 0);
+    std::string::push_byte(payload, 1);
+    push_be32(payload, std::str::len(value));
+    std::string::append(payload, value);
+    // Zero result format codes: all text.
+    std::string::push_byte(payload, 0);
+    std::string::push_byte(payload, 0);
+    frame(66, std::string::as_str(payload))
+}
+
+/// The `Describe` message ('D') for the unnamed portal.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::describe_message(), 0)  // 68
+/// ```
+pub fn describe_message() -> String {
+    var payload = std::string::empty();
+    // 'P' = describe a portal (as opposed to 'S', a statement).
+    std::string::push_byte(payload, 80);
+    std::string::push_byte(payload, 0);
+    frame(68, std::string::as_str(payload))
+}
+
+/// The `Execute` message ('E') for the unnamed portal, with no row limit.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::execute_message(), 0)  // 69
+/// ```
+pub fn execute_message() -> String {
+    var payload = std::string::empty();
+    std::string::push_byte(payload, 0);
+    // Row limit 0 = return every row.
+    push_be32(payload, 0);
+    frame(69, std::string::as_str(payload))
+}
+
+/// The `Sync` message ('S'), which ends the extended-query sequence and makes
+/// the server report `ReadyForQuery`.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::sync_message(), 0)  // 83
+/// ```
+pub fn sync_message() -> String {
+    frame(83, "")
+}
+
+/// The whole extended-query sequence for `sql` with one parameter `value`,
+/// pipelined into a single write.
+///
+/// Sending them together is what the protocol is designed for: one round trip
+/// rather than five.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::extended_query("SELECT $1", "1"), 0)  // 80
+/// ```
+pub fn extended_query(in sql: Str, in value: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, std::string::as_str(parse_message(sql)));
+    std::string::append(out, std::string::as_str(bind_message(value)));
+    std::string::append(out, std::string::as_str(describe_message()));
+    std::string::append(out, std::string::as_str(execute_message()));
+    std::string::append(out, std::string::as_str(sync_message()));
+    out
+}
+
+// ----------------------------------------------------------------------------
 // Row decoding (executable tier).
 // ----------------------------------------------------------------------------
 
@@ -500,6 +617,41 @@ fn run_query(take fd: Int, in sql: Str) -> String {
     answer
 }
 
+/// EFFECT: run `sql` with one bound parameter through the extended query
+/// protocol, returning the first column of the first row as text.
+///
+/// The parameter never enters the SQL text, so no quoting is involved and none
+/// can be got wrong — the property the simple protocol cannot offer.
+///
+/// Effectful, so no spec; pinned by the dogfood test.
+fn run_extended(take fd: Int, in sql: Str, in value: Str) -> String {
+    var answer = std::string::empty();
+    if std::rt::write_string(fd, extended_query(sql, value)) < 0 {
+        return answer;
+    }
+    var guard = 0;
+    while guard < 100 {
+        var tag_box = std::array::empty();
+        let payload = read_frame(fd, tag_box);
+        if std::array::len(tag_box) == 0 {
+            return answer;
+        }
+        let t = std::array::get(tag_box, 0);
+        // 'D' = DataRow.
+        if t == 68 {
+            if std::string::len(answer) == 0 {
+                answer = first_column(std::string::as_str(payload));
+            }
+        }
+        // 'Z' = ReadyForQuery, sent in response to Sync.
+        if t == 90 {
+            return answer;
+        }
+        guard = guard + 1;
+    }
+    answer
+}
+
 /// `value` when `result` is `Ok`, otherwise `fallback`.
 ///
 /// ```tuo
@@ -535,13 +687,32 @@ fn main() -> Int {
         return 10 - auth;
     }
 
+    // The simple query protocol: SQL text, no parameters.
     let answer = run_query(fd, "SELECT 42");
-    std::rt::close(fd);
-
-    if std::string::as_str(answer) == "42" {
-        return 42;
+    if std::string::as_str(answer) != "42" {
+        std::rt::close(fd);
+        return 5;
     }
-    5
+
+    // The extended protocol, with the value bound as a parameter rather than
+    // interpolated. The server echoes it back, so agreement proves the whole
+    // Parse/Bind/Describe/Execute/Sync sequence was accepted.
+    let bound = run_extended(fd, "SELECT $1::int", "42");
+    if std::string::as_str(bound) != "42" {
+        std::rt::close(fd);
+        return 6;
+    }
+
+    // A value that would be catastrophic if it were interpolated into SQL
+    // instead of bound. It must come back as the literal text it is, proving
+    // the server treated it as data and never parsed it.
+    let injection = run_extended(fd, "SELECT $1::text", "'; DROP TABLE users; --");
+    std::rt::close(fd);
+    if std::string::as_str(injection) != "'; DROP TABLE users; --" {
+        return 7;
+    }
+
+    42
 }
 
 spec push_be32 {
@@ -700,4 +871,53 @@ spec data_row {
 spec unwrap_or {
     then unwrap_or(std::str::parse_int("12"), 0) == 12;
     then unwrap_or(std::str::parse_int("nope"), 7) == 7;
+}
+
+spec parse_message {
+    then std::string::byte_at(parse_message("SELECT $1"), 0) == 80;
+    // Tag + length + empty name + sql + terminator + zero param types.
+    then std::string::len(parse_message("SELECT $1")) == 18;
+    then be32_at(std::string::as_str(parse_message("SELECT $1")), 1) == 17;
+    // The unnamed statement: an empty name immediately after the length.
+    then std::string::byte_at(parse_message("SELECT $1"), 5) == 0;
+}
+
+spec bind_message {
+    then std::string::byte_at(bind_message("42"), 0) == 66;
+    then be32_at(std::string::as_str(bind_message("42")), 1) == std::string::len(bind_message("42")) - 1;
+    // Exactly one parameter is declared.
+    then std::string::byte_at(bind_message("42"), 10) == 1;
+    // The parameter travels as its own length-prefixed field, so a longer
+    // value makes a longer message and nothing else changes.
+    then std::string::len(bind_message("4242")) == std::string::len(bind_message("42")) + 2;
+}
+
+spec describe_message {
+    then std::string::byte_at(describe_message(), 0) == 68;
+    // 'P' = a portal, not a statement.
+    then std::string::byte_at(describe_message(), 5) == 80;
+    then std::string::len(describe_message()) == 7;
+}
+
+spec execute_message {
+    then std::string::byte_at(execute_message(), 0) == 69;
+    then std::string::len(execute_message()) == 10;
+    // Row limit 0: every row.
+    then be32_at(std::string::as_str(execute_message()), 6) == 0;
+}
+
+spec sync_message {
+    then std::string::byte_at(sync_message(), 0) == 83;
+    then std::string::len(sync_message()) == 5;
+    then be32_at(std::string::as_str(sync_message()), 1) == 4;
+}
+
+spec extended_query {
+    // The five messages in protocol order: P, B, D, E, S.
+    then std::string::byte_at(extended_query("SELECT $1", "1"), 0) == 80;
+    then std::string::len(extended_query("SELECT $1", "1")) == std::string::len(parse_message("SELECT $1")) + std::string::len(bind_message("1")) + std::string::len(describe_message()) + std::string::len(execute_message()) + std::string::len(sync_message());
+    // The parameter value is NOT in the SQL text — the property that makes
+    // binding safe. A value containing SQL appears only in the Bind message.
+    then std::str::contains(std::string::as_str(parse_message("SELECT $1")), "DROP") == false;
+    then std::str::contains(std::string::as_str(bind_message("'; DROP TABLE users; --")), "DROP");
 }

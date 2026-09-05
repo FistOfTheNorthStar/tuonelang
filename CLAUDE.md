@@ -508,7 +508,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   structurally but fatal to the proof), and `postgres-client` (the other half:
   the same protocol driven over TCP against a **real PostgreSQL server** —
   startup packet, the live SASL exchange, the server's signature verified in
-  constant time, then `SELECT 42` decoded out of a `DataRow` frame; its
+  constant time, then `SELECT 42` decoded out of a `DataRow` frame — and the
+  **extended query protocol** (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`),
+  which is what makes parameters *safe*: a value travels as its own
+  length-prefixed field rather than interpolated into SQL text, demonstrated
+  with `'; DROP TABLE users; --` bound as a parameter and returned verbatim;
+  its
   protocol layer is pure and spec-checked so `check`/`test` always run, while
   the live exchange skips cleanly when no server is reachable and its exit byte
   *names the failing step* when one is, so a rejected proof reports 20 and a
