@@ -30,6 +30,8 @@
 //! `tuo build --manifest … -o …` then executed, because `tuo run` is file-based
 //! and has no package-aware form (DOGFOODING.md finding D-7).
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -242,6 +244,23 @@ fn http_service_parses_routes_prints_and_runs() {
         "HTTP/1.1 200 OK\n",
         "http-service must print its documented response line, byte for byte"
     );
+
+    // The wire framing is a separate promise from the printed line. `main`'s
+    // exit 200 already requires its loopback oracle to have read a *complete*
+    // response back (status line plus a terminated header block), but the
+    // source is asserted too so the framing constant cannot quietly regress to
+    // the bare `"\n"` this example shipped with — a response a real client
+    // cannot parse, and which no stdout assertion would notice.
+    let source = std::fs::read_to_string(&main).expect("http-service source reads");
+    assert!(
+        source.contains(r"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        "http-service must terminate its response with CRLF headers and a blank line"
+    );
+    assert!(
+        source.contains("drain_headers(conn)"),
+        "http-service must drain the request's header block before responding, \
+         or the close RSTs the response away"
+    );
 }
 
 /// concurrent-worker: since ADR-0007 the pool **runs live** — `main` computes
@@ -268,7 +287,12 @@ fn concurrent_worker_scheduling_core_checks_specs_and_runs() {
 /// is this example's documented finding. `main` resolves each path at runtime
 /// and calls through the slot it lands on, so the native run exercises a real
 /// indirect call (ADR-0008 Tier 1) that no pass can fold back into a direct
-/// one. Everything is pure, so the whole router is spec-checked; exit = 74.
+/// one. The dispatch table is pure and spec-checked; since this revision the
+/// example also carries an effect tier that serves the table over a real
+/// socket, and `main` exits 74 only when the six requests served over
+/// loopback agree with the pure `report()` — so the exit byte is now evidence
+/// the router *serves*, not merely that it dispatches. The independent-client
+/// framing oracle is `router_serves_real_http_to_an_independent_client`.
 #[test]
 fn router_dispatch_table_checks_specs_and_runs() {
     let dir = example_dir("router");
@@ -625,4 +649,276 @@ fn gguf_reader_runs_the_same_on_both_backends() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );
+}
+
+/// Reserve a free TCP port by binding one and immediately dropping it, so a
+/// test serving on a fixed port cannot collide with a concurrently-running
+/// test. There is an unavoidable race between releasing and rebinding, which
+/// is why callers retry the connect rather than assuming instant readiness.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("binding an ephemeral port succeeds")
+        .local_addr()
+        .expect("the bound listener has an address")
+        .port()
+}
+
+/// Start the router binary serving `connections` requests, retrying on a fresh
+/// port if the chosen one was taken in the gap between reserving and binding.
+///
+/// The whole suite runs in parallel and several tests here bind ports, so
+/// "reserve an ephemeral port, then start a process that binds it" is
+/// inherently racy — the reservation must be released before the child can
+/// take it. Retrying on a new port keeps that race from turning into a
+/// flaky failure, which would be far more expensive to debug than it is to
+/// prevent. Returns the live child and the port it is actually serving on.
+fn start_router(binary: &Path, connections: usize) -> (std::process::Child, u16) {
+    for _ in 0..10 {
+        let port = free_port();
+        let mut child = Command::new(binary)
+            .arg(port.to_string())
+            .arg(connections.to_string())
+            .spawn()
+            .expect("the router binary starts");
+        // The router exits immediately with -1 (255) when the bind fails, so
+        // a short grace period distinguishes "still serving" from "port taken".
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        match child.try_wait().expect("polling the router succeeds") {
+            // Still running: it bound the port and is accepting.
+            None => return (child, port),
+            // Exited already: the bind lost the race, so try another port.
+            Some(_) => continue,
+        }
+    }
+    panic!("could not start the router on a free port after 10 attempts");
+}
+
+/// Speak one real HTTP request to `port` and return the raw response bytes.
+///
+/// This is deliberately a hand-written client rather than a convenience
+/// wrapper: it sends the request line, a `Host` header, and the blank line a
+/// real client sends, then reads until the peer closes. That makes it an
+/// *independent* peer — it does not share the example's own framing
+/// assumptions, which is the whole point of using it as the oracle.
+fn http_request(port: u16, method: &str, path: &str) -> String {
+    // The server binds a moment after the port is reserved, so retry briefly.
+    let mut stream = None;
+    for _ in 0..200 {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+    let mut stream = stream.unwrap_or_else(|| panic!("connecting to the served port {port}"));
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("setting a read timeout succeeds");
+    let request = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .expect("writing the request succeeds");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("reading the response succeeds");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// router: the dispatch table **serving real traffic**.
+///
+/// The example's own `main` is a self-test — it serves itself over loopback,
+/// which proves the socket path but cannot prove the *framing*, because both
+/// sides share one set of assumptions. This test is the independent peer: it
+/// builds the router, runs it in its accept-loop mode, and drives it with a
+/// hand-written HTTP client that agreed to nothing.
+///
+/// It asserts the **exact response bytes**, not just a status. That is the
+/// gate that matters, because the two bugs this example shipped with were both
+/// invisible to a status-only check and to a loopback self-test:
+///
+///   * the response ended with a bare `"\n"` rather than CRLF + headers +
+///     the blank line, so it was *unterminated* — a real client waits for
+///     framing that never completes; and
+///   * the server closed with the client's headers still unread in its
+///     receive buffer, so the kernel sent RST and the peer discarded the
+///     response it had already been sent.
+///
+/// A regression in either one flips these assertions, so the framing can
+/// never silently rot back.
+#[test]
+fn router_serves_real_http_to_an_independent_client() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-serve-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-serve");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for serving)");
+
+    // Every (method, path) the table distinguishes, plus the two negative
+    // cases a router must get the RIGHT way round: an unknown path is 404,
+    // while a known path with a refused method is 405.
+    let cases: &[(&str, &str, &str)] = &[
+        ("GET", "/", "HTTP/1.1 200 OK"),
+        ("GET", "/health", "HTTP/1.1 204 No Content"),
+        ("GET", "/users", "HTTP/1.1 200 OK"),
+        ("POST", "/users", "HTTP/1.1 201 Created"),
+        ("GET", "/missing", "HTTP/1.1 404 Not Found"),
+        ("DELETE", "/health", "HTTP/1.1 405 Method Not Allowed"),
+        ("PATCH", "/users", "HTTP/1.1 405 Method Not Allowed"),
+        ("GET", "/users/1", "HTTP/1.1 404 Not Found"),
+    ];
+
+    let (mut server, port) = start_router(&binary, cases.len());
+
+    for (method, path, status_line) in cases {
+        let response = http_request(port, method, path);
+        let expected = format!("{status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        assert_eq!(
+            response, expected,
+            "router served the wrong bytes for `{method} {path}`.\n\
+             A bare-newline or unterminated response is exactly the bug this pins."
+        );
+    }
+
+    let served = server.wait().expect("the router binary exits");
+    assert_eq!(
+        served.code(),
+        Some(cases.len() as i32),
+        "the router should report serving all {} connections",
+        cases.len()
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The router's serving path must reach the same wire bytes under the
+/// optimizing LLVM release backend as under the Cranelift debug backend.
+///
+/// The effect tier is where the two backends could most plausibly diverge —
+/// it is the part that calls the runtime's socket shim, threads a borrowed
+/// `Str` through a heap-allocated `String`, and depends on argv. A serving
+/// regression that only appeared under `--release` would be invisible to
+/// every other test here, all of which build debug.
+#[test]
+fn router_serves_the_same_bytes_on_the_release_backend() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-serve-release-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-serve-release");
+
+    let built = tuo(&[
+        "build",
+        "--release",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build --release (router, for serving)");
+
+    let (mut server, port) = start_router(&binary, 2);
+
+    assert_eq!(
+        http_request(port, "GET", "/health"),
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "the release backend must serve the same bytes as the debug backend"
+    );
+    assert_eq!(
+        http_request(port, "DELETE", "/health"),
+        "HTTP/1.1 405 Method Not Allowed\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "the release backend must refuse a method the same way"
+    );
+
+    let served = server.wait().expect("the release router binary exits");
+    assert_eq!(
+        served.code(),
+        Some(2),
+        "the release router served both requests"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The router must answer a **malformed** request line the way a server does —
+/// with a response, not a hang, a crash, or a dropped connection.
+///
+/// A real client cannot easily produce these (curl will not send a request
+/// line with no method), so they are driven as raw bytes. They cover the
+/// branches an ordinary request never reaches: a line with no space at all
+/// (so no method/path split exists), an empty line, and a request line
+/// missing its HTTP-version token. Each must still come back fully framed,
+/// because a client that sent garbage is still a client waiting for bytes.
+#[test]
+fn router_answers_malformed_requests_without_hanging() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-malformed-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-malformed");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for malformed input)");
+
+    // (raw request line, expected status line). The version token is optional
+    // to this router — it dispatches on method and path — so a two-token line
+    // routes normally rather than being rejected.
+    let cases: &[(&str, &str)] = &[
+        ("garbage\r\n\r\n", "HTTP/1.1 404 Not Found"),
+        ("\r\n\r\n", "HTTP/1.1 404 Not Found"),
+        ("GET /health\r\n\r\n", "HTTP/1.1 204 No Content"),
+        ("GET /health  HTTP/1.1\r\n\r\n", "HTTP/1.1 204 No Content"),
+    ];
+
+    let (mut server, port) = start_router(&binary, cases.len());
+
+    for (raw, status_line) in cases {
+        let mut stream = None;
+        for _ in 0..200 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+        let mut stream = stream.expect("connecting to the served port");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("setting a read timeout succeeds");
+        stream
+            .write_all(raw.as_bytes())
+            .expect("writing the raw request succeeds");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .expect("reading the response succeeds");
+        let expected = format!("{status_line}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+        assert_eq!(
+            String::from_utf8_lossy(&response),
+            expected,
+            "the router mishandled the malformed request {raw:?}"
+        );
+    }
+
+    let served = server.wait().expect("the router binary exits");
+    assert_eq!(
+        served.code(),
+        Some(cases.len() as i32),
+        "every malformed request should still count as served"
+    );
+    let _ = std::fs::remove_file(&binary);
 }

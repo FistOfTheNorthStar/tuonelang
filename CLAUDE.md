@@ -496,9 +496,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `cli-stats` (a command-line statistics tool), `data-pipeline` (a record/JSON-style
   processor that decodes packed-integer fields and runs a filter+map+reduce),
   `workspace/` (a medium three-package graph `app → geometry → numeric` wired by
-  path dependencies), `http-service` (a request-routing/status core),
+  path dependencies), `http-service` (a request-routing/status core, whose response framing is now
+  complete — CRLF status line, a declared body length, and the terminating
+  blank line — and which drains the request's header block before answering),
   `concurrent-worker` (a worker-pool scheduling model), `router` (a declarative
-  dispatch table over indirect calls), `log-analytics` (a one-pass keyed rollup),
+  dispatch table over indirect calls, which since this revision also **serves
+  real HTTP**: a thin effect tier carries the pure `Str`-keyed table onto a
+  socket, and `main` exits 74 only when six requests served over loopback agree
+  with the pure `report()` — the wire framing is pinned against an
+  *independent* hand-written HTTP client in
+  `tuo-cli/tests/dogfood_examples.rs`, on both backends, because a loopback
+  self-test shares the server's own framing assumptions and so cannot catch an
+  unterminated response or a header block left unread (an RST that discards the
+  answer); both were real bugs this example and `http-service` shipped with, and
+  both are now regression-pinned), `log-analytics` (a one-pass keyed rollup),
   `file-report` (a report generator that really touches the disk), and
 `postgres-auth` (the PostgreSQL v3 authentication handshake — big-endian wire
   framing plus SCRAM-SHA-256 checked against RFC 7677's published vector and

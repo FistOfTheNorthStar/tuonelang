@@ -233,6 +233,23 @@ fn response_line(take status: Int) -> Str {
     }
 }
 
+/// The header block that completes a response: the CRLF ending the status
+/// line, a `Content-Length: 0` (these routes answer with a status and no
+/// body, and a client must be told the body length or it will wait for one),
+/// a `Connection: close` (this server serves one request per connection, so
+/// saying so lets the client stop rather than hold the connection open for a
+/// keep-alive that will never come), and the **blank line** that terminates
+/// the header block.
+///
+/// The terminator is the load-bearing part. HTTP/1.1 frames a response as
+/// status line, headers, blank line — a bare `"\n"` after the status line is
+/// not a short response, it is an unterminated one, and a real client waits
+/// for the framing to complete rather than accepting what it has. Pure, so
+/// it is spec-checked.
+fn response_headers() -> Str {
+    "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+}
+
 /// EFFECT: write the response status line and a newline to stdout via the
 /// `std::rt::write` effect primitive — the thin effectful shell over the pure
 /// core. Returns the bytes written. Effectful, so no spec (`R0007`); pinned
@@ -306,11 +323,55 @@ fn read_line_from(take conn: Int, mut read_ok: Bool) -> String {
     line
 }
 
+/// EFFECT: drain the request's remaining header block — every line up to the
+/// terminating blank line — and report how many header lines were consumed.
+///
+/// This is not politeness, it is correctness. A real client (curl, a browser,
+/// any HTTP library) sends `Host:`, `User-Agent:`, `Accept:` and friends
+/// immediately after the request line. If the server answers and closes with
+/// those bytes still sitting unread in its receive buffer, the kernel sends
+/// **RST** rather than a graceful FIN, and an RST makes the peer discard data
+/// it had already received — including the response just written. The client
+/// then reports a connection reset and never sees the answer, even though the
+/// server did everything else right.
+///
+/// The example already knew this hazard for the CRLF pair (see
+/// `read_line_from`, which drains the LF of a CR/LF for exactly this reason);
+/// this extends the same reasoning from one delimiter byte to the header
+/// block. Bounded like every other read, so a peer that stops mid-headers
+/// ends the drain instead of wedging it.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by `main`'s loopback
+/// oracle, which now reads the response back the way a client does and so
+/// fails if the framing is incomplete. The `router` example drives the same
+/// two rules against a genuinely *independent* HTTP client
+/// (`router_serves_real_http_to_an_independent_client`), which is the
+/// stronger check — a self-test shares its own assumptions.
+fn drain_headers(take conn: Int) -> Int {
+    var draining = true;
+    var lines = 0;
+    while draining {
+        var ok = false;
+        let header = read_line_from(conn, ok);
+        if !ok {
+            draining = false;
+        } else {
+            if std::str::len(std::string::as_str(header)) == 0 {
+                // The blank line: end of the header block.
+                draining = false;
+            } else {
+                lines = lines + 1;
+            }
+        }
+    }
+    lines
+}
+
 /// EFFECT: serve exactly one request on an accepted connection — the whole
 /// lifecycle the old `CONTRACT serve` promised, now real: read the request
 /// line off the socket (bounded, per ADR-0017), parse it with the pure core,
-/// route it, write the response status line back over the wire, and close
-/// the connection.
+/// route it, drain the header block, write a **complete HTTP response** back
+/// over the wire, and close the connection.
 ///
 /// Returns the routed status, or `-1` when the request line never arrived
 /// within the bound. A peer that opens a connection and then goes silent is
@@ -328,8 +389,11 @@ fn serve_once(take conn: Int) -> Int {
     }
     let request = parse_request_line(std::string::as_str(line));
     let status = route(request.method, request.path);
+    // Consume the header block before answering, or the close RSTs the
+    // response away (see `drain_headers`).
+    drain_headers(conn);
     std::rt::write(conn, response_line(status));
-    std::rt::write(conn, "\n");
+    std::rt::write(conn, response_headers());
     std::rt::close(conn);
     status
 }
@@ -339,10 +403,12 @@ fn serve_once(take conn: Int) -> Int {
 ///
 /// Listen on an ephemeral port, connect to it (TCP's backlog completes the
 /// handshake before accept), accept, send the canonical request line from
-/// the client, `serve_once` it on the server side, and read the status line
-/// back off the client socket. Returns the served status (200) only when
-/// the bytes on the wire equal the pure model's response line; any
-/// divergence, timeout, or socket failure returns -1.
+/// the client, `serve_once` it on the server side, and read the response back
+/// off the client socket the way a real client does — status line, then the
+/// header block to its terminating blank line. Returns the served status
+/// (200) only when the bytes on the wire equal the pure model's response line
+/// **and** the framing is complete; any divergence, timeout, or socket
+/// failure returns -1.
 ///
 /// Every wait here is bounded: `connect_timeout` and `accept_timeout` cannot
 /// hang on a handshake that never completes, and both reads go through
@@ -374,13 +440,22 @@ fn live_status() -> Int {
         std::rt::close(listener);
         return 0 - 1;
     }
-    std::rt::write(client, "GET /health HTTP/1.1\r\n");
+    // A *complete* request: the request line, one header, and the blank line
+    // that ends the header block — what a real client sends, and what
+    // `serve_once`'s drain consumes before answering.
+    std::rt::write(client, "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
     let served = serve_once(conn);
+    // Read the response back the way a client does: the status line, then the
+    // header lines, to the blank line that terminates the block. Checking the
+    // terminator is what makes this oracle able to fail on unterminated
+    // framing — a status-line-only check would pass a response no real client
+    // could parse, which is exactly the bug this example shipped with.
     var reply_ok = false;
     let reply = read_line_from(client, reply_ok);
+    let headers = drain_headers(client);
     std::rt::close(client);
     std::rt::close(listener);
-    if served == 200 && reply_ok && std::string::as_str(reply) == "HTTP/1.1 200 OK" {
+    if served == 200 && reply_ok && headers == 2 && std::string::as_str(reply) == "HTTP/1.1 200 OK" {
         200
     } else {
         0 - 1
@@ -492,6 +567,18 @@ spec response_line {
     then response_line(201) == "HTTP/1.1 201 Created";
     then response_line(404) == "HTTP/1.1 404 Not Found";
     then response_line(405) == "HTTP/1.1 405 Method Not Allowed";
+}
+
+spec response_headers {
+    // The framing a real client needs: the CRLF that ends the status line,
+    // and the blank line that ends the header block. A response missing the
+    // terminator is unterminated, not short — the client waits for bytes that
+    // never come, which is the failure this pins against.
+    then std::str::len(response_headers()) > 0;
+    then std::str::slice(response_headers(), 0, 2) == "\r\n";
+    then std::str::slice(response_headers(), std::str::len(response_headers()) - 4, std::str::len(response_headers())) == "\r\n\r\n";
+    // A body length is always declared, so a client never waits for a body.
+    then std::str::len(response_headers()) > 20;
 }
 
 spec handle_sample_traffic {
