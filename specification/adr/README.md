@@ -69,6 +69,8 @@ the replacement, preserving the decision history.
 | [ADR-0018](ADR-0018-context-injectable-cheat-sheet.md) | The context-injectable cheat sheet — a generated, compiler-backed language brief | accepted |
 | [ADR-0019](ADR-0019-bitwise-operations-and-crypto.md) | Bitwise operations and the crypto primitives | accepted |
 | [ADR-0020](ADR-0020-constant-time-code.md) | Constant-time code — the branchless subset and what tuonelang can honestly promise | accepted |
+| [ADR-0021](ADR-0021-secret-taint-tracking.md) | Secret taint tracking — marking data, not just functions | proposed |
+| [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | proposed |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -168,4 +170,11 @@ become `-3` (`-1` and `-2` were already spent, and `read_byte_timeout` is the
 call where all four outcomes are simultaneously possible), and the staged
 datagram needed its own `udp_byte_at` indexer rather than reusing
 `read_byte`, which calls `read(2)` directly and cannot see a runtime buffer.
-**No ADR remains `proposed`.**
+**Two ADRs remain `proposed`:** ADR-0021 (secret taint tracking) and ADR-0022
+(a constant-time bignum). Both were opened by ADR-0020's outstanding list, and
+both deliberately propose *no implementation yet* — they record the design
+space and the constraints so the gaps are reached deliberately rather than
+forgotten. ADR-0022's central finding is that `std::bignum`'s variable timing
+is a property of its **algorithms** (zero-limb skipping, value-dependent
+normalization) rather than of the spelling of its operations, so adopting
+`std::ct` there means rewriting them, not substituting calls.

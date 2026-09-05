@@ -299,9 +299,18 @@ guess, and the later ADRs kept the pattern: `map-lookup` (ADR-0011), `file-io`
 `chan`), and `json-parse` (ADR-0016, whose Go peer is `encoding/json`), then
 `udp-echo` and `connect-timeout` (ADR-0017), then `sha256-hash` and
 `wire-decode` (ADR-0019, whose Go peers are `crypto/sha256` and
-`encoding/binary`). All **seventeen** workloads now
+`encoding/binary`), and `constant-time` (ADR-0020, whose Go peer is
+`crypto/subtle.ConstantTimeCompare`). All **eighteen** workloads now
 measure, each against equivalent-semantics C *and* Go peers; none is
-unsupported. No new runtime figure is invented here; the lab
+unsupported.
+
+`constant-time` is the odd one out and deliberately so: it measures a cost
+*deliberately paid* rather than a throughput to improve. A 32-byte tag
+comparison done branchlessly against the same comparison done with an early
+return — the textbook timing vulnerability — over rounds alternating between
+the naive form's best case and its worst, so the gap is not read off one
+extreme. On this host tuonelang lands at parity with Go and roughly 2.2× the
+hand-written C peer, and the lab records that without an aggregate verdict. No new runtime figure is invented here; the lab
 remains the one measurement of record.
 
 ---
@@ -377,8 +386,8 @@ stdlib module (index-arena `parse`/`render` with positioned errors). The
 perf-lab entries the three ADRs gated all measure: `networking` flipped from
 the lab's last `Unsupported`, and `channels` and `json-parse` landed
 supported — thirteen workloads at that point, each with C and Go peers
-(ADR-0017 has since taken the catalog to fifteen, and ADR-0019 to
-seventeen). Still deferred,
+(ADR-0017 has since taken the catalog to fifteen, ADR-0019 to
+seventeen, and ADR-0020 to eighteen). Still deferred,
 honestly: recursive nominal types (`T0016` is the boundary until a successor
 ADR gives the backends runtime-recursive clone/drop glue), DNS and TLS,
 `\uXXXX` escapes, `Map[Str, V]` beyond `Int` values, building JSON from
@@ -400,8 +409,8 @@ its boundary) all landed across three stages at ABI v10. Two gating lab
 workloads came with them, taking the catalog to **fifteen** measured:
 `udp-echo` and `connect-timeout`, the latter measuring a *bounded failure* —
 a program that could not have been written before the ADR. (ADR-0019 has
-since added `sha256-hash` and `wire-decode`, taking the catalog to
-**seventeen**.) **DNS stays out**, and so does TLS — though for a narrower
+since added `sha256-hash` and `wire-decode`, and ADR-0020
+`constant-time`, taking the catalog to **eighteen**.) **DNS stays out**, and so does TLS — though for a narrower
 reason since ADR-0019 Stage B: SHA-256/HMAC are now written *in tuonelang*
 and need no cryptographic dependency at all, but TLS additionally needs
 X.509, a certificate store, and AEAD ciphers. (The original framing here —
@@ -479,7 +488,148 @@ The end-to-end proof is a **full SCRAM-SHA-256 client proof** computed
 natively and checked against RFC 7677's published vector: Base64 both ways,
 PBKDF2 over 4096 iterations, two HMACs, a SHA-256, and a byte-wise XOR. Since
 PostgreSQL has defaulted `password_encryption` to `scram-sha-256` since
-version 14, that is the exchange a connector actually needs. **`md5` remains
-unimplemented**, so the legacy challenge is unsupported — acceptable only
-because SCRAM is the default on every current server, and worth revisiting if
-a real connector meets an older one.
+version 14, that is the exchange a connector actually needs.
+
+That proof has since become **library surface and a running program**.
+`std::crypto` carries the SCRAM exchange
+(`scram_salted_password`/`scram_client_proof`/`scram_server_signature`) plus
+the constant-time `verify`, and `examples/postgres-auth` computes the whole v3
+handshake — big-endian framing, the startup packet, the SASL challenge parsed
+off the wire format, the proof, and the server's signature verified in
+constant time.
+
+Two findings came out of writing it, both worth recording:
+
+* **A library that offers no comparison is not neutral.** Before `verify`,
+  `std::crypto` exposed no way to compare two digests at all, which sounds
+  safe and is not: the caller writes the comparison instead, and the obvious
+  spelling returns early on the first mismatched byte — the exact timing leak
+  `std::ct::bytes_eq` exists to prevent. The fix was to make the safe
+  comparison the *convenient* one, in the module the caller already imports.
+* **A published vector caught a bug no self-consistent spec would have.** The
+  example's client-first message hardcoded an empty username. Every structural
+  property still held — the message parses, the proof is 32 bytes, the XOR
+  round-trip recovers the client key — but the auth message both sides sign
+  differed, so a real server would reject the proof with no useful diagnostic.
+  This is the argument for external vectors in one concrete instance.
+
+The connector has since been driven against a **real PostgreSQL 18 server**
+(`examples/postgres-client`): startup packet, the live SASL exchange, the
+server's signature verified in constant time, then `SELECT 42` decoded out of a
+`DataRow` frame. Three findings came out of that, none of which the hermetic
+version could have surfaced:
+
+* **`String` is the byte container the wire needs, and that is not a
+  workaround.** v0 has no `[u8]`, and a PostgreSQL frame is full of zero bytes
+  and high bytes. `String` holds both and `std::rt::write_string` puts them on
+  a socket unchanged, so the question "how do we send arbitrary bytes" had no
+  answer to invent — it was already the type's behaviour. Worth recording
+  because the obvious assumption is the opposite.
+* **The default `trust` auth would have made the test pass without
+  authenticating.** A cluster set up the usual way never issues a challenge, so
+  the client "succeeds" having proved nothing. The test provisions a cluster
+  with `--auth-host=scram-sha-256` for exactly this reason, and the README says
+  so — a green test against a `trust` server is the security equivalent of an
+  empty assertion.
+* **An exit byte that names the failing step is worth the arithmetic.** The
+  program returns `10 - step`, so a rejected proof reports 20 and a failed
+  server-signature check reports 21. Both were verified load-bearing by
+  substituting a wrong password and by tampering with the expected signature;
+  a single boolean would have said only "it didn't work".
+* **A type map's honest answer is sometimes "I don't know".** The client reads
+  each column's type OID off the `RowDescription` rather than assuming
+  everything is text, and reports an unrecognized OID as unknown. That is the
+  useful behaviour: presenting a `uuid` or a `timestamptz` as text yields a
+  value that looks plausible and may be wrong, and a caller cannot tell. The
+  live test proves it by asking for a `uuid` column and requiring the client to
+  refuse it.
+* **The extended query protocol is a safety feature, not a performance one.**
+  The simple `Query` message carries SQL text, so a value can only reach it by
+  interpolation — which is how SQL injection happens. `Parse`/`Bind` separates
+  them: the statement carries `$1` placeholders and the value travels as its
+  own length-prefixed field the server never re-parses. The client proves this
+  against the live server by binding `'; DROP TABLE users; --` and requiring it
+  back verbatim; the server's log never shows the text as SQL. The specs pin
+  the structural half the runtime check cannot see — that the dangerous text
+  appears in the `Bind` message and never in `Parse`'s SQL.
+
+**`md5` has since landed too**, so the legacy `AuthenticationMD5Password`
+challenge is supported for servers too old for SCRAM — shipped documented as
+broken for security (ADR-0019's own requirement), spec'd against RFC 1321's
+published suite, and with `md5_password` pinning the protocol composition
+against an independent implementation. SCRAM stays the primary path: it is the
+default on every current server, and MD5 auth is disabled outright on several
+managed providers.
+
+## A finding that produced no ADR — `gguf-reader`
+
+Every dogfooding round above ends in an ADR, which risks reading as though
+dogfooding only ever *finds gaps*. This one deliberately did not, and recording
+it matters: an exercise that can only produce feature requests is not measuring
+the language, it is ratcheting it.
+
+**The question.** Every wire-format example in this tree is **big-endian** —
+PostgreSQL's frame length, the SHA-256 block, the `wire-decode` workload. That
+is not a coincidence: ADR-0019 Stage A was opened to serve a network protocol,
+and network byte order is big-endian by convention. So the operators it added
+and the `std::bits` helpers built on them (`be32`, `be16`, `byte_of_be32`) had
+only ever been exercised in one direction. Had the surface been quietly fitted
+to PostgreSQL rather than designed for byte manipulation generally?
+
+**The test.** GGUF — llama.cpp's model container — is the counter-case in every
+respect: **little-endian**, **64-bit**, and a **memory-mappable file format**
+rather than a stream of framed messages, its fields sized to be read straight
+into registers rather than delimited on a wire. `examples/gguf-reader/` parses
+its header, metadata table, and tensor descriptors: the whole structural walk a
+model loader performs before touching a single weight.
+
+**The result: it generalizes.** `le16_at`, `le32_at`, and `le64_at` are written
+in the shipped `<<`/`>>`/`&`/`|` with **no new language feature, no new builtin,
+and no compiler change**. Per the project's own rule — an ADR follows a gap a
+real program actually hit — this produced none. The 31 specs and the two-backend
+run are the evidence; there is nothing to propose.
+
+**The one boundary, and why it stayed a limit.** GGUF's counts, lengths, and
+offsets are `u64`; `Int` is signed `I64`. Values below 2^63 round-trip exactly —
+every real model file, 2^63 bytes being 9.2 exabytes — but bit 63 has no
+representation, and the compiler is consistent about that (`std::bits::test_bit`
+already documents excluding it; `1 << 63` type-checks and evaluates to
+`i64::MIN`, a *negative* number, useless as a length). `le64_at` **refuses** such
+a value with `-1` rather than wrapping it into a negative length a caller would
+use as an array bound, and assembles its high word with `* 4294967296` rather
+than `<< 32` precisely because multiplication **traps** on overflow — so the
+refusal is checked before it can be observed.
+
+Widening `Int` or adding an unsigned 64-bit type to make this example prettier
+would be exactly the ad-hoc feature the governing rule forbids: no program is
+blocked, so nothing has been demonstrated. The honest response is a refusal at
+the boundary plus a spec that pins it (`spec "sixty_four_bit_values"`). If a
+future dogfooding target genuinely needs the full `u64` range, *that* program
+earns the ADR — with a name, a benchmark, and a C peer.
+
+**What it says about the six axes.** On *diagnostic quality*, four diagnostics
+came up while writing it and all four were actionable without reading compiler
+source. One of them **independently corroborates D-5b from the opposite
+direction**: that finding recorded a missing parameter mode at a *declaration*
+degrading to a coarse `P0002` whole-item skip, and writing `mut` at a *call
+site* (`push_le(mut out, …)`) produces the same coarse recovery — "skipped 16
+tokens" — rather than a targeted "`mut` is a parameter mode, not a call-site
+annotation". Two independent programs reaching the same rough edge from
+different directions is what promotes a backlog diagnostics item over a
+one-off. The other three were exemplary: one carried its own fix (`"an
+identifier-named spec targets a module-level function; use a string name for a
+free-standing spec"`), one named the absent symbol precisely (`R0002: no `eq` in
+`std::str``), and one was caught by the ownership checker before any backend saw
+it (`M0005`, an owned `String` moved inside a loop).
+
+On *stdlib gaps*, the honest one is real but narrow: `std::bits` is
+big-endian-only, so the little-endian readers had to be written in the example.
+That is a plausible future `std::bits` addition —
+`le32`/`le64` alongside `be32`/`be16` — and it is a *library* change, needing no
+ADR at all.
+
+**What it deliberately does not do.** No tensor data is read and nothing is
+dequantized. A descriptor table is pure structure over bytes and is exactly what
+v0 expresses; reading the blob means `mmap` and SIMD over `f16`, which v0 does
+not have and this example does not pretend to. Running an actual model is a
+separate project that would *consume* tuonelang — not a reason to change it.

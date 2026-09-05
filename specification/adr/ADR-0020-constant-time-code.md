@@ -369,7 +369,7 @@ flagged it.
 
 - **Stage C is not done**, and the promise stays limited accordingly: `std::ct`
   is branchless *as emitted today, pinned by a test*, which is not a
-  constant-time guarantee.
+  constant-time guarantee. *(Superseded — see the Stage C resolution below.)*
 - **Cross-target behavior is unverified.** Everything above was measured on
   ARM64. Whether the same idioms yield `cmov` or a real branch on x86-64 is
   unknown, because the workspace targets the host only.
@@ -378,7 +378,8 @@ flagged it.
   Stage A makes it writable, and it has not been added.
 - **`std::crypto` and `std::bignum` do not use `std::ct`.** Adopting it is
   Stage-A-usage work, and both keep their existing "not constant time" caveats
-  unchanged until they do.
+  unchanged until they do. *(Partly resolved — `std::crypto` adopted it; see
+  "Adoption" below.)*
 
 ---
 
@@ -475,3 +476,226 @@ code is tested branchless, and the hardware is trusted rather than checked.
   secret-carrying, so the checker verifies how a function computes, never what
   data flows into it. A taint discipline is a much larger design and is not
   proposed here.
+
+---
+
+## Adoption (2026-09-04)
+
+Stage A shipped `std::ct` and Stage C made the compiler verify it, but nothing
+*used* it: `std::crypto` and `std::bignum` contained zero references, and
+`#[constant_time]` appeared only in `ct.tuo` itself. A checked library nobody
+calls protects nobody, so this closes the loop for the case the whole ADR chain
+was opened for.
+
+### What shipped
+
+**`std::crypto::verify`**, the constant-time byte-array comparison, delegating
+to `std::ct::bytes_eq`. This is the point of adoption that matters most and the
+smallest change that could have been made:
+
+- Before this, `std::crypto` exposed **no comparison at all**. That is not the
+  same as being safe — it means a caller verifying a MAC tag or an
+  authentication proof had to write the comparison themselves, and the obvious
+  spelling (`==`, or a loop that returns on the first mismatch) is the exact
+  early-return vulnerability `bytes_eq` exists to prevent. The library was
+  neutral where it should have been opinionated.
+- After it, the safe comparison is the *convenient* one: it lives in the module
+  the caller is already importing, next to the digest they just computed.
+
+It also gives the catalog its second declared dependency edge, `std::crypto →
+std::ct`, checked by `the_dependency_graph_is_declared_and_acyclic`.
+
+**The SCRAM-SHA-256 client exchange**: `scram_salted_password`,
+`scram_client_proof`, and `scram_server_signature`. The proof math already
+existed — but only as a program *inside a test*, which meant every caller had to
+reimplement it. It is now library surface.
+
+One honesty note on how these are specified. RFC 7677's published vector needs
+4096 PBKDF2 iterations, which **exceeds the spec sandbox's instruction fuel** —
+and that is correct rather than a limitation, since making the derivation
+expensive is precisely the point of an iteration count. So the sandbox specs
+assert *structure* (the proof is 32 bytes; XORing the client signature back out
+recovers the client key; a different password or auth message gives a different
+proof), and the **published vector is pinned natively** in
+`crypto_cross_check.rs`. A structural spec cannot catch a wrong constant; the
+native vector can, and the split says which is doing which work.
+
+**`examples/postgres-auth`**, the handshake as a whole program: big-endian
+message framing, the startup packet, the SASL challenge parsed off the wire
+format, the client proof, and the server's signature verified with `verify`. It
+exits 44 only when all four steps match RFC 7677's published values.
+
+### The bug the published vector caught
+
+Worth recording, because it is the argument for external vectors in one
+concrete instance. The example's client-first message hardcoded an empty
+username (`n=,r=...` instead of `n=user,r=...`). Every structural property still
+held — the message parses, the proof is 32 bytes, the round-trip recovers the
+client key — so a self-consistent spec suite would have passed. But the auth
+message both sides sign then differs, and a real server rejects the proof with
+no useful diagnostic. The published vector failed immediately and pointed at
+exactly the wrong bytes.
+
+This is the same argument `std::crypto`'s specs already make by asserting FIPS
+and RFC vectors rather than the module's own reasoning; the example is now
+further evidence for it.
+
+### Still outstanding
+
+- **`std::bignum` still does not use `std::ct`**, and keeps its "deliberately
+  not constant time" caveat unchanged. That caveat is a correct description
+  rather than an oversight — schoolbook multiplication over 28-bit limbs is not
+  constant time and cannot be made so by swapping in a masked select — so
+  adopting `std::ct` there means *rewriting the algorithms*, which is its own
+  ADR. It stays safe for public values and unsafe for secrets.
+- ~~**The `constant-time` benchmark workload is still not written.**~~
+  *Resolved — see "The benchmark workload" below.*
+- ~~**Cross-target behavior is still unverified** (ARM64 only).~~
+  *Resolved — see "Cross-target verification" below.*
+- **There is still no taint discipline.** The attribute marks *functions*, not
+  *data*: the compiler verifies how a marked function computes, never what
+  flows into it, so passing a key to an unmarked function is not an error.
+  That is a much larger design and is deliberately not attempted here.
+
+---
+
+## The benchmark workload (2026-09-04)
+
+The Consequences section committed to a `constant-time` lab workload
+quantifying the price of branchless code. It is now the catalog's eighteenth
+workload, and the only one that measures a cost **deliberately paid** rather
+than a throughput to improve — every other entry exists because someone wants
+the number to go down.
+
+### What it measures
+
+Per round, a 32-byte tag comparison — the size of the SHA-256 digest
+`std::crypto::verify` is actually called on — performed twice over the same
+inputs: once branchlessly, once with the early-returning form that is the
+textbook timing vulnerability.
+
+The input choice is the load-bearing design decision. Rounds alternate between
+tags that differ at byte 0 (the naive form's *best* case, where it returns
+immediately) and equal tags (its *worst*, where it scans everything). A
+benchmark using only equal tags would understate the gap and, worse, would make
+the vulnerable code look like it costs the same as the safe code — which is
+precisely the false conclusion this workload exists to prevent.
+
+Each round asserts the two forms **agree**. A branchless comparison that was
+fast and wrong would otherwise sail through a timing benchmark unnoticed; the
+exit byte is a checksum of every round's agreement, so it cannot be produced
+without doing the work.
+
+### The measured figures
+
+Best of 7 runs, release build, ARM64 (the same host caveat as everywhere else
+in this ADR — see the cross-target item below):
+
+| Language | Time | Notes |
+|---|---:|---|
+| C (`cc -O2`) | 4.2 ms | the same sign-smearing mask tuonelang is forced into |
+| tuonelang (LLVM release) | 9.3 ms | ≈2.2× the C peer |
+| Go (`crypto/subtle`) | 9.2 ms | the standard library's own answer |
+
+tuonelang is at parity with Go and about 2.2× the hand-written C. That is the
+honest shape of the result and the lab records it without an aggregate verdict,
+per the no-superlative rule.
+
+### Two corrections worth recording
+
+**The Go peer nearly went missing on bad reasoning.** The first draft argued
+there should be *no* Go peer, because Go's answer is
+`crypto/subtle.ConstantTimeCompare` — a standard-library intrinsic rather than
+the same algorithm — so timing it would compare different programs. That
+inverted this catalog's actual convention: `sha256-hash` measures against
+`crypto/sha256` and `json-parse` against `encoding/json`, because the question
+being asked is "what does this cost in tuonelang versus what it costs in Go",
+and for a language with a standard-library answer that means *using* it. The
+`every_supported_workload_has_both_peers` invariant caught the omission, which
+is what that test is for.
+
+**The round count is 500,000, not the 200 that suffices for `sha256-hash`.**
+One 32-byte comparison is a few dozen instructions, so at a few hundred rounds
+every language finishes below the timer's resolution and the lab would record a
+meaningless zero. The first draft did exactly that, and the zeros were visible
+only because the figures were checked rather than assumed.
+
+---
+
+## Cross-target verification (2026-09-05)
+
+Every earlier note in this ADR recorded that the constant-time property was
+measured on ARM64 only, and gave the reason as "the workspace targets the host
+only". **That reason was wrong**, and the correction is more interesting than
+the gap.
+
+### What was actually true
+
+`TargetSpec` has always carried an arbitrary triple — it is a `String` field,
+not a host constant. Both backends then *refused* any triple that was not the
+host, with an explicit check and a clear "unsupported" message. So the
+restriction was a **deliberate policy** sitting one `if` away from being
+lifted, not an absent capability. The linked LLVM turned out to have the
+x86-64 and AArch64 targets registered already; only `initialize_native` was
+being called, which registers just the running architecture.
+
+The distinction matters because "we cannot" and "we have chosen not to" call
+for different work. This needed neither new plumbing nor an ABI change: the ABI
+is identical across the 64-bit targets v0 defines (`POINTER_SIZE` is 8 for all
+of them), so the object LLVM emits for another 64-bit triple is already
+correct.
+
+### What shipped
+
+The LLVM backend now emits objects for a non-host 64-bit triple, initializing
+all targets when one is requested and keeping `initialize_native` for the
+common path so the usual build's LLVM footprint is unchanged. For a non-host
+triple it selects the **generic** CPU with no extra features, since assuming
+the host's would emit instructions the target may not have.
+
+What is still host-only is **linking**: that needs a cross-linker and a target
+libc, neither of which the workspace has. `tuo build` is therefore unchanged —
+a caller asking for another triple gets a relocatable object and is responsible
+for linking it. This is the honest boundary: the compiler can now *say* what it
+would emit for another machine without pretending it can produce a runnable
+program for one.
+
+### The measurement
+
+`tuo-cli/tests/constant_time_cross_target.rs` compiles the ten
+`#[constant_time]` primitives for **x86-64 Linux** and **x86-64 Darwin**,
+disassembles the emitted objects, and asserts no conditional branch and no trap
+edge. Both pass: **the branchless idioms survive LLVM's O2 on x86-64 as well as
+on ARM64.**
+
+The open worry is settled in the direction one would hope but could not assume.
+`csel` on ARM64 and `cmov` on x86-64 are different instructions chosen by
+different heuristics, so a masking idiom staying branchless on one architecture
+was never evidence about the other.
+
+### Three design decisions in the test, each load-bearing
+
+**It compiles only the marked primitives, not the whole module.** `std::ct`
+also contains `select_array` and `bytes_eq`, which are deliberately unmarked
+because a scan needs a loop and a loop is a backward conditional branch. The
+first version of this test compiled the whole module and failed on exactly
+those two — correctly. Special-casing them by name is impossible, because
+symbol names do not survive into the object: every function appears as
+`tuo_fn_<n>`. Compiling exactly the marked set removes the ambiguity, so any
+branch found is a real violation.
+
+**The primitives are extracted from the catalog source, not transcribed.** A
+hand-written copy would keep passing while the shipped library regressed. The
+extraction asserts it found exactly ten, so adding or removing a marked
+function is a loud failure rather than a silently smaller check.
+
+**The "nothing was checked" guard is what caught the first two bugs.** The test
+asserts it found at least eight generated functions. That fired twice — once
+when the symbol matching was wrong, once on Mach-O's leading-underscore
+convention — and in both cases the alternative was a green test that had
+inspected nothing at all.
+
+Both properties were verified by sabotage: rewriting `select` with an `if`
+fails, and temporarily treating an ordinary `movq` as a branch produces the
+expected failure against real x86-64 disassembly, proving the check reads
+actual instructions rather than passing over an empty list.

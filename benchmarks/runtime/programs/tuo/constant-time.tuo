@@ -1,0 +1,152 @@
+// The constant-time workload (ADR-0020): what branchless code costs.
+//
+// This is the workload ADR-0020's Consequences section commits to. Every other
+// workload in this catalog measures throughput of something a program wants to
+// do faster. This one measures a *price deliberately paid*: the branchless
+// comparison in `std::ct` does strictly more work than the early-returning one
+// it replaces, and the whole argument for it is that the extra work buys a
+// security property. A benchmark that did not show the cost would be hiding
+// the trade-off rather than quantifying it.
+//
+// WHAT IS MEASURED. Per round, a 32-byte tag comparison — the size of a
+// SHA-256 digest, which is what `std::crypto::verify` is actually called on —
+// performed twice:
+//
+//   * `ct_bytes_eq`, the branchless form: scan every byte, accumulate the
+//     bitwise difference, fold the answer with masks and shifts. Its running
+//     time depends on the arrays' lengths, never on their contents.
+//   * `naive_bytes_eq`, the early-returning form: return the moment a byte
+//     differs. This is the textbook vulnerability — the time it takes reveals
+//     how many leading bytes matched, turning an infeasible search into a
+//     byte-at-a-time one.
+//
+// Both are run over the SAME inputs, so the difference in wall clock is the
+// price of the property and nothing else.
+//
+// THE INPUTS ARE THE POINT. Half the rounds compare tags differing at byte 0
+// (the naive form's best case — it returns immediately) and half compare equal
+// tags (its worst case — it scans everything). The branchless form does the
+// same work for both, which is exactly the property being bought; the naive
+// form does not, which is exactly the leak. A benchmark using only equal tags
+// would understate the gap and, worse, would make the vulnerable code look
+// like it costs the same as the safe code.
+//
+// The C peer makes the identical pair of comparisons with the same masking
+// idioms — including the sign-smearing `(bit << 63) >> 63` rather than the
+// conventional `0 - bit`, since tuonelang cannot use the cheaper spelling and
+// a peer that did would be measuring a different program. The Go peer uses
+// `crypto/subtle.ConstantTimeCompare`, the standard library's own answer,
+// following this catalog's convention that Go's side is the parity target
+// (sha256-hash uses crypto/sha256, json-parse uses encoding/json) rather than
+// a transliteration of the tuonelang source.
+//
+// The round count is 500,000 rather than the 200 that suffices for
+// sha256-hash: one 32-byte comparison is a few dozen instructions, so at a
+// few hundred rounds the whole program finishes below the timer's resolution
+// and the lab would record a meaningless zero for every language.
+//
+// Exit byte: 32. Per round the two comparisons must AGREE — a branchless
+// comparison that returned a different answer would be fast and wrong, and
+// would otherwise sail through a timing benchmark unnoticed. Each agreement
+// increments a counter; 500,000 rounds all agreeing gives 500000 % 256 = 32.
+// A single disagreement anywhere lowers the byte, so it is a checksum of the
+// whole run rather than a constant the program could return without working.
+
+// The branchless mask: all ones when bit is 1, all zeros when bit is 0.
+//
+// `0 - bit` is the conventional spelling and traps on i64::MIN, so this uses
+// the sign-smearing shift instead — the derivation ADR-0020 Stage A settled
+// on, and the reason `std::ct::mask` reads oddly compared to C.
+fn ct_mask(take bit: Int) -> Int {
+    (bit << 63) >> 63
+}
+
+// 1 when x is non-zero, 0 when x is zero — with no branch.
+fn ct_nonzero(take x: Int) -> Int {
+    ct_or_reduce(x)
+}
+
+// Fold every bit of x down to bit 0 by smearing, then take the low bit.
+fn ct_or_reduce(take x: Int) -> Int {
+    let a = x | (x >> 32);
+    let b = a | (a >> 16);
+    let c = b | (b >> 8);
+    let d = c | (c >> 4);
+    let e = d | (d >> 2);
+    let f = e | (e >> 1);
+    f & 1
+}
+
+// 1 when x is zero, 0 otherwise.
+fn ct_is_zero(take x: Int) -> Int {
+    ct_or_reduce(x) ^ 1
+}
+
+// The branchless comparison: constant work for a given length.
+fn ct_bytes_eq(in a: Array[Int], in b: Array[Int], take n: Int) -> Int {
+    var diff = 0;
+    var i = 0;
+    while i < n {
+        diff = diff | (std::array::get(a, i) ^ std::array::get(b, i));
+        i = i + 1;
+    }
+    ct_is_zero(diff)
+}
+
+// The early-returning comparison: the vulnerability, for comparison.
+fn naive_bytes_eq(in a: Array[Int], in b: Array[Int], take n: Int) -> Int {
+    var i = 0;
+    while i < n {
+        if std::array::get(a, i) != std::array::get(b, i) {
+            return 0;
+        }
+        i = i + 1;
+    }
+    1
+}
+
+// A 32-byte tag, deterministic in the seed.
+fn make_tag(take seed: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(out, (seed + i * 7) & 255);
+        i = i + 1;
+    }
+    out
+}
+
+fn main() -> Int {
+    let reference = make_tag(11);
+    // Differs from `reference` at byte 0: the naive form's best case.
+    let early_mismatch = make_tag(12);
+    // Equal to `reference`: the naive form's worst case.
+    let equal = make_tag(11);
+
+    var agreements = 0;
+    var round = 0;
+    while round < 500000 {
+        // Alternate the two cases so the naive form's advantage is averaged
+        // over its best and worst inputs rather than measured at one extreme.
+        var same_ct = 0;
+        var same_naive = 0;
+        if (round & 1) == 0 {
+            same_ct = ct_bytes_eq(reference, early_mismatch, 32);
+            same_naive = naive_bytes_eq(reference, early_mismatch, 32);
+        } else {
+            same_ct = ct_bytes_eq(reference, equal, 32);
+            same_naive = naive_bytes_eq(reference, equal, 32);
+        }
+
+        // The two must agree. A branchless comparison that is fast and wrong
+        // would otherwise sail through this benchmark unnoticed.
+        if same_ct == same_naive {
+            agreements = agreements + 1;
+        }
+        round = round + 1;
+    }
+    // 500000 agreements, reduced to an exit byte: 500000 % 256 = 32. A single
+    // disagreement anywhere lowers it, so the byte is a checksum of the whole
+    // run rather than a constant.
+    agreements % 256
+}

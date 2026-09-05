@@ -148,11 +148,22 @@ pub const CT: Module = Module {
 /// (ADR-0019 Stage B): SHA-256 (`sha256`/`sha256_bytes`), HMAC-SHA-256
 /// (`hmac_sha256`), PBKDF2-HMAC-SHA-256 (`pbkdf2_sha256` — SCRAM's key
 /// derivation), Base64 (`base64_encode`/`base64_decode`), hex rendering
-/// (`to_hex`), and the byte/text bridge (`bytes_of_str`/`str_of_bytes`).
+/// (`to_hex`), the byte/text bridge (`bytes_of_str`/`str_of_bytes`), the
+/// constant-time `verify` (delegating to `std::ct::bytes_eq`, so the safe
+/// comparison is the convenient one and `==` on a tag is never the obvious
+/// spelling), and the SCRAM-SHA-256 client exchange
+/// (`scram_salted_password`/`scram_client_proof`/`scram_server_signature`,
+/// RFC 7677 — what a PostgreSQL connector authenticates with), and — the last
+/// ADR-0019 item — `md5`/`md5_password`, the legacy
+/// `AuthenticationMD5Password` shim, shipped **documented as broken for
+/// security** (practical collisions since 2004) and present only because old
+/// servers still offer it, never as a hashing choice.
 /// Entirely executable, and uniquely in this catalog its specs assert
-/// **published** vectors (FIPS 180-4, RFC 4231, RFC 4648) rather than the
-/// module's own reasoning. It is a hashing library, not a TLS stack: it
-/// authenticates but does not encrypt.
+/// **published** vectors (FIPS 180-4, RFC 4231, RFC 4648, RFC 1321) rather than the
+/// module's own reasoning; RFC 7677's own vector needs 4096 PBKDF2 iterations,
+/// more than the spec sandbox's fuel allows, so it is pinned by the native
+/// `crypto_cross_check.rs` instead. It is a hashing library, not a TLS stack:
+/// it authenticates but does not encrypt.
 pub const CRYPTO: Module = Module {
     path: "std::crypto",
     name: "std/crypto.tuo",

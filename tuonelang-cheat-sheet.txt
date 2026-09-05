@@ -303,6 +303,18 @@ std::crypto
   fn random_byte() -> Int
   fn nonce(take length: Int) -> Array[Int]
   fn repeated_byte(take byte: Int, take count: Int) -> Array[Int]
+  fn verify(in a: Array[Int], in b: Array[Int]) -> Bool
+  fn xor_bytes(in a: Array[Int], in b: Array[Int]) -> Array[Int]
+  fn scram_salted_password(in password: Str, in salt: Array[Int], take iterations: Int) -> Array[Int]
+  fn scram_client_proof(in salted_password: Array[Int], in auth_message: Str) -> String
+  fn scram_server_signature(in salted_password: Array[Int], in auth_message: Str) -> String
+  fn md5_round_constants() -> Array[Int]
+  fn md5_shifts() -> Array[Int]
+  fn md5_pad(in data: Str) -> Array[Int]
+  fn md5_bytes(in data: Str) -> Array[Int]
+  fn push_le32(mut out: Array[Int], take value: Int) -> ()
+  fn md5(in data: Str) -> String
+  fn md5_password(in password: Str, in user: Str, in salt: Array[Int]) -> String
 
 std::str
   fn index_of_byte(in s: Str, take needle: Int) -> Option[Int]

@@ -362,7 +362,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: all **seventeen**
+  honesty rule the prompt demands is enforced structurally: all **eighteen**
   runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
@@ -403,7 +403,15 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   per frame (C peer the identical shifts, Go peer **`encoding/binary`**) —
   both workloads that **could not be written before ADR-0019**, since
   SHA-256 is *defined* in rotations and shifts and masking has no arithmetic
-  spelling at all) carry a real program and are
+  spelling at all, and — since ADR-0020 — **constant-time**, the one entry
+  measuring a cost *deliberately paid* rather than a throughput to improve:
+  a 32-byte tag comparison per round done twice over the same inputs, once
+  branchlessly and once with the early-returning form that is the textbook
+  timing vulnerability, with rounds alternating between the naive form's
+  best case (differ at byte 0) and its worst (equal tags) so the gap is not
+  measured at one extreme — the C peer using the same sign-smearing mask
+  tuonelang is forced into (`0 - bit` traps on `i64::MIN`), the Go peer its
+  standard **`crypto/subtle.ConstantTimeCompare`**) carry a real program and are
   `Support::Supported` —
   none remains `Unsupported`, and the mechanism (an entry with the *exact
   reason* and **no number**, flipping the moment its feature lands) stays as
@@ -483,13 +491,36 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tuo` binary makes — and the dependency-policy guard keeps it at layer 117 with
   no edge into the pipeline.
 - **The language is dogfooded with real programs; a discovered gap becomes an ADR
-  with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds five
+  with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds nine
   real, multi-function programs written *against* v0, not to test it from inside:
   `cli-stats` (a command-line statistics tool), `data-pipeline` (a record/JSON-style
   processor that decodes packed-integer fields and runs a filter+map+reduce),
   `workspace/` (a medium three-package graph `app → geometry → numeric` wired by
-  path dependencies), `http-service` (a request-routing/status core), and
-  `concurrent-worker` (a worker-pool scheduling model). The three that fit the
+  path dependencies), `http-service` (a request-routing/status core),
+  `concurrent-worker` (a worker-pool scheduling model), `router` (a declarative
+  dispatch table over indirect calls), `log-analytics` (a one-pass keyed rollup),
+  `file-report` (a report generator that really touches the disk), and
+`postgres-auth` (the PostgreSQL v3 authentication handshake — big-endian wire
+  framing plus SCRAM-SHA-256 checked against RFC 7677's published vector and
+  the legacy MD5 challenge, the ADR-0019 motivating case as a whole program;
+  exits 48 only when every step agrees, and it caught a real bug that no
+  self-consistent spec would have: an empty `n=` username field, invisible
+  structurally but fatal to the proof), and `postgres-client` (the other half:
+  the same protocol driven over TCP against a **real PostgreSQL server** —
+  startup packet, the live SASL exchange, the server's signature verified in
+  constant time, then `SELECT 42` decoded out of a `DataRow` frame — and the
+  **extended query protocol** (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`),
+  which is what makes parameters *safe*: a value travels as its own
+  length-prefixed field rather than interpolated into SQL text, demonstrated
+  with `'; DROP TABLE users; --` bound as a parameter and returned verbatim,
+  and a **type map** driven by the `RowDescription`'s per-column type OIDs, so
+  decoding follows what the server said and an unrecognized OID is reported as
+  unknown rather than silently presented as text;
+  its
+  protocol layer is pure and spec-checked so `check`/`test` always run, while
+  the live exchange skips cleanly when no server is reachable and its exit byte
+  *names the failing step* when one is, so a rejected proof reports 20 and a
+  failed server-signature check 21 rather than a bare mismatch). The three that fit the
   runnable core **run natively** — and since ADR-0004 landed they use it for
   real: `geometry` passes a `Point` struct, `data-pipeline` folds an `[Int; 8]`
   batch, and `cli-stats` holds an `[Int; 7]` dataset. Since ADR-0009 landed the
@@ -609,13 +640,30 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::rt::random_byte` (ABI v12) landed with it, so a **full
   SCRAM-SHA-256 client proof** now computes natively and is pinned against
   RFC 7677's published vector — the PostgreSQL authentication path the ADR
-  was opened for. Its two gating benchmark
+  was opened for. That path is now a *program* rather than a test vector:
+  `std::crypto` carries the SCRAM client exchange
+  (`scram_salted_password`/`scram_client_proof`/`scram_server_signature`)
+  and the constant-time `verify` (delegating to `std::ct::bytes_eq`, so the
+  safe comparison is the convenient one and `==` on a MAC tag is never the
+  obvious spelling — the catalog's second declared dependency edge,
+  `std::crypto → std::ct`), and `examples/postgres-auth` computes the whole
+  v3 handshake end to end — big-endian message framing, the startup packet,
+  the SASL challenge parsed off the wire format, the proof, and the server's
+  signature verified in constant time — exiting 44 only when every step
+  matches RFC 7677's published values. Its two gating benchmark
   workloads landed too — **`sha256-hash`** (against a `uint32_t` C peer and
   Go's `crypto/sha256`) and **`wire-decode`** (against `encoding/binary`) —
   both unwritable before Stage A, taking the lab catalog to seventeen
-  workloads with none `Unsupported`. Only `md5` remains outstanding, so the
-  legacy PostgreSQL challenge is unsupported — acceptable only because SCRAM
-  is the default on every current server. Note Stage B weakens but does not overturn the TLS
+  workloads with none `Unsupported` (eighteen since ADR-0020 added
+  `constant-time`). `md5` has since landed too — the legacy
+  `AuthenticationMD5Password` challenge is supported, shipped **documented as
+  broken for security** (the ADR's own requirement, since a stdlib that ships
+  MD5 without that sentence teaches the wrong thing to exactly this language's
+  audience) and spec'd against RFC 1321's published suite, with
+  `md5_password` pinning the protocol composition against an independent
+  implementation — so nothing from ADR-0019 remains unimplemented. SCRAM
+  stays the primary path regardless, being the default on every current
+  server. Note Stage B weakens but does not overturn the TLS
   exclusion above: SHA-256/HMAC written *in tuonelang* need no external
   dependency, but TLS additionally needs X.509, a certificate store, and AEAD
   ciphers, so it stays out. Resolved
@@ -909,9 +957,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   They promise only that their control flow depends on array *lengths*, never
   on contents),
   and **`std::crypto`** (SHA-256, HMAC-SHA-256, PBKDF2-HMAC-SHA-256, Base64,
-  hex, and the byte/text bridge), whose specs are unique in the catalog for
+  hex, the byte/text bridge, the constant-time `verify` — which delegates to
+  `std::ct::bytes_eq`, making the safe comparison the convenient one so `==`
+  on a MAC tag is never the obvious spelling, and giving the catalog its
+  second declared dependency edge `std::crypto → std::ct` — and the
+  SCRAM-SHA-256 client exchange
+  `scram_salted_password`/`scram_client_proof`/`scram_server_signature`,
+  the PostgreSQL authentication path ADR-0019 was opened for), whose specs
+  are unique in the catalog for
   asserting **published vectors** (FIPS 180-4, RFC 4231, RFC 4648) rather
-  than the module's own reasoning — and whose headline pin,
+  than the module's own reasoning — RFC 7677's own SCRAM vector needs 4096
+  PBKDF2 iterations, more than the spec sandbox's instruction fuel allows,
+  so the sandbox specs check structure and the published vector is pinned
+  **natively** instead (the cost being the whole point of an iteration
+  count) — and whose headline pin,
   `tuo-cli/tests/crypto_cross_check.rs`, compares a **native** tuonelang
   binary's digests against `tuo-package`'s own **Rust** `sha256` across nine
   padding-boundary inputs, so the language demonstrably reproduces its own
@@ -957,8 +1016,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   command line; the `std::fs` roundtrip really touches the disk; the
   `std::net` roundtrip really touches the network over loopback; the
   `std::sync` channels/mutexes really synchronize). Since ADR-0019 Stage B
-  the catalog is no longer flat: `std::crypto` uses `std::bits`, so rather
-  than ship two copies of `rotr32`/`add32`/`be32` free to drift, the test
+  the catalog is no longer flat: `std::crypto` uses `std::bits` (rather
+  than ship two copies of `rotr32`/`add32`/`be32` free to drift) and, since
+  the SCRAM surface landed, `std::ct` (so the constant-time comparison has
+  one implementation, not a re-derived copy in the module that most needs it
+  to be right), so the test
   carries a `DECLARED_DEPENDENCIES` table — each module is checked with
   exactly its declared dependencies and **nothing else**, so an undeclared
   use still fails to resolve, and `the_dependency_graph_is_declared_and_acyclic`

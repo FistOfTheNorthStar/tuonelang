@@ -1,0 +1,432 @@
+// std::bits — fixed-width bit and byte-order operations over `Int`.
+//
+// This module is entirely executable: every function is pure computation over
+// `Int`, runs through the reference interpreter, and every spec below proves
+// it. It exists because ADR-0019 gave the language bitwise operators, and the
+// operations built *on* them — masking to a width, rotating, and assembling or
+// splitting a big-endian integer — are needed identically by every binary
+// protocol and every hash function. Writing them once here is the difference
+// between one audited implementation and one per caller.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`x.rotr32()`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+//
+// THE OVERFLOW RULE, which is why this module exists at all. tuonelang's `+`
+// **traps** on overflow (Constitution §24) — that is the right default, and
+// nothing here changes it. But every hash and checksum is *defined* over
+// modular arithmetic: SHA-256 adds mod 2^32 by specification. So `a + b` is
+// the wrong primitive for that work, and a caller who reaches for it gets an
+// abort exactly where the algorithm requires wraparound. `add32`/`add64` are
+// the deliberate, named, documented way to ask for the modular add, so the
+// choice is made once and visibly rather than rediscovered per call site.
+//
+// EVERYTHING IS `Int`. v0's arithmetic surface is `Int` (`I64`), so a "32-bit"
+// value here is an `Int` holding a value in `0 ..= 4294967295` — a *convention
+// enforced by masking*, not a `U32` type. Every function returns a value
+// already masked to its stated width, so results compose without a caller
+// re-masking. Inputs are masked on entry too, so a stale high bit cannot leak
+// into a result.
+
+module std::bits;
+
+// ----------------------------------------------------------------------------
+// Widths and masks.
+// ----------------------------------------------------------------------------
+
+/// The 32-bit mask, `0xFFFFFFFF` (4294967295).
+///
+/// Written as a function because v0 has no `const` items in the standard
+/// library's executable tier; it folds to a constant at every call site.
+///
+/// # Example
+/// ```tuo
+/// let m = std::bits::mask32(); // 4294967295
+/// ```
+pub fn mask32() -> Int {
+    4294967295
+}
+
+/// `value` truncated to its low 32 bits.
+///
+/// This is the single operation that keeps a "32-bit" `Int` inside its
+/// convention. It is idempotent: masking an already-masked value changes
+/// nothing.
+///
+/// # Example
+/// ```tuo
+/// let low = std::bits::low32(4294967296); // 0 — the 33rd bit is dropped
+/// ```
+pub fn low32(take value: Int) -> Int {
+    value & 4294967295
+}
+
+/// The low 8 bits of `value`, i.e. one byte in `0 ..= 255`.
+///
+/// # Example
+/// ```tuo
+/// let b = std::bits::low8(258); // 2
+/// ```
+pub fn low8(take value: Int) -> Int {
+    value & 255
+}
+
+// ----------------------------------------------------------------------------
+// Modular arithmetic — the wraparound `+` deliberately is not.
+// ----------------------------------------------------------------------------
+
+/// `a + b` modulo 2^32.
+///
+/// The addition every 32-bit hash function is defined over. Plain `+` traps on
+/// overflow, which is correct for ordinary arithmetic and *wrong* here — a
+/// checksum that aborts on carry is not a checksum. Both operands are masked
+/// first, so the intermediate sum cannot exceed 2^33 and never traps in `Int`.
+///
+/// # Example
+/// ```tuo
+/// let wrapped = std::bits::add32(4294967295, 1); // 0
+/// ```
+pub fn add32(take a: Int, take b: Int) -> Int {
+    ((a & 4294967295) + (b & 4294967295)) & 4294967295
+}
+
+/// `a * b` modulo 2^32.
+///
+/// Used by the multiplicative mixing steps of non-cryptographic hashes. The
+/// operands are masked to 32 bits first; the product of two 32-bit values fits
+/// in 64 bits, so the multiply itself cannot overflow `Int`.
+///
+/// # Example
+/// ```tuo
+/// let wrapped = std::bits::mul32(65536, 65536); // 0 — 2^32 mod 2^32
+/// ```
+pub fn mul32(take a: Int, take b: Int) -> Int {
+    ((a & 4294967295) * (b & 4294967295)) & 4294967295
+}
+
+// ----------------------------------------------------------------------------
+// Rotation — a shift that keeps the bits it pushes out.
+// ----------------------------------------------------------------------------
+
+/// `value` rotated right by `n` bits, within 32 bits.
+///
+/// Bits shifted off the bottom re-enter at the top, which is what distinguishes
+/// a rotation from `>>`. `n` is reduced modulo 32, so every `n >= 0` is
+/// meaningful and `rotr32(x, 32) == rotr32(x, 0) == x`; a negative `n` is
+/// treated as `0` rather than trapping, since a rotation by a negative amount
+/// has no natural reading.
+///
+/// # Example
+/// ```tuo
+/// let r = std::bits::rotr32(1, 1); // 2147483648 — the low bit wrapped to the top
+/// ```
+pub fn rotr32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    let amount = n % 32;
+    if amount == 0 {
+        return masked;
+    }
+    ((masked >> amount) | (masked << (32 - amount))) & 4294967295
+}
+
+/// `value` rotated left by `n` bits, within 32 bits.
+///
+/// The mirror of [`rotr32`], with the same reduction and negative-`n` rules.
+///
+/// # Example
+/// ```tuo
+/// let r = std::bits::rotl32(2147483648, 1); // 1 — the top bit wrapped to the bottom
+/// ```
+pub fn rotl32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    let amount = n % 32;
+    if amount == 0 {
+        return masked;
+    }
+    ((masked << amount) | (masked >> (32 - amount))) & 4294967295
+}
+
+/// `value` shifted right by `n` bits, zero-filling, within 32 bits.
+///
+/// The *logical* right shift on the 32-bit convention. `Int` is signed, so a
+/// bare `>>` on a negative `Int` sign-extends; masking to 32 bits first makes
+/// the value non-negative, so this always zero-fills as a 32-bit shift must.
+/// `n >= 32` yields `0`, matching the definition rather than trapping.
+///
+/// # Example
+/// ```tuo
+/// let s = std::bits::shr32(4294967295, 24); // 255
+/// ```
+pub fn shr32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    if n >= 32 {
+        return 0;
+    }
+    (masked >> n) & 4294967295
+}
+
+/// `value` shifted left by `n` bits, within 32 bits (bits above 32 dropped).
+///
+/// # Example
+/// ```tuo
+/// let s = std::bits::shl32(1, 31); // 2147483648
+/// ```
+pub fn shl32(take value: Int, take n: Int) -> Int {
+    let masked = value & 4294967295;
+    if n <= 0 {
+        return masked;
+    }
+    if n >= 32 {
+        return 0;
+    }
+    (masked << n) & 4294967295
+}
+
+// ----------------------------------------------------------------------------
+// Byte order — assembling and splitting big-endian integers.
+//
+// Network byte order is big-endian, so this is the layout every wire protocol
+// uses: PostgreSQL's Int32 message length, TLS record headers, DNS packet
+// fields. `byte_of_*` splits, `be32`/`be16` assemble.
+// ----------------------------------------------------------------------------
+
+/// The four bytes `b0 b1 b2 b3` read as one big-endian 32-bit integer.
+///
+/// `b0` is the most significant byte. Each byte is masked to `0 ..= 255`, so a
+/// caller passing an out-of-range value cannot corrupt an adjacent field — the
+/// bits simply do not reach it. This is the operation ADR-0019 was opened for:
+/// the length prefix on every PostgreSQL protocol message.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bits::be32(0, 0, 1, 2); // 258
+/// ```
+pub fn be32(take b0: Int, take b1: Int, take b2: Int, take b3: Int) -> Int {
+    ((b0 & 255) << 24) | ((b1 & 255) << 16) | ((b2 & 255) << 8) | (b3 & 255)
+}
+
+/// The two bytes `b0 b1` read as one big-endian 16-bit integer.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bits::be16(1, 2); // 258
+/// ```
+pub fn be16(take b0: Int, take b1: Int) -> Int {
+    ((b0 & 255) << 8) | (b1 & 255)
+}
+
+/// Byte `index` of `value` in big-endian order, where index `0` is the most
+/// significant of the four.
+///
+/// The inverse of [`be32`]: feeding its four outputs back in reconstructs the
+/// original 32-bit value. An `index` outside `0 ..= 3` yields `0` rather than
+/// trapping, so a loop that overruns produces zeros instead of an abort.
+///
+/// # Example
+/// ```tuo
+/// let top = std::bits::byte_of_be32(258, 3); // 2 — the least significant byte
+/// ```
+pub fn byte_of_be32(take value: Int, take index: Int) -> Int {
+    if index < 0 || index > 3 {
+        return 0;
+    }
+    ((value & 4294967295) >> ((3 - index) * 8)) & 255
+}
+
+/// Byte `index` of `value` in big-endian order over two bytes (`0` = high).
+///
+/// # Example
+/// ```tuo
+/// let low = std::bits::byte_of_be16(258, 1); // 2
+/// ```
+pub fn byte_of_be16(take value: Int, take index: Int) -> Int {
+    if index < 0 || index > 1 {
+        return 0;
+    }
+    ((value & 65535) >> ((1 - index) * 8)) & 255
+}
+
+// ----------------------------------------------------------------------------
+// Bit inspection.
+// ----------------------------------------------------------------------------
+
+/// Whether bit `index` of `value` is set, counting from `0` at the least
+/// significant bit.
+///
+/// An `index` outside `0 ..= 62` yields `false` rather than trapping. Bit 63 is
+/// excluded deliberately: `1 << 63` overflows a signed `Int`, so asking for it
+/// has no representable mask.
+///
+/// # Example
+/// ```tuo
+/// let set = std::bits::test_bit(5, 2); // true — 5 is 0b101
+/// ```
+pub fn test_bit(take value: Int, take index: Int) -> Bool {
+    if index < 0 || index > 62 {
+        return false;
+    }
+    ((value >> index) & 1) == 1
+}
+
+/// The number of set bits in the low 32 bits of `value` (its population count).
+///
+/// # Example
+/// ```tuo
+/// let n = std::bits::count_ones32(255); // 8
+/// ```
+pub fn count_ones32(take value: Int) -> Int {
+    var remaining = value & 4294967295;
+    var count = 0;
+    while remaining != 0 {
+        count = count + (remaining & 1);
+        remaining = remaining >> 1;
+    }
+    count
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter.
+// ----------------------------------------------------------------------------
+
+spec mask32 {
+    then mask32() == 4294967295;
+    then low32(4294967295) == 4294967295;
+    // The 33rd bit and above are dropped.
+    then low32(4294967296) == 0;
+    then low32(4294967297) == 1;
+    // Idempotent.
+    then low32(low32(305419896)) == low32(305419896);
+    then low8(258) == 2;
+    then low8(255) == 255;
+    then low8(256) == 0;
+}
+
+spec add32 {
+    then add32(1, 2) == 3;
+    // Wraps rather than trapping — the whole point of the function.
+    then add32(4294967295, 1) == 0;
+    then add32(4294967295, 2) == 1;
+    then add32(2147483648, 2147483648) == 0;
+    // Operands are masked, so an over-wide input cannot leak upward.
+    then add32(4294967296, 5) == 5;
+}
+
+spec mul32 {
+    then mul32(2, 3) == 6;
+    // 2^16 * 2^16 == 2^32, which is 0 mod 2^32.
+    then mul32(65536, 65536) == 0;
+    then mul32(4294967295, 1) == 4294967295;
+    // 0xFFFFFFFF * 2 == 0x1FFFFFFFE, whose low 32 bits are 0xFFFFFFFE.
+    then mul32(4294967295, 2) == 4294967294;
+}
+
+spec rotr32 {
+    then rotr32(1, 1) == 2147483648;
+    then rotr32(2147483648, 31) == 1;
+    // A full turn is the identity, as is a zero or negative rotation.
+    then rotr32(305419896, 32) == 305419896;
+    then rotr32(305419896, 0) == 305419896;
+    then rotr32(305419896, 0 - 4) == 305419896;
+    // Rotating 0x12345678 right by 8 gives 0x78123456: the low byte moves to
+    // the top and every other byte shifts down one position. (This is NOT a
+    // byte reversal — that would be 0x78563412.)
+    then rotr32(305419896, 8) == 2014458966;
+}
+
+spec rotl32 {
+    then rotl32(2147483648, 1) == 1;
+    then rotl32(1, 31) == 2147483648;
+    then rotl32(305419896, 32) == 305419896;
+    // rotl and rotr are inverses.
+    then rotl32(rotr32(305419896, 7), 7) == 305419896;
+}
+
+spec shr32 {
+    then shr32(4294967295, 24) == 255;
+    then shr32(256, 8) == 1;
+    // Zero-fills: the top bit does not smear downward.
+    then shr32(2147483648, 31) == 1;
+    then shr32(4294967295, 32) == 0;
+    then shr32(305419896, 0) == 305419896;
+}
+
+spec shl32 {
+    then shl32(1, 31) == 2147483648;
+    then shl32(1, 32) == 0;
+    // Bits above 32 are dropped rather than growing the value.
+    then shl32(4294967295, 4) == 4294967280;
+    then shl32(305419896, 0) == 305419896;
+}
+
+spec be32 {
+    then be32(0, 0, 1, 2) == 258;
+    then be32(0, 0, 0, 255) == 255;
+    then be32(1, 0, 0, 0) == 16777216;
+    // The all-ones case the multiply-add form makes easy to get wrong.
+    then be32(255, 255, 255, 255) == 4294967295;
+    // 0x12345678.
+    then be32(18, 52, 86, 120) == 305419896;
+    // An out-of-range byte is masked, not carried into the next field.
+    then be32(0, 0, 256, 0) == 0;
+}
+
+spec be16 {
+    then be16(1, 2) == 258;
+    then be16(255, 255) == 65535;
+    then be16(0, 0) == 0;
+}
+
+spec byte_of_be32 {
+    then byte_of_be32(305419896, 0) == 18;
+    then byte_of_be32(305419896, 1) == 52;
+    then byte_of_be32(305419896, 2) == 86;
+    then byte_of_be32(305419896, 3) == 120;
+    // Out of range yields 0 rather than trapping.
+    then byte_of_be32(305419896, 4) == 0;
+    then byte_of_be32(305419896, 0 - 1) == 0;
+    // Round-trip: splitting and reassembling is the identity.
+    then be32(
+        byte_of_be32(4023233417, 0),
+        byte_of_be32(4023233417, 1),
+        byte_of_be32(4023233417, 2),
+        byte_of_be32(4023233417, 3)
+    ) == 4023233417;
+}
+
+spec byte_of_be16 {
+    then byte_of_be16(258, 0) == 1;
+    then byte_of_be16(258, 1) == 2;
+    then byte_of_be16(258, 2) == 0;
+    then be16(byte_of_be16(65535, 0), byte_of_be16(65535, 1)) == 65535;
+}
+
+spec test_bit {
+    // 5 is 0b101.
+    then test_bit(5, 0);
+    then !test_bit(5, 1);
+    then test_bit(5, 2);
+    then !test_bit(5, 3);
+    // Out of range is false, never a trap.
+    then !test_bit(5, 0 - 1);
+    then !test_bit(5, 63);
+}
+
+spec count_ones32 {
+    then count_ones32(0) == 0;
+    then count_ones32(255) == 8;
+    then count_ones32(4294967295) == 32;
+    then count_ones32(5) == 2;
+    // The high 32 bits are ignored.
+    then count_ones32(4294967296) == 0;
+}

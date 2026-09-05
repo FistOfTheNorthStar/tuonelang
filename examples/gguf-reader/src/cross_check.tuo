@@ -1,0 +1,41 @@
+module cross_check;
+
+// An outside check on the fixture's byte layout.
+//
+// `main.tuo`'s builder and its parser are written in opposite directions, which
+// already makes a shared bug unlikely — but not impossible, since both were
+// written by the same author from the same reading of the format. These numbers
+// come from a THIRD implementation: a short Python script using `struct`,
+// written from the GGUF v3 specification alone, which reports
+//
+//   descriptor table ends at 209
+//   data blob begins at     224   (209 rounded up to the declared alignment 32)
+//   tensor 0 absolute       224
+//   tensor 1 absolute       736   (224 + its blob-relative 512)
+//   tensor 0 elements       128   (16 x 8)
+//
+// Asserting them here pins the alignment rule and the blob-relative-to-
+// file-absolute composition — the format's two classic bug sources — against an
+// outside authority. Exits 100 only when every one agrees.
+
+import gguf_reader;
+
+pub fn main() -> Int {
+    let f = gguf_reader::fixture();
+    if std::array::len(f) != 209 {
+        return 1;
+    }
+    if gguf_reader::data_offset(f) != 224 {
+        return 2;
+    }
+    if gguf_reader::tensor_data_offset(f, 0) != 224 {
+        return 3;
+    }
+    if gguf_reader::tensor_data_offset(f, 1) != 736 {
+        return 4;
+    }
+    if gguf_reader::tensor_elements(f, 0) != 128 {
+        return 5;
+    }
+    100
+}

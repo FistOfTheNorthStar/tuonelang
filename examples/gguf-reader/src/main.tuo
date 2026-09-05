@@ -1,0 +1,845 @@
+module gguf_reader;
+
+// gguf-reader — the GGUF container format's header, metadata table, and tensor
+// descriptors, parsed end to end in tuonelang.
+//
+// WHY THIS EXAMPLE EXISTS. Every previous wire-format example in this tree is
+// BIG-endian: PostgreSQL's frame length, the SHA-256 block, the `wire-decode`
+// benchmark workload. That is not a coincidence — network protocols are
+// big-endian by convention, and ADR-0019 Stage A was opened to serve one. GGUF
+// is the opposite case and the one this repository had never dogfooded: a
+// LITTLE-endian, 64-bit, memory-mappable FILE format, where fields are sized to
+// be read directly into registers rather than to be framed on a wire.
+//
+// The question this example was written to answer empirically was whether
+// ADR-0019's operator surface generalizes past the protocol it was opened for,
+// or whether it had been fitted to that one case. The answer is in
+// `le64_at`/`le32_at` below: it generalizes, with one real boundary found and
+// documented rather than worked around (see THE u64 BOUNDARY).
+//
+// WHAT IT COVERS. The whole structural walk a loader performs before it
+// touches a single weight:
+//
+//   * THE HEADER — the magic "GGUF", a little-endian u32 version, and two
+//     little-endian u64 counts (tensors, metadata pairs).
+//   * THE METADATA TABLE — `n_kv` entries, each a length-prefixed UTF-8 key,
+//     a u32 type tag, and a value whose encoding depends on that tag. This is
+//     where a model's architecture, context length, and quantization live.
+//   * THE TENSOR DESCRIPTORS — `n_tensors` entries, each a name, a dimension
+//     count, that many u64 extents, a type tag, and a u64 offset into the data
+//     blob that follows the aligned end of the descriptor table.
+//   * THE ALIGNMENT RULE — the data blob begins at the descriptor table's end
+//     rounded up to `general.alignment` (default 32). Getting this wrong reads
+//     every tensor from the wrong place, so it is spec'd directly.
+//
+// WHAT IT DELIBERATELY DOES NOT COVER. No tensor DATA is read, and nothing is
+// dequantized. That is the honest boundary: a GGUF file's descriptor table is
+// pure structure over bytes and is exactly what v0 can express, while reading
+// the blob means mmap and SIMD over f16 — neither of which v0 has, and neither
+// of which this example pretends to. The parser is pure and spec-checked, so
+// the program is hermetic: its exit byte is decided by the specs, not by any
+// model file on disk.
+//
+// THE u64 BOUNDARY (the gap this example found). GGUF counts and offsets are
+// unsigned 64-bit; tuonelang's `Int` is signed `I64`. Every value below 2^63
+// round-trips exactly, which covers every real model file by an enormous
+// margin — 2^63 bytes is 9.2 exabytes. But the top bit is genuinely
+// unrepresentable: `std::bits` stops at 32-bit assembly (`be32`/`be16`), and
+// `test_bit` documents that bit 63 is excluded because `1 << 63` has no
+// representable mask — it type-checks and evaluates to the NEGATIVE `i64::MIN`,
+// which is useless as a length or an offset. So `le64_at` assembles its high word with a checked
+// multiplication rather than `<< 32`, and REFUSES a value with the top bit set
+// instead of silently returning a negative length. A corrupt file therefore
+// gets a diagnosable -1, never a wrapped offset. See README.md for why this is
+// a documented limit rather than an ADR.
+
+import std::str;
+
+// ----------------------------------------------------------------------------
+// Little-endian scalar decoding.
+//
+// `std::bits` assembles BIG-endian words (`be32`, `be16`) because PostgreSQL
+// needed those. GGUF needs the other order and a wider one, so these three are
+// written here. They are the reason this example exists: writing them is the
+// experiment that tests whether ADR-0019's operators generalize.
+// ----------------------------------------------------------------------------
+
+/// The 2 bytes at `offset` read as a little-endian unsigned 16-bit integer, or
+/// `-1` when the buffer is too short.
+///
+/// Least significant byte first — the reverse of `std::bits::be16`.
+///
+/// ```tuo
+/// let b = gguf_reader::bytes(2, 1);
+/// gguf_reader::le16_at(b, 0)  // 258
+/// ```
+pub fn le16_at(in bytes: Array[Int], take offset: Int) -> Int {
+    if offset < 0 || std::array::len(bytes) < (offset + 2) {
+        return -1;
+    }
+    let b0 = std::array::get(bytes, offset) & 255;
+    let b1 = std::array::get(bytes, offset + 1) & 255;
+    b0 | (b1 << 8)
+}
+
+/// The 4 bytes at `offset` read as a little-endian unsigned 32-bit integer, or
+/// `-1` when the buffer is too short.
+///
+/// A u32 always fits an `Int`, so this needs no range refusal beyond bounds.
+///
+/// ```tuo
+/// var b = std::array::empty();
+/// gguf_reader::push_le(b, 1, 4);
+/// gguf_reader::le32_at(b, 0)  // 1
+/// ```
+pub fn le32_at(in bytes: Array[Int], take offset: Int) -> Int {
+    if offset < 0 || std::array::len(bytes) < (offset + 4) {
+        return -1;
+    }
+    let b0 = std::array::get(bytes, offset) & 255;
+    let b1 = std::array::get(bytes, offset + 1) & 255;
+    let b2 = std::array::get(bytes, offset + 2) & 255;
+    let b3 = std::array::get(bytes, offset + 3) & 255;
+    b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+}
+
+/// The 8 bytes at `offset` read as a little-endian unsigned 64-bit integer, or
+/// `-1` when the buffer is too short OR when the value's top bit is set.
+///
+/// THE SIGNEDNESS BOUNDARY. GGUF's counts, string lengths, dimensions, and
+/// offsets are all `u64`; `Int` is signed `I64`. Values below 2^63 are exact —
+/// which is every real file, since 2^63 bytes is 9.2 exabytes — but a value
+/// with bit 63 set cannot be represented at all. Rather than let it wrap into a
+/// negative length (which a caller would then use as an array bound), this
+/// refuses with `-1`, the same sentinel a short buffer gets. The high word is
+/// combined with `* 4294967296` rather than `<< 32` deliberately: multiplication
+/// TRAPS on overflow, so the refusal is checked before it can be observed.
+///
+/// ```tuo
+/// var b = std::array::empty();
+/// gguf_reader::push_le(b, 3, 8);
+/// gguf_reader::le64_at(b, 0)  // 3
+/// ```
+pub fn le64_at(in bytes: Array[Int], take offset: Int) -> Int {
+    if offset < 0 || std::array::len(bytes) < (offset + 8) {
+        return -1;
+    }
+    let low = le32_at(bytes, offset);
+    let high = le32_at(bytes, offset + 4);
+    // Bit 63 of the value is bit 31 of the high word. Refuse it: there is no
+    // signed Int that represents it, and a wrapped negative would be used as a
+    // length by the caller.
+    if high >= 2147483648 {
+        return -1;
+    }
+    low + (high * 4294967296)
+}
+
+// ----------------------------------------------------------------------------
+// Test-vector helpers.
+//
+// These build byte buffers so the specs below can assert against encodings
+// written out by hand, rather than against this file's own reasoning.
+// ----------------------------------------------------------------------------
+
+/// A two-byte buffer holding `b0` then `b1`.
+///
+/// ```tuo
+/// std::array::len(gguf_reader::bytes(1, 2))  // 2
+/// ```
+pub fn bytes(take b0: Int, take b1: Int) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, b0);
+    std::array::push(out, b1);
+    out
+}
+
+/// `value` encoded as `width` little-endian bytes, appended to `out`.
+///
+/// Used by the fixture builder to write the same encoding the parser reads, so
+/// a spec that round-trips exercises both directions.
+///
+/// ```tuo
+/// var b = std::array::empty();
+/// gguf_reader::push_le(mut b, 258, 2);
+/// std::array::get(b, 0)  // 2 — least significant byte first
+/// ```
+pub fn push_le(mut out: Array[Int], take value: Int, take width: Int) {
+    var i = 0;
+    var rest = value;
+    while i < width {
+        std::array::push(out, rest & 255);
+        rest = rest >> 8;
+        i = i + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Length-prefixed strings.
+//
+// Every name in a GGUF file — metadata keys and tensor names alike — is a u64
+// byte count followed by that many UTF-8 bytes. No terminator, so a reader that
+// loses track of the count desynchronizes the whole table.
+// ----------------------------------------------------------------------------
+
+/// The total encoded size of the GGUF string at `offset` (8 + its byte count),
+/// or `-1` when the buffer is too short to hold it.
+///
+/// A reader steps over strings with this rather than searching for a
+/// terminator, because there is none.
+pub fn gstring_size(in bytes: Array[Int], take offset: Int) -> Int {
+    let n = le64_at(bytes, offset);
+    if n < 0 {
+        return -1;
+    }
+    if std::array::len(bytes) < (offset + 8 + n) {
+        return -1;
+    }
+    8 + n
+}
+
+/// The GGUF string at `offset` decoded to an owned `String`, or the empty
+/// string when the buffer is too short.
+///
+/// Callers distinguish "empty string" from "truncated" with `gstring_size`,
+/// which returns `-1` only in the latter case.
+pub fn gstring_at(in bytes: Array[Int], take offset: Int) -> String {
+    var out = std::string::empty();
+    let n = le64_at(bytes, offset);
+    if n < 0 {
+        return out;
+    }
+    if std::array::len(bytes) < (offset + 8 + n) {
+        return out;
+    }
+    var i = 0;
+    while i < n {
+        std::string::push_byte(out, std::array::get(bytes, offset + 8 + i));
+        i = i + 1;
+    }
+    out
+}
+
+/// `text` encoded as a GGUF string (u64 length prefix + bytes), appended to
+/// `out`.
+pub fn push_gstring(mut out: Array[Int], in text: Str) {
+    push_le(out, std::str::len(text), 8);
+    var i = 0;
+    while i < std::str::len(text) {
+        std::array::push(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The header.
+//
+// magic "GGUF" (4 bytes) | version u32 | tensor_count u64 | kv_count u64
+// = 24 bytes, and the only fixed-size region in the format.
+// ----------------------------------------------------------------------------
+
+/// The byte length of a GGUF header.
+pub fn header_size() -> Int {
+    24
+}
+
+/// Whether `bytes` begins with the GGUF magic, `"GGUF"` (0x47 0x47 0x55 0x46).
+///
+/// Checked as bytes rather than as text because a truncated or foreign file
+/// must be rejected before any length is trusted.
+pub fn has_magic(in bytes: Array[Int]) -> Bool {
+    if std::array::len(bytes) < 4 {
+        return false;
+    }
+    std::array::get(bytes, 0) == 71 && std::array::get(bytes, 1) == 71 && std::array::get(bytes, 2) == 85 && std::array::get(bytes, 3) == 70
+}
+
+/// The format version, or `-1` when the buffer is not a GGUF file.
+///
+/// Version 3 is current. The version is deliberately read only after the magic
+/// is confirmed, so a foreign file never contributes a plausible number.
+pub fn version(in bytes: Array[Int]) -> Int {
+    if !has_magic(bytes) {
+        return -1;
+    }
+    le32_at(bytes, 4)
+}
+
+/// The declared tensor count, or `-1` when the buffer is not a GGUF file.
+pub fn tensor_count(in bytes: Array[Int]) -> Int {
+    if !has_magic(bytes) {
+        return -1;
+    }
+    le64_at(bytes, 8)
+}
+
+/// The declared metadata-pair count, or `-1` when the buffer is not a GGUF
+/// file.
+pub fn kv_count(in bytes: Array[Int]) -> Int {
+    if !has_magic(bytes) {
+        return -1;
+    }
+    le64_at(bytes, 16)
+}
+
+// ----------------------------------------------------------------------------
+// Metadata values.
+//
+// A metadata entry is: key (GGUF string), type tag (u32), value (encoding
+// determined by the tag). The scalar tags are what a loader actually reads —
+// architecture, context length, and alignment are all scalars — so those are
+// decoded, and the aggregate tag (ARRAY = 9) is stepped over rather than
+// decoded into a typed value, since v0 has no sum type over mixed element
+// types to decode it INTO. That boundary is real and is documented here rather
+// than hidden.
+// ----------------------------------------------------------------------------
+
+/// The GGUF type tag for unsigned 32-bit metadata values.
+pub fn type_u32() -> Int {
+    4
+}
+
+/// The GGUF type tag for string metadata values.
+pub fn type_string() -> Int {
+    8
+}
+
+/// The encoded size of a scalar metadata value with type tag `tag`, or `-1`
+/// for a tag whose size is not fixed (strings and arrays).
+///
+/// The tag numbering is the format's own: 0/1 are 8-bit, 2/3 16-bit, 4/5/6
+/// 32-bit, 7 is bool (1 byte), 10/11/12 are 64-bit.
+pub fn scalar_size(take tag: Int) -> Int {
+    if tag == 0 || tag == 1 || tag == 7 {
+        return 1;
+    }
+    if tag == 2 || tag == 3 {
+        return 2;
+    }
+    if tag == 4 || tag == 5 || tag == 6 {
+        return 4;
+    }
+    if tag == 10 || tag == 11 || tag == 12 {
+        return 8;
+    }
+    0 - 1
+}
+
+/// The value of the u32-typed metadata entry named `key`, or `-1` when the key
+/// is absent, the file is malformed, or the entry has a different type.
+///
+/// This is the one query a loader always makes — `general.alignment` decides
+/// where the tensor data begins — so it is spec'd against a hand-built file.
+pub fn u32_metadata(in bytes: Array[Int], in key: Str) -> Int {
+    if !has_magic(bytes) {
+        return 0 - 1;
+    }
+    let n = kv_count(bytes);
+    if n < 0 {
+        return 0 - 1;
+    }
+    var offset = header_size();
+    var seen = 0;
+    while seen < n {
+        let key_size = gstring_size(bytes, offset);
+        if key_size < 0 {
+            return 0 - 1;
+        }
+        let this_key = gstring_at(bytes, offset);
+        let tag = le32_at(bytes, offset + key_size);
+        if tag < 0 {
+            return 0 - 1;
+        }
+        let value_at = offset + key_size + 4;
+        if tag == type_string() {
+            let size = gstring_size(bytes, value_at);
+            if size < 0 {
+                return 0 - 1;
+            }
+            offset = value_at + size;
+        } else {
+            let size = scalar_size(tag);
+            if size < 0 {
+                // An array-typed entry: v0 has no mixed-element sum type to
+                // decode it into, and stepping over one requires its element
+                // type and count. This parser reports rather than guesses.
+                return 0 - 1;
+            }
+            if tag == type_u32() && std::string::as_str(this_key) == key {
+                return le32_at(bytes, value_at);
+            }
+            offset = value_at + size;
+        }
+        seen = seen + 1;
+    }
+    0 - 1
+}
+
+/// The alignment the tensor data blob starts on: `general.alignment` when the
+/// file declares it, or the format's default of 32.
+pub fn alignment(in bytes: Array[Int]) -> Int {
+    let declared = u32_metadata(bytes, "general.alignment");
+    if declared < 1 {
+        return 32;
+    }
+    declared
+}
+
+/// `value` rounded up to the next multiple of `align`.
+///
+/// The data blob begins at the descriptor table's end rounded up this way. An
+/// off-by-one here reads every tensor from the wrong offset, which is why it is
+/// a named function with its own spec rather than an inline expression.
+pub fn align_up(take value: Int, take align: Int) -> Int {
+    if align < 1 {
+        return value;
+    }
+    let rem = value % align;
+    if rem == 0 {
+        return value;
+    }
+    value + (align - rem)
+}
+
+// ----------------------------------------------------------------------------
+// Tensor descriptors.
+//
+// After the metadata table come `n_tensors` descriptors, each:
+//
+//   name (GGUF string) | n_dims u32 | dims[n_dims] u64 | type u32 | offset u64
+//
+// The offset is relative to the START of the data blob, not to the file, which
+// is the format's second classic bug source (the first being the alignment
+// rule). `tensor_data_offset` composes both, so a caller gets a file-absolute
+// position it can seek to directly.
+// ----------------------------------------------------------------------------
+
+/// The byte offset just past the metadata table, i.e. where the first tensor
+/// descriptor begins — or `-1` when the file is malformed.
+pub fn descriptors_offset(in bytes: Array[Int]) -> Int {
+    if !has_magic(bytes) {
+        return 0 - 1;
+    }
+    let n = kv_count(bytes);
+    if n < 0 {
+        return 0 - 1;
+    }
+    var offset = header_size();
+    var seen = 0;
+    while seen < n {
+        let key_size = gstring_size(bytes, offset);
+        if key_size < 0 {
+            return 0 - 1;
+        }
+        let tag = le32_at(bytes, offset + key_size);
+        if tag < 0 {
+            return 0 - 1;
+        }
+        let value_at = offset + key_size + 4;
+        if tag == type_string() {
+            let size = gstring_size(bytes, value_at);
+            if size < 0 {
+                return 0 - 1;
+            }
+            offset = value_at + size;
+        } else {
+            let size = scalar_size(tag);
+            if size < 0 {
+                return 0 - 1;
+            }
+            offset = value_at + size;
+        }
+        seen = seen + 1;
+    }
+    offset
+}
+
+/// The byte offset of tensor descriptor `index`, or `-1` when the file is
+/// malformed or the index is out of range.
+///
+/// Descriptors are variable-width (the name and the dimension list both vary),
+/// so reaching index `n` means walking the `n` before it — there is no index.
+pub fn descriptor_offset(in bytes: Array[Int], take index: Int) -> Int {
+    let count = tensor_count(bytes);
+    if count < 0 || index < 0 || index >= count {
+        return 0 - 1;
+    }
+    var offset = descriptors_offset(bytes);
+    if offset < 0 {
+        return 0 - 1;
+    }
+    var seen = 0;
+    while seen < index {
+        let size = descriptor_size(bytes, offset);
+        if size < 0 {
+            return 0 - 1;
+        }
+        offset = offset + size;
+        seen = seen + 1;
+    }
+    offset
+}
+
+/// The encoded byte size of the tensor descriptor at `offset`, or `-1` when the
+/// buffer is too short.
+pub fn descriptor_size(in bytes: Array[Int], take offset: Int) -> Int {
+    let name_size = gstring_size(bytes, offset);
+    if name_size < 0 {
+        return 0 - 1;
+    }
+    let n_dims = le32_at(bytes, offset + name_size);
+    if n_dims < 0 {
+        return 0 - 1;
+    }
+    // name | n_dims u32 | dims u64 each | type u32 | offset u64
+    let total = name_size + 4 + (n_dims * 8) + 4 + 8;
+    if std::array::len(bytes) < (offset + total) {
+        return 0 - 1;
+    }
+    total
+}
+
+/// The name of tensor `index`, or the empty string when it is out of range.
+pub fn tensor_name(in bytes: Array[Int], take index: Int) -> String {
+    let offset = descriptor_offset(bytes, index);
+    if offset < 0 {
+        return std::string::empty();
+    }
+    gstring_at(bytes, offset)
+}
+
+/// The number of dimensions of tensor `index`, or `-1` when out of range.
+pub fn tensor_dims(in bytes: Array[Int], take index: Int) -> Int {
+    let offset = descriptor_offset(bytes, index);
+    if offset < 0 {
+        return 0 - 1;
+    }
+    let name_size = gstring_size(bytes, offset);
+    if name_size < 0 {
+        return 0 - 1;
+    }
+    le32_at(bytes, offset + name_size)
+}
+
+/// Extent `dim` of tensor `index`, or `-1` when either is out of range.
+pub fn tensor_extent(in bytes: Array[Int], take index: Int, take dim: Int) -> Int {
+    let dims = tensor_dims(bytes, index);
+    if dims < 0 || dim < 0 || dim >= dims {
+        return 0 - 1;
+    }
+    let offset = descriptor_offset(bytes, index);
+    let name_size = gstring_size(bytes, offset);
+    le64_at(bytes, offset + name_size + 4 + (dim * 8))
+}
+
+/// The total element count of tensor `index` — the product of its extents — or
+/// `-1` when out of range.
+///
+/// This is what a loader multiplies by the type's bytes-per-element to size the
+/// tensor, so it is the first place a wrong dimension walk becomes visible.
+pub fn tensor_elements(in bytes: Array[Int], take index: Int) -> Int {
+    let dims = tensor_dims(bytes, index);
+    if dims < 0 {
+        return 0 - 1;
+    }
+    var total = 1;
+    var d = 0;
+    while d < dims {
+        let extent = tensor_extent(bytes, index, d);
+        if extent < 0 {
+            return 0 - 1;
+        }
+        total = total * extent;
+        d = d + 1;
+    }
+    total
+}
+
+/// The blob-relative data offset declared by tensor `index`, or `-1` when out
+/// of range.
+pub fn tensor_relative_offset(in bytes: Array[Int], take index: Int) -> Int {
+    let offset = descriptor_offset(bytes, index);
+    if offset < 0 {
+        return 0 - 1;
+    }
+    let name_size = gstring_size(bytes, offset);
+    if name_size < 0 {
+        return 0 - 1;
+    }
+    let dims = le32_at(bytes, offset + name_size);
+    if dims < 0 {
+        return 0 - 1;
+    }
+    le64_at(bytes, offset + name_size + 4 + (dims * 8) + 4)
+}
+
+/// The byte offset at which the tensor data blob begins: the end of the
+/// descriptor table, rounded up to the file's alignment.
+pub fn data_offset(in bytes: Array[Int]) -> Int {
+    let count = tensor_count(bytes);
+    if count < 0 {
+        return 0 - 1;
+    }
+    var offset = descriptors_offset(bytes);
+    if offset < 0 {
+        return 0 - 1;
+    }
+    var seen = 0;
+    while seen < count {
+        let size = descriptor_size(bytes, offset);
+        if size < 0 {
+            return 0 - 1;
+        }
+        offset = offset + size;
+        seen = seen + 1;
+    }
+    align_up(offset, alignment(bytes))
+}
+
+/// The FILE-absolute byte offset of tensor `index`'s data — the composition of
+/// the blob start with the tensor's blob-relative offset.
+///
+/// This is the number a loader seeks to. Both halves are easy to get right in
+/// isolation and easy to get wrong together, which is why the composition is
+/// its own spec'd function.
+pub fn tensor_data_offset(in bytes: Array[Int], take index: Int) -> Int {
+    let base = data_offset(bytes);
+    if base < 0 {
+        return 0 - 1;
+    }
+    let relative = tensor_relative_offset(bytes, index);
+    if relative < 0 {
+        return 0 - 1;
+    }
+    base + relative
+}
+
+// ----------------------------------------------------------------------------
+// A fixture file, built byte by byte.
+//
+// The specs below assert against THIS, not against the parser's own reasoning:
+// the builder writes the encoding the format specifies, and the parser reads it
+// back. A bug that lived in both would have to be made twice, in opposite
+// directions, to stay hidden.
+//
+// The fixture models a plausible tiny model: two metadata entries
+// (`general.architecture` = "llama", `general.alignment` = 32) and two tensors
+// with realistic names and shapes.
+// ----------------------------------------------------------------------------
+
+/// The bytes of `text`, for building non-GGUF buffers in specs.
+pub fn ascii(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::str::len(text) {
+        std::array::push(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// A complete, well-formed GGUF v3 file with 2 metadata pairs and 2 tensors.
+pub fn fixture() -> Array[Int] {
+    var out = std::array::empty();
+    // Header: magic, version 3, 2 tensors, 2 metadata pairs.
+    std::array::push(out, 71);
+    std::array::push(out, 71);
+    std::array::push(out, 85);
+    std::array::push(out, 70);
+    push_le(out, 3, 4);
+    push_le(out, 2, 8);
+    push_le(out, 2, 8);
+    // Metadata: general.architecture (string) = "llama".
+    push_gstring(out, "general.architecture");
+    push_le(out, type_string(), 4);
+    push_gstring(out, "llama");
+    // Metadata: general.alignment (u32) = 32.
+    push_gstring(out, "general.alignment");
+    push_le(out, type_u32(), 4);
+    push_le(out, 32, 4);
+    // Tensor 0: token_embd.weight, 2-D 16x8, type 0 (F32), at blob offset 0.
+    push_gstring(out, "token_embd.weight");
+    push_le(out, 2, 4);
+    push_le(out, 16, 8);
+    push_le(out, 8, 8);
+    push_le(out, 0, 4);
+    push_le(out, 0, 8);
+    // Tensor 1: output_norm.weight, 1-D 8, type 0 (F32), at blob offset 512.
+    push_gstring(out, "output_norm.weight");
+    push_le(out, 1, 4);
+    push_le(out, 8, 8);
+    push_le(out, 0, 4);
+    push_le(out, 512, 8);
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs.
+// ----------------------------------------------------------------------------
+
+spec "little_endian_scalars" {
+    // Byte order: least significant first. The same bytes read big-endian
+    // would be 258, so this pins the ORDER and not merely the arithmetic.
+    then le16_at(bytes(2, 1), 0) == 258;
+    then le16_at(bytes(1, 2), 0) == 513;
+    // A 32-bit value whose top byte is set — the case a sign error would show.
+    var b = std::array::empty();
+    push_le(b, 4278190080, 4);
+    then le32_at(b, 0) == 4278190080;
+    // The maximum u32 round-trips, which `std::bits::be32` also allows.
+    var m = std::array::empty();
+    push_le(m, 4294967295, 4);
+    then le32_at(m, 0) == 4294967295;
+    // Short buffers are reported, never read past.
+    then le16_at(bytes(1, 2), 1) == 0 - 1;
+    then le32_at(bytes(1, 2), 0) == 0 - 1;
+    then le64_at(bytes(1, 2), 0) == 0 - 1;
+}
+
+spec "sixty_four_bit_values" {
+    // A value above 2^32 — the case that distinguishes a real 64-bit read from
+    // a 32-bit one, and the reason a model file's offsets need one.
+    var big = std::array::empty();
+    push_le(big, 4294967296, 8);
+    then le64_at(big, 0) == 4294967296;
+    // A realistic weight offset in a multi-gigabyte model.
+    var off = std::array::empty();
+    push_le(off, 7516192768, 8);
+    then le64_at(off, 0) == 7516192768;
+    // THE SIGNEDNESS BOUNDARY. A u64 with bit 63 set has no signed-Int
+    // representation, so it is refused rather than wrapped to a negative
+    // length. This is the documented limit, asserted so it cannot regress
+    // into silent corruption.
+    var top = std::array::empty();
+    push_le(top, 0, 4);
+    push_le(top, 2147483648, 4);
+    then le64_at(top, 0) == 0 - 1;
+    // The boundary is exact, not approximate: 2^63-1 is the largest value that
+    // decodes, and 2^63 is the first that refuses. An off-by-one here would
+    // either reject a legal offset or admit an unrepresentable one.
+    var max_ok = std::array::empty();
+    push_le(max_ok, 4294967295, 4);
+    push_le(max_ok, 2147483647, 4);
+    then le64_at(max_ok, 0) == 9223372036854775807;
+}
+
+spec "header" {
+    let f = fixture();
+    then has_magic(f);
+    then version(f) == 3;
+    then tensor_count(f) == 2;
+    then kv_count(f) == 2;
+    // A foreign file is refused at the magic, before any length is trusted.
+    then !has_magic(ascii("ELF!"));
+    then version(ascii("not a gguf file")) == 0 - 1;
+    then tensor_count(std::array::empty()) == 0 - 1;
+}
+
+spec "gguf_strings" {
+    var s = std::array::empty();
+    push_gstring(s, "llama");
+    // 8-byte length prefix plus the bytes; no terminator.
+    then gstring_size(s, 0) == 13;
+    then std::string::as_str(gstring_at(s, 0)) == "llama";
+    // The empty string is well-formed and distinguishable from truncation:
+    // its size is 8, not -1.
+    var e = std::array::empty();
+    push_gstring(e, "");
+    then gstring_size(e, 0) == 8;
+    then std::string::as_str(gstring_at(e, 0)) == "";
+    then gstring_size(bytes(1, 2), 0) == 0 - 1;
+}
+
+spec "metadata" {
+    let f = fixture();
+    // The query a loader always makes.
+    then u32_metadata(f, "general.alignment") == 32;
+    then alignment(f) == 32;
+    // An absent key is reported, not defaulted to something plausible.
+    then u32_metadata(f, "general.file_type") == 0 - 1;
+    // A string-typed entry is stepped over, not returned as a number — the
+    // walk must survive a mixed-type table to reach the alignment at all.
+    then u32_metadata(f, "general.architecture") == 0 - 1;
+}
+
+spec "alignment_rule" {
+    // The rounding that places the data blob. Exact multiples must not move.
+    then align_up(0, 32) == 0;
+    then align_up(32, 32) == 32;
+    then align_up(1, 32) == 32;
+    then align_up(31, 32) == 32;
+    then align_up(33, 32) == 64;
+    // A file with no declared alignment gets the format's default of 32.
+    var no_align = std::array::empty();
+    std::array::push(no_align, 71);
+    std::array::push(no_align, 71);
+    std::array::push(no_align, 85);
+    std::array::push(no_align, 70);
+    push_le(no_align, 3, 4);
+    push_le(no_align, 0, 8);
+    push_le(no_align, 0, 8);
+    then alignment(no_align) == 32;
+}
+
+spec "tensors" {
+    let f = fixture();
+    // Names and shapes survive the descriptor walk, including reaching the
+    // SECOND descriptor, which requires sizing the first one exactly right.
+    then std::string::as_str(tensor_name(f, 0)) == "token_embd.weight";
+    then std::string::as_str(tensor_name(f, 1)) == "output_norm.weight";
+    then tensor_dims(f, 0) == 2;
+    then tensor_dims(f, 1) == 1;
+    then tensor_extent(f, 0, 0) == 16;
+    then tensor_extent(f, 0, 1) == 8;
+    then tensor_extent(f, 1, 0) == 8;
+    // The element count a loader multiplies by bytes-per-element.
+    then tensor_elements(f, 0) == 128;
+    then tensor_elements(f, 1) == 8;
+    // Out-of-range indices are reported rather than reading a neighbour.
+    then tensor_dims(f, 2) == 0 - 1;
+    then tensor_extent(f, 0, 2) == 0 - 1;
+}
+
+spec "data_placement" {
+    let f = fixture();
+    // The blob starts on the declared alignment, past every descriptor.
+    then data_offset(f) > 0;
+    then data_offset(f) % 32 == 0;
+    then data_offset(f) >= descriptors_offset(f);
+    // Tensor offsets are blob-RELATIVE in the file and file-ABSOLUTE after
+    // composition — the distinction this format's readers most often lose.
+    then tensor_relative_offset(f, 0) == 0;
+    then tensor_relative_offset(f, 1) == 512;
+    then tensor_data_offset(f, 0) == data_offset(f);
+    then tensor_data_offset(f, 1) == data_offset(f) + 512;
+    // Neither tensor's data begins before the blob does.
+    then tensor_data_offset(f, 0) >= data_offset(f);
+}
+
+/// Walk the fixture and exit with the number of tensor descriptors whose full
+/// shape, name, and data offset were recovered — 2 for a well-formed file.
+///
+/// The exit byte is decided by the specs' own oracle rather than by any file on
+/// disk, so the program is hermetic.
+pub fn main() -> Int {
+    let f = fixture();
+    if !has_magic(f) {
+        return 1;
+    }
+    if version(f) != 3 {
+        return 2;
+    }
+    let count = tensor_count(f);
+    var recovered = 0;
+    var i = 0;
+    while i < count {
+        let elements = tensor_elements(f, i);
+        let offset = tensor_data_offset(f, i);
+        let name = tensor_name(f, i);
+        if elements > 0 && offset >= data_offset(f) && std::string::len(name) > 0 {
+            recovered = recovered + 1;
+        }
+        i = i + 1;
+    }
+    recovered
+}

@@ -1,8 +1,9 @@
 # ADR-0019: Bitwise operations and the crypto primitives
 
-- **Status:** accepted (2026-09-04 — **Stages A and B landed**, including the
-  entropy primitive and both gating benchmark workloads; only `md5` remains,
-  see the Stage B resolution)
+- **Status:** accepted (2026-09-04 — **Stages A and B landed in full**,
+  including the entropy primitive, both gating benchmark workloads, and — as
+  of the MD5 addendum below — `md5`, the last outstanding item; nothing from
+  this ADR remains unimplemented)
 - **Date:** 2026-09-01
 - **Context** (*describes the state **before** this ADR; Stage A has since
   changed it — see the Stage A resolution*)**:** A PostgreSQL client — the connector itself deliberately *not*
@@ -455,3 +456,55 @@ is recorded here so it is made once.
     unsupported. That is acceptable only because SCRAM is the default on every
     current server, and it should be revisited if a real connector meets an
     older one.
+
+---
+
+## MD5 addendum (2026-09-04)
+
+`md5` was this ADR's last unimplemented item, listed in the Stage B function
+table and left out when Stage B landed. It now ships, closing the ADR.
+
+### What shipped
+
+`md5`, `md5_bytes`, `md5_pad`, `md5_round_constants`, `md5_shifts`,
+`push_le32`, and `md5_password` — the PostgreSQL `AuthenticationMD5Password`
+response `"md5" + md5(md5(password + username) + salt)`.
+
+The implementation reuses `std::bits`' `rotl32`/`add32`/`low32`, so MD5 and
+SHA-256 share one set of 32-bit primitives rather than each carrying its own.
+The one structural difference is endianness: MD5 is little-endian throughout
+where SHA-256 is big-endian, which is why `md5_pad` and `push_le32` exist as
+separate, separately-spec'd counterparts to `sha256_pad` and `push_be32`.
+Getting that backwards produces a plausible-looking digest that is simply
+wrong, so it is pinned rather than left implicit.
+
+### The documentation requirement was load-bearing, and is met
+
+This ADR required that `md5` ship **documented as broken for security**,
+reasoning that "a stdlib that ships MD5 without that sentence teaches the wrong
+thing to exactly the LLM audience this language is built for." The module
+carries a section-length warning saying MD5 is broken in the specific sense
+that collisions can be constructed at will, that it must not be used for
+integrity, signatures, deduplication, or password storage, and that the only
+reason it is present is PostgreSQL's legacy challenge. Both public entry points
+repeat the warning and point at `sha256` and the `scram_*` functions instead.
+
+### Correctness
+
+The specs assert **RFC 1321 appendix A.5's published test suite** — the RFC's
+own vectors, not this implementation's output — across the empty string, single
+characters, and inputs spanning the 56-byte padding boundary into a second
+block. `md5_password` additionally pins the exact response for a known
+(password, user, salt) triple, cross-checked against an independent
+implementation of the same protocol step, so what is verified is the protocol
+*composition* and not merely that some digest comes out.
+
+### What this does and does not change
+
+The legacy PostgreSQL challenge is now supported, so a connector can
+authenticate against a server too old for SCRAM. This does **not** revise the
+ADR's reasoning about which is primary: `password_encryption` has defaulted to
+`scram-sha-256` since PostgreSQL 14 and MD5 auth is disabled outright on
+several managed providers, so SCRAM remains the target and MD5 the
+compatibility shim. It also does not weaken the TLS exclusion — MD5 is a hash,
+and TLS needs X.509, a certificate store, and AEAD ciphers.

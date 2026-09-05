@@ -255,36 +255,64 @@ impl CodegenBackend for LlvmBackend {
 
 /// Build an LLVM target machine for `target` at optimization level `opt`.
 ///
-/// v0 supports the host target only; a different triple is refused as
-/// unsupported rather than silently mis-targeted. PIC is used so the produced
-/// object links into a position-independent executable on the supported hosts,
-/// matching the Cranelift backend.
+/// Build a target machine for `target`.
+///
+/// The host is the target `tuo build` uses and the only one the CLI links, but
+/// **object emission is not restricted to it**: the ABI is identical across the
+/// 64-bit targets v0 defines (`POINTER_SIZE` is 8 for all of them), so LLVM can
+/// emit a correct relocatable object for another 64-bit triple. What the
+/// workspace cannot do is *link* one, which needs a cross-linker and a target
+/// libc — so a caller asking for a non-host triple gets an object and is
+/// responsible for linking it.
+///
+/// This exists so a property of the *emitted code* can be checked on a target
+/// the developer is not running. ADR-0020's constant-time guarantee is the
+/// motivating case: whether a branchless idiom survives the optimizer is
+/// architecture-specific, and before this the question could only be asked
+/// about ARM64 on an ARM64 host.
+///
+/// PIC is used so the produced object links into a position-independent
+/// executable on the supported hosts, matching the Cranelift backend.
 fn target_machine(target: &TargetSpec, opt: OptLevel) -> Result<TargetMachine, CodegenError> {
     let host = TargetSpec::host();
-    if target.triple != host.triple {
-        return Err(CodegenError::unsupported(format!(
-            "the LLVM backend targets the host ({}) only in v0; requested `{}`",
-            host.triple, target.triple
-        )));
+    let is_host = target.triple == host.triple;
+
+    // The host's codegen is always needed; the full set only when emitting for
+    // another triple, which keeps the common path's LLVM footprint unchanged.
+    if is_host {
+        Target::initialize_native(&InitializationConfig::default()).map_err(|error| {
+            CodegenError::backend(format!("initializing the native target: {error}"))
+        })?;
+    } else {
+        Target::initialize_all(&InitializationConfig::default());
     }
 
-    // Initialize only the native target's codegen; that is the one host target
-    // v0 supports, and it keeps the linked LLVM footprint minimal.
-    Target::initialize_native(&InitializationConfig::default()).map_err(|error| {
-        CodegenError::backend(format!("initializing the native target: {error}"))
+    let triple = TargetTriple::create(&target.triple);
+    let llvm_target = Target::from_triple(&triple).map_err(|error| {
+        CodegenError::unsupported(format!("no LLVM target for `{}`: {error}", target.triple))
     })?;
 
-    let triple = TargetTriple::create(&target.triple);
-    let llvm_target = Target::from_triple(&triple)
-        .map_err(|error| CodegenError::backend(format!("no LLVM target for the host: {error}")))?;
-
-    let cpu = TargetMachine::get_host_cpu_name();
-    let features = TargetMachine::get_host_cpu_features();
+    // CPU/feature detection is only meaningful for the machine we are running
+    // on; for another triple the generic CPU is the correct choice, since
+    // assuming the host's features would emit instructions the target may not
+    // have.
+    let host_cpu = TargetMachine::get_host_cpu_name();
+    let host_features = TargetMachine::get_host_cpu_features();
+    let (cpu, features) = if is_host {
+        (
+            host_cpu.to_str().unwrap_or(""),
+            host_features.to_str().unwrap_or(""),
+        )
+    } else {
+        // The generic CPU with no extra features: assuming the host's would
+        // emit instructions the target machine may not have.
+        ("generic", "")
+    };
     llvm_target
         .create_target_machine(
             &triple,
-            cpu.to_str().unwrap_or(""),
-            features.to_str().unwrap_or(""),
+            cpu,
+            features,
             opt.machine_level(),
             RelocMode::PIC,
             CodeModel::Default,

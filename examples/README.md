@@ -22,6 +22,12 @@ cannot express is documented *in place* by the example that hit it — see
 natively because neither backend lowered `Rvalue::Len` (what `for x in xs`
 over a **growable** `Array[T]` compiles to), so both backends gained that
 lowering, pinned three-way by `tests/codegen/fixtures/arr_for_len.tuo`.
+Dogfooding also *confirms* the language when it finds no gap: `gguf-reader/`
+was written to test whether ADR-0019's bitwise surface generalizes past the
+big-endian network protocol it was opened for, and it does — a little-endian
+64-bit container format parses in the shipped operators with **no ADR and no
+compiler change**. Its one real boundary (GGUF's `u64` offsets vs the signed
+`Int`) is pinned as a *documented refusal* rather than widened speculatively.
 Nothing here pretends to do what the language cannot.
 
 | Example | Kind | v0 status | `main` exit |
@@ -34,6 +40,9 @@ Nothing here pretends to do what the language cannot.
 | [`router/`](router/) | declarative request router *(runtime dispatch table, indirect calls)* | runs natively | 74 |
 | [`log-analytics/`](log-analytics/) | log aggregation *(one-pass keyed rollup over `Map[Int, Int]`)* | runs natively | 42 |
 | [`file-report/`](file-report/) | report generator *(renders, writes, reads back, verifies, cleans up)* | runs natively | 7 |
+| [`postgres-auth/`](postgres-auth/) | PostgreSQL v3 auth handshake *(wire framing + SCRAM-SHA-256 vs RFC 7677, and the legacy MD5 challenge)* | runs natively | 48 |
+| [`postgres-client/`](postgres-client/) | PostgreSQL client *(connects to a **real server**, SCRAM-SHA-256 over TCP, runs a query)* | runs natively | 42 |
+| [`gguf-reader/`](gguf-reader/) | GGUF container parsing *(little-endian 64-bit file format: header, metadata, tensor descriptors)* | runs natively | 2 |
 
 ## Running them
 
@@ -62,6 +71,13 @@ tuo run  --release examples/log-analytics/src/main.tuo ; echo $? # 42
 tuo test --manifest examples/file-report               # 6 passed, 0 failed
 cd /tmp && tuo run ~/Projects/tuonelang/examples/file-report/src/main.tuo ; echo $?
 # the 7-line report, then `verified 7`, then exit 7
+
+# gguf-reader: a LITTLE-endian, 64-bit file format — the counter-case to every
+# other wire example here, which are all big-endian. Bit manipulation is where
+# two backends are most likely to disagree, so both are asserted.
+tuo test --manifest examples/gguf-reader               # 31 passed, 0 failed
+tuo run examples/gguf-reader/src/main.tuo examples/gguf-reader/src/std_str.tuo ; echo $?           # 2
+tuo run --release examples/gguf-reader/src/main.tuo examples/gguf-reader/src/std_str.tuo ; echo $? # 2
 
 # The multi-package workspace: check/test the graph, then build + run the binary.
 # (`tuo run` is file-based, so a package binary is built and then executed —

@@ -172,6 +172,35 @@ fn cli_stats_vendored_std_io_matches_the_catalog() {
     );
 }
 
+/// postgres-auth vendors four catalog modules, and each must equal the
+/// `tuo-stdlib` original byte-for-byte.
+///
+/// The pin matters more here than elsewhere: `std_crypto.tuo` and
+/// `std_ct.tuo` carry the code that decides whether an authentication proof is
+/// correct and whether a signature comparison leaks timing. A vendored copy
+/// that silently diverged from the catalog would keep passing this example's
+/// own specs while no longer being the library the rest of the suite verifies.
+#[test]
+fn postgres_auth_vendored_modules_match_the_catalog() {
+    let dir = example_dir("postgres-auth");
+    for (file, module) in [
+        ("std_bits.tuo", tuo_stdlib::BITS),
+        ("std_ct.tuo", tuo_stdlib::CT),
+        ("std_crypto.tuo", tuo_stdlib::CRYPTO),
+        ("std_str.tuo", tuo_stdlib::STR),
+    ] {
+        let vendored = dir.join("src").join(file);
+        let on_disk = std::fs::read_to_string(&vendored)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+        assert_eq!(
+            on_disk, module.source,
+            "examples/postgres-auth/src/{file} drifted from tuo-stdlib's {}; \
+             re-copy the catalog module",
+            module.name
+        );
+    }
+}
+
 /// data-pipeline: a runnable record-processing pipeline. Since ADR-0009 landed
 /// the allocator, the file carries the **growable-collection oracle** — it
 /// `push`es the filtered subset (a data-dependent size a fixed `[Int; N]`
@@ -324,6 +353,132 @@ fn file_report_checks_specs_runs_and_roundtrips_a_real_file() {
     );
 }
 
+/// postgres-auth: the PostgreSQL v3 authentication handshake, computed end to
+/// end in tuonelang.
+///
+/// This is ADR-0019's motivating case as a whole program rather than one
+/// assertion. The connector was the first dogfooding target the language could
+/// not express *at all* — the wire protocol is big-endian length prefixes and
+/// its authentication is rotations and xors, and v0 had neither operator. The
+/// program frames a startup packet, parses the server's SASL challenge off the
+/// wire format, derives the SCRAM-SHA-256 client proof, and verifies the
+/// server's signature with the constant-time `std::crypto::verify`.
+///
+/// The exit byte is load-bearing: 4 of it counts SCRAM handshake steps that
+/// each compare against **RFC 7677's published vector**, 40 counts a framing
+/// round-trip, and 4 counts the legacy MD5 challenge against its own pinned
+/// vector. A wrong proof, a misparsed attribute, or an off-by-one in the
+/// self-counting length field all lower it, so 48 is reachable only if both
+/// authentication paths and the framing are right. This caught a real bug while being written: the
+/// `n=` username field was hardcoded empty, which is invisible to every
+/// structural check but produces a proof the server rejects.
+#[test]
+fn postgres_auth_checks_specs_and_completes_the_rfc_7677_handshake() {
+    let dir = example_dir("postgres-auth");
+    let sources: Vec<PathBuf> = ["main", "std_bits", "std_ct", "std_crypto", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+    assert_runs_to(&refs, 48);
+}
+
+/// postgres-client: the connector talking to a **real PostgreSQL server** over
+/// TCP — the other half of `postgres-auth`, which computes the same
+/// authentication hermetically against RFC 7677's published vector.
+///
+/// Together they are the dogfooding target ADR-0019 was opened for. This one
+/// connects, performs the SCRAM-SHA-256 exchange, verifies the server's
+/// signature with the constant-time `std::crypto::verify` (ADR-0020), runs
+/// `SELECT 42`, and decodes the answer out of a `DataRow` frame.
+///
+/// It then exercises the **extended query protocol**
+/// (`Parse`/`Bind`/`Describe`/`Execute`/`Sync`) with the value sent as a
+/// parameter rather than interpolated into SQL — including one containing SQL,
+/// which must come back as literal text, proving the server treated it as data
+/// and never parsed it. Finally it reads a three-column row's type OIDs off the
+/// `RowDescription` and checks each against its type map, so decoding follows
+/// what the server said rather than an assumption.
+///
+/// **This test skips when no server is reachable**, and that is a deliberate
+/// trade rather than a hole. A developer without a local PostgreSQL must still
+/// get a green suite, so the program returns 3 for "could not connect" and the
+/// test treats only that one value as a skip. Every other outcome is a real
+/// failure with a real diagnosis: the program encodes *which* step failed in
+/// its exit byte (10 + the negative step number), so a broken proof reports 20
+/// and a rejected server signature reports 21 rather than a bare mismatch.
+///
+/// The protocol layer is pure and spec-checked regardless of whether a server
+/// exists, so `check` and `test` below always run; only the live exchange is
+/// conditional.
+///
+/// To run the live path locally:
+/// ```text
+/// initdb -D /tmp/tuopg/data -U tuo_admin --auth-host=scram-sha-256 --pwfile=<(echo adminpw)
+/// pg_ctl -D /tmp/tuopg/data -o "-p 55432 -k /tmp/tuopg" -l /tmp/tuopg/log start
+/// PGPASSWORD=adminpw psql -h 127.0.0.1 -p 55432 -U tuo_admin -d postgres \
+///   -c "CREATE ROLE tuo_test LOGIN PASSWORD 'tuo_secret';" \
+///   -c "CREATE DATABASE tuo_testdb OWNER tuo_test;"
+/// ```
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "diagnostic note when a machine has no PostgreSQL; keeps the test green there"
+)]
+fn postgres_client_checks_specs_and_authenticates_against_a_live_server() {
+    let dir = example_dir("postgres-client");
+    let sources: Vec<PathBuf> = ["main", "std_bits", "std_ct", "std_crypto", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+
+    // The protocol layer is pure, so these hold with or without a server.
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+
+    let mut args = vec!["run".to_string()];
+    args.extend(refs.iter().map(|s| s.display().to_string()));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = tuo(&arg_refs);
+    match out.status.code() {
+        Some(42) => {}
+        Some(3) => eprintln!(
+            "note: no PostgreSQL reachable on 127.0.0.1:55432;              the live SCRAM exchange was skipped (see this test's doc comment              for how to start one)"
+        ),
+        other => panic!(
+            "postgres-client reached a live server but failed at step {}: exit {other:?} (20 = the client's proof was rejected, 21 = the server's signature failed verification, 5 = the simple query returned the wrong answer, 6 = the bound parameter did not round-trip, 7 = a parameter containing SQL was not returned as literal text, 8 = a column's type OID was not recognized from the RowDescription); stderr:\n{}",
+            other.map_or(-1, |c| c - 10),
+            String::from_utf8_lossy(&out.stderr),
+        ),
+    }
+}
+
+/// postgres-client vendors the same four catalog modules as postgres-auth, and
+/// each must equal the `tuo-stdlib` original byte-for-byte.
+#[test]
+fn postgres_client_vendored_modules_match_the_catalog() {
+    let dir = example_dir("postgres-client");
+    for (file, module) in [
+        ("std_bits.tuo", tuo_stdlib::BITS),
+        ("std_ct.tuo", tuo_stdlib::CT),
+        ("std_crypto.tuo", tuo_stdlib::CRYPTO),
+        ("std_str.tuo", tuo_stdlib::STR),
+    ] {
+        let vendored = dir.join("src").join(file);
+        let on_disk = std::fs::read_to_string(&vendored)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+        assert_eq!(
+            on_disk, module.source,
+            "examples/postgres-client/src/{file} drifted from tuo-stdlib's {}; \
+             re-copy the catalog module",
+            module.name
+        );
+    }
+}
+
 /// The medium multi-package workspace: `app → geometry → numeric`. Every
 /// package's specs are green, and the whole-graph binary builds and executes to
 /// the documented exit 26. Built (not `run`) because `tuo run` is file-based.
@@ -364,5 +519,110 @@ fn workspace_graph_checks_specs_and_builds_to_a_runnable_binary() {
         Some(26),
         "the workspace binary exited {:?}, expected 26",
         run.status.code(),
+    );
+}
+
+/// gguf-reader: the GGUF container format's header, metadata table, and tensor
+/// descriptors — the structural walk a model loader performs before it touches
+/// a single weight.
+///
+/// This example was written to answer a question empirically rather than to
+/// exercise a feature: every other wire-format example in this tree is
+/// **big-endian** (PostgreSQL's frame length, the SHA-256 block, the
+/// `wire-decode` workload), because ADR-0019 Stage A was opened to serve a
+/// network protocol. GGUF is the opposite case — a **little-endian, 64-bit,
+/// memory-mappable file format** — so it tests whether that operator surface
+/// generalizes past the protocol it was opened for, or had been fitted to it.
+/// It generalizes: `le16_at`/`le32_at`/`le64_at` are written in the shipped
+/// `<<`/`>>`/`&`/`|` with no new language feature, which is why this example
+/// produced **no ADR**.
+///
+/// It did find one real boundary, and the specs pin it as a *documented limit*
+/// rather than letting it become silent corruption: GGUF's counts, lengths and
+/// offsets are `u64` while `Int` is signed `I64`, so a value with bit 63 set
+/// has no representation. `le64_at` refuses such a value with `-1` instead of
+/// wrapping it to a negative length that a caller would then use as an array
+/// bound. Every value below 2^63 — i.e. every real model file, 2^63 bytes being
+/// 9.2 exabytes — round-trips exactly.
+///
+/// The parser is pure and spec-checked, so the program is hermetic: it parses a
+/// GGUF file it builds byte-by-byte from the format's own encoding rules, and
+/// its exit byte is the number of tensor descriptors whose name, shape, and
+/// file-absolute data offset were all recovered — 2 for the fixture.
+#[test]
+fn gguf_reader_checks_specs_and_walks_a_container() {
+    let dir = example_dir("gguf-reader");
+    let sources: Vec<PathBuf> = ["main", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+    assert_runs_to(&refs, 2);
+}
+
+/// gguf-reader vendors the catalog's `std::str`, which must equal the
+/// `tuo-stdlib` original byte-for-byte.
+#[test]
+fn gguf_reader_vendored_module_matches_the_catalog() {
+    let vendored = example_dir("gguf-reader").join("src/std_str.tuo");
+    let on_disk = std::fs::read_to_string(&vendored)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+    assert_eq!(
+        on_disk,
+        tuo_stdlib::STR.source,
+        "examples/gguf-reader/src/std_str.tuo drifted from tuo-stdlib's std/str.tuo; \
+         re-copy the catalog module"
+    );
+}
+
+/// The fixture's byte layout is cross-checked against an **independent**
+/// implementation of the GGUF v3 spec (a short Python script using `struct`,
+/// recorded in the example's README workflow), so the example cannot be
+/// self-consistently wrong: its builder and its parser could share a bug, but
+/// they cannot also share one with a third implementation written from the
+/// format spec alone.
+///
+/// The independent implementation gives: descriptor table ends at byte 209,
+/// the data blob begins at 224 (209 rounded up to the declared alignment of
+/// 32), tensor 0 sits at 224, tensor 1 at 736 (224 + its blob-relative 512),
+/// and tensor 0 has 16x8 = 128 elements. Those exact numbers are asserted here
+/// through the real compiler, which pins the alignment rule and the
+/// blob-relative-to-file-absolute composition — the format's two classic bug
+/// sources — against an outside authority rather than against this example's
+/// own reasoning.
+#[test]
+fn gguf_reader_agrees_with_an_independent_implementation() {
+    let dir = example_dir("gguf-reader");
+    let probe = dir.join("src/cross_check.tuo");
+    let main = dir.join("src/main.tuo");
+    let std_str = dir.join("src/std_str.tuo");
+    assert_runs_to(&[&probe, &main, &std_str], 100);
+}
+
+/// The whole point of this example is bit manipulation, which is exactly where
+/// two backends are most likely to disagree — shift semantics, masking, and the
+/// 64-bit assembly in `le64_at` are all places an optimizer can differ from a
+/// straightforward lowering. So the same container walk is asserted to reach
+/// the same answer under the optimizing LLVM release backend as under the
+/// Cranelift debug backend.
+#[test]
+fn gguf_reader_runs_the_same_on_both_backends() {
+    let dir = example_dir("gguf-reader");
+    let main = dir.join("src/main.tuo");
+    let std_str = dir.join("src/std_str.tuo");
+    let out = tuo(&[
+        "run",
+        "--release",
+        &main.display().to_string(),
+        &std_str.display().to_string(),
+    ]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "gguf-reader under --release exited {:?}, expected 2\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr),
     );
 }
