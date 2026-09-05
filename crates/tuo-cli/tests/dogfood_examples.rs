@@ -385,6 +385,92 @@ fn postgres_auth_checks_specs_and_completes_the_rfc_7677_handshake() {
     assert_runs_to(&refs, 48);
 }
 
+/// postgres-client: the connector talking to a **real PostgreSQL server** over
+/// TCP — the other half of `postgres-auth`, which computes the same
+/// authentication hermetically against RFC 7677's published vector.
+///
+/// Together they are the dogfooding target ADR-0019 was opened for. This one
+/// connects, performs the SCRAM-SHA-256 exchange, verifies the server's
+/// signature with the constant-time `std::crypto::verify` (ADR-0020), runs
+/// `SELECT 42`, and decodes the answer out of a `DataRow` frame.
+///
+/// **This test skips when no server is reachable**, and that is a deliberate
+/// trade rather than a hole. A developer without a local PostgreSQL must still
+/// get a green suite, so the program returns 3 for "could not connect" and the
+/// test treats only that one value as a skip. Every other outcome is a real
+/// failure with a real diagnosis: the program encodes *which* step failed in
+/// its exit byte (10 + the negative step number), so a broken proof reports 20
+/// and a rejected server signature reports 21 rather than a bare mismatch.
+///
+/// The protocol layer is pure and spec-checked regardless of whether a server
+/// exists, so `check` and `test` below always run; only the live exchange is
+/// conditional.
+///
+/// To run the live path locally:
+/// ```text
+/// initdb -D /tmp/tuopg/data -U tuo_admin --auth-host=scram-sha-256 --pwfile=<(echo adminpw)
+/// pg_ctl -D /tmp/tuopg/data -o "-p 55432 -k /tmp/tuopg" -l /tmp/tuopg/log start
+/// PGPASSWORD=adminpw psql -h 127.0.0.1 -p 55432 -U tuo_admin -d postgres \
+///   -c "CREATE ROLE tuo_test LOGIN PASSWORD 'tuo_secret';" \
+///   -c "CREATE DATABASE tuo_testdb OWNER tuo_test;"
+/// ```
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "diagnostic note when a machine has no PostgreSQL; keeps the test green there"
+)]
+fn postgres_client_checks_specs_and_authenticates_against_a_live_server() {
+    let dir = example_dir("postgres-client");
+    let sources: Vec<PathBuf> = ["main", "std_bits", "std_ct", "std_crypto", "std_str"]
+        .iter()
+        .map(|name| dir.join(format!("src/{name}.tuo")))
+        .collect();
+    let refs: Vec<&Path> = sources.iter().map(PathBuf::as_path).collect();
+
+    // The protocol layer is pure, so these hold with or without a server.
+    assert_checks(&refs);
+    assert_specs_green(&dir);
+
+    let mut args = vec!["run".to_string()];
+    args.extend(refs.iter().map(|s| s.display().to_string()));
+    let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let out = tuo(&arg_refs);
+    match out.status.code() {
+        Some(42) => {}
+        Some(3) => eprintln!(
+            "note: no PostgreSQL reachable on 127.0.0.1:55432;              the live SCRAM exchange was skipped (see this test's doc comment              for how to start one)"
+        ),
+        other => panic!(
+            "postgres-client reached a live server but failed at step {}:              exit {other:?} (20 = the client's proof was rejected,              21 = the server's signature failed verification,              5 = the query returned the wrong answer); stderr:\n{}",
+            other.map_or(-1, |c| c - 10),
+            String::from_utf8_lossy(&out.stderr),
+        ),
+    }
+}
+
+/// postgres-client vendors the same four catalog modules as postgres-auth, and
+/// each must equal the `tuo-stdlib` original byte-for-byte.
+#[test]
+fn postgres_client_vendored_modules_match_the_catalog() {
+    let dir = example_dir("postgres-client");
+    for (file, module) in [
+        ("std_bits.tuo", tuo_stdlib::BITS),
+        ("std_ct.tuo", tuo_stdlib::CT),
+        ("std_crypto.tuo", tuo_stdlib::CRYPTO),
+        ("std_str.tuo", tuo_stdlib::STR),
+    ] {
+        let vendored = dir.join("src").join(file);
+        let on_disk = std::fs::read_to_string(&vendored)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", vendored.display()));
+        assert_eq!(
+            on_disk, module.source,
+            "examples/postgres-client/src/{file} drifted from tuo-stdlib's {}; \
+             re-copy the catalog module",
+            module.name
+        );
+    }
+}
+
 /// The medium multi-package workspace: `app → geometry → numeric`. Every
 /// package's specs are green, and the whole-graph binary builds and executes to
 /// the documented exit 26. Built (not `run`) because `tuo run` is file-based.

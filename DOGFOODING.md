@@ -513,6 +513,30 @@ Two findings came out of writing it, both worth recording:
   differed, so a real server would reject the proof with no useful diagnostic.
   This is the argument for external vectors in one concrete instance.
 
+The connector has since been driven against a **real PostgreSQL 18 server**
+(`examples/postgres-client`): startup packet, the live SASL exchange, the
+server's signature verified in constant time, then `SELECT 42` decoded out of a
+`DataRow` frame. Three findings came out of that, none of which the hermetic
+version could have surfaced:
+
+* **`String` is the byte container the wire needs, and that is not a
+  workaround.** v0 has no `[u8]`, and a PostgreSQL frame is full of zero bytes
+  and high bytes. `String` holds both and `std::rt::write_string` puts them on
+  a socket unchanged, so the question "how do we send arbitrary bytes" had no
+  answer to invent — it was already the type's behaviour. Worth recording
+  because the obvious assumption is the opposite.
+* **The default `trust` auth would have made the test pass without
+  authenticating.** A cluster set up the usual way never issues a challenge, so
+  the client "succeeds" having proved nothing. The test provisions a cluster
+  with `--auth-host=scram-sha-256` for exactly this reason, and the README says
+  so — a green test against a `trust` server is the security equivalent of an
+  empty assertion.
+* **An exit byte that names the failing step is worth the arithmetic.** The
+  program returns `10 - step`, so a rejected proof reports 20 and a failed
+  server-signature check reports 21. Both were verified load-bearing by
+  substituting a wrong password and by tampering with the expected signature;
+  a single boolean would have said only "it didn't work".
+
 **`md5` has since landed too**, so the legacy `AuthenticationMD5Password`
 challenge is supported for servers too old for SCRAM — shipped documented as
 broken for security (ADR-0019's own requirement), spec'd against RFC 1321's

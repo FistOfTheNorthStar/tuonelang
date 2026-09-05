@@ -1,0 +1,560 @@
+// std::ct — the branchless subset, for code whose timing must not reveal its
+// data (ADR-0020 Stage A).
+//
+// This module is entirely executable: every function is pure computation over
+// `Int` and `Array[Int]`, runs through the reference interpreter, and every
+// spec below proves it.
+//
+// WHAT THIS MODULE IS FOR. Ordinary code branches on the values it is given,
+// so its running time reveals information about them. When those values are
+// secret — a key, a password, a MAC tag — that timing is an attack surface,
+// and the classic instance is a tag comparison that returns early on the first
+// mismatched byte: the time it takes reveals how many leading bytes the
+// attacker guessed correctly, which turns an infeasible search into a
+// byte-at-a-time one. The functions here compute the same answers with no
+// data-dependent control flow at all, using only the ADR-0019 bitwise
+// operators.
+//
+// READ THIS BEFORE RELYING ON IT. Constant-time-ness is not a property of a
+// program's *meaning*; it is a property of the *instructions a compiler
+// emits*, and every layer between this source and the machine is free to
+// destroy it. What this module offers is therefore precise and limited, and
+// pinned at two independent levels:
+//
+//   * the ten scalar primitives carry **`#[constant_time]`**, so the compiler
+//     itself verifies each body contains no data-dependent construct — no
+//     branch, no bounds-checked indexing, no trapping arithmetic, and no call
+//     to an unmarked function (`T0017`-`T0021`, ADR-0020 Stage C); and
+//   * that they are still branchless *as emitted*, on both backends, is pinned
+//     by a disassembly test (`tuo-cli`'s `constant_time.rs`) that fails if an
+//     optimizer rewrites one into a conditional.
+//
+// The second check is not redundant. The first reads the source, and an
+// optimizer is free to introduce a branch the source never wrote — LLVM's O2
+// really does rewrite a branchless select into a conditional move, which is
+// why the emitted code is checked separately from the code that was written.
+//
+// What remains outside reach is the hardware: whether those instructions
+// execute in data-independent time is a property of the processor, not of any
+// compiler, so this is still short of a constant-time *guarantee*. Treat the
+// module as verified-branchless primitives, not as a promise about wall time.
+//
+// NO TRAPPING ARITHMETIC ON SECRET DATA, ON PURPOSE. tuonelang's integers
+// **trap** on overflow rather than wrapping, which is a deliberate safety
+// property (Constitution §24) and a problem here: a trap is a conditional
+// branch, and an overflow check on a secret value is a branch on that secret.
+// The textbook way to build an all-ones mask is `0 - bit`, and negation traps
+// on `i64::MIN`, so it emits a branch-on-overflow into what was supposed to be
+// branchless code. `mask` therefore uses the sign-smearing shift
+// `(bit << 63) >> 63`, which cannot trap because no shift can. This is why the
+// module reads oddly compared to the same algorithms in C, and the oddness is
+// load-bearing rather than stylistic.
+//
+// One place uses arithmetic, and it is stated rather than hidden, because
+// "this module contains no `+`" would be a false claim a reader could check:
+// the two array loops increment a counter with `i = i + 1`. That counter is a
+// loop index bounded by the array's length, which is public; it never depends
+// on the values being compared. Those two loops are also the only functions
+// here that go unmarked, so the compiler never had to accept that argument.
+//
+// The ten marked functions contain no arithmetic at all — the checker refuses
+// `+`, `-`, `*`, `/`, and `%` outright, since each can trap and a trap is a
+// branch. That rule is why `lt` finds the highest differing bit by smearing
+// rather than by subtracting: the conventional comparison is written with a
+// subtraction, and the gate rejected it. The invariant the module keeps is
+// therefore the precise one: **no arithmetic whose overflow check could depend
+// on secret data**, enforced by the compiler wherever a function is marked.
+//
+// THE ENCODING OF A CHOICE. Conditions here are `Int` values 0 (false) and 1
+// (true), not `Bool`, because a `Bool` would have to be branched on to be
+// used. Every function that takes a condition documents that it is defined
+// only for 0 and 1; passing anything else yields an unspecified value rather
+// than an error, since checking would itself be a branch.
+//
+// THE ARRAY SCANS ARE WEAKER, AND THE DIFFERENCE MATTERS. The scalar functions
+// above compile to straight-line code with no branch at all. `select_array`
+// and `bytes_eq` cannot: they contain a loop, which is a backward branch by
+// construction, and — measured, not assumed — tuonelang's array indexing emits
+// a **bounds check** that the optimizer does not eliminate even for the
+// canonical `while i < len(xs)` loop whose index is trivially in range. So
+// each iteration carries a comparison and a conditional branch to the trap
+// handler.
+//
+// What this does and does not cost is worth being exact about. The bounds
+// check's branch depends on the *index* and the array's *length*, both of
+// which are public here — the loop counter runs 0..len, and the check is never
+// taken. It does not depend on any element's value, so it does not leak the
+// contents these functions exist to compare. What it means is that the scans
+// are **not branch-free**, so the claim they carry is the weaker one: their
+// control flow depends only on array lengths, never on array contents. That is
+// the property a tag comparison actually needs, and it is what the tests pin.
+// A branch-free scan needs unchecked indexing or a bounds-check elimination
+// tuonelang does not have today, and inventing a claim of one here would be
+// exactly the dishonesty this module is trying to avoid.
+//
+// THE SCANS ARE THEREFORE NOT MARKED `#[constant_time]`, AND THAT IS VISIBLE.
+// Every scalar function above carries the attribute and is checked by the
+// compiler (ADR-0020 Stage C). `select_array` and `bytes_eq` do not, because
+// they cannot: the checker refuses loops (`T0017`) and indexing (`T0018`), and
+// both are essential to what a scan *is*. The exemption is deliberately an
+// absence rather than an override — there is no `#[allow]`, no escape hatch,
+// nothing that would let a future function quietly opt out of the check while
+// still looking guaranteed. A reader can tell which functions the compiler
+// verified by looking for the attribute, and the two that lack it are the two
+// documented above as carrying the weaker property.
+//
+// This is also why the checker refuses to be talked out of a rejection. Its
+// rule is *sufficient, not necessary*: some code it rejects is genuinely
+// constant time, and `lt` was such a case — its earlier formulation subtracted
+// halved operands, which provably cannot overflow, and the compiler still
+// refused it because the compiler cannot follow that argument. Rather than add
+// an exemption, `lt` was rewritten to need no arithmetic at all. That is the
+// intended response to a rejection: restructure, or accept that the function
+// carries no machine-checked guarantee and say so.
+//
+// WHAT IS NOT HERE. Constant-time *table lookup* is absent for the same
+// reason: a fixed-time lookup must scan the whole table and select rather than
+// index it, so any algorithm needing an S-box or a windowed exponentiation
+// table must be written as a scan (`select_array` is the primitive for that)
+// rather than transliterated from an indexing form — and it inherits the loop
+// caveat above. Division and modulus are likewise absent: they are not
+// branchless on real hardware.
+
+module std::ct;
+
+// ----------------------------------------------------------------------------
+// Masks and selection.
+// ----------------------------------------------------------------------------
+
+/// The all-ones mask when `bit` is 1, and zero when `bit` is 0.
+///
+/// This is the primitive every other function here is built from: it turns a
+/// condition into something that can be combined with `&` instead of branched
+/// on. Defined only for `bit` equal to 0 or 1.
+///
+/// It is written as a sign-smearing shift rather than the conventional
+/// `0 - bit` because negation traps on overflow in tuonelang, and a trap is a
+/// branch.
+///
+/// # Example
+/// ```tuo
+/// let m = std::ct::mask(1); // -1, i.e. every bit set
+/// ```
+#[constant_time]
+pub fn mask(take bit: Int) -> Int {
+    (bit << 63) >> 63
+}
+
+/// `a` when `c` is 1, `b` when `c` is 0 — chosen without branching.
+///
+/// Both `a` and `b` are evaluated by the caller, which is the point: the
+/// function's timing does not depend on which one is returned. Defined only
+/// for `c` equal to 0 or 1.
+///
+/// # Example
+/// ```tuo
+/// let x = std::ct::select(1, 10, 20); // 10
+/// ```
+#[constant_time]
+pub fn select(take c: Int, take a: Int, take b: Int) -> Int {
+    let m = mask(c);
+    (a & m) | (b & ~m)
+}
+
+// ----------------------------------------------------------------------------
+// Tests. Each answers with 1 for true and 0 for false.
+// ----------------------------------------------------------------------------
+
+/// 1 when `x` is not zero, 0 when it is.
+///
+/// Folds every bit of `x` down into bit 0 with shifts and `|`, so no
+/// comparison and no arithmetic is involved. Correct for every `Int`,
+/// including the most negative one — the value on which a `0 - x`
+/// formulation traps.
+///
+/// # Example
+/// ```tuo
+/// let n = std::ct::nonzero(5); // 1
+/// ```
+#[constant_time]
+pub fn nonzero(take x: Int) -> Int {
+    let a = x | (x >> 32);
+    let b = a | (a >> 16);
+    let c = b | (b >> 8);
+    let d = c | (c >> 4);
+    let e = d | (d >> 2);
+    let f = e | (e >> 1);
+    f & 1
+}
+
+/// 1 when `x` is zero, 0 when it is not.
+///
+/// # Example
+/// ```tuo
+/// let z = std::ct::is_zero(0); // 1
+/// ```
+#[constant_time]
+pub fn is_zero(take x: Int) -> Int {
+    nonzero(x) ^ 1
+}
+
+/// 1 when `a` and `b` are equal, 0 when they differ.
+///
+/// The timing does not depend on *where* they differ, which is the property
+/// an early-returning comparison lacks.
+///
+/// # Example
+/// ```tuo
+/// let same = std::ct::eq(7, 7); // 1
+/// ```
+#[constant_time]
+pub fn eq(take a: Int, take b: Int) -> Int {
+    is_zero(a ^ b)
+}
+
+/// 1 when `a` and `b` differ, 0 when they are equal.
+///
+/// # Example
+/// ```tuo
+/// let differ = std::ct::ne(7, 9); // 1
+/// ```
+#[constant_time]
+pub fn ne(take a: Int, take b: Int) -> Int {
+    nonzero(a ^ b)
+}
+
+/// 1 when `x` is negative, 0 otherwise — the sign bit, extracted.
+///
+/// # Example
+/// ```tuo
+/// let neg = std::ct::is_negative(0 - 1); // 1
+/// ```
+#[constant_time]
+pub fn is_negative(take x: Int) -> Int {
+    (x >> 63) & 1
+}
+
+/// 1 when `a` is less than `b`, comparing both as **signed** integers.
+///
+/// The usual branchless formulation is `(a - b) >> 63`, which is wrong here:
+/// `a - b` overflows for operands far apart, and in tuonelang an overflow
+/// traps rather than wrapping, so that spelling both gives the wrong answer
+/// *and* emits a branch on the data.
+///
+/// This one uses no arithmetic at all. Where `a` and `b` differ, the highest
+/// differing bit decides the unsigned comparison: `a < b` exactly when that
+/// bit is set in `b`. When the sign bits differ the signed answer is the
+/// opposite — the negative operand is the smaller — so `a`'s sign bit is the
+/// answer directly. The two cases are combined with `select` rather than a
+/// branch.
+///
+/// Correct across the full range, including `MIN` against `MAX`, which the
+/// specs check in both directions. Because it contains no `+`, `-`, or `*`, it
+/// satisfies the `#[constant_time]` checker (ADR-0020 Stage C) — an earlier
+/// halved-subtraction version was provably non-overflowing but could not be
+/// *proven so by the compiler*, and being rejected is what prompted this
+/// spelling.
+///
+/// # Example
+/// ```tuo
+/// let less = std::ct::lt(3, 9); // 1
+/// ```
+#[constant_time]
+pub fn lt(take a: Int, take b: Int) -> Int {
+    let sign_a = (a >> 63) & 1;
+    let sign_b = (b >> 63) & 1;
+    let signs_differ = sign_a ^ sign_b;
+    // Same sign: the highest differing bit decides, and `a` is smaller exactly
+    // when that bit belongs to `b`. Different signs: the negative one is
+    // smaller, which is `a`'s own sign bit.
+    let difference = a ^ b;
+    let deciding_bit = highest_bit(difference);
+    let unsigned_lt = nonzero(b & deciding_bit);
+    select(signs_differ, sign_a, unsigned_lt)
+}
+
+/// Only the highest set bit of `x`, or 0 when `x` is 0.
+///
+/// Smears the top set bit downward with shifts and `|` — so every bit below it
+/// becomes 1 — then isolates it by clearing that smear shifted right by one.
+/// The extra mask on the shift keeps it logical rather than arithmetic, which
+/// matters when `x` is negative and the top bit is the sign.
+///
+/// # Example
+/// ```tuo
+/// let top = std::ct::highest_bit(9); // 8 — the 4-bit, not the 1-bit
+/// ```
+#[constant_time]
+pub fn highest_bit(take x: Int) -> Int {
+    let a = x | (x >> 1);
+    let b = a | (a >> 2);
+    let c = b | (b >> 4);
+    let d = c | (c >> 8);
+    let e = d | (d >> 16);
+    let smeared = e | (e >> 32);
+    smeared ^ ((smeared >> 1) & 9223372036854775807)
+}
+
+/// 1 when `a` is greater than `b`, comparing both as **signed** integers.
+///
+/// # Example
+/// ```tuo
+/// let more = std::ct::gt(9, 3); // 1
+/// ```
+#[constant_time]
+pub fn gt(take a: Int, take b: Int) -> Int {
+    lt(b, a)
+}
+
+// ----------------------------------------------------------------------------
+// Array operations — scans, never indexed lookups.
+// ----------------------------------------------------------------------------
+
+/// The element of `xs` at `index`, found by scanning every element rather
+/// than indexing — so the time taken does not reveal `index`.
+///
+/// Returns 0 when `index` is outside the array, without trapping, because a
+/// bounds check is a branch. This is the primitive a constant-time table
+/// lookup is built from; it is deliberately O(n) per lookup, and that cost is
+/// the price of the property rather than an inefficiency to optimize away.
+///
+/// # Example
+/// ```tuo
+/// let x = std::ct::select_array(std::ct::of3(7, 8, 9), 1); // 8
+/// ```
+pub fn select_array(in xs: Array[Int], take index: Int) -> Int {
+    var acc = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        let hit = eq(i, index);
+        acc = acc | (std::array::get(xs, i) & mask(hit));
+        i = i + 1;
+    }
+    acc
+}
+
+/// 1 when `a` and `b` hold the same elements in the same order, 0 otherwise —
+/// examining every element regardless of where the first difference is.
+///
+/// This is the fixed-time replacement for comparing a computed MAC against a
+/// received one. Writing that comparison with an early return leaks, through
+/// timing, how many leading bytes matched, which is enough to forge a tag one
+/// byte at a time; this function's timing depends only on the *length* of the
+/// inputs, which is public.
+///
+/// Arrays of different lengths compare unequal. The loop runs over the
+/// *shorter* of the two lengths — which keeps every index in bounds for both
+/// arrays — so the time taken reveals only that length, and nothing about
+/// either array's contents.
+///
+/// # Example
+/// ```tuo
+/// let same = std::ct::bytes_eq(std::ct::of3(1, 2, 3), std::ct::of3(1, 2, 3)); // 1
+/// ```
+pub fn bytes_eq(in a: Array[Int], in b: Array[Int]) -> Int {
+    let len_a = std::array::len(a);
+    let len_b = std::array::len(b);
+    // Different lengths already decide the answer, and there is no shared
+    // prefix worth scanning past the shorter one. Iterating the *minimum*
+    // length keeps every index trivially in bounds for both arrays, so no
+    // bounds check survives into the emitted code — a bounds check is a
+    // branch, and one on an index derived from the inputs is exactly what this
+    // function must not contain.
+    let n = select(lt(len_a, len_b), len_a, len_b);
+    // Accumulate the bitwise difference of every element. Zero at the end
+    // means every compared pair agreed.
+    var diff = 0;
+    var i = 0;
+    while i < n {
+        diff = diff | (std::array::get(a, i) ^ std::array::get(b, i));
+        i = i + 1;
+    }
+    // Unequal lengths are unequal contents, folded in without a branch. The
+    // loop count is the public minimum length, so the time taken reveals only
+    // that — never where, or whether, the contents differ.
+    let same_len = eq(len_a, len_b);
+    is_zero(diff) & same_len
+}
+
+/// The element of `xs` at `index`, or 0 when `xs` is empty.
+///
+/// A helper for `bytes_eq`: it exists so the clamped index passed to
+/// `std::array::get` is provably in bounds even for an empty array, which the
+/// clamp alone does not guarantee.
+///
+/// # Example
+/// ```tuo
+/// let x = std::ct::element_or_zero(std::ct::of3(4, 5, 6), 0); // 4
+/// ```
+pub fn element_or_zero(in xs: Array[Int], take index: Int) -> Int {
+    if std::array::len(xs) == 0 {
+        return 0;
+    }
+    std::array::get(xs, index)
+}
+
+/// An `Array[Int]` holding the three given elements.
+///
+/// A local builder so this module depends on no other: `std::collections` has
+/// the general versions, but a constant-time module that pulled in the whole
+/// collections library to write its own specs would be needlessly coupled.
+///
+/// # Example
+/// ```tuo
+/// let xs = std::ct::of3(7, 8, 9); // [7, 8, 9]
+/// ```
+pub fn of3(take a: Int, take b: Int, take c: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, a);
+    std::array::push(xs, b);
+    std::array::push(xs, c);
+    xs
+}
+
+/// An `Array[Int]` holding the two given elements.
+///
+/// # Example
+/// ```tuo
+/// let xs = std::ct::of2(4, 5); // [4, 5]
+/// ```
+pub fn of2(take a: Int, take b: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, a);
+    std::array::push(xs, b);
+    xs
+}
+
+// ----------------------------------------------------------------------------
+// Specs.
+// ----------------------------------------------------------------------------
+
+spec mask {
+    then mask(0) == 0;
+    then mask(1) == 0 - 1;
+}
+
+spec select {
+    then select(1, 10, 20) == 10;
+    then select(0, 10, 20) == 20;
+    // Negative values are chosen the same way; there is no arithmetic here.
+    then select(1, 0 - 5, 7) == 0 - 5;
+    then select(0, 0 - 5, 7) == 7;
+}
+
+spec nonzero {
+    then nonzero(0) == 0;
+    then nonzero(1) == 1;
+    then nonzero(5) == 1;
+    then nonzero(0 - 1) == 1;
+    // The value a `0 - x` formulation would trap on.
+    then nonzero(0 - 9223372036854775807 - 1) == 1;
+    then nonzero(9223372036854775807) == 1;
+}
+
+spec is_zero {
+    then is_zero(0) == 1;
+    then is_zero(3) == 0;
+    then is_zero(0 - 3) == 0;
+}
+
+spec eq {
+    then eq(7, 7) == 1;
+    then eq(7, 9) == 0;
+    then eq(0, 0) == 1;
+    then eq(0 - 4, 0 - 4) == 1;
+    // Differing only in the lowest bit, and only in the highest.
+    then eq(2, 3) == 0;
+    then eq(0, 0 - 9223372036854775807 - 1) == 0;
+}
+
+spec ne {
+    then ne(7, 7) == 0;
+    then ne(7, 9) == 1;
+}
+
+spec is_negative {
+    then is_negative(0) == 0;
+    then is_negative(5) == 0;
+    then is_negative(0 - 1) == 1;
+    then is_negative(0 - 9223372036854775807 - 1) == 1;
+    then is_negative(9223372036854775807) == 0;
+}
+
+spec lt {
+    then lt(3, 9) == 1;
+    then lt(9, 3) == 0;
+    then lt(4, 4) == 0;
+    // Adjacent values, so the low-bit path decides.
+    then lt(4, 5) == 1;
+    then lt(5, 4) == 0;
+    then lt(0, 1) == 1;
+    // Mixed signs.
+    then lt(0 - 1, 0) == 1;
+    then lt(0, 0 - 1) == 0;
+    then lt(0 - 9, 0 - 3) == 1;
+    then lt(0 - 3, 0 - 9) == 0;
+    // The extremes, where a subtracting formulation would overflow.
+    then lt(0 - 9223372036854775807 - 1, 9223372036854775807) == 1;
+    then lt(9223372036854775807, 0 - 9223372036854775807 - 1) == 0;
+    then lt(0 - 9223372036854775807 - 1, 0 - 9223372036854775807 - 1) == 0;
+    then lt(9223372036854775807, 9223372036854775807) == 0;
+}
+
+spec highest_bit {
+    then highest_bit(0) == 0;
+    then highest_bit(1) == 1;
+    then highest_bit(9) == 8;
+    then highest_bit(255) == 128;
+    // A negative value's top bit is the sign bit.
+    then highest_bit(0 - 1) == 0 - 9223372036854775807 - 1;
+}
+
+spec gt {
+    then gt(9, 3) == 1;
+    then gt(3, 9) == 0;
+    then gt(4, 4) == 0;
+    then gt(9223372036854775807, 0 - 9223372036854775807 - 1) == 1;
+}
+
+spec element_or_zero {
+    then element_or_zero(of3(4, 5, 6), 0) == 4;
+    then element_or_zero(of3(4, 5, 6), 2) == 6;
+    then element_or_zero(std::array::empty(), 0) == 0;
+}
+
+spec select_array {
+    then select_array(of3(7, 8, 9), 0) == 7;
+    then select_array(of3(7, 8, 9), 1) == 8;
+    then select_array(of3(7, 8, 9), 2) == 9;
+    // Out of range answers zero rather than trapping.
+    then select_array(of3(7, 8, 9), 3) == 0;
+    then select_array(of3(7, 8, 9), 0 - 1) == 0;
+    then select_array(std::array::empty(), 0) == 0;
+}
+
+spec bytes_eq {
+    then bytes_eq(of3(1, 2, 3), of3(1, 2, 3)) == 1;
+    // Differing in the first position, and in the last: both must answer 0,
+    // and — the property this function exists for — both take the same time.
+    then bytes_eq(of3(9, 2, 3), of3(1, 2, 3)) == 0;
+    then bytes_eq(of3(1, 2, 9), of3(1, 2, 3)) == 0;
+    // Different lengths are unequal, in both orders.
+    then bytes_eq(of2(1, 2), of3(1, 2, 3)) == 0;
+    then bytes_eq(of3(1, 2, 3), of2(1, 2)) == 0;
+    // Two empty arrays are equal.
+    then bytes_eq(std::array::empty(), std::array::empty()) == 1;
+    then bytes_eq(std::array::empty(), of3(1, 2, 3)) == 0;
+    then bytes_eq(of3(1, 2, 3), std::array::empty()) == 0;
+}
+
+spec of3 {
+    then std::array::len(of3(7, 8, 9)) == 3;
+    then std::array::get(of3(7, 8, 9), 0) == 7;
+    then std::array::get(of3(7, 8, 9), 2) == 9;
+}
+
+spec of2 {
+    then std::array::len(of2(4, 5)) == 2;
+    then std::array::get(of2(4, 5), 0) == 4;
+    then std::array::get(of2(4, 5), 1) == 5;
+}

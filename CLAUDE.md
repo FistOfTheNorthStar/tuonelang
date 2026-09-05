@@ -500,11 +500,19 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `concurrent-worker` (a worker-pool scheduling model), `router` (a declarative
   dispatch table over indirect calls), `log-analytics` (a one-pass keyed rollup),
   `file-report` (a report generator that really touches the disk), and
-  `postgres-auth` (the PostgreSQL v3 authentication handshake — big-endian wire
-  framing plus SCRAM-SHA-256 checked against RFC 7677's published vector, the
-  ADR-0019 motivating case as a whole program; exits 44 only when every step
-  agrees, and it caught a real bug that no self-consistent spec would have: an
-  empty `n=` username field, invisible structurally but fatal to the proof). The three that fit the
+`postgres-auth` (the PostgreSQL v3 authentication handshake — big-endian wire
+  framing plus SCRAM-SHA-256 checked against RFC 7677's published vector and
+  the legacy MD5 challenge, the ADR-0019 motivating case as a whole program;
+  exits 48 only when every step agrees, and it caught a real bug that no
+  self-consistent spec would have: an empty `n=` username field, invisible
+  structurally but fatal to the proof), and `postgres-client` (the other half:
+  the same protocol driven over TCP against a **real PostgreSQL server** —
+  startup packet, the live SASL exchange, the server's signature verified in
+  constant time, then `SELECT 42` decoded out of a `DataRow` frame; its
+  protocol layer is pure and spec-checked so `check`/`test` always run, while
+  the live exchange skips cleanly when no server is reachable and its exit byte
+  *names the failing step* when one is, so a rejected proof reports 20 and a
+  failed server-signature check 21 rather than a bare mismatch). The three that fit the
   runnable core **run natively** — and since ADR-0004 landed they use it for
   real: `geometry` passes a `Point` struct, `data-pipeline` folds an `[Int; 8]`
   batch, and `cli-stats` holds an `[Int; 7]` dataset. Since ADR-0009 landed the

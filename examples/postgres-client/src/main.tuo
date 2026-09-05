@@ -1,0 +1,703 @@
+module postgres_client;
+
+// postgres-client — a real PostgreSQL client that connects over TCP,
+// authenticates with SCRAM-SHA-256, runs a query, and reads the rows back.
+//
+// WHAT THIS IS. `postgres-auth` computes the authentication *mathematics*
+// against RFC 7677's published vector, hermetically, with no socket. This is
+// the other half: the same protocol driven over a live connection to an actual
+// PostgreSQL server. Together they are a connector — the dogfooding target
+// ADR-0019 was opened for, which at the time the language could not express at
+// all.
+//
+// It is a *client*, not a driver. What a production driver adds is breadth
+// (the extended query protocol, the full type map, connection pooling, TLS)
+// rather than anything the language is missing; every piece used here is
+// ordinary v0.
+//
+// THE TWO TIERS, kept strictly apart as the standard library keeps them:
+//
+//   * The EXECUTABLE tier is the protocol itself — building a startup packet,
+//     framing a message, parsing a SASL challenge, decoding a row. It is pure
+//     computation over bytes, so every function carries a `spec`, and what the
+//     client puts on the wire is decided by spec-checked code.
+//   * The EFFECT tier is `connect`/`write`/`read_byte_timeout`/`close`. It can
+//     carry no spec (`R0007` keeps the sandbox pure), so each function is
+//     marked `EFFECT:` and pinned instead by the dogfood test, which runs this
+//     program against a real server.
+//
+// BYTES ARE `String`. v0 has no `[u8]`, and `Str`/`String` are byte containers
+// that happily hold zero bytes and high bytes (the wire is full of both), so a
+// frame is built as a `String` and written with `std::rt::write_string`. That
+// is not a workaround — it is what those types are.
+//
+// TIMEOUTS EVERYWHERE. Every read is `read_byte_timeout` (ADR-0017), never the
+// unbounded `read_byte`. A client that blocks forever on a server that stopped
+// talking is a hung process, and the bounded form is the entire reason
+// ADR-0017 added it.
+
+import std::crypto;
+import std::str;
+
+// ----------------------------------------------------------------------------
+// Message framing (executable tier).
+// ----------------------------------------------------------------------------
+
+/// Append `value` to `out` as four big-endian bytes.
+///
+/// Every length and integer on the PostgreSQL wire is big-endian, so this is
+/// the single spelling the rest of the module uses.
+///
+/// ```tuo
+/// var b = std::string::empty();
+/// postgres_client::push_be32(b, 1);
+/// std::string::byte_at(b, 3)  // 1
+/// ```
+pub fn push_be32(mut out: String, take value: Int) {
+    std::string::push_byte(out, (value >> 24) & 255);
+    std::string::push_byte(out, (value >> 16) & 255);
+    std::string::push_byte(out, (value >> 8) & 255);
+    std::string::push_byte(out, value & 255);
+}
+
+/// Append `text` and a terminating zero byte.
+///
+/// ```tuo
+/// var b = std::string::empty();
+/// postgres_client::push_cstring(b, "ab");
+/// std::string::len(b)  // 3
+/// ```
+pub fn push_cstring(mut out: String, in text: Str) {
+    std::string::append(out, text);
+    std::string::push_byte(out, 0);
+}
+
+/// The startup packet for `user` and `database`.
+///
+/// The only frame with no tag byte: a self-counting length, protocol version
+/// 3.0, then null-terminated key/value pairs and a final zero.
+///
+/// ```tuo
+/// std::string::len(postgres_client::startup_packet("u", "d"))  // 33
+/// ```
+pub fn startup_packet(in user: Str, in database: Str) -> String {
+    var body = std::string::empty();
+    push_be32(body, 196608);
+    push_cstring(body, "user");
+    push_cstring(body, user);
+    push_cstring(body, "database");
+    push_cstring(body, database);
+    std::string::push_byte(body, 0);
+
+    var packet = std::string::empty();
+    push_be32(packet, std::string::len(body) + 4);
+    std::string::append(packet, std::string::as_str(body));
+    packet
+}
+
+/// A tagged frame: `tag`, a self-counting big-endian length, then `payload`.
+///
+/// The length counts itself and the payload but *not* the tag, which is the
+/// protocol's rule and the source of most off-by-one bugs against it.
+///
+/// ```tuo
+/// std::string::len(postgres_client::frame(81, "hi"))  // 7
+/// ```
+pub fn frame(take tag: Int, in payload: Str) -> String {
+    var out = std::string::empty();
+    std::string::push_byte(out, tag);
+    push_be32(out, std::str::len(payload) + 4);
+    std::string::append(out, payload);
+    out
+}
+
+/// The `Query` message ('Q') for `sql` — the simple query protocol.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::query_message("SELECT 1"), 0)  // 81
+/// ```
+pub fn query_message(in sql: Str) -> String {
+    var payload = std::string::empty();
+    push_cstring(payload, sql);
+    frame(81, std::string::as_str(payload))
+}
+
+/// The `SASLInitialResponse` message ('p') naming SCRAM-SHA-256.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::sasl_initial("n,,n=,r=abc"), 0)  // 112
+/// ```
+pub fn sasl_initial(in client_first: Str) -> String {
+    var payload = std::string::empty();
+    push_cstring(payload, "SCRAM-SHA-256");
+    push_be32(payload, std::str::len(client_first));
+    std::string::append(payload, client_first);
+    frame(112, std::string::as_str(payload))
+}
+
+/// The `SASLResponse` message ('p') carrying the client-final message.
+///
+/// ```tuo
+/// std::string::byte_at(postgres_client::sasl_response("c=biws,r=x,p=y"), 0)  // 112
+/// ```
+pub fn sasl_response(in client_final: Str) -> String {
+    frame(112, client_final)
+}
+
+// ----------------------------------------------------------------------------
+// SCRAM message parsing (executable tier).
+// ----------------------------------------------------------------------------
+
+/// The value of attribute `key` in a comma-separated SCRAM message, or the
+/// empty string when absent.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::scram_attr("r=abc,i=4096", "i"))  // "4096"
+/// ```
+pub fn scram_attr(in message: Str, in key: Str) -> String {
+    let parts = std::str::split(message, ",");
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::array::len(parts) {
+        let text = std::string::as_str(std::array::get(parts, i));
+        if std::str::len(text) > std::str::len(key) {
+            if std::str::byte_at(text, std::str::len(key)) == 61 {
+                if std::str::starts_with(text, key) {
+                    out = substring_from(text, std::str::len(key) + 1);
+                }
+            }
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The substring of `text` from `start` to its end.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::substring_from("i=4096", 2))  // "4096"
+/// ```
+pub fn substring_from(in text: Str, take start: Int) -> String {
+    var out = std::string::empty();
+    var i = start;
+    while i < std::str::len(text) {
+        std::string::push_byte(out, std::str::byte_at(text, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// The client-first-bare message `n=<user>,r=<nonce>`.
+///
+/// The username is part of the auth message both sides sign. PostgreSQL
+/// ignores its value (the name came in the startup packet), but a wrong one
+/// still produces a proof the server rejects with no useful diagnostic.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::client_first_bare("u", "abc"))  // "n=u,r=abc"
+/// ```
+pub fn client_first_bare(in user: Str, in nonce: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, "n=");
+    std::string::append(out, user);
+    std::string::append(out, ",r=");
+    std::string::append(out, nonce);
+    out
+}
+
+/// The client-final message without its proof: the fixed GS2 header `biws`
+/// (base64 of `n,,`) and the combined nonce.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::client_final_bare("xy"))  // "c=biws,r=xy"
+/// ```
+pub fn client_final_bare(in nonce: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, "c=biws,r=");
+    std::string::append(out, nonce);
+    out
+}
+
+/// The SCRAM auth message: client-first-bare, server-first, and
+/// client-final-without-proof, joined by commas.
+///
+/// Both sides must build this identically, which is why it is one function
+/// rather than three inline concatenations.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::auth_message("a", "b", "c"))  // "a,b,c"
+/// ```
+pub fn auth_message(in client_first: Str, in server_first: Str, in client_final: Str) -> String {
+    var out = std::string::empty();
+    std::string::append(out, client_first);
+    std::string::append(out, ",");
+    std::string::append(out, server_first);
+    std::string::append(out, ",");
+    std::string::append(out, client_final);
+    out
+}
+
+/// The complete client-final message, proof included.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::client_final("xy", "AA"))  // "c=biws,r=xy,p=AA"
+/// ```
+pub fn client_final(in nonce: Str, in proof: Str) -> String {
+    var out = client_final_bare(nonce);
+    std::string::append(out, ",p=");
+    std::string::append(out, proof);
+    out
+}
+
+/// A deterministic client nonce built from `seed`.
+///
+/// A real client draws this from `std::crypto::nonce` (the platform CSPRNG);
+/// this example uses a fixed one so the dogfood test is reproducible. The
+/// server's nonce is random regardless, so the exchange is still unique per
+/// connection.
+///
+/// ```tuo
+/// std::str::len(std::string::as_str(postgres_client::client_nonce(7)))  // 18
+/// ```
+pub fn client_nonce(take seed: Int) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < 18 {
+        // Printable ASCII in the SCRAM-safe range, excluding ','.
+        let b = 48 + ((seed + i * 13) % 60);
+        if b == 44 {
+            std::string::push_byte(out, 45);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Row decoding (executable tier).
+// ----------------------------------------------------------------------------
+
+/// The big-endian 32-bit integer at `offset` in `bytes`.
+///
+/// ```tuo
+/// postgres_client::be32_at(std::crypto::str_of_bytes(std::crypto::bytes_of_str("\u{0}\u{0}\u{0}\u{1}")), 0)  // 1
+/// ```
+pub fn be32_at(in bytes: Str, take offset: Int) -> Int {
+    if std::str::len(bytes) < (offset + 4) {
+        return 0 - 1;
+    }
+    (std::str::byte_at(bytes, offset) << 24) | (std::str::byte_at(bytes, offset + 1) << 16) | (std::str::byte_at(bytes, offset + 2) << 8) | std::str::byte_at(bytes, offset + 3)
+}
+
+/// The first column of a `DataRow` payload, as text.
+///
+/// A `DataRow` payload is a 2-byte column count followed by, per column, a
+/// 4-byte length (-1 for NULL) and that many bytes. The simple query protocol
+/// returns everything in text format, so a column is the decimal text of
+/// whatever it holds.
+///
+/// ```tuo
+/// std::string::as_str(postgres_client::first_column(""))  // ""
+/// ```
+pub fn first_column(in payload: Str) -> String {
+    var out = std::string::empty();
+    if std::str::len(payload) < 6 {
+        return out;
+    }
+    let length = be32_at(payload, 2);
+    if length < 0 {
+        // NULL, which is distinct from an empty string but rendered the same
+        // here; a real driver returns an Option.
+        return out;
+    }
+    var i = 0;
+    while i < length {
+        let at = 6 + i;
+        if at < std::str::len(payload) {
+            std::string::push_byte(out, std::str::byte_at(payload, at));
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// The wire (effect tier). No specs — `R0007` keeps the sandbox pure.
+// ----------------------------------------------------------------------------
+
+/// EFFECT: read `n` bytes from `fd`, returning them as a `String`. A short
+/// read (timeout or closed connection) returns what arrived.
+///
+/// Effectful, so no spec; pinned by the dogfood test, which runs this program
+/// against a real PostgreSQL server.
+fn read_exact(take fd: Int, take n: Int) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < n {
+        let b = std::rt::read_byte_timeout(fd, 5000);
+        if b < 0 {
+            return out;
+        }
+        std::string::push_byte(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// EFFECT: read one tagged frame from `fd`, returning its payload. The tag is
+/// written into `tag_out` as its only element.
+///
+/// Effectful, so no spec; pinned by the dogfood test.
+fn read_frame(take fd: Int, mut tag_out: Array[Int]) -> String {
+    let header = read_exact(fd, 5);
+    if std::string::len(header) < 5 {
+        std::array::push(tag_out, 0 - 1);
+        return std::string::empty();
+    }
+    let tag = std::string::byte_at(header, 0);
+    std::array::push(tag_out, tag);
+    let length = be32_at(std::string::as_str(header), 1);
+    read_exact(fd, length - 4)
+}
+
+/// EFFECT: perform the whole SCRAM-SHA-256 exchange on an open connection.
+/// Returns 0 on success, or a negative step number identifying what failed.
+///
+/// Effectful, so no spec; pinned by the dogfood test.
+fn authenticate(take fd: Int, in user: Str, in password: Str) -> Int {
+    var tag_box = std::array::empty();
+
+    // The server's AuthenticationSASL, listing its mechanisms.
+    let auth_payload = read_frame(fd, tag_box);
+    if std::array::len(tag_box) == 0 {
+        return 0 - 1;
+    }
+    if std::array::get(tag_box, 0) != 82 {
+        return 0 - 2;
+    }
+    // Sub-type 10 is AuthenticationSASL. 0 would mean the server let us in
+    // with no password at all, which is a valid outcome but not what this
+    // example is demonstrating.
+    let kind = be32_at(std::string::as_str(auth_payload), 0);
+    if kind != 10 {
+        return 0 - 3;
+    }
+
+    // Client-first.
+    let nonce = client_nonce(7);
+    let first_bare = client_first_bare(user, std::string::as_str(nonce));
+    var gs2 = std::string::empty();
+    std::string::append(gs2, "n,,");
+    std::string::append(gs2, std::string::as_str(first_bare));
+    let initial = sasl_initial(std::string::as_str(gs2));
+    if std::rt::write_string(fd, initial) < 0 {
+        return 0 - 4;
+    }
+
+    // The server's SASLContinue: r=<nonce>,s=<salt>,i=<iterations>.
+    var tag_box2 = std::array::empty();
+    let cont_payload = read_frame(fd, tag_box2);
+    if std::array::len(tag_box2) == 0 {
+        return 0 - 5;
+    }
+    if std::array::get(tag_box2, 0) != 82 {
+        return 0 - 6;
+    }
+    // Skip the 4-byte sub-type (11 = SASLContinue) to reach the SASL data.
+    let server_first = substring_from(std::string::as_str(cont_payload), 4);
+    let server_first_str = std::string::as_str(server_first);
+
+    let salt_b64 = scram_attr(server_first_str, "s");
+    let iters_text = scram_attr(server_first_str, "i");
+    let combined = scram_attr(server_first_str, "r");
+    let iterations = unwrap_or(std::str::parse_int(std::string::as_str(iters_text)), 0);
+    if iterations <= 0 {
+        return 0 - 7;
+    }
+
+    let salt = std::crypto::base64_decode(std::string::as_str(salt_b64));
+    let salted = std::crypto::scram_salted_password(password, salt, iterations);
+    let final_bare = client_final_bare(std::string::as_str(combined));
+    let auth = auth_message(std::string::as_str(first_bare), server_first_str, std::string::as_str(final_bare));
+    let proof = std::crypto::scram_client_proof(salted, std::string::as_str(auth));
+    let final_message = client_final(std::string::as_str(combined), std::string::as_str(proof));
+    if std::rt::write_string(fd, sasl_response(std::string::as_str(final_message))) < 0 {
+        return 0 - 8;
+    }
+
+    // The server's SASLFinal carries v=<signature>, which the client MUST
+    // verify — a client that skips this authenticates against an impostor.
+    var tag_box3 = std::array::empty();
+    let final_payload = read_frame(fd, tag_box3);
+    if std::array::len(tag_box3) == 0 {
+        return 0 - 9;
+    }
+    if std::array::get(tag_box3, 0) != 82 {
+        return 0 - 10;
+    }
+    let server_final = substring_from(std::string::as_str(final_payload), 4);
+    let claimed = scram_attr(std::string::as_str(server_final), "v");
+    let expected = std::crypto::scram_server_signature(salted, std::string::as_str(auth));
+    // Constant time: an early-returning comparison here leaks how many leading
+    // bytes of a forged signature were correct.
+    let ok = std::crypto::verify(std::crypto::base64_decode(std::string::as_str(claimed)), std::crypto::base64_decode(std::string::as_str(expected)));
+    if ok == false {
+        return 0 - 11;
+    }
+
+    // AuthenticationOk, then parameters until ReadyForQuery ('Z' = 90).
+    var guard = 0;
+    while guard < 100 {
+        var tag_box4 = std::array::empty();
+        read_frame(fd, tag_box4);
+        if std::array::len(tag_box4) == 0 {
+            return 0 - 12;
+        }
+        let t = std::array::get(tag_box4, 0);
+        if t == 90 {
+            return 0;
+        }
+        if t == 69 {
+            // ErrorResponse.
+            return 0 - 13;
+        }
+        guard = guard + 1;
+    }
+    0 - 14
+}
+
+/// EFFECT: run `sql` on an authenticated connection and return the first
+/// column of the first row as text. An empty string means no row arrived.
+///
+/// Effectful, so no spec; pinned by the dogfood test.
+fn run_query(take fd: Int, in sql: Str) -> String {
+    var answer = std::string::empty();
+    if std::rt::write_string(fd, query_message(sql)) < 0 {
+        return answer;
+    }
+    var guard = 0;
+    while guard < 100 {
+        var tag_box = std::array::empty();
+        let payload = read_frame(fd, tag_box);
+        if std::array::len(tag_box) == 0 {
+            return answer;
+        }
+        let t = std::array::get(tag_box, 0);
+        // 'D' = DataRow.
+        if t == 68 {
+            if std::string::len(answer) == 0 {
+                answer = first_column(std::string::as_str(payload));
+            }
+        }
+        // 'Z' = ReadyForQuery: the exchange is complete.
+        if t == 90 {
+            return answer;
+        }
+        guard = guard + 1;
+    }
+    answer
+}
+
+/// `value` when `result` is `Ok`, otherwise `fallback`.
+///
+/// ```tuo
+/// postgres_client::unwrap_or(std::str::parse_int("12"), 0)  // 12
+/// ```
+pub fn unwrap_or(take result: Result[Int, Str], take fallback: Int) -> Int {
+    match result {
+        Result::Ok { value } => value,
+        Result::Err { error } => fallback,
+    }
+}
+
+fn main() -> Int {
+    // The connection details the dogfood test provisions. A real client reads
+    // these from its command line or environment; this example fixes them so
+    // the test is reproducible.
+    let fd = std::rt::connect("127.0.0.1", 55432);
+    if fd < 0 {
+        // No server: the dogfood test skips rather than failing, since a
+        // developer without a local PostgreSQL should still get a green suite.
+        return 3;
+    }
+
+    if std::rt::write_string(fd, startup_packet("tuo_test", "tuo_testdb")) < 0 {
+        std::rt::close(fd);
+        return 4;
+    }
+
+    let auth = authenticate(fd, "tuo_test", "tuo_secret");
+    if auth != 0 {
+        std::rt::close(fd);
+        // 10 + the failing step, so a failure names where it happened.
+        return 10 - auth;
+    }
+
+    let answer = run_query(fd, "SELECT 42");
+    std::rt::close(fd);
+
+    if std::string::as_str(answer) == "42" {
+        return 42;
+    }
+    5
+}
+
+spec push_be32 {
+    when var b = std::string::empty();
+    when push_be32(b, 258);
+    then std::string::len(b) == 4;
+    then std::string::byte_at(b, 0) == 0;
+    then std::string::byte_at(b, 2) == 1;
+    then std::string::byte_at(b, 3) == 2;
+}
+
+spec push_cstring {
+    when var b = std::string::empty();
+    when push_cstring(b, "ab");
+    then std::string::len(b) == 3;
+    then std::string::byte_at(b, 2) == 0;
+}
+
+spec startup_packet {
+    // Self-counting: the length field equals the packet's own size.
+    then be32_at(std::string::as_str(startup_packet("u", "d")), 0) == std::string::len(startup_packet("u", "d"));
+    // Protocol version 3.0 follows the length.
+    then be32_at(std::string::as_str(startup_packet("u", "d")), 4) == 196608;
+    // A longer user makes a longer packet.
+    then std::string::len(startup_packet("longer", "d")) > std::string::len(startup_packet("u", "d"));
+    // It ends with the terminating zero the parameter list requires.
+    then std::string::byte_at(startup_packet("u", "d"), std::string::len(startup_packet("u", "d")) - 1) == 0;
+}
+
+spec frame {
+    // The length counts itself and the payload, never the tag.
+    then std::string::len(frame(81, "")) == 5;
+    then std::string::len(frame(81, "hi")) == 7;
+    then std::string::byte_at(frame(81, "hi"), 0) == 81;
+    then be32_at(std::string::as_str(frame(81, "hi")), 1) == 6;
+}
+
+spec query_message {
+    then std::string::byte_at(query_message("SELECT 1"), 0) == 81;
+    // Tag + length + sql + terminator.
+    then std::string::len(query_message("SELECT 1")) == 14;
+    then std::string::byte_at(query_message("SELECT 1"), 13) == 0;
+}
+
+spec sasl_initial {
+    then std::string::byte_at(sasl_initial("n,,n=,r=abc"), 0) == 112;
+    // The mechanism name is null-terminated, then a big-endian length.
+    then std::string::byte_at(sasl_initial("n,,n=,r=abc"), 18) == 0;
+    then be32_at(std::string::as_str(sasl_initial("n,,n=,r=abc")), 19) == 11;
+}
+
+spec sasl_response {
+    then std::string::byte_at(sasl_response("c=biws,r=x,p=y"), 0) == 112;
+    then be32_at(std::string::as_str(sasl_response("c=biws,r=x,p=y")), 1) == 18;
+}
+
+spec scram_attr {
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "i")) == "4096";
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "s")) == "QQ==";
+    then std::string::as_str(scram_attr("r=abc,s=QQ==,i=4096", "r")) == "abc";
+    then std::string::as_str(scram_attr("r=abc", "v")) == "";
+    // A key matches the whole attribute name, not a prefix of it.
+    then std::string::as_str(scram_attr("rs=x,r=y", "r")) == "y";
+}
+
+spec substring_from {
+    then std::string::as_str(substring_from("i=4096", 2)) == "4096";
+    then std::string::as_str(substring_from("abc", 0)) == "abc";
+    then std::string::as_str(substring_from("abc", 9)) == "";
+}
+
+spec client_first_bare {
+    then std::string::as_str(client_first_bare("u", "abc")) == "n=u,r=abc";
+    // The username is signed, so an empty one must not match a real one.
+    then std::string::as_str(client_first_bare("", "abc")) != std::string::as_str(client_first_bare("u", "abc"));
+}
+
+spec client_final_bare {
+    then std::string::as_str(client_final_bare("xy")) == "c=biws,r=xy";
+}
+
+spec client_final {
+    then std::string::as_str(client_final("xy", "AA")) == "c=biws,r=xy,p=AA";
+    then std::str::ends_with(std::string::as_str(client_final("xy", "AA")), "p=AA");
+}
+
+spec auth_message {
+    then std::string::as_str(auth_message("a", "b", "c")) == "a,b,c";
+}
+
+spec client_nonce {
+    then std::string::len(client_nonce(7)) == 18;
+    // A nonce may not contain a comma, which is SCRAM's attribute separator.
+    then std::str::contains(std::string::as_str(client_nonce(7)), ",") == false;
+    then std::str::contains(std::string::as_str(client_nonce(0)), ",") == false;
+    // Different seeds give different nonces.
+    then std::string::as_str(client_nonce(7)) != std::string::as_str(client_nonce(8));
+}
+
+spec be32_at {
+    then be32_at(std::string::as_str(be32_of(1)), 0) == 1;
+    then be32_at(std::string::as_str(be32_of(196608)), 0) == 196608;
+    then be32_at(std::string::as_str(be32_of(0)), 0) == 0;
+    // Too short to hold an integer is reported, not read past.
+    then be32_at("ab", 0) == 0 - 1;
+}
+
+/// `value` as a four-byte big-endian `String`. Spec helper for [`be32_at`].
+///
+/// ```tuo
+/// std::string::len(postgres_client::be32_of(1))  // 4
+/// ```
+pub fn be32_of(take value: Int) -> String {
+    var out = std::string::empty();
+    push_be32(out, value);
+    out
+}
+
+spec be32_of {
+    then std::string::len(be32_of(0)) == 4;
+    then std::string::byte_at(be32_of(258), 3) == 2;
+}
+
+spec first_column {
+    // A payload too short to hold a column yields empty rather than trapping.
+    then std::string::as_str(first_column("")) == "";
+    then std::string::as_str(first_column("abc")) == "";
+    // One column holding "42": count=1, length=2, then the bytes.
+    then std::string::as_str(first_column(std::string::as_str(data_row("42")))) == "42";
+    then std::string::as_str(first_column(std::string::as_str(data_row("hello")))) == "hello";
+    then std::string::as_str(first_column(std::string::as_str(data_row("")))) == "";
+}
+
+/// A one-column `DataRow` payload holding `text`. Spec helper for
+/// [`first_column`], which parses what a server sends.
+///
+/// ```tuo
+/// std::string::len(postgres_client::data_row("42"))  // 8
+/// ```
+pub fn data_row(in text: Str) -> String {
+    var out = std::string::empty();
+    // Column count (2 bytes), then this column's length and bytes.
+    std::string::push_byte(out, 0);
+    std::string::push_byte(out, 1);
+    push_be32(out, std::str::len(text));
+    std::string::append(out, text);
+    out
+}
+
+spec data_row {
+    then std::string::len(data_row("42")) == 8;
+    then std::string::byte_at(data_row("42"), 1) == 1;
+    then be32_at(std::string::as_str(data_row("42")), 2) == 2;
+}
+
+spec unwrap_or {
+    then unwrap_or(std::str::parse_int("12"), 0) == 12;
+    then unwrap_or(std::str::parse_int("nope"), 7) == 7;
+}

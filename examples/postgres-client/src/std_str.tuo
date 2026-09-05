@@ -1,0 +1,1097 @@
+// std::str — string algorithms over the byte-level `Str`/`String` builtins.
+//
+// This module is entirely executable: every function is pure byte computation,
+// runs through the reference interpreter, and every spec below proves it.
+//
+// The runnable core gives two string types and a small builtin surface over
+// each:
+//   * `Str` — a borrowed, read-only fat pointer (`std::str::len`/`byte_at`/
+//     `slice`, and `==` for content equality);
+//   * `String` — an owned, growable buffer (`std::string::empty`/`from_str`/
+//     `push_byte`/`append`/`concat`/`len`/`byte_at`/`slice`).
+// Those builtins are the *primitive* layer — indexing, slicing, length. This
+// module never re-spells them; it composes them into the algorithms a caller
+// actually reaches for (search, prefix/suffix tests, trimming, counting,
+// all/first replacement, separator splitting and joining, and a named
+// string-builder idiom over the owned `String`) and the two conversions
+// between an integer and its decimal text. `split`/`join` (ADR-0012 Stage C)
+// ride the generic `Array[T]` element surface that ADR-0012 landed: `split`
+// produces an `Array[String]` of owned pieces, `join` consumes an `Array[Str]`
+// of borrowed pieces. Everything present is byte-oriented: `Str` in the
+// runnable core is a sequence of bytes, so "length" and "index" are byte
+// counts, and the ASCII helpers below (`to_upper`, `is_digit`) act on the
+// ASCII byte range and pass every other byte through unchanged — honest for
+// ASCII text, and never claiming a Unicode algorithm the core does not
+// implement.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax (`s.trim()`) is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+
+module std::str;
+
+// ----------------------------------------------------------------------------
+// Search and membership over a borrowed `Str`.
+// ----------------------------------------------------------------------------
+
+/// The index of the first byte equal to `needle` at or after 0, or `None` when
+/// no byte matches. `needle` is a byte value (`0..=255`).
+///
+/// # Example
+/// ```tuo
+/// let at = std::str::index_of_byte("hello", 108); // Some { value: 2 } ('l')
+/// ```
+pub fn index_of_byte(in s: Str, take needle: Int) -> Option[Int] {
+    var i = 0;
+    while i < std::str::len(s) {
+        if std::str::byte_at(s, i) == needle {
+            return Some { value: i };
+        }
+        i = i + 1;
+    }
+    None
+}
+
+/// Does `s` contain the byte `needle` anywhere?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::contains_byte("hello", 101); // true ('e')
+/// ```
+pub fn contains_byte(in s: Str, take needle: Int) -> Bool {
+    match index_of_byte(s, needle) {
+        Some { value } => true,
+        None => false,
+    }
+}
+
+/// The index at which `needle` first occurs as a contiguous substring of `s`,
+/// or `None` when it does not occur. The empty needle occurs at index 0.
+///
+/// A straightforward byte-by-byte scan (no suffix-automaton cleverness): the
+/// runnable core has bounded loops and this is the obvious, correct algorithm.
+///
+/// # Example
+/// ```tuo
+/// let at = std::str::find("hello world", "world"); // Some { value: 6 }
+/// ```
+pub fn find(in s: Str, in needle: Str) -> Option[Int] {
+    let n = std::str::len(s);
+    let m = std::str::len(needle);
+    if m == 0 {
+        return Some { value: 0 };
+    }
+    if m > n {
+        return None;
+    }
+    var start = 0;
+    while start <= n - m {
+        var j = 0;
+        var matched = true;
+        while j < m {
+            if std::str::byte_at(s, start + j) != std::str::byte_at(needle, j) {
+                matched = false;
+                j = m; // break the inner scan
+            } else {
+                j = j + 1;
+            }
+        }
+        if matched {
+            return Some { value: start };
+        }
+        start = start + 1;
+    }
+    None
+}
+
+/// Does `s` contain `needle` as a contiguous substring?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::contains("hello world", "o w"); // true
+/// ```
+pub fn contains(in s: Str, in needle: Str) -> Bool {
+    match find(s, needle) {
+        Some { value } => true,
+        None => false,
+    }
+}
+
+/// Does `s` begin with `prefix` (byte-wise)? The empty prefix always matches.
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::starts_with("GET /health", "GET"); // true
+/// ```
+pub fn starts_with(in s: Str, in prefix: Str) -> Bool {
+    let n = std::str::len(prefix);
+    if std::str::len(s) < n {
+        false
+    } else {
+        std::str::slice(s, 0, n) == prefix
+    }
+}
+
+/// Does `s` end with `suffix` (byte-wise)? The empty suffix always matches.
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::ends_with("file.tuo", ".tuo"); // true
+/// ```
+pub fn ends_with(in s: Str, in suffix: Str) -> Bool {
+    let n = std::str::len(s);
+    let m = std::str::len(suffix);
+    if n < m {
+        false
+    } else {
+        std::str::slice(s, n - m, n) == suffix
+    }
+}
+
+/// How many non-overlapping occurrences of `needle` appear in `s`. The empty
+/// needle counts as `len(s) + 1` (the gaps between and around every byte),
+/// matching the conventional definition.
+///
+/// # Example
+/// ```tuo
+/// let n = std::str::count("banana", "a"); // 3
+/// ```
+pub fn count(in s: Str, in needle: Str) -> Int {
+    let n = std::str::len(s);
+    let m = std::str::len(needle);
+    if m == 0 {
+        return n + 1;
+    }
+    var total = 0;
+    var i = 0;
+    while i <= n - m {
+        if std::str::slice(s, i, i + m) == needle {
+            total = total + 1;
+            i = i + m; // non-overlapping: skip past the match
+        } else {
+            i = i + 1;
+        }
+    }
+    total
+}
+
+// ----------------------------------------------------------------------------
+// Replacement — scans a borrowed `Str` and builds a fresh owned `String`.
+//
+// These allocate (the result is a new `String`, since a replacement can change
+// the length), which the ADR-0009 allocator core and the ADR-0010 `as_str`
+// view together make expressible in the pure executable tier: build the output
+// by pushing byte slices of the input, then view the result back as a `Str`
+// when a spec needs to compare it. There is deliberately one `replace` (all
+// occurrences) and one `replace_first` (just the first) — no third spelling.
+//
+// An empty `from` matches nothing and yields a copy of `s` unchanged; this is
+// the honest choice (the alternative — inserting `to` between every byte —
+// is a surprising behavior no caller reaches for by that name).
+// ----------------------------------------------------------------------------
+
+/// `s` with **every** non-overlapping occurrence of `from` replaced by `to`, as
+/// a fresh owned `String`. An empty `from` yields a copy of `s` unchanged.
+///
+/// A byte-by-byte scan: at each position, if `from` matches, append `to` and
+/// skip past the match; otherwise append the single byte and advance one.
+///
+/// # Example
+/// ```tuo
+/// let r = std::str::replace("a.b.c", ".", "/"); // a String holding "a/b/c"
+/// ```
+pub fn replace(in s: Str, in from: Str, in to: Str) -> String {
+    let n = std::str::len(s);
+    let m = std::str::len(from);
+    var out = std::string::empty();
+    if m == 0 {
+        // Nothing to match: copy the input through unchanged.
+        std::string::append(out, s);
+        return out;
+    }
+    var i = 0;
+    while i < n {
+        if i + m <= n && std::str::slice(s, i, i + m) == from {
+            std::string::append(out, to);
+            i = i + m;
+        } else {
+            std::string::push_byte(out, std::str::byte_at(s, i));
+            i = i + 1;
+        }
+    }
+    out
+}
+
+/// `s` with only the **first** occurrence of `from` replaced by `to`, as a fresh
+/// owned `String`. If `from` does not occur (or is empty), the result is a copy
+/// of `s` unchanged.
+///
+/// # Example
+/// ```tuo
+/// let r = std::str::replace_first("a.b.c", ".", "/"); // "a/b.c"
+/// ```
+pub fn replace_first(in s: Str, in from: Str, in to: Str) -> String {
+    let n = std::str::len(s);
+    let m = std::str::len(from);
+    var out = std::string::empty();
+    if m == 0 {
+        std::string::append(out, s);
+        return out;
+    }
+    let at = find(s, from);
+    match at {
+        None => {
+            std::string::append(out, s);
+            out
+        },
+        Some { value } => {
+            std::string::append(out, std::str::slice(s, 0, value));
+            std::string::append(out, to);
+            std::string::append(out, std::str::slice(s, value + m, n));
+            out
+        },
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Splitting and joining — the sequence layer over strings (ADR-0012 Stage C).
+//
+// `split` produces an `Array[String]` of **owned** pieces (each copied out of
+// the input with `std::string::from_str`), so the result escapes its function
+// freely — no borrow scope at the call site. `join` consumes an `Array[Str]`
+// of **borrowed** pieces (view an owned piece with `std::string::as_str` at
+// the call site if needed). One input form, one output form — no combinatorial
+// API. The pair follows Go's `strings.Split`/`Join` semantics: splitting
+// `"a.b.c"` on `"."` yields `["a", "b", "c"]`, splitting the empty string
+// yields one empty piece, separators do not overlap, and
+// `join(split(s, sep), sep)` reproduces `s`.
+//
+// An empty separator yields the whole input as a single piece (Go's `Split`
+// with `""` splits into UTF-8 runes — a Unicode algorithm the byte-level core
+// does not implement, so this module does not fake it; the doc says so).
+// ----------------------------------------------------------------------------
+
+/// The pieces of `s` between non-overlapping occurrences of `sep`, in order, as
+/// a fresh `Array[String]` of owned copies. Adjacent separators yield empty
+/// pieces; a leading/trailing separator yields a leading/trailing empty piece;
+/// the empty input yields one empty piece; an empty `sep` yields the whole
+/// input as a single piece (no rune splitting — see the section note).
+///
+/// # Example
+/// ```tuo
+/// let parts = std::str::split("a.b.c", "."); // ["a", "b", "c"], len 3
+/// ```
+pub fn split(in s: Str, in sep: Str) -> Array[String] {
+    var out = std::array::empty();
+    let n = std::str::len(s);
+    let m = std::str::len(sep);
+    if m == 0 {
+        std::array::push(out, std::string::from_str(s));
+        return out;
+    }
+    var start = 0;
+    var i = 0;
+    while i + m <= n {
+        if std::str::slice(s, i, i + m) == sep {
+            std::array::push(out, std::string::from_str(std::str::slice(s, start, i)));
+            i = i + m; // non-overlapping: skip past the separator
+            start = i;
+        } else {
+            i = i + 1;
+        }
+    }
+    std::array::push(out, std::string::from_str(std::str::slice(s, start, n)));
+    out
+}
+
+/// The pieces of `parts` concatenated in order with `sep` between consecutive
+/// pieces (none leading, none trailing), as a fresh owned `String`. An empty
+/// array yields the empty string; a single piece yields that piece alone.
+///
+/// # Example
+/// ```tuo
+/// var parts = std::array::empty();
+/// std::array::push(parts, "a");
+/// std::array::push(parts, "b");
+/// let joined = std::str::join(parts, "-"); // a String holding "a-b"
+/// ```
+pub fn join(in parts: Array[Str], in sep: Str) -> String {
+    var out = std::string::empty();
+    let n = std::array::len(parts);
+    var i = 0;
+    while i < n {
+        if i > 0 {
+            std::string::append(out, sep);
+        }
+        std::string::append(out, std::array::get(parts, i));
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Trimming — produces a new borrowed sub-slice of `s` (no allocation).
+//
+// "Whitespace" here is the ASCII set the runnable core sees on a line: space
+// (32), tab (9), carriage return (13), and newline (10). A byte outside that
+// set ends the trim. The result is a slice of the *same* backing bytes, so it
+// borrows `s` and allocates nothing.
+// ----------------------------------------------------------------------------
+
+/// Is byte `b` ASCII whitespace (space, tab, CR, or LF)?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::is_space(32); // true (' ')
+/// ```
+pub fn is_space(take b: Int) -> Bool {
+    b == 32 || b == 9 || b == 13 || b == 10
+}
+
+/// `s` with leading and trailing ASCII whitespace removed, as a sub-slice.
+///
+/// # Example
+/// ```tuo
+/// let t = std::str::trim("  hi  "); // "hi"
+/// ```
+pub fn trim(in s: Str) -> Str {
+    let n = std::str::len(s);
+    var start = 0;
+    while start < n && is_space(std::str::byte_at(s, start)) {
+        start = start + 1;
+    }
+    var end = n;
+    while end > start && is_space(std::str::byte_at(s, end - 1)) {
+        end = end - 1;
+    }
+    std::str::slice(s, start, end)
+}
+
+// ----------------------------------------------------------------------------
+// ASCII case and classification. These operate on the ASCII byte range and
+// pass every other byte through unchanged — they are byte helpers, not a
+// Unicode algorithm, and the doc says so.
+// ----------------------------------------------------------------------------
+
+/// Is byte `b` an ASCII decimal digit (`'0'..='9'`)?
+///
+/// # Example
+/// ```tuo
+/// let b = std::str::is_digit(53); // true ('5')
+/// ```
+pub fn is_digit(take b: Int) -> Bool {
+    b >= 48 && b <= 57
+}
+
+/// The ASCII-uppercase form of `s`, as a fresh owned `String`. Bytes `'a'..='z'`
+/// map to `'A'..='Z'`; every other byte is copied unchanged.
+///
+/// # Example
+/// ```tuo
+/// let u = std::str::to_upper("Hi!"); // a String holding "HI!"
+/// ```
+pub fn to_upper(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b >= 97 && b <= 122 {
+            std::string::push_byte(out, b - 32);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The ASCII-lowercase form of `s`, as a fresh owned `String`. Bytes `'A'..='Z'`
+/// map to `'a'..='z'`; every other byte is copied unchanged.
+///
+/// # Example
+/// ```tuo
+/// let l = std::str::to_lower("Hi!"); // a String holding "hi!"
+/// ```
+pub fn to_lower(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b >= 65 && b <= 90 {
+            std::string::push_byte(out, b + 32);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// String builder — accumulate text piece by piece into an owned `String`.
+//
+// In v0 the owned `String` *is* the builder: `std::string::empty` gives a fresh
+// buffer and `append`/`push_byte` grow it in place (amortized doubling, per the
+// ADR-0009 allocator core). This layer is the named, obvious spelling of the
+// *accumulation* idiom — the equivalent of Go's `strings.Builder` — so a caller
+// writes `builder()` / `push` / `push_int` instead of reaching for the
+// `std::string` primitives directly. There is no separate builder *type* (v0
+// has no methods).
+//
+// There is deliberately **no** `finish` function. Per ADR-0010, a `Str` view of
+// a `String` is a within-block borrow and may not escape the function that owns
+// the `String` (`O0011`): a wrapper returning `std::string::as_str(b)` would be
+// refused. So to read the built text, call `std::string::as_str(b)` directly at
+// the use site — where the builder `b` is still live — or keep the owned
+// `String`. The builder helpers only *grow* the buffer; viewing it is the
+// caller's in-scope read.
+// ----------------------------------------------------------------------------
+
+/// A fresh, empty string builder — an owned `String` ready to be grown by
+/// `push`/`push_int`. Exactly `std::string::empty`, named for the builder idiom.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "x = ");
+/// ```
+pub fn builder() -> String {
+    std::string::empty()
+}
+
+/// Append the bytes of `piece` to the builder `b`, in place.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "hello ");
+/// std::str::push(b, "world"); // b now holds "hello world"
+/// ```
+pub fn push(mut b: String, in piece: Str) {
+    std::string::append(b, piece);
+}
+
+/// Append the decimal text of the integer `n` to the builder `b`, in place
+/// (a leading `-` for a negative value). Composes `to_string` — the one
+/// integer→text conversion — so a builder never needs a second itoa.
+///
+/// # Example
+/// ```tuo
+/// var b = std::str::builder();
+/// std::str::push(b, "count=");
+/// std::str::push_int(b, 42); // b now holds "count=42"
+/// ```
+pub fn push_int(mut b: String, take n: Int) {
+    std::string::append(b, std::string::as_str(to_string(n)));
+}
+
+// ----------------------------------------------------------------------------
+// Integer ⇄ decimal text (the `strconv` layer).
+//
+// `parse_int` is Atoi over a borrowed `Str`; `to_string` is Itoa into a fresh
+// owned `String`. They are the single, obvious bridge between the integer and
+// its human text — there is no second `format`/`itoa` spelling. `parse_int`
+// returns a `Result` because failure is data (empty, a stray non-digit), not a
+// trap.
+// ----------------------------------------------------------------------------
+
+/// Parse a decimal integer from `s` (optionally leading `-`), or an `Err`
+/// naming why it failed. Accepts `"0"`, `"42"`, `"-7"`; rejects the empty
+/// string, a lone `"-"`, and any string with a non-digit byte. Does not skip
+/// surrounding whitespace — `trim` first if the input may be padded.
+///
+/// Overflow of the accumulator traps (the same honest `*`/`+` contract), so a
+/// caller parsing untrusted extremes should bound the input length first.
+///
+/// # Example
+/// ```tuo
+/// // match std::str::parse_int("-42") { Ok { value } => value, Err { error } => 0 } // -42
+/// ```
+pub fn parse_int(in s: Str) -> Result[Int, Str] {
+    let n = std::str::len(s);
+    if n == 0 {
+        return Err { error: "empty" };
+    }
+    var i = 0;
+    var neg = false;
+    if std::str::byte_at(s, 0) == 45 {
+        neg = true;
+        i = 1;
+        if n == 1 {
+            return Err { error: "lone minus" };
+        }
+    }
+    var acc = 0;
+    while i < n {
+        let b = std::str::byte_at(s, i);
+        if b < 48 || b > 57 {
+            return Err { error: "non-digit" };
+        }
+        acc = acc * 10 + (b - 48);
+        i = i + 1;
+    }
+    if neg {
+        Ok { value: 0 - acc }
+    } else {
+        Ok { value: acc }
+    }
+}
+
+/// The decimal text of `n` as a fresh owned `String`, with a leading `-` for a
+/// negative value. `to_string(0)` is `"0"`.
+///
+/// # Example
+/// ```tuo
+/// let s = std::str::to_string(0 - 42); // "-42"
+/// ```
+pub fn to_string(take n: Int) -> String {
+    if n == 0 {
+        return std::string::from_str("0");
+    }
+    var neg = false;
+    var m = n;
+    if m < 0 {
+        neg = true;
+        m = 0 - m;
+    }
+    // Collect digits least-significant first, then emit most-significant first.
+    var digits = std::array::empty();
+    while m > 0 {
+        std::array::push(digits, m % 10);
+        m = m / 10;
+    }
+    var out = std::string::empty();
+    if neg {
+        std::string::push_byte(out, 45); // '-'
+    }
+    var i = std::array::len(digits) - 1;
+    while i >= 0 {
+        std::string::push_byte(out, 48 + std::array::get(digits, i));
+        i = i - 1;
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Float ⇄ decimal text (the rest of the `strconv` layer).
+//
+// `parse_float` is ParseFloat over a borrowed `Str`; `float_to_string` is
+// FormatFloat into a fresh owned `String` at a fixed decimal count. Both are
+// deterministic pure computation over `Float` arithmetic. They are honest
+// about their precision: the digits accumulate in binary `Float` arithmetic,
+// so a value is the arithmetic result of its digits — for typical inputs the
+// nearest double, but the final ulp is not a promise (a correctly-rounded
+// strtod is future work, and the doc says so rather than implying one).
+// ----------------------------------------------------------------------------
+
+/// Parse a decimal floating-point number from `s`: an optional leading `-`,
+/// integer digits, an optional `.` with fraction digits, and an optional
+/// `e`/`E` exponent (itself optionally signed) — `"1.5"`, `"-0.25"`,
+/// `"6.022e23"`, `"1E-2"`. Rejects the empty string, a bare `-`, a dot
+/// without digits on both sides (`"1."`, `".5"` — the same rule as the float
+/// literal grammar), a bare exponent, and any other stray byte. Does not skip
+/// surrounding whitespace — `trim` first if the input may be padded.
+///
+/// The value is accumulated with binary `Float` arithmetic (digits, then the
+/// exponent as repeated scaling), so it is exact whenever the mathematical
+/// value is exactly representable and within an ulp of the ideal otherwise;
+/// a magnitude beyond the double range overflows to infinity rather than
+/// failing, mirroring `Float` arithmetic itself.
+///
+/// # Example
+/// ```tuo
+/// // match std::str::parse_float("1.5") { Ok { value } => value, Err { error } => 0.0 } // 1.5
+/// ```
+pub fn parse_float(in s: Str) -> Result[Float, Str] {
+    let n = std::str::len(s);
+    if n == 0 {
+        return Err { error: "empty" };
+    }
+    var i = 0;
+    var neg = false;
+    if std::str::byte_at(s, 0) == 45 {
+        neg = true;
+        i = 1;
+    }
+    var mantissa = 0.0;
+    var int_digits = 0;
+    while i < n {
+        let b = std::str::byte_at(s, i);
+        if b < 48 || b > 57 {
+            break;
+        }
+        mantissa = mantissa * 10.0 + ((b - 48) as Float);
+        int_digits = int_digits + 1;
+        i = i + 1;
+    }
+    if int_digits == 0 {
+        return Err { error: "missing integer digits" };
+    }
+    if i < n && std::str::byte_at(s, i) == 46 {
+        i = i + 1;
+        var frac_digits = 0;
+        var scale = 1.0;
+        while i < n {
+            let b = std::str::byte_at(s, i);
+            if b < 48 || b > 57 {
+                break;
+            }
+            mantissa = mantissa * 10.0 + ((b - 48) as Float);
+            scale = scale * 10.0;
+            frac_digits = frac_digits + 1;
+            i = i + 1;
+        }
+        if frac_digits == 0 {
+            return Err { error: "missing fraction digits" };
+        }
+        mantissa = mantissa / scale;
+    }
+    if i < n {
+        let e = std::str::byte_at(s, i);
+        if e != 101 && e != 69 {
+            return Err { error: "non-digit" };
+        }
+        i = i + 1;
+        var exp_neg = false;
+        if i < n {
+            let sign = std::str::byte_at(s, i);
+            if sign == 43 {
+                i = i + 1;
+            } else if sign == 45 {
+                exp_neg = true;
+                i = i + 1;
+            }
+        }
+        var exp = 0;
+        var exp_digits = 0;
+        while i < n {
+            let b = std::str::byte_at(s, i);
+            if b < 48 || b > 57 {
+                break;
+            }
+            exp = exp * 10 + (b - 48);
+            exp_digits = exp_digits + 1;
+            i = i + 1;
+        }
+        if exp_digits == 0 {
+            return Err { error: "missing exponent digits" };
+        }
+        if i < n {
+            return Err { error: "non-digit" };
+        }
+        // Beyond ±400 every double has already saturated to infinity or
+        // flushed to zero; clamping bounds the scaling loop.
+        if exp > 400 {
+            exp = 400;
+        }
+        var k = 0;
+        while k < exp {
+            if exp_neg {
+                mantissa = mantissa / 10.0;
+            } else {
+                mantissa = mantissa * 10.0;
+            }
+            k = k + 1;
+        }
+    }
+    if i < n {
+        return Err { error: "non-digit" };
+    }
+    if neg {
+        Ok { value: 0.0 - mantissa }
+    } else {
+        Ok { value: mantissa }
+    }
+}
+
+/// The decimal text of the float `x` with exactly `decimals` fraction digits
+/// (clamped to `0..=17`), rounded half-up on the scaled value: `"1.50"`,
+/// `"-2.25"`, `"0.13"`. Non-finite values render as `"NaN"`, `"inf"`, and
+/// `"-inf"`. A magnitude too large for fixed-point digits (the scaled value
+/// would leave the exact integer range) renders in scientific form instead —
+/// the same digits over a normalized mantissa plus `e` and the power of ten
+/// (`"1.0e19"`) — so every float has a rendering and none is silently wrong.
+///
+/// # Example
+/// ```tuo
+/// let s = std::str::float_to_string(1.5, 2); // "1.50"
+/// ```
+pub fn float_to_string(take x: Float, take decimals: Int) -> String {
+    if x != x {
+        return std::string::from_str("NaN");
+    }
+    if x != 0.0 && x / 2.0 == x {
+        if x < 0.0 {
+            return std::string::from_str("-inf");
+        }
+        return std::string::from_str("inf");
+    }
+    var d = decimals;
+    if d < 0 {
+        d = 0;
+    }
+    if d > 17 {
+        d = 17;
+    }
+    var out = std::string::empty();
+    var m = x;
+    if m < 0.0 {
+        std::string::push_byte(out, 45); // '-'
+        m = 0.0 - m;
+    }
+    var scale = 1.0;
+    var k = 0;
+    while k < d {
+        scale = scale * 10.0;
+        k = k + 1;
+    }
+    if m >= 1000000000000000000.0 / scale {
+        // Fixed-point digits would overflow the exact integer range:
+        // normalize to [1, 10) and render mantissa-and-exponent instead.
+        var exp = 0;
+        var norm = m;
+        while norm >= 10.0 {
+            norm = norm / 10.0;
+            exp = exp + 1;
+        }
+        std::string::append(out, std::string::as_str(float_to_string(norm, d)));
+        std::string::push_byte(out, 101); // 'e'
+        std::string::append(out, std::string::as_str(to_string(exp)));
+        return out;
+    }
+    let unit = scale as Int;
+    let total = (m * scale + 0.5) as Int;
+    std::string::append(out, std::string::as_str(to_string(total / unit)));
+    if d > 0 {
+        std::string::push_byte(out, 46); // '.'
+        let frac = total % unit;
+        var w = unit / 10;
+        while w > 0 {
+            std::string::push_byte(out, 48 + ((frac / w) % 10));
+            w = w / 10;
+        }
+    }
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Specs — every function above runs through the reference interpreter. Byte
+// values are written as their ASCII code points, the same convention the
+// builtins use.
+//
+// A local `or` unwraps a Result[Int, Str] to a scalar (equality in v0 is on
+// scalars), and a local `opt_or` does the same for Option[Int].
+// ----------------------------------------------------------------------------
+
+fn or(in r: Result[Int, Str], take fallback: Int) -> Int {
+    match r {
+        Ok { value } => value,
+        Err { error } => fallback,
+    }
+}
+
+fn or_float(in r: Result[Float, Str], take fallback: Float) -> Float {
+    match r {
+        Ok { value } => value,
+        Err { error } => fallback,
+    }
+}
+
+fn opt_or(in o: Option[Int], take fallback: Int) -> Int {
+    match o {
+        Some { value } => value,
+        None => fallback,
+    }
+}
+
+// `Array == Array` over non-scalar elements is deferred, so split's specs
+// compare *observations*: `nth_is` reads the i-th owned piece and compares its
+// text through the ADR-0010 `as_str` view (the piece is bound locally, so the
+// view stays inside its borrow).
+fn nth_is(in xs: Array[String], take i: Int, in want: Str) -> Bool {
+    let piece = std::array::get(xs, i);
+    std::string::as_str(piece) == want
+}
+
+// The split→join round-trip over a three-piece input: split, view each owned
+// piece back to a `Str`, join with the same separator, and compare against the
+// original text. Exercises `Array[Str]` holding `String`-derived views (the
+// ADR-0012 §6 borrow-provenance case) with every source piece still live.
+fn rejoins_3(in s: Str, in sep: Str) -> Bool {
+    let parts = split(s, sep);
+    if std::array::len(parts) != 3 {
+        return false;
+    }
+    let p0 = std::array::get(parts, 0);
+    let p1 = std::array::get(parts, 1);
+    let p2 = std::array::get(parts, 2);
+    var views = std::array::empty();
+    std::array::push(views, std::string::as_str(p0));
+    std::array::push(views, std::string::as_str(p1));
+    std::array::push(views, std::string::as_str(p2));
+    std::string::as_str(join(views, sep)) == s
+}
+
+spec index_of_byte {
+    then opt_or(index_of_byte("hello", 108), 0 - 1) == 2;
+    then opt_or(index_of_byte("hello", 104), 0 - 1) == 0;
+    then opt_or(index_of_byte("hello", 122), 0 - 1) == 0 - 1;
+    then opt_or(index_of_byte("", 97), 0 - 1) == 0 - 1;
+}
+
+spec contains_byte {
+    then contains_byte("hello", 101);
+    then !contains_byte("hello", 122);
+}
+
+spec find {
+    then opt_or(find("hello world", "world"), 0 - 1) == 6;
+    then opt_or(find("hello world", "hello"), 0 - 1) == 0;
+    then opt_or(find("hello world", "xyz"), 0 - 1) == 0 - 1;
+    then opt_or(find("aaa", "aa"), 0 - 1) == 0;
+    then opt_or(find("abc", ""), 0 - 1) == 0; // empty needle at 0
+    then opt_or(find("ab", "abc"), 0 - 1) == 0 - 1; // needle longer than haystack
+}
+
+spec contains {
+    then contains("hello world", "o w");
+    then contains("hello", "hello");
+    then !contains("hello", "world");
+}
+
+spec starts_with {
+    then starts_with("GET /health", "GET");
+    then starts_with("anything", "");
+    then !starts_with("GET", "GETX");
+    then !starts_with("POST", "GET");
+}
+
+spec ends_with {
+    then ends_with("file.tuo", ".tuo");
+    then ends_with("anything", "");
+    then !ends_with("file.tuo", ".rs");
+    then !ends_with("hi", "ahi");
+}
+
+spec count {
+    then count("banana", "a") == 3;
+    then count("banana", "na") == 2;
+    then count("aaaa", "aa") == 2; // non-overlapping
+    then count("hello", "z") == 0;
+    then count("abc", "") == 4; // len + 1
+}
+
+// `replace`/`replace_first` return an owned `String`; compare via the ADR-0010
+// `as_str` view so the assertion reads as the resulting text.
+
+spec replace {
+    then std::string::as_str(replace("a.b.c", ".", "/")) == "a/b/c";
+    then std::string::as_str(replace("banana", "a", "o")) == "bonono";
+    then std::string::as_str(replace("aaaa", "aa", "b")) == "bb"; // non-overlapping
+    then std::string::as_str(replace("hello", "z", "Z")) == "hello"; // no match
+    then std::string::as_str(replace("abc", "", "X")) == "abc"; // empty from: unchanged
+    then std::string::as_str(replace("a.b", ".", "")) == "ab"; // delete
+    then std::string::as_str(replace("x", "x", "yy")) == "yy"; // grow
+}
+
+spec replace_first {
+    then std::string::as_str(replace_first("a.b.c", ".", "/")) == "a/b.c";
+    then std::string::as_str(replace_first("banana", "a", "o")) == "bonana";
+    then std::string::as_str(replace_first("hello", "z", "Z")) == "hello"; // no match
+    then std::string::as_str(replace_first("abc", "", "X")) == "abc"; // empty from
+    then std::string::as_str(replace_first("aa", "a", "bbb")) == "bbba"; // grow, first only
+}
+
+spec split {
+    // The Go-parity core: "a.b.c" on "." → ["a", "b", "c"].
+    let parts = split("a.b.c", ".");
+    then std::array::len(parts) == 3;
+    then nth_is(parts, 0, "a");
+    then nth_is(parts, 1, "b");
+    then nth_is(parts, 2, "c");
+    // Adjacent separators yield an empty middle piece; a trailing separator a
+    // trailing empty piece.
+    let gaps = split("a..b.", ".");
+    then std::array::len(gaps) == 4;
+    then nth_is(gaps, 0, "a");
+    then nth_is(gaps, 1, "");
+    then nth_is(gaps, 2, "b");
+    then nth_is(gaps, 3, "");
+    // No separator present → the whole input as one piece.
+    let whole = split("abc", ".");
+    then std::array::len(whole) == 1;
+    then nth_is(whole, 0, "abc");
+    // Empty input → one empty piece (Go's Split("", sep)).
+    let nothing = split("", ".");
+    then std::array::len(nothing) == 1;
+    then nth_is(nothing, 0, "");
+    // Empty separator → the whole input as a single piece (documented — no
+    // rune splitting in the byte-level core).
+    let nosep = split("ab", "");
+    then std::array::len(nosep) == 1;
+    then nth_is(nosep, 0, "ab");
+    // A multi-byte separator, non-overlapping.
+    let multi = split("x--y--z", "--");
+    then std::array::len(multi) == 3;
+    then nth_is(multi, 1, "y");
+    // The round-trip law: join(split(s, sep), sep) == s.
+    then rejoins_3("a.b.c", ".");
+    then rejoins_3("x--y--z", "--");
+}
+
+spec join {
+    var parts = std::array::empty();
+    std::array::push(parts, "a");
+    std::array::push(parts, "b");
+    std::array::push(parts, "c");
+    then std::string::as_str(join(parts, ".")) == "a.b.c";
+    // `join` borrows its array, so the same pieces join again with another
+    // separator — including a multi-byte one.
+    then std::string::as_str(join(parts, "--")) == "a--b--c";
+    // A single piece emits no separator at all.
+    var solo = std::array::empty();
+    std::array::push(solo, "only");
+    then std::string::as_str(join(solo, ".")) == "only";
+    // An empty array joins to the empty string.
+    let none: Array[Str] = std::array::empty();
+    then std::string::as_str(join(none, ".")) == "";
+}
+
+spec is_space {
+    then is_space(32);
+    then is_space(9);
+    then is_space(10);
+    then is_space(13);
+    then !is_space(97);
+}
+
+spec trim {
+    then trim("  hi  ") == "hi";
+    then trim("hi") == "hi";
+    then trim("   ") == "";
+    then trim("\thi\n") == "hi";
+    then trim("") == "";
+}
+
+spec is_digit {
+    then is_digit(48);
+    then is_digit(57);
+    then !is_digit(47);
+    then !is_digit(58);
+    then !is_digit(97);
+}
+
+// `to_upper`/`to_lower`/`to_string` return an owned `String`; each spec views
+// the result through `std::string::as_str` (ADR-0010) and compares against a
+// bare `Str` literal, so the assertion reads as the resulting text — the
+// composition Stage C of that ADR names.
+
+spec to_upper {
+    then std::string::as_str(to_upper("Hi!")) == "HI!";
+    then std::string::as_str(to_upper("abc")) == "ABC";
+    then std::string::as_str(to_upper("ABC")) == "ABC";
+    then std::string::as_str(to_upper("a1z")) == "A1Z";
+}
+
+spec to_lower {
+    then std::string::as_str(to_lower("Hi!")) == "hi!";
+    then std::string::as_str(to_lower("ABC")) == "abc";
+    then std::string::as_str(to_lower("abc")) == "abc";
+    then std::string::as_str(to_lower("A1Z")) == "a1z";
+}
+
+// The builder layer: build a `String` piece by piece, then read it in-block with
+// `std::string::as_str` (per ADR-0010, the view stays where the builder lives).
+// Statements before `then` accumulate into the builder, exactly as a caller
+// would; the `then` asserts on the accumulated text.
+
+spec builder {
+    var b = builder();
+    push(b, "hello ");
+    push(b, "world");
+    then std::string::as_str(b) == "hello world";
+}
+
+spec push {
+    var b = builder();
+    push(b, ""); // empty piece is a no-op
+    push(b, "x");
+    then std::string::as_str(b) == "x";
+    // The builder keeps growing after a read; the view is re-taken each time.
+    push(b, "yz");
+    then std::string::as_str(b) == "xyz";
+}
+
+spec push_int {
+    var b = builder();
+    push(b, "count=");
+    push_int(b, 42);
+    push(b, ", n=");
+    push_int(b, 0 - 7); // negative gets a leading '-'
+    then std::string::as_str(b) == "count=42, n=-7";
+}
+
+spec parse_int {
+    then or(parse_int("123"), 0 - 1) == 123;
+    then or(parse_int("0"), 0 - 1) == 0;
+    then or(parse_int("-42"), 0) == 0 - 42;
+    then or(parse_int(""), 999) == 999;
+    then or(parse_int("-"), 999) == 999;
+    then or(parse_int("12x"), 999) == 999;
+    then or(parse_int("x12"), 999) == 999;
+}
+
+spec to_string {
+    then std::string::as_str(to_string(0)) == "0";
+    then std::string::as_str(to_string(123)) == "123";
+    then std::string::as_str(to_string(0 - 42)) == "-42";
+    then std::string::as_str(to_string(7)) == "7";
+    // The round-trip closes through the owned buffer itself (ADR-0010): the
+    // digits `to_string` emits parse straight back through the `as_str` view.
+    then or(parse_int(std::string::as_str(to_string(9876))), 0 - 1) == 9876;
+    then or(parse_int(std::string::as_str(to_string(0 - 500))), 0) == 0 - 500;
+    then std::string::byte_at(to_string(9876), 0) == 57; // '9'
+    then std::string::len(to_string(9876)) == 4;
+}
+
+spec parse_float {
+    // Exactly representable values compare exactly.
+    then or_float(parse_float("1.5"), 0.0) == 1.5;
+    then or_float(parse_float("0.25"), 0.0) == 0.25;
+    then or_float(parse_float("-42"), 0.0) == 0.0 - 42.0;
+    then or_float(parse_float("0"), 0.0 - 1.0) == 0.0;
+    then or_float(parse_float("2e3"), 0.0) == 2000.0;
+    then or_float(parse_float("1.5E2"), 0.0) == 150.0;
+    then or_float(parse_float("25e-2"), 0.0) == 0.25;
+    // A negative-exponent value that is not exactly representable is within
+    // an ulp of the ideal; the spec asserts the honest bound, not bit
+    // equality.
+    then or_float(parse_float("1e-2"), 0.0) > 0.009;
+    then or_float(parse_float("1e-2"), 0.0) < 0.011;
+    // The failure vocabulary, mirroring the float literal grammar.
+    then or_float(parse_float(""), 9.0) == 9.0;
+    then or_float(parse_float("-"), 9.0) == 9.0;
+    then or_float(parse_float("1."), 9.0) == 9.0;
+    then or_float(parse_float(".5"), 9.0) == 9.0;
+    then or_float(parse_float("1e"), 9.0) == 9.0;
+    then or_float(parse_float("1x"), 9.0) == 9.0;
+    then or_float(parse_float("x1"), 9.0) == 9.0;
+}
+
+spec float_to_string {
+    then std::string::as_str(float_to_string(1.5, 2)) == "1.50";
+    then std::string::as_str(float_to_string(0.0, 0)) == "0";
+    then std::string::as_str(float_to_string(0.0 - 2.25, 2)) == "-2.25";
+    // Half-up rounding on the scaled value: 0.125 scaled by 100 is 12.5.
+    then std::string::as_str(float_to_string(0.125, 2)) == "0.13";
+    // Non-finite renderings.
+    then std::string::as_str(float_to_string(0.0 / 0.0, 2)) == "NaN";
+    then std::string::as_str(float_to_string(1.0 / 0.0, 2)) == "inf";
+    then std::string::as_str(float_to_string(0.0 - 1.0 / 0.0, 2)) == "-inf";
+    // Too big for fixed-point digits: scientific form, never wrong digits.
+    then std::string::as_str(float_to_string(10000000000000000000.0, 1)) == "1.0e19";
+    // The round-trip closes: parse the digits float_to_string emits.
+    then or_float(parse_float(std::string::as_str(float_to_string(1.25, 2))), 0.0) == 1.25;
+}
