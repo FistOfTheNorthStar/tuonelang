@@ -58,6 +58,18 @@ use crate::ty::{
 ///   array indexing (`T0018`), trapping arithmetic (`T0019`), and calls to
 ///   unmarked functions (`T0020`) are all refused; `T0021` reports an
 ///   attribute this compiler does not recognize.
+/// - `T0022` — **warning**, not an error: the runnable-core advisory. A
+///   heap-wrapper (`Box`/`Shared`/`Weak`) **value** in a parameter, return,
+///   or `let`/`var` position type-checks and runs on the reference
+///   interpreter, but no native backend lowers it, so `tuo build`/`tuo run`
+///   will refuse it at storage-classification time. Reported here in the
+///   `Txxxx` namespace because it is a property of a written type, but
+///   *emitted* from `tuo-compiler`'s orchestration seam (`native_core`) —
+///   the stage crates' own "zero diagnostics" contracts stay untouched, and
+///   the advisory can consult what the whole pipeline knows. Wrapper
+///   **declarations** (a struct field, an enum payload) are deliberately not
+///   reported: they lower fine, and `T0016` recommends exactly that
+///   indirection to break a recursive type.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -156,6 +168,13 @@ pub(crate) struct Checker<'a> {
     /// consts, specs, and impl bodies) — the source node of recorded
     /// [`Checker::call_edges`].
     current_fn: Option<SymbolId>,
+    /// The builtin whose arguments are currently being checked, if any.
+    /// Set around a builtin call's argument checking so a `T0001` on an
+    /// argument can name the sibling builtin that *would* accept the type
+    /// the caller actually passed — the wrong-module fix (see
+    /// [`Checker::sibling_builtin_for`]). `None` everywhere else, so the
+    /// suggestion is offered only where it is meaningful.
+    current_callee: Option<Builtin>,
 }
 
 /// Type-check every body in `files`, using `resolution`'s stable symbols.
@@ -192,6 +211,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         frames: Vec::new(),
         fallback,
         current_fn: None,
+        current_callee: None,
         call_edges: BTreeMap::new(),
     };
     checker.install_builtin_signatures();
@@ -254,6 +274,26 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
 /// only the seed installed into `symbol_types`/`fns` (arity + a monomorphic
 /// fallback); every real call resolves its element type from the receiver, so
 /// these `Int` shapes are never the type a widened call is checked against.
+/// Does `candidate`'s first parameter accept a value of type `actual`?
+///
+/// Compared by *constructor*, not by full unification: the array and map
+/// builtins are element-parametric, so `Array[Str]` must count as accepted by
+/// an `Array[T]` parameter whatever `builtin_signature` spells its element as.
+/// This is only ever used to phrase a hint, so a coarse match is right —
+/// being wrong here costs a slightly-off suggestion, never an accepted
+/// program.
+fn builtin_first_param_accepts(candidate: Builtin, actual: &Ty) -> bool {
+    let (params, _) = builtin_signature(candidate);
+    let Some(first) = params.first() else {
+        return false;
+    };
+    match (first, actual) {
+        (Ty::Array(_), Ty::Array(_)) | (Ty::Map(..), Ty::Map(..)) => true,
+        (Ty::Str, Ty::Str) | (Ty::String, Ty::String) => true,
+        (a, b) => a == b,
+    }
+}
+
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
     let int_array = || Ty::Array(Box::new(Ty::int()));
     let int_map = || Ty::Map(Box::new(Ty::int()), Box::new(Ty::int()));
@@ -420,12 +460,46 @@ impl<'a> Checker<'a> {
     fn mismatch(&mut self, expected: &Ty, actual: &Ty, span: Span) {
         let expected_text = self.render(expected);
         let actual_text = self.render(actual);
-        self.push(
-            Diagnostic::error(code(1), "mismatched types", span)
-                .with_primary_label(format!("expected `{expected_text}`, found `{actual_text}`"))
-                .with_expected(StructuredValue::Type(expected_text))
-                .with_actual(StructuredValue::Type(actual_text)),
-        );
+        let mut diagnostic = Diagnostic::error(code(1), "mismatched types", span)
+            .with_primary_label(format!("expected `{expected_text}`, found `{actual_text}`"))
+            .with_expected(StructuredValue::Type(expected_text))
+            .with_actual(StructuredValue::Type(actual_text));
+        // The wrong-module fix: tuonelang has no methods, so `len` is spelled
+        // `std::str::len` or `std::string::len` or `std::array::len` or
+        // `std::map::len` depending on the receiver's type. Picking the wrong
+        // one is a type error whose *cause* is the module, not the argument —
+        // and the checker knows both the type actually passed and every
+        // sibling's signature, so it can name the one that would have worked
+        // instead of leaving the caller to guess.
+        if let Some(sibling) = self.sibling_builtin_for(actual) {
+            diagnostic = diagnostic.with_help(format!(
+                "`{}` takes `{}` — the same operation on this type lives in a different module",
+                sibling.qualified_name(),
+                self.render(actual),
+            ));
+        }
+        self.push(diagnostic);
+    }
+
+    /// The builtin that shares the current callee's short name but whose
+    /// first parameter accepts `actual` — the module the caller meant.
+    ///
+    /// Returns `None` when there is no current builtin callee, when the name
+    /// is owned by only that module (so there is nothing to have confused it
+    /// with), or when no sibling accepts the type — in which case the plain
+    /// mismatch is the honest report and inventing a suggestion would send
+    /// the caller somewhere equally wrong.
+    fn sibling_builtin_for(&mut self, actual: &Ty) -> Option<Builtin> {
+        let callee = self.current_callee?;
+        let actual = self.icx.apply(actual);
+        if matches!(actual, Ty::Error | Ty::Var(_)) {
+            return None;
+        }
+        Builtin::ALL.into_iter().find(|candidate| {
+            *candidate != callee
+                && candidate.name() == callee.name()
+                && builtin_first_param_accepts(*candidate, &actual)
+        })
     }
 
     /// Unify, reporting a `T0001` at `span` on failure.
@@ -3068,12 +3142,19 @@ impl<'a> Checker<'a> {
                     // `Int`. Handle them here rather than through the fixed
                     // `builtin_signature`, which cannot spell a type variable.
                     if let Some(builtin) = self.resolution.builtin(symbol) {
-                        if let Some(ret) = self.check_array_builtin_call(builtin, &args, span) {
-                            return ret;
-                        }
+                        // Remember which builtin is being called so an
+                        // argument `T0001` can name the sibling module whose
+                        // signature accepts what was actually passed.
+                        let outer = self.current_callee.replace(builtin);
+                        let array = self.check_array_builtin_call(builtin, &args, span);
                         // The `std::map` builtins are key/value-parametric the
                         // same way (ADR-0011).
-                        if let Some(ret) = self.check_map_builtin_call(builtin, &args, span) {
+                        let ret = match array {
+                            Some(ret) => Some(ret),
+                            None => self.check_map_builtin_call(builtin, &args, span),
+                        };
+                        self.current_callee = outer;
+                        if let Some(ret) = ret {
                             return ret;
                         }
                     }
@@ -3081,7 +3162,10 @@ impl<'a> Checker<'a> {
                         .turbofish()
                         .map(|list| list.types().map(|ty| self.lower_type(ty)).collect());
                     let (params, ret) = self.instantiate_fn(symbol, given_args, span);
+                    let outer =
+                        std::mem::replace(&mut self.current_callee, self.resolution.builtin(symbol));
                     self.check_args(&params, &args, span);
+                    self.current_callee = outer;
                     return ret;
                 }
             }

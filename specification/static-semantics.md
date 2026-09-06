@@ -104,7 +104,7 @@ module).
 | Code | Meaning |
 |------|---------|
 | `R0001` | Duplicate definition. |
-| `R0002` | Undefined name. |
+| `R0002` | Undefined name. When the name is one a **builtin** module owns (tuonelang is free functions only, so `len` is spelled `std::array::len` / `std::map::len` / `std::str::len` / `std::string::len`), the diagnostic lists the owning modules; a name owned by exactly one module carries a machine-applicable edit that qualifies the call. |
 | `R0003` | Unresolved import. |
 | `R0004` | Ambiguous name. |
 | `R0005` | Visibility violation. |
@@ -246,7 +246,7 @@ the trait system will own.
 
 | Code | Meaning |
 |------|---------|
-| `T0001` | Mismatched types (carries structured expected/actual). |
+| `T0001` | Mismatched types (carries structured expected/actual). On an argument to a **builtin** whose short name several modules share, the diagnostic also names the sibling whose first parameter accepts the type actually passed — the wrong-module case, where the mismatch's real cause is the module rather than the argument. The hint appears only when such a sibling exists; it is never guessed. |
 | `T0002` | Wrong number of arguments. |
 | `T0003` | Call of a non-function. |
 | `T0004` | Unknown field. |
@@ -267,6 +267,15 @@ the trait system will own.
 | `T0019` | Trapping arithmetic (`+ - * / %`) in a `#[constant_time]` function (§3.10): the overflow check is a conditional branch on the operands. |
 | `T0020` | A `#[constant_time]` function calls a function that is not marked (§3.10), so the callee carries no checked guarantee. |
 | `T0021` | Unknown attribute (§3.10). v0 defines exactly one, `#[constant_time]`; an unrecognized name is an error, never a silently-ignored annotation. |
+| `T0022` | **Warning, not an error** — the runnable-core advisory. A heap-wrapper (`Box`/`Shared`/`Weak`) **value** in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
+
+`T0022` is the table's only warning: it reports a program the static
+semantics **accepts**. It exists because `tuo check` deliberately accepts a
+larger language than the native backends lower, and that gap should be
+visible at the offending type rather than surfacing later as a spanless
+build failure. Because it is a warning it never changes whether a program is
+accepted, and the set of programs this document defines as well-typed is
+exactly what it was before the advisory existed.
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`

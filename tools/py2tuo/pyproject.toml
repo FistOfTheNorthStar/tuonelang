@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "py2tuo"
+version = "0.1.0"
+description = "Compile a typed subset of Python into tuonelang source."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Kaarle Kulvik" }]
+# No runtime dependencies: the tool uses only the standard library, and drives
+# the real `tuo` binary through a subprocess rather than linking the compiler.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+py2tuo = "py2tuo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

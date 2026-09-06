@@ -138,6 +138,8 @@
   - **`Map[K, V]` for value types beyond `Int`** in the *operation* surface — the
     type exists for any `V`; the v0 ops are `V = Int`. `Map[Str, String]` and
     friends are additive once the drop path (already specified) is exercised.
+    *(Taken up by [ADR-0023](ADR-0023-map-value-widening.md), which also fixes a
+    soundness defect in how this narrowness is enforced.)*
   - **Ordered maps / sorted iteration as a built-in** — `keys` is deterministic
     but content-unordered; sorted views compose via `std::collections::sorted_*`.
   - **`Map == Map`, map literals, and an `entry`-style API** — later increments.

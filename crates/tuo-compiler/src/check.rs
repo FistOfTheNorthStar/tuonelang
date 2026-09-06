@@ -62,6 +62,11 @@ pub fn check_sources(map: &SourceMap, sources: &[SourceId]) -> CheckResult {
     diagnostics.extend_from_slice(resolution.diagnostics());
     diagnostics.extend_from_slice(types.diagnostics());
     diagnostics.extend_from_slice(ownership.diagnostics());
+    // The runnable-core advisory (`T0022`): warnings, never errors, so the
+    // accepted language is unchanged — see `crate::native_core`. Emitted
+    // here rather than inside a stage so the stage crates' own "zero
+    // diagnostics" contracts stay exactly as strict as they were.
+    diagnostics.extend(crate::native_core::advisories(&asts));
     CheckResult {
         resolution,
         types,

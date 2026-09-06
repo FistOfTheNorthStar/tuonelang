@@ -71,6 +71,10 @@ the replacement, preserving the decision history.
 | [ADR-0020](ADR-0020-constant-time-code.md) | Constant-time code — the branchless subset and what tuonelang can honestly promise | accepted |
 | [ADR-0021](ADR-0021-secret-taint-tracking.md) | Secret taint tracking — marking data, not just functions | proposed |
 | [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | proposed |
+| [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed |
+| [ADR-0024](ADR-0024-capturing-closures.md) | Capturing closures — the four decisions Tier 2 actually requires | proposed |
+| [ADR-0025](ADR-0025-no-exceptions.md) | No exceptions — `Result[T, E]` and the trap are the two failure modes | accepted |
+| [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -178,3 +182,45 @@ forgotten. ADR-0022's central finding is that `std::bignum`'s variable timing
 is a property of its **algorithms** (zero-limb skipping, value-dependent
 normalization) rather than of the spelling of its operations, so adopting
 `std::ct` there means rewriting them, not substituting calls.
+
+**ADR-0023 through ADR-0026** were opened together (2026-09-06) by the
+`tools/py2tuo` dogfooding exercise — a compiler from a typed Python subset to
+tuonelang, which surfaced four distinct boundaries between the two languages.
+Two are open work and two record settled decisions.
+
+**ADR-0023** (map value widening) takes up the item ADR-0011 listed as
+"additive once the drop path (already specified) is exercised". Its Stage A is
+a **soundness fix that stands alone**: `reject_unsupported_map_pair` runs
+eagerly and returns early on an unsolved inference variable, so
+`Map[Int, Bool]`, `Map[Int, Float]`, and `Map[Int, Str]` built through
+`std::map::empty()` **pass `tuo check` and fail in codegen** — a violation of
+the never-mis-compile invariant, caught only incidentally for `Map[Str, Str]`
+because a string-literal key resolves immediately. Stages B and C widen `V` to
+the ADR-0012 element set over a value-stride-parametric runtime shim, reusing
+`ty_owns_heap`/`HeapGlue` rather than adding a shim per value type. User **key**
+types stay deferred to the trait system, unchanged.
+
+**ADR-0024** (capturing closures) converts ADR-0008's single deferred Tier 2
+item into **four separately decidable questions** — syntax, capture ownership,
+representation, and the purity/concurrency interaction — and records that one
+of Tier 2's stated premises has expired: it was to build on the
+`Box`/allocator seam, but `Box`/`Shared`/`Weak` **values** are still refused, so
+the environment should allocate directly on `tuo_rt_alloc` with no user-visible
+`Box`. It recommends **move-only captures** first, because borrowed captures
+would introduce a lifetime-shaped obligation the call-scoped ownership model
+(ADR-0003) does not have — and notes that the obvious Rust-style `|x|` syntax
+is unavailable, `|` already serving as both bitwise-or and pattern alternation
+(ADR-0019). `par_map` must keep accepting only non-capturing values, or
+ADR-0007's data-race-freedom-by-construction breaks.
+
+**ADR-0025** (no exceptions) and **ADR-0026** (fixed-width integers) are
+`accepted` on arrival: they document decisions the language already embodies,
+which had been recorded only implicitly. ADR-0025 states that tuonelang has
+exactly two failure mechanisms — `Result[T, E]` for expected failure and the
+deterministic trap for programmer error — and that an exception is neither;
+it leaves a `?`-style propagation operator explicitly open as sugar over
+`Result`. ADR-0026 records why `Int` is `I64`-with-trapping and, more usefully,
+why shipping `std::bignum` does **not** close the gap with Python: the gap is
+that Python's unboundedness is *implicit*, and closing it would mean implicit
+promotion — which would make `+` allocate, make every containing type
+dynamically sized, and destroy the trap's meaning.

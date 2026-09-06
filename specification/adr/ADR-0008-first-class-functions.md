@@ -282,7 +282,11 @@ benchmark condition — is met by a committed, test-pinned artifact:
   the indirect dispatch is a *recorded measurement*, not a claim — no superlative
   appears anywhere in the report (a test forbids it).
 - *Deliberately deferred to a future ADR (Tier 2), each a whole increment, never
-  a silent half-feature:* **capturing closures** — a closure that captures locals
+  a silent half-feature* — taken up by
+  [ADR-0024](ADR-0024-capturing-closures.md), which decomposes Tier 2 into four
+  separately decidable questions and records that the `Box`-seam premise below
+  has expired (`Box`/`Shared`/`Weak` **values** are still refused):*
+  **capturing closures** — a closure that captures locals
   under the ownership vocabulary (`take` to move a capture, `in`/`mut` to borrow
   for the closure's lifetime), which needs a **heap-allocated environment on the
   `Box`/allocator seam** (ADR-0009) and revisits the purity taint for opaque
