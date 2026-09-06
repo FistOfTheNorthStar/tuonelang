@@ -694,8 +694,14 @@ fn start_router(binary: &Path, connections: usize) -> (std::process::Child, u16)
         // stolen from it — otherwise the last request would find the server
         // already gone. Callers pass the number of requests they intend to
         // make; this function asks the server for one more.
+        // 400 * 25ms = 10s per attempt. Generous on purpose: these tests run
+        // in parallel with the rest of the suite, which compiles and links
+        // native binaries, so a freshly spawned process can take seconds to
+        // reach its first `accept` on a loaded machine. A tight budget here
+        // turns machine load into a spurious failure, which is the most
+        // expensive kind of test to debug.
         let mut ready = false;
-        for _ in 0..100 {
+        for _ in 0..400 {
             if child
                 .try_wait()
                 .expect("polling the router succeeds")
@@ -725,7 +731,12 @@ fn start_router(binary: &Path, connections: usize) -> (std::process::Child, u16)
         let _ = child.kill();
         let _ = child.wait();
     }
-    panic!("could not start the router on a free port after 10 attempts");
+    panic!(
+        "could not start the router on a free port after 10 attempts \
+         (binary: {}); every attempt either failed to bind or never began \
+         accepting within 10s",
+        binary.display()
+    );
 }
 
 /// Speak one real HTTP request to `port` and return the raw response bytes.
