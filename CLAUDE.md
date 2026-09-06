@@ -218,7 +218,20 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming
   the type and pointing the user back to the interpreter as the
-  reference), and
+  reference — and, since the runnable-core advisory landed, **saying so at
+  `check` time rather than only at `build` time**: `tuo check` emits a
+  located `T0022` *warning* (`tuo-compiler`'s `native_core`, pinned by
+  `crates/tuo-compiler/tests/native_core.rs`) at the span of any
+  heap-wrapper **value** in a parameter, return, or `let`/`var` position, so
+  the gap between what `check` accepts and what `build`/`run` lower is
+  visible where it is written instead of surfacing later as a spanless
+  whole-program refusal; a wrapper in a struct field or enum payload is
+  deliberately **not** warned about, since such a declaration lowers fine and
+  is exactly what `T0016` recommends for breaking a recursive type. It is a
+  warning, never an error — those programs are legal tuonelang the
+  interpreter executes, so the accepted language is unchanged and
+  `tuo spec`/`tuo verify` are unaffected — and the `build` refusal now
+  renders the same located advisories above its message), and
   `tuo debug syntax|ast|hir|mir [--opt] <file>` (diagnostic developer
   tools with unstable output, not language protocols; `mir` requires an accepted
   program, since MIR is only defined once the front end passes, and the lowered MIR is
@@ -509,7 +522,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   self-test shares the server's own framing assumptions and so cannot catch an
   unterminated response or a header block left unread (an RST that discards the
   answer); both were real bugs this example and `http-service` shipped with, and
-  both are now regression-pinned), `log-analytics` (a one-pass keyed rollup),
+  both are now regression-pinned; since this revision it also answers with
+  **response bodies** — a handler returns `Response { status, body: String }`
+  and the wire layer sends a *measured* `Content-Length`, a table-wide
+  signature change that needed no language change — and serves from a real
+  **concurrent worker pool**: `par_map` forks N threads that race `accept` on
+  one shared listener, because the fork-join task set does not have to be the
+  requests, it has to be the *workers*, and a descriptor is an `Int`. A server
+  that runs *forever* remains genuinely absent, since fork-join must join, so
+  the pool takes a connection budget; the concurrency is pinned by a test that
+  holds every connection open mid-request before releasing them, which a
+  serial accept loop cannot satisfy), `log-analytics` (a one-pass keyed rollup),
   `file-report` (a report generator that really touches the disk), and
 `postgres-auth` (the PostgreSQL v3 authentication handshake — big-endian wire
   framing plus SCRAM-SHA-256 checked against RFC 7677's published vector and

@@ -37,7 +37,7 @@ Nothing here pretends to do what the language cannot.
 | [`workspace/`](workspace/) | medium multi-package project (`app → geometry → numeric`) | builds natively | 26 |
 | [`http-service/`](http-service/) | HTTP service *(serves a real request over a live loopback socket)* | runs natively | 200 |
 | [`concurrent-worker/`](concurrent-worker/) | concurrent worker *(runs its pool live via `par_map` + a channel-drained queue)* | runs natively | 15 |
-| [`router/`](router/) | declarative request router *(runtime dispatch table, indirect calls; **serves real HTTP** over a socket)* | runs natively | 74 |
+| [`router/`](router/) | declarative request router *(dispatch table, indirect calls; **serves real HTTP** with bodies, serially or from a **concurrent worker pool**)* | runs natively | 74 |
 | [`log-analytics/`](log-analytics/) | log aggregation *(one-pass keyed rollup over `Map[Int, Int]`)* | runs natively | 42 |
 | [`file-report/`](file-report/) | report generator *(renders, writes, reads back, verifies, cleans up)* | runs natively | 7 |
 | [`postgres-auth/`](postgres-auth/) | PostgreSQL v3 auth handshake *(wire framing + SCRAM-SHA-256 vs RFC 7677, and the legacy MD5 challenge)* | runs natively | 48 |
@@ -55,15 +55,16 @@ tuo test  --manifest examples/cli-stats
 tuo run   examples/cli-stats/src/main.tuo examples/cli-stats/src/std_io.tuo ; echo $?
 # count 7 / mean 12 / sd 6 / report 18, then exit 18
 
-# The router: 12 specs over the dispatch table, then a real indirect-call run
+# The router: 14 specs over the dispatch table, then a real indirect-call run
 # that also serves its six sample requests over a live loopback socket.
-tuo test --manifest examples/router                    # 12 passed, 0 failed
+tuo test --manifest examples/router                    # 14 passed, 0 failed
 tuo run  examples/router/src/main.tuo ; echo $?        # 74
 
-# …or serve real traffic: bind a port and answer N connections from any
-# client. `curl http://127.0.0.1:8080/health` then returns a real 204.
+# …or serve real traffic. `curl http://127.0.0.1:8080/` returns a real 200
+# with a body; `/health` returns a 204 with none.
 tuo build -o /tmp/router examples/router/src/main.tuo
-/tmp/router 8080 4
+/tmp/router 8080 4     # serially, 4 connections
+/tmp/router 8080 0     # …or from a concurrent worker pool (4 threads)
 
 # log-analytics: the map rollup is pinned against an independent re-scan, and
 # the program is asserted to give the same answer on BOTH backends.
