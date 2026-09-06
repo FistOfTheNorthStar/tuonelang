@@ -930,7 +930,25 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   comment, a worked example, machine-queryable symbol information (the same
   `Resolution` symbols the agent/LSP project), and — where pure-executable — an
   executable `spec`; there is deliberately **one** obvious API per fundamental
-  task, never competing spellings. Because **methods are not lowered** (`impl`
+  task, never competing spellings. Because there are no methods, one short
+  name is often owned by several modules — `len` by four builtin modules
+  (`std::array`/`std::map`/`std::str`/`std::string`), `empty` by three,
+  `byte_at`/`slice`/`get` by two — so **choosing the wrong module is a
+  first-guess failure the compiler answers rather than merely rejects**:
+  `R0002` on a bare `len(s)` lists every module that defines the name (a
+  single owner yields a *machine-applicable* qualification edit, so LSP
+  quick-fix and the agent's `apply_safe_fix` get it for free), and `T0001`
+  on a wrong-module argument names the sibling whose first parameter accepts
+  the type actually passed — the checker already knows both, so it says which
+  instead of leaving the caller to search. Both hints are deliberately
+  narrow: they appear only when a *different* module really owns the same
+  name and really accepts the type, never guessed, since a hint pointing
+  somewhere equally wrong costs a round trip and is worse than silence
+  (pinned by `crates/tuo-types/tests/wrong_module.rs`, whose negative cases
+  are as load-bearing as its positive ones). Note the ambiguity is in the
+  **builtins**, not the catalog: 253 of the catalog's 269 public functions
+  have globally unique names and only 16 collide, so the sixteen-module split
+  is not what makes a name hard to place. Because **methods are not lowered** (`impl`
   method calls are v0 no-ops pending the trait system), the library is *free
   functions only*, and each module separates an **executable tier** (pure
   computation — ordering, `Option`/`Result` combinators, `Duration` arithmetic,

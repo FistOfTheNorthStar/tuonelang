@@ -17,7 +17,9 @@ use tuo_ast::{
     ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, GenericParams, ImportDecl,
     Item, Name, Pattern, SpecDecl, SpecStatement, Statement, TypeArgs, TypePath, TypeRef,
 };
-use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
+use tuo_diagnostics::{
+    Confidence, Diagnostic, DiagnosticCode, Edit, Namespace, StructuredValue,
+};
 use tuo_source::Span;
 
 use crate::builtin::Builtin;
@@ -1549,14 +1551,61 @@ impl Resolver {
     }
 
     fn undefined_name(&mut self, name: Name<'_>) {
-        self.out.diagnostics.push(
-            Diagnostic::error(
-                code(2),
-                format!("cannot find `{}` in this scope", name.text),
-                name.span,
-            )
-            .with_primary_label("not found")
-            .with_actual(StructuredValue::Name(name.text.to_owned())),
-        );
+        let mut diagnostic = Diagnostic::error(
+            code(2),
+            format!("cannot find `{}` in this scope", name.text),
+            name.span,
+        )
+        .with_primary_label("not found")
+        .with_actual(StructuredValue::Name(name.text.to_owned()));
+        // The name may exist, just unqualified. tuonelang is free functions
+        // only, so a bare `len(s)` is a natural thing to write and always
+        // wrong; the compiler knows every module that defines the name, so
+        // say which rather than leaving the caller to guess. A single owner
+        // yields a machine-applicable edit; several are listed for the
+        // caller to choose between (the argument type decides, and this
+        // stage has no types).
+        let owners = builtin_paths_named(name.text);
+        match owners.as_slice() {
+            [] => {}
+            [only] => {
+                diagnostic = diagnostic
+                    .with_help(format!("`{only}` is the one builtin with that name"))
+                    .with_suggestion(
+                        format!("qualify the call as `{only}`"),
+                        vec![Edit {
+                            span: name.span,
+                            replacement: (*only).to_owned(),
+                        }],
+                        Confidence::MachineApplicable,
+                    );
+            }
+            many => {
+                diagnostic = diagnostic.with_help(format!(
+                    "`{}` is defined in {} builtin modules ({}); qualify the call with the \
+                     one whose type you are calling it on",
+                    name.text,
+                    many.len(),
+                    many.join(", "),
+                ));
+            }
+        }
+        self.out.diagnostics.push(diagnostic);
     }
+}
+
+/// Every builtin whose unqualified name is `name`, as fully qualified paths
+/// in `Builtin::ALL` order.
+///
+/// tuonelang has no methods, so an operation that other languages spell
+/// `xs.len()` is written `std::array::len(xs)` — and the same short name is
+/// owned by several modules (`len` by four). A caller who writes the bare
+/// name is not inventing a symbol; they picked the right name and omitted
+/// the module, which is exactly what the compiler can tell them.
+fn builtin_paths_named(name: &str) -> Vec<&'static str> {
+    Builtin::ALL
+        .iter()
+        .filter(|builtin| builtin.name() == name)
+        .map(|builtin| builtin.qualified_name())
+        .collect()
 }

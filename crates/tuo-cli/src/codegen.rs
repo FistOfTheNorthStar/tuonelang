@@ -189,6 +189,13 @@ enum Failure {
         stage: &'static str,
         message: String,
         unsupported: bool,
+        /// The located `T0022` runnable-core advisories of this program, if
+        /// any. A backend refuses an unlowerable construct at
+        /// storage-classification time, where it knows the function but not
+        /// the span; the front end already computed exactly which written
+        /// types are outside the core, so rendering them here turns a
+        /// spanless refusal into a diagnostic pointing at the real cause.
+        advisories: Vec<diagnostics::Diagnostic>,
     },
 }
 
@@ -233,6 +240,7 @@ fn compile_and_finish(
             stage: "codegen",
             message: "internal: lowered MIR failed verification".to_owned(),
             unsupported: false,
+            advisories: Vec::new(),
         });
     }
 
@@ -261,7 +269,7 @@ fn compile_and_finish(
     let target = TargetSpec::host();
     let artifact = backend
         .compile(&program, &check.types, &target)
-        .map_err(codegen_failure)?;
+        .map_err(|error| codegen_failure(error, runnable_core_advisories(&check.diagnostics)))?;
 
     // Link object + runtime → executable.
     emit_progress(&mut emitter, mode, "linking", "linking the executable");
@@ -270,6 +278,7 @@ fn compile_and_finish(
         stage: "linking",
         message,
         unsupported: false,
+        advisories: Vec::new(),
     })?;
 
     match kind {
@@ -290,6 +299,7 @@ fn compile_and_finish(
                     stage: "running",
                     message: format!("could not run the built executable: {error}"),
                     unsupported: false,
+                    advisories: Vec::new(),
                 })?;
             let code = status.code().unwrap_or_else(|| signal_exit_code(&status));
             // The tooling operation *succeeded*: the program was built, linked,
@@ -390,13 +400,32 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
     }
 }
 
+/// The `T0022` runnable-core advisories among `diagnostics` — the located
+/// warnings naming exactly which written types the native backends cannot
+/// lower (see `tuo_compiler`'s `native_core`).
+fn runnable_core_advisories(
+    diagnostics: &[diagnostics::Diagnostic],
+) -> Vec<diagnostics::Diagnostic> {
+    diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.code.to_string() == "T0022")
+        .cloned()
+        .collect()
+}
+
 /// Map a [`CodegenError`] to a reportable failure, preserving "unsupported".
-fn codegen_failure(error: CodegenError) -> Failure {
+///
+/// `advisories` are the program's located `T0022` diagnostics. A backend
+/// refuses an unlowerable construct at storage-classification time, where it
+/// knows the offending function but not the span; carrying the front end's
+/// advisories lets the report point at the written type instead.
+fn codegen_failure(error: CodegenError, advisories: Vec<diagnostics::Diagnostic>) -> Failure {
     let unsupported = error.is_unsupported();
     Failure::Step {
         stage: "codegen",
         message: error.message,
         unsupported,
+        advisories: if unsupported { advisories } else { Vec::new() },
     }
 }
 
@@ -604,10 +633,14 @@ fn report_failure_machine(
                 }
                 json!({ "reason": "front-end errors" })
             }
+            // `advisories` are a human-presentation aid: in a machine format
+            // the located `T0022` warnings already travel as their own
+            // diagnostic events, so the payload does not repeat them.
             Failure::Step {
                 stage,
                 message,
                 unsupported,
+                advisories: _,
             } => json!({ "stage": stage, "message": message, "unsupported": unsupported }),
         };
         emitter.emit(&Event::finished(Status::Error, summary))?;
@@ -635,8 +668,16 @@ fn report_failure_human(map: &SourceMap, failure: &Failure) {
             stage,
             message,
             unsupported,
+            advisories,
         } => {
             if *unsupported {
+                // The backend's message names the function but carries no
+                // span. The front end already located the cause, so render
+                // those advisories first: the user sees the offending type
+                // before the refusal that follows from it.
+                if !advisories.is_empty() {
+                    eprint!("{}", diagnostics::render::render_all(advisories, map));
+                }
                 eprintln!(
                     "error: cannot build ({stage}): {message}\n\
                      note: this program is outside the native backend's current subset; \

@@ -29,6 +29,7 @@
 
 mod check;
 mod incremental;
+mod native_core;
 
 pub use check::{CheckResult, check_sources};
 pub use incremental::{IncrementalSession, Semantics};

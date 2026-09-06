@@ -256,6 +256,15 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
     );
     let check = run(&["check", &path]);
     assert!(check.status.success(), "the front end accepts: {check:?}");
+    // The runnable-core advisory (`T0022`): accepting the program is not the
+    // same as being silent about it. `check` must say — at the span of the
+    // written type — that the native backends cannot lower this, so the gap
+    // is visible where it is written rather than only at build time.
+    let check_stderr = String::from_utf8(check.stderr).expect("utf-8");
+    assert!(
+        check_stderr.contains("T0022") && check_stderr.contains("Box[Int]"),
+        "`tuo check` must warn about the unlowerable type: {check_stderr}"
+    );
     for args in [
         &["build", path.as_str()][..],
         &["build", "--release", &path][..],
@@ -274,6 +283,13 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         assert!(
             stderr.contains("remains the reference"),
             "the refusal points back to the interpreter: {stderr}"
+        );
+        // The backend refuses at storage-classification time, where it knows
+        // the function but not the span. The located advisory is rendered
+        // alongside it, so the build failure points at the real cause.
+        assert!(
+            stderr.contains("T0022") && stderr.contains("Box[Int]"),
+            "the refusal carries the located advisory: {stderr}"
         );
     }
 }
