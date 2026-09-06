@@ -71,13 +71,56 @@ module router;
 // concurrency is structured fork-join, so a server here is an accept loop, not
 // an event loop. Nothing below pretends otherwise.
 //
-// Everything in this file is PURE, so every function is spec-checked and the
-// whole router runs inside the spec sandbox — no sockets, no effects. Wiring
-// it to a real connection is `http-service`'s `serve_once`, already live; this
-// example is deliberately the dispatch layer alone.
+// --- Two tiers: the table is pure, the wire is not --------------------------
+//
+// The dispatch table above is PURE — every function spec-checked, the whole
+// router exercisable inside the spec sandbox with no sockets and no effects.
+// That is the part worth proving exhaustively, and the specs do.
+//
+// Below it sits a thin EFFECT TIER that carries the table onto a real TCP
+// connection: `serve_once` (read a request line → dispatch → respond → close)
+// and `live_once`/`live_report` (the loopback oracle). Effectful, so no specs
+// (`R0007` keeps the sandbox pure); pinned instead by the dogfood test, which
+// asserts the exact response bytes a real client receives.
+//
+// The seam between the tiers is one line — `route(method, path)` — and it
+// needs no adapter, because the router already speaks the borrowed `Str`s a
+// request line is made of. `http-service` cannot do this: its `route` takes
+// pre-tagged `Int`s, so its socket shell must convert a path to a tag before
+// routing, and adding a route means editing that conversion. A `Str`-keyed
+// table is what keeps the wire layer this thin — the practical payoff of the
+// split table, beyond the finding it documents.
+//
+// Both of the things this example once listed as absent have since landed,
+// and neither needed a language change:
+//
+//   * RESPONSE BODIES. A handler returns a `Response { status, body: String }`
+//     rather than a status `Int`, so it can answer with content and the wire
+//     layer sends a *measured* `Content-Length`. This was correctly described
+//     as a table-wide change — every handler's signature moved together,
+//     because the shared signature IS the table's element type — but the
+//     language already supported it: a struct carrying an owned `String` is an
+//     ordinary ADR-0009 value, returned through the dispatch table's indirect
+//     call under ADR-0012's owned-element rules.
+//
+//   * CONCURRENT SERVING. `serve_pool` forks `pool_workers()` OS threads that
+//     race `accept` on one shared listener. The earlier reasoning — that
+//     `par_map` is fork-join over a known task set and so cannot express an
+//     accept loop — had the right premise and the wrong conclusion: the task
+//     set does not have to be the requests, it has to be the WORKERS. A socket
+//     descriptor is an `Int`, so the shared listener is an ordinary task
+//     value, and the kernel's accept queue distributes connections without
+//     needing a channel at all.
+//
+// What remains genuinely absent is a server that runs FOREVER. Fork-join must
+// join, so `serve_pool` takes a connection budget and returns; an unbounded
+// loop wants detached spawn, which v0 deliberately does not have. That is a
+// real boundary, and it is not faked here.
 //
 // It compiles with `tuo check`, its specs run under `tuo test`, and it runs
-// natively with `tuo run`, exiting with `report()` — 74.
+// natively with `tuo run` — serving its six sample requests over a real
+// loopback socket and exiting with `report()` (74) only when the wire agrees
+// with the table.
 
 // --- The request ------------------------------------------------------------
 
@@ -134,41 +177,89 @@ fn status_method_not_allowed() -> Int {
     405
 }
 
+// --- The response -----------------------------------------------------------
+
+/// What a handler answers with: a status **and a body**.
+///
+/// The body is an owned `String` because a handler builds it — it is not a
+/// slice of anything that outlives the call, so `Str` would have nothing to
+/// borrow from. That ownership is the whole reason this struct exists rather
+/// than the bare `Int` the table used to carry: an `Int` can be returned by
+/// value forever, but the moment a handler *composes* its answer, something
+/// has to own the bytes.
+///
+/// This is the change the example previously documented as absent. It is a
+/// table-wide change, not a wire-layer one — every handler's signature moves
+/// together, because the shared signature is exactly what makes them
+/// interchangeable values. Nothing in the language needed to change: a
+/// struct carrying an owned `String` is an ordinary ADR-0009 value, and
+/// ADR-0012's owned-element rules already cover returning one through the
+/// indirect call the dispatch table makes.
+struct Response {
+    status: Int,
+    body: String,
+}
+
+/// A response with no body — the common case, and the one a status-only
+/// route wants. Kept as a named constructor so a handler never spells the
+/// empty string, and so "no body" is one decision made in one place.
+fn no_body(take status: Int) -> Response {
+    Response { status: status, body: std::string::empty() }
+}
+
+/// A response whose body is the given text.
+fn with_body(take status: Int, in text: Str) -> Response {
+    var body = std::string::empty();
+    std::string::append(body, text);
+    Response { status: status, body: body }
+}
+
 // --- The handlers -----------------------------------------------------------
 //
 // Each handler is an ordinary top-level `fn` with ONE shared signature —
-// `fn(in Request) -> Int` — which is what makes them interchangeable values
-// storable in a single array. This uniform signature is the router's real
-// contract; a handler with a different shape could not sit in the table.
+// `fn(in Request) -> Response` — which is what makes them interchangeable
+// values storable in a single array. This uniform signature is the router's
+// real contract; a handler with a different shape could not sit in the table.
+//
+// The signature carries a `Response` rather than the `Int` it once did, so a
+// handler can answer with content. Every handler moved at once, which is the
+// cost the example named when it listed bodies as absent: the table's element
+// type IS the signature, so there is no way to give one route a body without
+// giving every route the capacity for one.
 
-/// `GET /` — the service root.
-fn handle_root(in request: Request) -> Int {
+/// `GET /` — the service root, which answers with a short greeting so the
+/// body path is exercised by the most ordinary route in the table.
+fn handle_root(in request: Request) -> Response {
     if request.method == method_get() {
-        status_ok()
+        with_body(status_ok(), "tuonelang router")
     } else {
-        status_method_not_allowed()
+        no_body(status_method_not_allowed())
     }
 }
 
-/// `GET /health` — a liveness probe, which answers with no body.
-fn handle_health(in request: Request) -> Int {
+/// `GET /health` — a liveness probe, which answers with **no** body.
+///
+/// 204 is defined to carry no content, so this route is the one that proves
+/// the body is genuinely optional: a `Content-Length: 0` here is correct,
+/// while a body would make the response malformed.
+fn handle_health(in request: Request) -> Response {
     if request.method == method_get() {
-        status_no_content()
+        no_body(status_no_content())
     } else {
-        status_method_not_allowed()
+        no_body(status_method_not_allowed())
     }
 }
 
 /// `GET /users` lists, `POST /users` creates — the one route in this table
 /// whose answer depends on the method, so it proves the handler really
 /// receives the request rather than just its path.
-fn handle_users(in request: Request) -> Int {
+fn handle_users(in request: Request) -> Response {
     if request.method == method_get() {
-        status_ok()
+        with_body(status_ok(), "[\"ada\",\"grace\"]")
     } else if request.method == method_post() {
-        status_created()
+        with_body(status_created(), "{\"created\":true}")
     } else {
-        status_method_not_allowed()
+        no_body(status_method_not_allowed())
     }
 }
 
@@ -176,8 +267,8 @@ fn handle_users(in request: Request) -> Int {
 /// answering an unknown path is a normal outcome, not an error path: making
 /// 404 an ordinary slot in the table means `dispatch` has exactly one exit and
 /// never needs an `Option` the caller must unwrap.
-fn handle_not_found(in request: Request) -> Int {
-    status_not_found()
+fn handle_not_found(in request: Request) -> Response {
+    with_body(status_not_found(), "not found")
 }
 
 // --- The split table --------------------------------------------------------
@@ -201,7 +292,7 @@ fn not_found_slot() -> Int {
 /// fine — a fixed array's elements may be function values — while the
 /// growable `Array[Route]` this would rather be is refused. Slot order is
 /// load-bearing and matches `routes()` exactly.
-fn handler_table() -> [fn(in Request) -> Int; 4] {
+fn handler_table() -> [fn(in Request) -> Response; 4] {
     [handle_root, handle_health, handle_users, handle_not_found]
 }
 
@@ -247,7 +338,7 @@ fn slot_for(in table: Map[Str, Int], in path: Str) -> Int {
 /// the target is a value read out of an array at an index computed at
 /// runtime, so no compiler pass can turn it back into a direct call. That is
 /// what makes this a real dispatch table.
-fn dispatch(in table: Map[Str, Int], in request: Request) -> Int {
+fn dispatch(in table: Map[Str, Int], in request: Request) -> Response {
     let slot = slot_for(table, request.path);
     let handler = handler_table()[slot as Usize];
     handler(request)
@@ -255,9 +346,27 @@ fn dispatch(in table: Map[Str, Int], in request: Request) -> Int {
 
 /// Route a raw (method, path) pair — the whole router in one call, the entry
 /// point a connection handler would use after parsing a request line.
-fn route(in method: Str, in path: Str) -> Int {
+fn route(in method: Str, in path: Str) -> Response {
     let table = routes();
     dispatch(table, Request { method: method_tag(method), path: path })
+}
+
+/// Route a request and report only its status — the spelling every caller
+/// that does not need the body wants.
+///
+/// The specs below use this heavily, and that is the point: adding bodies did
+/// not make the status contract harder to state. A route's status is still one
+/// call, so the assertions that pinned the table before still read the same
+/// way, and a body regression cannot hide behind a rewritten spec.
+fn status_for(in method: Str, in path: Str) -> Int {
+    route(method, path).status
+}
+
+/// Route a request and report its body's length — the observable that proves
+/// a body was actually built, without pinning the exact bytes in the pure
+/// specs (the wire tests assert those).
+fn body_len_for(in method: Str, in path: Str) -> Int {
+    std::str::len(std::string::as_str(route(method, path).body))
 }
 
 // --- The acceptance oracle --------------------------------------------------
@@ -271,18 +380,575 @@ fn route(in method: Str, in path: Str) -> Int {
 /// `1614 - 1540 = 74` — a value chosen to land inside one byte so the process
 /// exit status carries it exactly, with no `& 0xff` truncation to explain.
 fn report() -> Int {
-    let a = route("GET", "/");
-    let b = route("GET", "/health");
-    let c = route("GET", "/users");
-    let d = route("POST", "/users");
-    let e = route("GET", "/missing");
-    let f = route("DELETE", "/health");
+    let a = status_for("GET", "/");
+    let b = status_for("GET", "/health");
+    let c = status_for("GET", "/users");
+    let d = status_for("POST", "/users");
+    let e = status_for("GET", "/missing");
+    let f = status_for("DELETE", "/health");
     ((((a + b) + c) + d) + (e + f)) - 1540
 }
 
-/// Exit with the router's report: 74.
+// --- The effect tier: serving the table over a real socket ------------------
+//
+// Everything above is pure, and stays pure — the dispatch table is the part
+// worth spec-checking, and it is checked exhaustively. What follows is the
+// thin effectful shell that carries it onto a wire, mirroring how
+// `tuo-stdlib` and `http-service` split their tiers: no spec down here
+// (`R0007` keeps the spec sandbox pure), each function marked `EFFECT:` and
+// pinned by the dogfood test instead.
+//
+// The shell is deliberately small. Its whole job is: read a request line,
+// hand the method and path to `route` as the borrowed `Str`s they already
+// are, and write back what HTTP requires. The router itself needs no
+// adaptation to be served — that is the point being demonstrated.
+
+/// The bound every socket wait carries (ADR-0017), in milliseconds. Generous
+/// enough that a healthy loopback round-trip never reaches it, short enough
+/// that a peer which goes away fails the run instead of wedging it forever.
+fn io_timeout_ms() -> Int {
+    5000
+}
+
+/// The status line for a routed status — the reverse of `method_tag`, mapping
+/// the router's answer back to the text HTTP puts on the wire. Pure, so it is
+/// spec-checked.
+fn response_line(take status: Int) -> Str {
+    if status == status_ok() {
+        "HTTP/1.1 200 OK"
+    } else if status == status_created() {
+        "HTTP/1.1 201 Created"
+    } else if status == status_no_content() {
+        "HTTP/1.1 204 No Content"
+    } else if status == status_not_found() {
+        "HTTP/1.1 404 Not Found"
+    } else {
+        "HTTP/1.1 405 Method Not Allowed"
+    }
+}
+
+/// Render a non-negative integer as decimal text.
+///
+/// Needed because `Content-Length` is now computed from the body rather than
+/// being the constant zero it was when every response was empty. Pure, so it
+/// is spec-checked.
+fn int_to_text(take n: Int) -> String {
+    var out = std::string::empty();
+    if n == 0 {
+        std::string::push_byte(out, 48);
+        return out;
+    }
+    // Collect digits least-significant first, then reverse — the ordinary
+    // trick, written out because v0 has no string formatting.
+    var digits = std::string::empty();
+    var v = n;
+    while v > 0 {
+        std::string::push_byte(digits, 48 + (v % 10));
+        v = v / 10;
+    }
+    let text = std::string::as_str(digits);
+    var i = std::str::len(text);
+    while i > 0 {
+        std::string::push_byte(out, std::str::byte_at(text, i - 1));
+        i = i - 1;
+    }
+    out
+}
+
+/// The complete header block for a response carrying `length` body bytes: the
+/// CRLF ending the status line, the **measured** `Content-Length`, a
+/// `Connection: close`, and the blank line that terminates the block.
+///
+/// The length is computed, not assumed. That is the substantive difference
+/// bodies make to the wire: a client reads exactly `Content-Length` bytes, so
+/// a wrong number is worse than a missing body — it makes the client hang
+/// waiting for bytes that never come, or truncate the ones it got. Pure, so
+/// it is spec-checked.
+fn headers_for(take length: Int) -> String {
+    var out = std::string::empty();
+    std::string::append(out, "\r\nContent-Length: ");
+    std::string::append(out, std::string::as_str(int_to_text(length)));
+    std::string::append(out, "\r\nConnection: close\r\n\r\n");
+    out
+}
+
+/// Find the first space at or after `from`, or -1 when the line has none.
+/// The request line is `METHOD SP PATH SP VERSION`, so two spaces split it
+/// into the three tokens the router needs. Pure, so it is spec-checked.
+fn find_space(in line: Str, take from: Int) -> Int {
+    var i = from;
+    var found = 0 - 1;
+    let n = std::str::len(line);
+    while i < n {
+        if std::str::byte_at(line, i) == 32 && found < 0 {
+            found = i;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+/// EFFECT: read one line (bytes up to CR, LF, or end of input, exclusive) off
+/// a connection into an owned `String`, every byte **bounded** by
+/// `read_byte_timeout` (ADR-0017) rather than blocking forever on a silent
+/// peer.
+///
+/// `read_ok` reports whether the line ended for a legitimate reason (a CR/LF
+/// delimiter or clean end of input) rather than a timeout or host error. The
+/// distinction matters: a timeout that quietly returned the bytes read so far
+/// would look exactly like a short-but-complete request line, and the router
+/// would dispatch a truncated request as if the peer had sent it — precisely
+/// the confusion ADR-0017's distinct `-3` sentinel exists to prevent.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn read_line_from(take conn: Int, mut read_ok: Bool) -> String {
+    var line = std::string::empty();
+    var done = false;
+    read_ok = true;
+    while !done {
+        let b = std::rt::read_byte_timeout(conn, io_timeout_ms());
+        if b == 13 {
+            // A CR: consume the LF of the pair too, so the close stays
+            // orderly and no delimiter byte is left unread.
+            let lf = std::rt::read_byte_timeout(conn, io_timeout_ms());
+            if lf < 0 && lf != 0 - 1 {
+                read_ok = false;
+            }
+            done = true;
+        } else {
+            if b == 10 || b == 0 - 1 {
+                done = true;
+            } else {
+                if b < 0 {
+                    // -3 (timeout) or -2 (host error): the peer never finished.
+                    read_ok = false;
+                    done = true;
+                } else {
+                    std::string::push_byte(line, b);
+                }
+            }
+        }
+    }
+    line
+}
+
+/// EFFECT: drain the request's remaining header block — every line up to the
+/// terminating blank line — returning how many header lines were consumed.
+///
+/// This is correctness, not politeness. A real client (curl, a browser, any
+/// HTTP library) sends `Host:`, `User-Agent:`, `Accept:` immediately after the
+/// request line. If the server answers and closes with those bytes still
+/// unread in its receive buffer, the kernel sends **RST** instead of a
+/// graceful FIN, and an RST makes the peer discard data it had already
+/// received — including the response just written. The client reports a
+/// connection reset and never sees an answer the server computed correctly.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test's
+/// real-client round-trip.
+fn drain_headers(take conn: Int) -> Int {
+    var draining = true;
+    var lines = 0;
+    while draining {
+        var ok = false;
+        let header = read_line_from(conn, ok);
+        if !ok {
+            draining = false;
+        } else {
+            if std::str::len(std::string::as_str(header)) == 0 {
+                draining = false;
+            } else {
+                lines = lines + 1;
+            }
+        }
+    }
+    lines
+}
+
+/// The fallback response for a request line so malformed it has no method and
+/// path to route — the same 404 the table's fallback handler gives, built
+/// here because there is no `Request` to dispatch.
+fn route_not_found() -> Response {
+    with_body(status_not_found(), "not found")
+}
+
+/// EFFECT: write a complete HTTP response — status line, measured headers,
+/// then the body bytes — to a connection.
+///
+/// The body is written only when it is non-empty. That is not an
+/// optimization: a 204 is defined to carry no content, so writing zero bytes
+/// after a `Content-Length: 0` keeps the response well-formed for the one
+/// route in this table that must not have a body.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test's
+/// exact-byte assertions.
+fn write_response(take conn: Int, take response: Response) -> Int {
+    let body = std::string::as_str(response.body);
+    let length = std::str::len(body);
+    std::rt::write(conn, response_line(response.status));
+    std::rt::write(conn, std::string::as_str(headers_for(length)));
+    if length > 0 {
+        std::rt::write(conn, body);
+    }
+    length
+}
+
+/// EFFECT: serve exactly one request on an accepted connection, dispatching it
+/// through **the table above, unchanged**.
+///
+/// Read the request line, split it into method and path, hand both to `route`
+/// as the borrowed `Str`s the router already speaks, drain the header block,
+/// and write a complete HTTP response back. Returns the routed status, or -1
+/// when the request line never arrived within the bound.
+///
+/// The line worth noticing is `route(method, path)`: the pure router is
+/// called here exactly as the specs call it, with no adapter and no
+/// re-encoding. `http-service` cannot do this — its `route` takes pre-tagged
+/// `Int`s, so its socket shell must convert a path into a tag before routing,
+/// and every new route means editing that conversion. A `Str`-keyed table is
+/// what lets the wire layer stay this thin.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn serve_once(take conn: Int) -> Int {
+    var read_ok = false;
+    let line = read_line_from(conn, read_ok);
+    if !read_ok {
+        std::rt::close(conn);
+        return 0 - 1;
+    }
+    let raw = std::string::as_str(line);
+    let first = find_space(raw, 0);
+    if first < 0 {
+        // No method/path split: malformed, and a router answers garbage with
+        // 404 rather than failing — a real server's behavior.
+        drain_headers(conn);
+        write_response(conn, route_not_found());
+        std::rt::close(conn);
+        return status_not_found();
+    }
+    let method = std::str::slice(raw, 0, first);
+    let second = find_space(raw, first + 1);
+    var path = std::str::slice(raw, first + 1, std::str::len(raw));
+    if second > 0 {
+        path = std::str::slice(raw, first + 1, second);
+    }
+    let response = route(method, path);
+    let status = response.status;
+    drain_headers(conn);
+    write_response(conn, response);
+    std::rt::close(conn);
+    status
+}
+
+/// EFFECT: serve one request to ourselves over a real loopback socket and read
+/// the response back the way a client does — the acceptance oracle for the
+/// wire path.
+///
+/// Listen on an ephemeral port, connect, accept, send a complete request
+/// (request line, a header, the blank line), serve it, then read the status
+/// line and drain the response's header block. Returns the served status only
+/// when the wire's status line equals the pure model's `response_line` and the
+/// framing terminated; any divergence, timeout, or socket failure returns -1.
+///
+/// Every wait is bounded, so a peer that never answers ends the run instead of
+/// hanging CI, and the descriptors are closed on the failure paths too.
+///
+/// Effectful, so no spec (`R0007`).
+fn live_once(in method: Str, in path: Str) -> Int {
+    let listener = std::rt::listen(0);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    let port = std::rt::bound_port(listener);
+    if port <= 0 {
+        std::rt::close(listener);
+        return 0 - 1;
+    }
+    let client = std::rt::connect_timeout("127.0.0.1", port, io_timeout_ms());
+    if client < 0 {
+        std::rt::close(listener);
+        return 0 - 1;
+    }
+    let conn = std::rt::accept_timeout(listener, io_timeout_ms());
+    if conn < 0 {
+        std::rt::close(client);
+        std::rt::close(listener);
+        return 0 - 1;
+    }
+    std::rt::write(client, method);
+    std::rt::write(client, " ");
+    std::rt::write(client, path);
+    std::rt::write(client, " HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    let served = serve_once(conn);
+    var reply_ok = false;
+    let reply = read_line_from(client, reply_ok);
+    let headers = drain_headers(client);
+    // Read whatever body follows the header block, so the oracle checks the
+    // bytes a client would actually receive rather than stopping at the
+    // framing. `read_line_from` stops at end of input, and the server has
+    // closed by now, so this drains the body exactly.
+    var body_ok = false;
+    let body = read_line_from(client, body_ok);
+    std::rt::close(client);
+    std::rt::close(listener);
+    // The body on the wire must equal the body the pure table produced for
+    // the same request — the property that makes bodies real rather than
+    // decorative. A 204 produces an empty one, and both sides agree on that.
+    let expected = route(method, path);
+    let matches = std::string::as_str(body) == std::string::as_str(expected.body);
+    if reply_ok && headers == 2 && matches && std::string::as_str(reply) == response_line(served) {
+        served
+    } else {
+        0 - 1
+    }
+}
+
+/// EFFECT: the wire oracle — serve the whole synthetic traffic sample over
+/// real sockets and sum it exactly as `report()` sums the pure dispatches.
+///
+/// This is the router's acceptance property: routing a request over TCP must
+/// reach the same answer as routing it in memory. Because the sum is built
+/// from the same six requests in the same order, it can only equal
+/// `report()` if every route, every method-refusal, and the fallback all
+/// survived the round trip through parsing, framing, and the socket.
+fn live_report() -> Int {
+    let a = live_once("GET", "/");
+    let b = live_once("GET", "/health");
+    let c = live_once("GET", "/users");
+    let d = live_once("POST", "/users");
+    let e = live_once("GET", "/missing");
+    let f = live_once("DELETE", "/health");
+    ((((a + b) + c) + d) + (e + f)) - 1540
+}
+
+/// EFFECT: bind `port` and serve `n` connections from whatever client shows
+/// up, then close the listener — a real accept loop, not a self-test.
+///
+/// This is the entry point that makes the router a *server* rather than a
+/// program that talks to itself: the peer is arbitrary, so the bytes on the
+/// wire must satisfy a client this program has no control over. The dogfood
+/// test drives exactly this path with its own TCP client, which is what pins
+/// the response framing against a peer that did not agree to be lenient.
+///
+/// Returns the number of connections served. Bounded: an accept that times
+/// out ends the loop rather than hanging forever.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn serve_on(take port: Int, take n: Int) -> Int {
+    let listener = std::rt::listen(port);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    var served = 0;
+    var remaining = n;
+    while remaining > 0 {
+        let conn = std::rt::accept_timeout(listener, io_timeout_ms());
+        if conn < 0 {
+            remaining = 0;
+        } else {
+            let status = serve_once(conn);
+            if status > 0 {
+                served = served + 1;
+            }
+            remaining = remaining - 1;
+        }
+    }
+    std::rt::close(listener);
+    served
+}
+
+/// Exit with the router's report: 74 — but only after the table has proved
+/// itself on a real socket.
+///
+/// `main` computes the report twice: once through the pure dispatch table, and
+/// once by serving the identical six requests to itself over loopback TCP. It
+/// exits 74 only when the two agree, so the documented exit byte is now
+/// evidence that the router *serves*, not merely that it dispatches. A
+/// framing or parsing regression that left the pure specs green would break
+/// the agreement and exit 0, which the dogfood test reports loudly.
+// --- Concurrent serving (ADR-0007 + ADR-0015) -------------------------------
+//
+// The example previously listed concurrent serving as absent, reasoning that
+// `par_map` is fork-join over a *known* task set and so cannot express an
+// unbounded accept loop. The first half is right; the conclusion was not.
+//
+// A worker pool does not need the task set to be the *requests*. It needs it
+// to be the **workers**, and each worker to find its own work. Since a socket
+// descriptor is an `Int`, the shared listener is an ordinary `par_map` task
+// value: hand the same listener to N workers and let each one race `accept`
+// on it, exactly as `concurrent-worker`'s `drain_queue` races `chan_recv` on
+// a shared channel. The kernel's accept queue *is* the work queue, so no
+// channel is needed to distribute connections — the OS already does it.
+//
+// What stays true is the boundary: this is structured fork-join, so the pool
+// serves a **bounded** number of connections and joins before returning. A
+// server that runs forever is a different shape (it wants detached spawn,
+// which v0 deliberately does not have), and this does not pretend otherwise —
+// it takes a connection budget and returns when the budget is spent.
+
+/// How many connections each worker in the pool serves before it joins.
+/// Together with `pool_workers` this bounds the pool: fork-join must join,
+/// so the work has to be finite.
+fn per_worker_budget() -> Int {
+    2
+}
+
+/// The pool's width — the number of OS threads `par_map` forks.
+fn pool_workers() -> Int {
+    4
+}
+
+/// EFFECT: one pool worker — accept and serve `per_worker_budget()`
+/// connections off the **shared** listener, returning how many it served.
+///
+/// Every worker receives the same listener descriptor and races the others to
+/// `accept` it. Which worker wins any particular connection is
+/// scheduler-dependent and deliberately unobservable; the *total* served
+/// across the pool is not, which is what makes the pool testable at all. A
+/// worker whose accept times out stops early rather than blocking the join.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+/// How long a pool worker waits for a connection before concluding there is
+/// no more work and joining.
+///
+/// Deliberately shorter than `io_timeout_ms`, and for a different reason: that
+/// bound protects an *in-progress* request from a peer that stalls mid-write,
+/// where waiting is the correct behavior. This one bounds the pool's *idle*
+/// time, where waiting achieves nothing — fork-join cannot return until every
+/// worker joins, so an unused worker sitting on a long accept delays the whole
+/// pool's exit by that much. Separating the two means a slow client is still
+/// tolerated while an idle pool still shuts down briskly.
+fn pool_idle_ms() -> Int {
+    1000
+}
+
+fn pool_worker(take listener: Int) -> Int {
+    var served = 0;
+    var remaining = per_worker_budget();
+    while remaining > 0 {
+        let conn = std::rt::accept_timeout(listener, pool_idle_ms());
+        if conn < 0 {
+            remaining = 0;
+        } else {
+            let status = serve_once(conn);
+            if status > 0 {
+                served = served + 1;
+            }
+            remaining = remaining - 1;
+        }
+    }
+    served
+}
+
+/// EFFECT: serve on `port` with a real **concurrent worker pool** — fork
+/// `pool_workers()` OS threads over the shared listener, each serving its own
+/// budget of connections, and join. Returns the total served.
+///
+/// The capacity is `pool_workers() * per_worker_budget()` connections, served
+/// concurrently rather than one at a time: several requests can be in flight
+/// on different threads, which is the property `serve_on`'s serial loop lacks
+/// and the reason a pool is worth having.
+///
+/// No data race is expressible here by construction, which is ADR-0007's
+/// guarantee doing real work: the workers share only the listener descriptor,
+/// an `Int` the kernel synchronizes internally, and every connection is owned
+/// by exactly one worker from `accept` to `close`. The router itself is pure,
+/// so there is no shared mutable state for the threads to contend over — a
+/// property worth noticing, because it is what makes a routing table safe to
+/// serve from N threads without a single lock.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn serve_pool(take port: Int) -> Int {
+    let listener = std::rt::listen(port);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    // The task set is the WORKERS, not the requests: each entry is the same
+    // shared listener, and each worker finds its own connections on it.
+    var workers = std::array::empty();
+    var w = 0;
+    while w < pool_workers() {
+        std::array::push(workers, listener);
+        w = w + 1;
+    }
+    let served = std::rt::par_map(pool_worker, workers, pool_workers());
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(served) {
+        total = total + std::array::get(served, i);
+        i = i + 1;
+    }
+    std::rt::close(listener);
+    total
+}
+
+/// EFFECT: read argument `i` as a non-negative decimal integer, or -1 when it
+/// is absent or malformed.
+///
+/// The digits are read straight off `std::rt::arg_byte` (ADR-0013) rather than
+/// through `std::str::parse_int`, because this example is a standalone file:
+/// it consumes no stdlib module, so it decodes the few bytes it needs itself.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn arg_int(take i: Int) -> Int {
+    if i >= std::rt::arg_count() {
+        return 0 - 1;
+    }
+    var value = 0;
+    var j = 0;
+    var digits = 0;
+    var bad = false;
+    var scanning = true;
+    while scanning {
+        let b = std::rt::arg_byte(i, j);
+        if b < 0 {
+            scanning = false;
+        } else {
+            if b < 48 || b > 57 {
+                bad = true;
+                scanning = false;
+            } else {
+                value = value * 10 + (b - 48);
+                digits = digits + 1;
+                j = j + 1;
+            }
+        }
+    }
+    if bad || digits == 0 {
+        0 - 1
+    } else {
+        value
+    }
+}
+
+/// Three modes, selected by the command line:
+///
+///   * `router` — the self-test: serve the six sample requests to itself over
+///     loopback and exit 74 only when the wire agrees with the pure table.
+///   * `router <port> <n>` — serve `n` real connections serially on `port`.
+///   * `router <port> 0` — serve on `port` with the concurrent worker pool.
+///
+/// The two serving modes exit with the number of connections served, which is
+/// what lets the dogfood tests assert the server did the work rather than
+/// merely surviving.
 fn main() -> Int {
-    report()
+    let port = arg_int(1);
+    let count = arg_int(2);
+    if port >= 0 && count >= 0 {
+        // `router <port> 0` selects the concurrent pool, whose capacity is
+        // fixed by `pool_workers` * `per_worker_budget` rather than passed in
+        // — a serial run of zero connections would be a no-op anyway, so the
+        // spelling is free.
+        if count == 0 {
+            return serve_pool(port);
+        }
+        return serve_on(port, count);
+    }
+    let pure_report = report();
+    if live_report() != pure_report {
+        return 0;
+    }
+    std::rt::write(1, "router: 6 requests served over loopback, wire == table\n");
+    pure_report
 }
 
 // --- Executable specs -------------------------------------------------------
@@ -325,45 +991,115 @@ spec "every route dispatches to its own handler" {
     // Each registered path reaches the handler that path is *for* — the
     // check that catches a registration whose slot drifted from
     // `handler_table`'s order, which is the split table's real failure mode.
-    then route("GET", "/") == status_ok();
-    then route("GET", "/health") == status_no_content();
-    then route("GET", "/users") == status_ok();
+    then status_for("GET", "/") == status_ok();
+    then status_for("GET", "/health") == status_no_content();
+    then status_for("GET", "/users") == status_ok();
     // Distinct handlers really are distinct: `/` and `/health` both answer a
     // GET, but with different statuses, so a swapped registration is visible.
-    then route("GET", "/") != route("GET", "/health");
+    then status_for("GET", "/") != status_for("GET", "/health");
 }
 
 spec "handlers receive the request, not just the path" {
     // Same path, different method, different status: proof the handler is
     // called with the request rather than selected by path alone.
-    then route("POST", "/users") == status_created();
-    then route("GET", "/users") == status_ok();
-    then route("POST", "/users") != route("GET", "/users");
+    then status_for("POST", "/users") == status_created();
+    then status_for("GET", "/users") == status_ok();
+    then status_for("POST", "/users") != status_for("GET", "/users");
 }
 
 spec "an unmatched path dispatches to the fallback handler" {
-    then route("GET", "/missing") == status_not_found();
-    then route("POST", "/nope") == status_not_found();
+    then status_for("GET", "/missing") == status_not_found();
+    then status_for("POST", "/nope") == status_not_found();
     // The fallback answers regardless of method — 404 precedes any method
     // policy, because an unknown path has no policy to consult.
-    then route("DELETE", "/missing") == status_not_found();
-    then route("PATCH", "/missing") == status_not_found();
+    then status_for("DELETE", "/missing") == status_not_found();
+    then status_for("PATCH", "/missing") == status_not_found();
 }
 
 spec "a known path refuses a method it does not allow" {
     // 405, not 404: the path exists, the method is wrong. Getting this
     // backwards is the classic router bug, so it is pinned explicitly.
-    then route("DELETE", "/health") == status_method_not_allowed();
-    then route("POST", "/health") == status_method_not_allowed();
-    then route("POST", "/") == status_method_not_allowed();
+    then status_for("DELETE", "/health") == status_method_not_allowed();
+    then status_for("POST", "/health") == status_method_not_allowed();
+    then status_for("POST", "/") == status_method_not_allowed();
     // An unknown method on a known path is refused, not dispatched.
-    then route("PATCH", "/users") == status_method_not_allowed();
+    then status_for("PATCH", "/users") == status_method_not_allowed();
 }
 
 spec handle_not_found {
     // The fallback is total: every method reaches the same answer.
-    then handle_not_found(Request { method: method_get(), path: "/x" }) == status_not_found();
-    then handle_not_found(Request { method: 0, path: "" }) == status_not_found();
+    then handle_not_found(Request { method: method_get(), path: "/x" }).status == status_not_found();
+    then handle_not_found(Request { method: 0, path: "" }).status == status_not_found();
+    // …and it answers with a body, so a client learns why, not just that.
+    then std::str::len(std::string::as_str(handle_not_found(Request { method: 0, path: "" }).body)) > 0;
+}
+
+spec int_to_text {
+    // Content-Length is computed now, so the renderer that produces it is
+    // pinned across the boundaries a hand-rolled loop gets wrong.
+    then std::string::as_str(int_to_text(0)) == "0";
+    then std::string::as_str(int_to_text(7)) == "7";
+    then std::string::as_str(int_to_text(10)) == "10";
+    then std::string::as_str(int_to_text(16)) == "16";
+    then std::string::as_str(int_to_text(99)) == "99";
+    then std::string::as_str(int_to_text(100)) == "100";
+    then std::string::as_str(int_to_text(1024)) == "1024";
+}
+
+spec headers_for {
+    // The measured length reaches the wire. A wrong Content-Length is worse
+    // than a missing body: the client hangs waiting for bytes that never
+    // come, or truncates the ones it got.
+    then std::string::as_str(headers_for(0)) == "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    then std::string::as_str(headers_for(16)) == "\r\nContent-Length: 16\r\nConnection: close\r\n\r\n";
+    // Whatever the length, the block still terminates with a blank line.
+    then std::str::slice(std::string::as_str(headers_for(5)), std::str::len(std::string::as_str(headers_for(5))) - 4, std::str::len(std::string::as_str(headers_for(5)))) == "\r\n\r\n";
+}
+
+spec "handlers answer with bodies, and 204 answers without one" {
+    // The body is real: routes that carry content report a non-zero length,
+    // measured through the same accessor the wire layer uses.
+    then body_len_for("GET", "/") > 0;
+    then body_len_for("GET", "/users") > 0;
+    then body_len_for("POST", "/users") > 0;
+    then body_len_for("GET", "/missing") > 0;
+    // 204 is defined to carry no content, so this route must stay empty —
+    // the case that proves the body is genuinely optional rather than always
+    // present and sometimes ignored.
+    then body_len_for("GET", "/health") == 0;
+    // A refused method answers with a status and no body.
+    then body_len_for("DELETE", "/health") == 0;
+    // Distinct routes really carry distinct content, so a body cannot be a
+    // constant that happens to look right.
+    then std::string::as_str(route("GET", "/").body) != std::string::as_str(route("GET", "/users").body);
+    // GET and POST on the same path differ in body as well as status.
+    then std::string::as_str(route("GET", "/users").body) != std::string::as_str(route("POST", "/users").body);
+}
+
+spec response_line {
+    // The reverse of the table: every status the router can answer with has a
+    // distinct status line, so a client can read back what was routed.
+    then response_line(status_ok()) == "HTTP/1.1 200 OK";
+    then response_line(status_created()) == "HTTP/1.1 201 Created";
+    then response_line(status_no_content()) == "HTTP/1.1 204 No Content";
+    then response_line(status_not_found()) == "HTTP/1.1 404 Not Found";
+    then response_line(status_method_not_allowed()) == "HTTP/1.1 405 Method Not Allowed";
+    // Distinct statuses stay distinct on the wire — a collision here would
+    // make two different outcomes indistinguishable to a client.
+    then response_line(status_ok()) != response_line(status_no_content());
+    then response_line(status_not_found()) != response_line(status_method_not_allowed());
+}
+
+spec find_space {
+    // The request line splits on spaces: "GET /health HTTP/1.1".
+    then find_space("GET /health HTTP/1.1", 0) == 3;
+    then find_space("GET /health HTTP/1.1", 4) == 11;
+    // A line with no space at all reports -1 rather than a bogus index, which
+    // is what routes malformed input to the fallback instead of trapping.
+    then find_space("garbage", 0) == 0 - 1;
+    then find_space("", 0) == 0 - 1;
+    // Searching past the last space finds nothing.
+    then find_space("GET /", 5) == 0 - 1;
 }
 
 spec report {

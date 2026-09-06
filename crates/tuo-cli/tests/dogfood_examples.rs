@@ -30,6 +30,8 @@
 //! `tuo build --manifest … -o …` then executed, because `tuo run` is file-based
 //! and has no package-aware form (DOGFOODING.md finding D-7).
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -242,6 +244,23 @@ fn http_service_parses_routes_prints_and_runs() {
         "HTTP/1.1 200 OK\n",
         "http-service must print its documented response line, byte for byte"
     );
+
+    // The wire framing is a separate promise from the printed line. `main`'s
+    // exit 200 already requires its loopback oracle to have read a *complete*
+    // response back (status line plus a terminated header block), but the
+    // source is asserted too so the framing constant cannot quietly regress to
+    // the bare `"\n"` this example shipped with — a response a real client
+    // cannot parse, and which no stdout assertion would notice.
+    let source = std::fs::read_to_string(&main).expect("http-service source reads");
+    assert!(
+        source.contains(r"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+        "http-service must terminate its response with CRLF headers and a blank line"
+    );
+    assert!(
+        source.contains("drain_headers(conn)"),
+        "http-service must drain the request's header block before responding, \
+         or the close RSTs the response away"
+    );
 }
 
 /// concurrent-worker: since ADR-0007 the pool **runs live** — `main` computes
@@ -268,7 +287,12 @@ fn concurrent_worker_scheduling_core_checks_specs_and_runs() {
 /// is this example's documented finding. `main` resolves each path at runtime
 /// and calls through the slot it lands on, so the native run exercises a real
 /// indirect call (ADR-0008 Tier 1) that no pass can fold back into a direct
-/// one. Everything is pure, so the whole router is spec-checked; exit = 74.
+/// one. The dispatch table is pure and spec-checked; since this revision the
+/// example also carries an effect tier that serves the table over a real
+/// socket, and `main` exits 74 only when the six requests served over
+/// loopback agree with the pure `report()` — so the exit byte is now evidence
+/// the router *serves*, not merely that it dispatches. The independent-client
+/// framing oracle is `router_serves_real_http_to_an_independent_client`.
 #[test]
 fn router_dispatch_table_checks_specs_and_runs() {
     let dir = example_dir("router");
@@ -625,4 +649,459 @@ fn gguf_reader_runs_the_same_on_both_backends() {
         out.status.code(),
         String::from_utf8_lossy(&out.stderr),
     );
+}
+
+/// Reserve a free TCP port by binding one and immediately dropping it, so a
+/// test serving on a fixed port cannot collide with a concurrently-running
+/// test. There is an unavoidable race between releasing and rebinding, which
+/// is why callers retry the connect rather than assuming instant readiness.
+fn free_port() -> u16 {
+    TcpListener::bind("127.0.0.1:0")
+        .expect("binding an ephemeral port succeeds")
+        .local_addr()
+        .expect("the bound listener has an address")
+        .port()
+}
+
+/// Start the router binary serving `connections` requests, retrying on a fresh
+/// port if the chosen one was taken in the gap between reserving and binding.
+///
+/// The whole suite runs in parallel and several tests here bind ports, so
+/// "reserve an ephemeral port, then start a process that binds it" is
+/// inherently racy — the reservation must be released before the child can
+/// take it. Retrying on a new port keeps that race from turning into a
+/// flaky failure, which would be far more expensive to debug than it is to
+/// prevent. Returns the live child and the port it is actually serving on.
+fn start_router(binary: &Path, connections: usize) -> (std::process::Child, u16) {
+    for _ in 0..10 {
+        let port = free_port();
+        // `0` selects the pool, whose capacity is fixed in the source, so its
+        // budget must not be incremented — only the serial mode counts.
+        let budget = if connections == 0 { 0 } else { connections + 1 };
+        let mut child = Command::new(binary)
+            .arg(port.to_string())
+            .arg(budget.to_string())
+            .spawn()
+            .expect("the router binary starts");
+        // Wait until the child is actually accepting on `port`, rather than
+        // assuming a fixed grace period is enough. A probe connection is the
+        // only reliable signal: the process being alive does not mean the bind
+        // succeeded (in pool mode the workers sit in a timed accept either
+        // way), and a fixed sleep would be both slower and flakier.
+        //
+        // The probe itself is a real connection the server accepts and serves,
+        // so it is added to the caller's budget here rather than silently
+        // stolen from it — otherwise the last request would find the server
+        // already gone. Callers pass the number of requests they intend to
+        // make; this function asks the server for one more.
+        // 400 * 25ms = 10s per attempt. Generous on purpose: these tests run
+        // in parallel with the rest of the suite, which compiles and links
+        // native binaries, so a freshly spawned process can take seconds to
+        // reach its first `accept` on a loaded machine. A tight budget here
+        // turns machine load into a spurious failure, which is the most
+        // expensive kind of test to debug.
+        let mut ready = false;
+        for _ in 0..400 {
+            if child
+                .try_wait()
+                .expect("polling the router succeeds")
+                .is_some()
+            {
+                // Exited already: the bind lost the race, so try another port.
+                break;
+            }
+            if let Ok(mut probe) = TcpStream::connect(("127.0.0.1", port)) {
+                // Send a complete request and read the answer, rather than
+                // connecting and dropping. A bare connect-and-close makes the
+                // server's read fail with a reset, which is indistinguishable
+                // from the RST bug these tests exist to detect — the probe
+                // must not manufacture the symptom it is checking for.
+                let _ = probe.write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+                let _ = probe.flush();
+                let mut sink = Vec::new();
+                let _ = probe.read_to_end(&mut sink);
+                ready = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        if ready {
+            return (child, port);
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    panic!(
+        "could not start the router on a free port after 10 attempts \
+         (binary: {}); every attempt either failed to bind or never began \
+         accepting within 10s",
+        binary.display()
+    );
+}
+
+/// Speak one real HTTP request to `port` and return the raw response bytes.
+///
+/// This is deliberately a hand-written client rather than a convenience
+/// wrapper: it sends the request line, a `Host` header, and the blank line a
+/// real client sends, then reads until the peer closes. That makes it an
+/// *independent* peer — it does not share the example's own framing
+/// assumptions, which is the whole point of using it as the oracle.
+fn http_request(port: u16, method: &str, path: &str) -> String {
+    // The server binds a moment after the port is reserved, so retry briefly.
+    let mut stream = None;
+    for _ in 0..200 {
+        match TcpStream::connect(("127.0.0.1", port)) {
+            Ok(s) => {
+                stream = Some(s);
+                break;
+            }
+            Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+        }
+    }
+    let mut stream = stream.unwrap_or_else(|| panic!("connecting to the served port {port}"));
+    stream
+        .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+        .expect("setting a read timeout succeeds");
+    let request = format!("{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n");
+    stream
+        .write_all(request.as_bytes())
+        .expect("writing the request succeeds");
+    let mut response = Vec::new();
+    stream
+        .read_to_end(&mut response)
+        .expect("reading the response succeeds");
+    String::from_utf8_lossy(&response).into_owned()
+}
+
+/// router: the dispatch table **serving real traffic**.
+///
+/// The example's own `main` is a self-test — it serves itself over loopback,
+/// which proves the socket path but cannot prove the *framing*, because both
+/// sides share one set of assumptions. This test is the independent peer: it
+/// builds the router, runs it in its accept-loop mode, and drives it with a
+/// hand-written HTTP client that agreed to nothing.
+///
+/// It asserts the **exact response bytes**, not just a status. That is the
+/// gate that matters, because the two bugs this example shipped with were both
+/// invisible to a status-only check and to a loopback self-test:
+///
+///   * the response ended with a bare `"\n"` rather than CRLF + headers +
+///     the blank line, so it was *unterminated* — a real client waits for
+///     framing that never completes; and
+///   * the server closed with the client's headers still unread in its
+///     receive buffer, so the kernel sent RST and the peer discarded the
+///     response it had already been sent.
+///
+/// A regression in either one flips these assertions, so the framing can
+/// never silently rot back.
+#[test]
+fn router_serves_real_http_to_an_independent_client() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-serve-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-serve");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for serving)");
+
+    // Every (method, path) the table distinguishes, plus the two negative
+    // cases a router must get the RIGHT way round: an unknown path is 404,
+    // while a known path with a refused method is 405.
+    // (method, path, status line, body). The body is asserted byte for byte,
+    // and its length must match the `Content-Length` the server computed — a
+    // wrong length is worse than a missing body, because the client either
+    // hangs waiting for bytes that never come or truncates the ones it got.
+    let cases: &[(&str, &str, &str, &str)] = &[
+        ("GET", "/", "HTTP/1.1 200 OK", "tuonelang router"),
+        // 204 is defined to carry no content: this route must stay empty.
+        ("GET", "/health", "HTTP/1.1 204 No Content", ""),
+        ("GET", "/users", "HTTP/1.1 200 OK", "[\"ada\",\"grace\"]"),
+        (
+            "POST",
+            "/users",
+            "HTTP/1.1 201 Created",
+            "{\"created\":true}",
+        ),
+        ("GET", "/missing", "HTTP/1.1 404 Not Found", "not found"),
+        ("DELETE", "/health", "HTTP/1.1 405 Method Not Allowed", ""),
+        ("PATCH", "/users", "HTTP/1.1 405 Method Not Allowed", ""),
+        ("GET", "/users/1", "HTTP/1.1 404 Not Found", "not found"),
+    ];
+
+    let (mut server, port) = start_router(&binary, cases.len());
+
+    for (method, path, status_line, body) in cases {
+        let response = http_request(port, method, path);
+        let expected = format!(
+            "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(
+            response, expected,
+            "router served the wrong bytes for `{method} {path}`.\n\
+             A bare-newline or unterminated response, a wrong Content-Length, \
+             or a body on a 204 are all pinned by this assertion."
+        );
+    }
+
+    let served = server.wait().expect("the router binary exits");
+    // +1 for `start_router`'s readiness probe, which is a real served
+    // connection rather than a free one.
+    assert_eq!(
+        served.code(),
+        Some(cases.len() as i32 + 1),
+        "the router should report serving all {} connections (plus the probe)",
+        cases.len()
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The router's serving path must reach the same wire bytes under the
+/// optimizing LLVM release backend as under the Cranelift debug backend.
+///
+/// The effect tier is where the two backends could most plausibly diverge —
+/// it is the part that calls the runtime's socket shim, threads a borrowed
+/// `Str` through a heap-allocated `String`, and depends on argv. A serving
+/// regression that only appeared under `--release` would be invisible to
+/// every other test here, all of which build debug.
+#[test]
+fn router_serves_the_same_bytes_on_the_release_backend() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-serve-release-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-serve-release");
+
+    let built = tuo(&[
+        "build",
+        "--release",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build --release (router, for serving)");
+
+    let (mut server, port) = start_router(&binary, 2);
+
+    assert_eq!(
+        http_request(port, "GET", "/health"),
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "the release backend must serve the same bytes as the debug backend"
+    );
+    // A route WITH a body, so the release backend's owned-`String` path
+    // through the indirect call is covered too — the part most likely to
+    // differ between backends, not the empty case.
+    assert_eq!(
+        http_request(port, "GET", "/"),
+        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\ntuonelang router",
+        "the release backend must serve the same body bytes"
+    );
+
+    let served = server.wait().expect("the release router binary exits");
+    assert_eq!(
+        served.code(),
+        Some(3),
+        "the release router served both requests (plus the probe)"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The router must answer a **malformed** request line the way a server does —
+/// with a response, not a hang, a crash, or a dropped connection.
+///
+/// A real client cannot easily produce these (curl will not send a request
+/// line with no method), so they are driven as raw bytes. They cover the
+/// branches an ordinary request never reaches: a line with no space at all
+/// (so no method/path split exists), an empty line, and a request line
+/// missing its HTTP-version token. Each must still come back fully framed,
+/// because a client that sent garbage is still a client waiting for bytes.
+#[test]
+fn router_answers_malformed_requests_without_hanging() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-malformed-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-malformed");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for malformed input)");
+
+    // (raw request line, expected status line). The version token is optional
+    // to this router — it dispatches on method and path — so a two-token line
+    // routes normally rather than being rejected.
+    let cases: &[(&str, &str, &str)] = &[
+        ("garbage\r\n\r\n", "HTTP/1.1 404 Not Found", "not found"),
+        ("\r\n\r\n", "HTTP/1.1 404 Not Found", "not found"),
+        ("GET /health\r\n\r\n", "HTTP/1.1 204 No Content", ""),
+        (
+            "GET /health  HTTP/1.1\r\n\r\n",
+            "HTTP/1.1 204 No Content",
+            "",
+        ),
+    ];
+
+    let (mut server, port) = start_router(&binary, cases.len());
+
+    for (raw, status_line, body) in cases {
+        let mut stream = None;
+        for _ in 0..200 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+        let mut stream = stream.expect("connecting to the served port");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("setting a read timeout succeeds");
+        stream
+            .write_all(raw.as_bytes())
+            .expect("writing the raw request succeeds");
+        let mut response = Vec::new();
+        stream
+            .read_to_end(&mut response)
+            .expect("reading the response succeeds");
+        let expected = format!(
+            "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&response),
+            expected,
+            "the router mishandled the malformed request {raw:?}"
+        );
+    }
+
+    let served = server.wait().expect("the router binary exits");
+    assert_eq!(
+        served.code(),
+        Some(cases.len() as i32 + 1),
+        "every malformed request should still count as served (plus the probe)"
+    );
+    let _ = std::fs::remove_file(&binary);
+}
+
+/// The router's **concurrent worker pool** must serve several requests that
+/// are in flight at the same time — the property a serial accept loop lacks.
+///
+/// The example previously listed concurrent serving as absent, reasoning that
+/// `par_map` is fork-join over a known task set and so cannot express an
+/// accept loop. The conclusion was wrong: the task set does not have to be the
+/// requests, it has to be the *workers*. A socket descriptor is an `Int`, so
+/// the shared listener is an ordinary `par_map` task value, and the kernel's
+/// accept queue distributes connections without a channel.
+///
+/// Proving concurrency requires more than "N requests all got answers" — a
+/// serial loop achieves that too, just one at a time. So this test opens
+/// every connection FIRST and only then lets any of them finish their
+/// request. A serial server would accept one, block reading it, and never
+/// reach the others until that one completed; the pool accepts all of them
+/// at once. Each client sends its request line, waits while the others
+/// connect, and only then sends the blank line that lets the server respond.
+/// All of them being answered is what a single-threaded accept loop cannot do.
+#[test]
+fn router_pool_serves_requests_concurrently() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-pool-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-pool");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for the pool)");
+
+    // `router <port> 0` selects the pool. Its capacity is fixed in the source
+    // as pool_workers * per_worker_budget = 4 * 2 = 8; this test occupies all
+    // four workers simultaneously, which is the concurrency being proven.
+    const WORKERS: usize = 4;
+
+    // The pool binds the port itself, so retry until one is free. `start_router`
+    // is reused: it already distinguishes "bound and serving" from "port taken".
+    let (mut server, port) = start_router(&binary, 0);
+
+    // Phase 1: every client connects and sends its request line, but NOT the
+    // blank line — so the server has accepted it and is blocked reading.
+    let mut clients = Vec::new();
+    for _ in 0..WORKERS {
+        let mut stream = None;
+        for _ in 0..200 {
+            match TcpStream::connect(("127.0.0.1", port)) {
+                Ok(s) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(25)),
+            }
+        }
+        let mut stream = stream.expect("connecting to the pooled port");
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+            .expect("setting a read timeout succeeds");
+        stream
+            .write_all(b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n")
+            .expect("writing the partial request succeeds");
+        stream.flush().expect("flushing succeeds");
+        clients.push(stream);
+    }
+
+    // Every connection is now open and mid-request. A serial server would be
+    // stuck on the first one, having never accepted the rest.
+    assert_eq!(
+        clients.len(),
+        WORKERS,
+        "all {WORKERS} connections should be open at once"
+    );
+
+    // Phase 2: release them all, then collect every response.
+    for stream in &mut clients {
+        stream
+            .write_all(b"\r\n")
+            .expect("completing the request succeeds");
+        stream.flush().expect("flushing succeeds");
+    }
+
+    let expected =
+        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\ntuonelang router";
+    for (i, stream) in clients.iter_mut().enumerate() {
+        let mut response = String::new();
+        stream
+            .read_to_string(&mut response)
+            .unwrap_or_else(|e| panic!("client {i} reading its response: {e}"));
+        assert_eq!(
+            response, expected,
+            "client {i} did not get a complete response from the pool; \\
+             a serial accept loop cannot answer all {WORKERS} of these"
+        );
+    }
+
+    // The pool's own accounting: it returns the total connections served
+    // across every worker, which must be at least the ones we drove. (It may
+    // serve more — its budget is 8 — but the remaining workers time out and
+    // join, which is why this exits at all.)
+    let served = server.wait().expect("the pooled router exits");
+    let code = served.code().expect("the pool exits with a status");
+    assert!(
+        code >= WORKERS as i32,
+        "the pool reported {code} connections served, expected at least {WORKERS}"
+    );
+    let _ = std::fs::remove_file(&binary);
 }
