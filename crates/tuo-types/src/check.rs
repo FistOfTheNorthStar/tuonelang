@@ -160,6 +160,14 @@ pub(crate) struct Checker<'a> {
     /// Types of the current body's expressions, recorded raw (inference
     /// variables unresolved) and published — applied — by [`finish_body`].
     body_exprs: Vec<(Span, Ty)>,
+    /// Map-builtin call sites whose `(key, value)` pair was still an unsolved
+    /// inference variable when the call was checked, re-examined by
+    /// [`Self::finish_body`] once inference has run. Without this, a pair
+    /// solved *after* its call site — the ordinary case for
+    /// `std::map::empty()`, whose `K`/`V` come from later use — would never be
+    /// checked against the v0 operation surface and would reach codegen
+    /// (ADR-0023 Stage A).
+    deferred_map_pairs: Vec<(Ty, Ty, Span)>,
     locals: HashMap<SymbolId, Ty>,
     ret: Ty,
     frames: Vec<Frame>,
@@ -206,6 +214,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         expr_types: HashMap::new(),
         icx: InferCtx::default(),
         body_exprs: Vec::new(),
+        deferred_map_pairs: Vec::new(),
         locals: HashMap::new(),
         ret: Ty::Unit,
         frames: Vec::new(),
@@ -1426,6 +1435,7 @@ impl<'a> Checker<'a> {
     fn begin_body(&mut self, ret: Ty, fallback: Span) {
         self.icx = InferCtx::default();
         self.body_exprs = Vec::new();
+        self.deferred_map_pairs = Vec::new();
         self.locals = HashMap::new();
         self.ret = ret;
         self.frames = Vec::new();
@@ -1441,6 +1451,20 @@ impl<'a> Checker<'a> {
                 Diagnostic::error(code(11), "type annotation needed", span)
                     .with_primary_label("cannot infer the type here"),
             );
+        }
+        // Re-check the map pairs that were still unsolved at their call site.
+        // Inference has now run, so `apply` yields the pair the program really
+        // built — the check the eager pass could not perform (ADR-0023 Stage A).
+        // A pair *still* undetermined here is left alone: that is a genuinely
+        // unconstrained `empty()`, already reported as `T0011` above.
+        let deferred = std::mem::take(&mut self.deferred_map_pairs);
+        for (key, value, span) in deferred {
+            let key = self.icx.apply(&key);
+            let value = self.icx.apply(&value);
+            if Self::map_pair_undetermined(&key, &value) {
+                continue;
+            }
+            self.check_map_pair(&key, &value, span);
         }
         let locals = std::mem::take(&mut self.locals);
         for (symbol, ty) in locals {
@@ -2984,14 +3008,37 @@ impl<'a> Checker<'a> {
     /// component is left alone (an undetermined `empty()` is `T0011`,
     /// reported by the unsolved-variable path).
     fn reject_unsupported_map_pair(&mut self, key: &Ty, value: &Ty, span: Span) {
-        let key = self.icx.apply(key);
-        let value = self.icx.apply(value);
-        let undetermined = |ty: &Ty| matches!(ty, Ty::Var(_) | Ty::Error | Ty::Never);
-        if undetermined(&key) || undetermined(&value) {
+        let applied_key = self.icx.apply(key);
+        let applied_value = self.icx.apply(value);
+        if Self::map_pair_undetermined(&applied_key, &applied_value) {
+            // Not yet solvable *here*. Inference may still determine the pair
+            // from a later use of the same map, so remember the site and try
+            // again in `finish_body` rather than dropping the check — dropping
+            // it is what let unsupported pairs reach codegen (ADR-0023 Stage A).
+            self.deferred_map_pairs
+                .push((applied_key, applied_value, span));
             return;
         }
+        self.check_map_pair(&applied_key, &applied_value, span);
+    }
+
+    /// Is either half of a map pair still undetermined? `Error`/`Never` count
+    /// as undetermined: they mean an error was already reported elsewhere, and
+    /// a second diagnostic about the same code would be noise.
+    fn map_pair_undetermined(key: &Ty, value: &Ty) -> bool {
+        let undetermined = |ty: &Ty| matches!(ty, Ty::Var(_) | Ty::Error | Ty::Never);
+        undetermined(key) || undetermined(value)
+    }
+
+    /// Report a `T0001` if the (already applied, already determined) pair is
+    /// outside the v0 operation surface. Split out of
+    /// [`Self::reject_unsupported_map_pair`] so the deferred re-check in
+    /// [`Self::finish_body`] runs the identical rule rather than a copy.
+    fn check_map_pair(&mut self, key: &Ty, value: &Ty, span: Span) {
+        let key = key.clone();
+        let value = value.clone();
         let key_ok = matches!(key, Ty::Str) || key == Ty::int();
-        let value_ok = value == Ty::int();
+        let value_ok = Self::is_supported_map_value(&value);
         if key_ok && value_ok {
             return;
         }
@@ -3005,16 +3052,33 @@ impl<'a> Checker<'a> {
                 span,
             )
             .with_primary_label(format!(
-                "the v0 map operation surface is `Map[Int, Int]` and `Map[Str, Int]`, \
-                     not `{rendered}`"
+                "the v0 map operation surface is an `Int`/`Str` key with an \
+                     `Int`/`Bool`/`Float` value, not `{rendered}`"
             ))
             .with_help(
-                "user key types await the trait system's `Hash`/`Eq`, and non-`Int` \
-                     values are a later additive increment (ADR-0011); use an `Int` or \
-                     `Str` key with an `Int` value",
+                "user key types await the trait system's `Hash`/`Eq` (ADR-0011), and \
+                     `Str`/`String`/struct values await the deep-copy and drop path \
+                     (ADR-0023 Stage B2); use an `Int` or `Str` key with an \
+                     `Int`/`Bool`/`Float` value",
             )
             .with_actual(StructuredValue::Type(rendered)),
         );
+    }
+
+    /// Is `ty` a v0-supported map **value** type (ADR-0023 Stage B)?
+    ///
+    /// The set is the `Copy` scalars: `Int`, `Bool`, and `Float`. Each is a
+    /// fixed-size value the table can hold inline, so `get` is a plain load and
+    /// destruction needs no per-value glue — which is exactly why this subset
+    /// lands first. `Str`/`String` values and struct/enum values own or borrow
+    /// data and need the deep-copy-on-read and recursive-drop machinery
+    /// ADR-0012 built for array elements; they stay refused until that path is
+    /// wired through both backends (Stage B2).
+    ///
+    /// Keys are deliberately **not** widened here: a user key type needs the
+    /// trait system's `Hash`/`Eq` (ADR-0011), which is a different decision.
+    fn is_supported_map_value(ty: &Ty) -> bool {
+        matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Float(_))
     }
 
     /// Refuse an `Array[T]` whose element type `T` is outside the v0-supported

@@ -17,7 +17,7 @@ use chumsky::error::{Rich, RichReason};
 
 use tuo_diagnostics::Diagnostic;
 use tuo_lexer::LexResult;
-use tuo_source::SourceText;
+use tuo_source::{SourceText, Span};
 use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
@@ -69,6 +69,40 @@ pub fn parse(source: &SourceText) -> ParseResult {
     }
 }
 
+/// The marker a targeted recovery prefixes to its custom message, so
+/// [`to_diagnostic`] can tell it from an ordinary skipped-token report.
+pub(crate) const TARGETED: &str = "\u{1}targeted:";
+
+/// Build the targeted-recovery diagnostic named by `message`, or `None` if
+/// `message` is an ordinary recovery report.
+///
+/// The grammar is built over token *kinds* and has no access to the source
+/// text, so it cannot spell the parameter's name itself; it emits the marker
+/// alone and the name is read here, off the same span the diagnostic points
+/// at. Targeted recoveries must match the handwritten engine's diagnostic
+/// exactly — same code, message, label, and help — because `oracle_parity`
+/// compares them.
+fn targeted_recovery(message: &str, primary: Span, source: &SourceText) -> Option<Diagnostic> {
+    if message.strip_prefix(TARGETED)? != "param-missing-mode" {
+        return None;
+    }
+    let range = primary.range();
+    let name = &source.text()[range.start().as_usize()..range.end().as_usize()];
+    Some(
+        Diagnostic::error(
+            code(1),
+            format!("parameter `{name}` is missing its passing mode"),
+            primary,
+        )
+        .with_primary_label("expected `in`, `mut`, or `take` before this name")
+        .with_help(concat!(
+            "every parameter states how it takes its argument: `in` borrows it ",
+            "read-only, `mut` borrows it mutably, `take` moves it — there is no ",
+            "default, so the choice is always written",
+        )),
+    )
+}
+
 /// Convert one chumsky error to a diagnostic.
 ///
 /// - `P0001`: unexpected token (expected/found, from the grammar itself).
@@ -84,11 +118,21 @@ fn to_diagnostic(
     let primary = byte_span(span.start, toks, lex, source);
 
     match error.reason() {
-        RichReason::Custom(message) => Diagnostic::error(code(2), message.clone(), primary)
-            .with_primary_label("skipped during error recovery")
-            .with_note(
-                "the parser resynchronized at the next `;`, `}`, or item keyword and continued",
-            ),
+        // A custom message is a recovery report by default (`P0002`). The one
+        // exception is a *targeted* recovery, which diagnoses a specific
+        // mistake rather than reporting skipped tokens: it carries the
+        // `TARGETED` sentinel so it keeps its own code, label, and help
+        // instead of being dressed as generic resynchronization. The
+        // handwritten engine produces the identical diagnostic directly;
+        // parity over the `invalid/` corpus pins the two together.
+        RichReason::Custom(message) => match targeted_recovery(message, primary, source) {
+            Some(diagnostic) => diagnostic,
+            None => Diagnostic::error(code(2), message.clone(), primary)
+                .with_primary_label("skipped during error recovery")
+                .with_note(
+                    "the parser resynchronized at the next `;`, `}`, or item keyword and continued",
+                ),
+        },
         RichReason::ExpectedFound { .. } => {
             let mut expected: Vec<String> = error.expected().map(ToString::to_string).collect();
             expected.sort_unstable();

@@ -3380,7 +3380,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     map::MAP_INT_GET_SYMBOL
                 };
                 self.call_map_shim(symbol, &call_args)?;
-                self.write_option_int_dest(dest, out)
+                self.write_option_scalar_dest(dest, out)
             }
             HeapOp::MapKeys => {
                 // `keys(in Map) -> Array[K]`: the shim allocates the fresh
@@ -3454,11 +3454,46 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         Ok(())
     }
 
-    /// Materialize an `Option[Int]` destination from a map shim's two-word
+    /// Reinterpret a `Copy` scalar as the `i64` word a map shim parameter is
+    /// declared as.
+    ///
+    /// `Int` passes through. `Bool` (i1) is zero-extended. `Float` is
+    /// **bitcast**, never numerically converted: the table stores opaque bytes,
+    /// so the bits must survive the round trip unchanged.
+    fn value_as_word(
+        &mut self,
+        value: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, CodegenError> {
+        let i64_ty = self.ctx.i64_type();
+        match value {
+            BasicValueEnum::IntValue(int) => {
+                if int.get_type().get_bit_width() == 64 {
+                    return Ok(int.into());
+                }
+                Ok(self
+                    .builder
+                    .build_int_z_extend(int, i64_ty, "map_value_word")
+                    .map_err(builder_err("widening a map value"))?
+                    .into())
+            }
+            BasicValueEnum::FloatValue(float) => Ok(self
+                .builder
+                .build_bit_cast(float, i64_ty, "map_value_bits")
+                .map_err(builder_err("bitcasting a map value"))?),
+            other => Ok(other),
+        }
+    }
+
+    /// Materialize an `Option[V]` destination from a map shim's two-word
     /// `{found, value}` out buffer: tag = `1 - found` (`Some` is variant 0,
     /// `None` variant 1), payload = the value word (deterministically zero
     /// when absent, so no branch is needed).
-    fn write_option_int_dest(
+    ///
+    /// `V` is a `Copy` scalar — `Int`, `Bool`, or `Float` (ADR-0023 Stage B).
+    /// The shim's buffer holds untyped words, so the loaded word is narrowed
+    /// back to the destination's own payload type, the exact inverse of
+    /// [`Self::value_as_word`].
+    fn write_option_scalar_dest(
         &mut self,
         dest: &Place,
         out: PointerValue<'ctx>,
@@ -3472,11 +3507,27 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .map_err(builder_err("loading the map found flag"))?
             .into_int_value();
         let value_addr = self.byte_gep(out, 8)?;
-        let value = self
+        let word = self
             .builder
             .build_load(i64_ty, value_addr, "map_value")
             .map_err(builder_err("loading the map value"))?
             .into_int_value();
+        let payload_ty = match &dest_ty {
+            Ty::Option(inner) => (**inner).clone(),
+            _ => Ty::int(),
+        };
+        let value: BasicValueEnum<'ctx> = match &payload_ty {
+            Ty::Bool => self
+                .builder
+                .build_int_truncate(word, self.ctx.bool_type(), "map_value_bool")
+                .map_err(builder_err("narrowing a map Bool value"))?
+                .into(),
+            Ty::Float(_) => self
+                .builder
+                .build_bit_cast(word, self.ctx.f64_type(), "map_value_float")
+                .map_err(builder_err("bitcasting a map Float value"))?,
+            _ => word.into(),
+        };
         let one = i64_ty.const_int(1, false);
         let tag64 = self
             .builder
@@ -3761,7 +3812,14 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     let value = args.get(1).ok_or_else(|| {
                         CodegenError::backend("a map insert is missing its value")
                     })?;
-                    call_args.push(self.lower_operand(value)?.into());
+                    let lowered = self.lower_operand(value)?;
+                    // `call_map_shim` declares every non-pointer parameter as
+                    // `i64`, so a `Copy` value that is not already an i64 —
+                    // `Bool` (i1) or `Float` (double) — must be reinterpreted
+                    // into a word first. Passing it raw is the "Call parameter
+                    // type mismatch" LLVM's verifier rejects, which is what made
+                    // non-`Int` values unsound before ADR-0023 Stage B.
+                    call_args.push(self.value_as_word(lowered)?.into());
                 }
                 call_args.push(out.into());
                 let symbol = match (insert, key_is_str) {
@@ -3771,7 +3829,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     (false, true) => map::MAP_STR_REMOVE_SYMBOL,
                 };
                 self.call_map_shim(symbol, &call_args)?;
-                self.write_option_int_dest(dest, out)
+                self.write_option_scalar_dest(dest, out)
             }
         }
     }

@@ -797,3 +797,147 @@ fn calling_a_non_function_value_is_t0003() {
     let (_, result) = check_one("fn main() -> Int { var n = 5; n(1) }\n");
     assert_eq!(codes(&result), vec!["T0003"]);
 }
+
+// ---------------------------------------------------------------------------
+// ADR-0023 Stage A — the map operation surface is enforced *after* inference.
+//
+// `reject_unsupported_map_pair` used to run only at the call site and return
+// early when either half of the pair was still an inference variable. For a map
+// built with `std::map::empty()` — whose `K`/`V` are solved from *later* uses —
+// that meant the check never ran at all, and an unsupported pair reached
+// codegen: `tuo check` accepted the program and the backend then failed with a
+// raw verifier error, violating the invariant that the compiler refuses what it
+// cannot compile rather than mis-compiling it.
+//
+// Every case below is written in the INFERRED spelling, because that is the one
+// that regressed. The annotated spelling was always caught, so a test using it
+// would have passed throughout the defect's life and proved nothing.
+// ---------------------------------------------------------------------------
+
+/// Build a map through `empty()`, so `K`/`V` are only determined by the
+/// `insert` that follows — the shape the eager check could not see.
+fn inferred_map_program(insert_args: &str) -> String {
+    format!(
+        "module m;\n\
+         fn f() -> Int {{\n\
+         \x20   var m = std::map::empty();\n\
+         \x20   std::map::insert(m, {insert_args});\n\
+         \x20   std::map::len(m)\n\
+         }}\n"
+    )
+}
+
+#[test]
+fn inferred_map_with_copy_scalar_values_is_accepted() {
+    // ADR-0023 Stage B widened the value set to the `Copy` scalars. These were
+    // refused before Stage B (and, before Stage A, wrongly *accepted* here and
+    // then rejected by the backend); now they are genuinely supported on all
+    // three engines, which the codegen fixtures pin at runtime.
+    assert_clean(&check_one(&inferred_map_program("1, true")).1);
+    assert_clean(&check_one(&inferred_map_program("1, 2.5")).1);
+    assert_clean(&check_one(&inferred_map_program("\"k\", true")).1);
+    assert_clean(&check_one(&inferred_map_program("\"k\", 2.5")).1);
+}
+
+#[test]
+fn inferred_map_with_str_value_is_refused() {
+    let (_, result) = check_one(&inferred_map_program("1, \"s\""));
+    assert!(
+        codes(&result).iter().any(|code| code == "T0001"),
+        "`Map[Int, Str]` built through `empty()` must be refused; got {:?}",
+        codes(&result)
+    );
+}
+
+#[test]
+fn inferred_map_error_names_the_solved_pair() {
+    // The diagnostic must name the pair inference actually produced, so the
+    // message is actionable rather than mentioning an unsolved variable. `Str`
+    // is used because it is still outside the value set after Stage B.
+    let (_, result) = check_one(&inferred_map_program("1, \"s\""));
+    let message = result
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.message.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        message.contains("Str"),
+        "the diagnostic should name the solved value type; got: {message}"
+    );
+}
+
+#[test]
+fn inferred_supported_map_pairs_still_check() {
+    // The fix must not over-refuse: both v0 pairs are built the same way.
+    assert_clean(&check_one(&inferred_map_program("1, 2")).1);
+    assert_clean(&check_one(&inferred_map_program("\"k\", 2")).1);
+}
+
+#[test]
+fn an_unconstrained_empty_map_is_an_annotation_error_not_a_pair_error() {
+    // A map whose type nothing determines is `T0011` ("type annotation
+    // needed"), reported by the unsolved-variable path. The deferred re-check
+    // must stay silent here rather than inventing a second complaint about a
+    // pair the program never chose.
+    let (_, result) = check_one("module m;\nfn f() -> Int {\n    let m = std::map::empty();\n    0\n}\n");
+    let codes = codes(&result);
+    assert!(
+        codes.iter().any(|code| code == "T0011"),
+        "expected T0011 for an unconstrained `empty()`; got {codes:?}"
+    );
+    assert!(
+        !codes.iter().any(|code| code == "T0001"),
+        "an unconstrained map must not also report a pair error; got {codes:?}"
+    );
+}
+
+#[test]
+fn a_map_pair_solved_by_a_later_call_is_still_refused() {
+    // The value type is determined by `insert` *after* `get` has been checked.
+    // Both sites defer, and both must be re-checked once inference has run.
+    // The value is a `Str`, still outside the Stage B value set.
+    let source = "module m;\n\
+                  fn f() -> Int {\n\
+                  \x20   var m = std::map::empty();\n\
+                  \x20   let seen = std::map::get(m, 1);\n\
+                  \x20   std::map::insert(m, 1, \"s\");\n\
+                  \x20   std::map::len(m)\n\
+                  }\n";
+    let (_, result) = check_one(source);
+    assert!(
+        codes(&result).iter().any(|code| code == "T0001"),
+        "a pair solved after the call site must still be refused; got {:?}",
+        codes(&result)
+    );
+}
+
+#[test]
+fn map_values_that_own_heap_stay_refused() {
+    // ADR-0023 Stage B widened the value set to `Copy` scalars only. A value
+    // that owns or borrows heap needs the deep-copy-on-read and recursive-drop
+    // path (Stage B2) and must not slip in with the scalars — the shim stores
+    // one opaque word per value, which a `Str`'s two words do not fit.
+    for value in ["\"s\"", "std::string::from_str(\"s\")"] {
+        let result = check_one(&inferred_map_program(&format!("1, {value}"))).1;
+        assert!(
+            codes(&result).iter().any(|code| code == "T0001"),
+            "a heap-owning map value ({value}) must stay refused; got {:?}",
+            codes(&result)
+        );
+    }
+}
+
+#[test]
+fn map_keys_are_not_widened_by_the_value_widening() {
+    // Keys are gated by the trait system's `Hash`/`Eq` (ADR-0011), a different
+    // decision from the value set. Widening values must not widen keys.
+    for key in ["true", "2.5"] {
+        let result = check_one(&inferred_map_program(&format!("{key}, 1"))).1;
+        assert!(
+            codes(&result).iter().any(|code| code == "T0001"),
+            "a `{key}` key must stay refused after the value widening; got {:?}",
+            codes(&result)
+        );
+    }
+}

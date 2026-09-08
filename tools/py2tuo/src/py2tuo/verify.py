@@ -48,16 +48,27 @@ def find_tuo(explicit: str | None = None) -> str | None:
         if candidate and Path(candidate).is_file():
             return str(Path(candidate).resolve())
 
-    found = shutil.which("tuo")
-    if found:
-        return found
-
+    # The repository's own build comes BEFORE any `tuo` on PATH. This tool
+    # lives inside the tuonelang tree and is used to exercise the compiler being
+    # worked on; an installed `tuo` from `cargo install` is almost always older,
+    # and silently testing against it reports the compiler's *previous*
+    # behaviour. `$TUO_BIN` above still overrides, for the case where a specific
+    # binary really is wanted.
+    #
+    # Prefer whichever build is NEWER rather than always preferring release.
+    # A stale release binary silently reports the compiler's *old* behaviour --
+    # a debugging trap that costs more than the speed of an optimized build
+    # saves, since this tool only ever runs `check`/`fmt`/`spec` on small files.
     root = Path(__file__).resolve().parents[4]
-    for build in ("release", "debug"):
-        candidate_path = root / "target" / build / "tuo"
-        if candidate_path.is_file():
-            return str(candidate_path)
-    return None
+    builds = [
+        path
+        for build in ("release", "debug")
+        if (path := root / "target" / build / "tuo").is_file()
+    ]
+    if builds:
+        return str(max(builds, key=lambda path: path.stat().st_mtime))
+
+    return shutil.which("tuo")
 
 
 def run_tuo(tuo: str, args: list[str], *, timeout: float = 120.0) -> ToolResult:

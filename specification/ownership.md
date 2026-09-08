@@ -196,6 +196,27 @@ initializer is **initialization**, not mutation (Constitution §9 definite
 assignment), and each control-flow path may initialize it at most once; a
 second assignment on any path is O0004.
 
+A `mut` argument must also *be* a place. A temporary — a literal, a struct
+literal, a call result — has no location to borrow mutably, so passing one as
+a `mut` argument is O0004 as well. (This is not merely a diagnostic nicety:
+MIR lowering cannot construct a `Place` for such an argument either, so a
+program that reached lowering with one would have its whole enclosing function
+declined, turning an accepted program into one that fails to build.)
+
+```tuo
+// MUST FAIL (O0004) — a `mut` argument needs a mutable place
+fn bump(mut n: Int) -> Int { n = n + 1; n }
+fn main() -> Int {
+    bump(1)         // ERROR: O0004 a literal is not a place
+}
+
+// MUST COMPILE — bind it first, then pass the binding
+fn main_ok() -> Int {
+    var n = 1;
+    bump(n)
+}
+```
+
 ```tuo
 // MUST COMPILE — deferred initialization of a `let`
 fn deferred(in flag: Bool) -> Int {
@@ -453,7 +474,7 @@ the negative fixture corpus:
 | `O0001` | Use of moved value. |
 | `O0002` | Use of possibly moved value (branch join or loop back edge). |
 | `O0003` | Move out of a borrowed (`in`/`mut`) parameter. |
-| `O0004` | Mutation of an immutable place (`let` binding, `in` parameter, or a field of one). |
+| `O0004` | Mutation of an immutable place (`let` binding, `in` parameter, or a field of one), or a `mut` argument that is not a place at all (a literal, a struct literal, a call result). |
 | `O0005` | Conflicting borrows of overlapping places in one argument list. |
 | `O0006` | Move of a place that is borrowed in the same argument list. |
 | `O0007` | Invalid explicit `move` (a `Copy` value or a non-place expression). |

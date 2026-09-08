@@ -230,3 +230,49 @@ fn diagnostics_arrive_in_source_order() {
     assert_eq!(starts, sorted);
     assert_eq!(count(&result, SyntaxKind::FunctionItem), 3);
 }
+
+/// A parameter written without its `in`/`mut`/`take` mode is the single most
+/// likely mistake in a tuonelang signature — every other language spells it
+/// `f(x: Int)`. It gets a diagnosis naming the parameter and the three modes,
+/// not the generic "malformed item: skipped N tokens" that item-level
+/// recovery would otherwise produce, and the rest of the signature still
+/// parses so later errors are real rather than cascade noise.
+#[test]
+fn a_parameter_missing_its_mode_is_diagnosed_at_the_parameter() {
+    let result = parse_str("fn f(x: Int) -> Int {\n    1\n}\n");
+    let codes: Vec<String> = result
+        .all_diagnostics()
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, vec!["P0001".to_owned()], "exactly one targeted error");
+
+    let diagnostics = result.all_diagnostics();
+    let diagnostic = &diagnostics[0];
+    assert!(
+        diagnostic.message.contains("missing its passing mode") && diagnostic.message.contains('x'),
+        "the message names the parameter: {}",
+        diagnostic.message
+    );
+    // Pointing at the parameter, not at `fn`, is the whole improvement.
+    assert_eq!(
+        diagnostic.primary_span.range().start().as_usize(),
+        5,
+        "the span covers the parameter name"
+    );
+    // The signature still parsed, so the parameter survives in the tree.
+    assert_eq!(count(&result, SyntaxKind::Param), 1);
+}
+
+/// Each mode-less parameter in a list is reported, wherever it sits, and a
+/// correctly-written neighbour is not disturbed.
+#[test]
+fn every_mode_less_parameter_in_a_list_is_reported() {
+    let result = parse_str("fn f(x: Int, in y: Str, z: Bool) -> Int {\n    1\n}\n");
+    let diagnostics = result.all_diagnostics();
+    let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
+    assert_eq!(messages.len(), 2, "two of the three lack a mode: {messages:?}");
+    assert!(messages[0].contains('x'), "first: {}", messages[0]);
+    assert!(messages[1].contains('z'), "second: {}", messages[1]);
+    assert_eq!(count(&result, SyntaxKind::Param), 3);
+}

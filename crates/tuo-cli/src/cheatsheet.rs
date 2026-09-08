@@ -269,7 +269,13 @@ amount outside 0..width TRAPS rather than wrapping, so `x << 64` is an abort,
 not `x`. Note `|` does double duty: alternation inside a match pattern,
 bitwise-or everywhere else. There is NO compound assignment (`+=`, `|=`), and
 comparisons DO NOT chain (`a < b < c` is a parse error). Integer overflow
-TRAPS — wraparound does not exist.
+TRAPS — wraparound does not exist. That is right for arithmetic and WRONG for
+a checksum or hash, which is *defined* modulo 2^32: `a + b` on two large
+values aborts the program rather than wrapping. When you want wraparound, say
+so — `std::bits::add32(a, b)` and `std::bits::mul32(a, b)` are the modular
+operations, and they are what every hash, checksum, and digest in
+`std::crypto` is built from. Reach for them whenever the arithmetic is
+supposed to overflow.
 
 "#;
 

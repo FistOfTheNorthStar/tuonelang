@@ -3142,7 +3142,7 @@ impl<'a> Lowering<'a> {
                     map::MAP_INT_GET_SYMBOL
                 };
                 self.call_map_shim(symbol, &call_args)?;
-                self.write_option_int_dest(dest, out)
+                self.write_option_scalar_dest(dest, out)
             }
             HeapOp::MapKeys => {
                 // `keys(in Map) -> Array[K]`: the shim allocates the fresh
@@ -3188,6 +3188,55 @@ impl<'a> Lowering<'a> {
     /// values, out buffers all pass as one register each), and every shim
     /// returns void — results come back through the out buffer or a written
     /// header.
+    /// Reinterpret a `Copy` scalar as a pointer-width word for a map shim
+    /// argument, which is declared pointer-width for every parameter.
+    ///
+    /// `Int` passes through. `Bool` is an integer narrower than a word and is
+    /// zero-extended, so the round trip through the table is exact. `Float` is
+    /// **bitcast**, never converted: the table stores opaque bytes, and a
+    /// numeric conversion would change the value rather than move it.
+    fn value_as_word(&mut self, value: ClifValue) -> Result<ClifValue, CodegenError> {
+        let ty = self.builder.func.dfg.value_type(value);
+        let word = self.pointer_type;
+        if ty == word {
+            return Ok(value);
+        }
+        if ty.is_float() {
+            // Same width as the word for F64; bitcast preserves the bits.
+            let bits = self.builder.ins().bitcast(
+                Type::int(u16::try_from(ty.bits()).unwrap_or(64)).unwrap_or(types::I64),
+                MemFlags::new(),
+                value,
+            );
+            let bits_ty = self.builder.func.dfg.value_type(bits);
+            return Ok(if bits_ty == word {
+                bits
+            } else {
+                self.builder.ins().uextend(word, bits)
+            });
+        }
+        if ty.is_int() && ty.bits() < word.bits() {
+            return Ok(self.builder.ins().uextend(word, value));
+        }
+        Ok(value)
+    }
+
+    /// The inverse of [`Self::value_as_word`]: narrow a machine word read back
+    /// from a map shim's out buffer into the value's own scalar type.
+    fn word_as_value(&mut self, word: ClifValue, target: Type) -> ClifValue {
+        let word_ty = self.builder.func.dfg.value_type(word);
+        if target == word_ty {
+            return word;
+        }
+        if target.is_float() {
+            return self.builder.ins().bitcast(target, MemFlags::new(), word);
+        }
+        if target.is_int() && target.bits() < word_ty.bits() {
+            return self.builder.ins().ireduce(target, word);
+        }
+        word
+    }
+
     fn call_map_shim(&mut self, symbol: &str, args: &[ClifValue]) -> Result<(), CodegenError> {
         let mut signature = Signature::new(CallConv::triple_default(self.module.isa().triple()));
         for _ in args {
@@ -3204,21 +3253,41 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
-    /// Materialize an `Option[Int]` destination from a map shim's two-word
+    /// Materialize an `Option[V]` destination from a map shim's two-word
     /// `{found, value}` out buffer: tag = `1 - found` (`Some` is variant 0,
     /// `None` variant 1), payload = the value word (deterministically zero
     /// when absent, so no branch is needed).
-    fn write_option_int_dest(&mut self, dest: &Place, out: ClifValue) -> Result<(), CodegenError> {
+    ///
+    /// `V` is a `Copy` scalar — `Int`, `Bool`, or `Float` (ADR-0023 Stage B).
+    /// The shim's out buffer is untyped machine words, so the payload is loaded
+    /// **at the destination's own payload type** rather than always as `I64`:
+    /// storing an `I64` into an `F64` or `I8` slot is what produced the
+    /// "Verifier errors" that made non-`Int` values unsound before Stage B.
+    fn write_option_scalar_dest(
+        &mut self,
+        dest: &Place,
+        out: ClifValue,
+    ) -> Result<(), CodegenError> {
         let dest_ty = self.place_type(dest);
         let dest_base = self.aggregate_dest_address(dest)?;
+        let payload_ty = match &dest_ty {
+            Ty::Option(inner) => require_scalar(inner, "map value")?,
+            _ => types::I64,
+        };
         let found = self
             .builder
             .ins()
             .load(types::I64, MemFlags::trusted(), out, 0);
-        let value = self
+        // Load the payload. The shim stores a full machine word (the value was
+        // widened by `value_as_word` on the way in), so read a word and narrow
+        // back to the destination's own type — the exact inverse of the write.
+        // A plain `load(payload_ty, ..)` would be endian-dependent for `Bool`;
+        // loading the word and reducing is not.
+        let word = self
             .builder
             .ins()
-            .load(types::I64, MemFlags::trusted(), out, 8);
+            .load(self.pointer_type, MemFlags::trusted(), out, 8);
+        let value = self.word_as_value(word, payload_ty);
         let one = self.builder.ins().iconst(types::I64, 1);
         let tag64 = self.builder.ins().isub(one, found);
         let tag = self.builder.ins().ireduce(types::I32, tag64);
@@ -3544,7 +3613,15 @@ impl<'a> Lowering<'a> {
                     let value = args.get(1).ok_or_else(|| {
                         CodegenError::backend("a map insert is missing its value")
                     })?;
-                    call_args.push(self.lower_operand(value)?);
+                    let lowered = self.lower_operand(value)?;
+                    // Every `tuo_rt_map_*` parameter is declared pointer-width
+                    // (see `call_map_shim`), so a narrower or differently-typed
+                    // `Copy` value — `Bool` (I8) or `Float` (F64) — must be
+                    // reinterpreted into a machine word first. Passing it raw
+                    // is a signature mismatch the Cranelift verifier rejects,
+                    // which is what made non-`Int` values unsound before
+                    // ADR-0023 Stage B.
+                    call_args.push(self.value_as_word(lowered)?);
                 }
                 call_args.push(out);
                 let symbol = match (insert, key_is_str) {
@@ -3554,7 +3631,7 @@ impl<'a> Lowering<'a> {
                     (false, true) => map::MAP_STR_REMOVE_SYMBOL,
                 };
                 self.call_map_shim(symbol, &call_args)?;
-                self.write_option_int_dest(dest, out)
+                self.write_option_scalar_dest(dest, out)
             }
         }
     }

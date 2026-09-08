@@ -155,6 +155,21 @@ class Local:
 
 
 @dataclass
+class StructDef:
+    """A translated `@dataclass`: a tuonelang `struct` and its fields."""
+
+    name: str
+    fields: list[tuple[str, Type]]
+
+    def field_type(self, name: str) -> Type | None:
+        """The type of field ``name``, or ``None`` if the struct has no such field."""
+        for field_name, ty in self.fields:
+            if field_name == name:
+                return ty
+        return None
+
+
+@dataclass
 class FunctionSig:
     """A translated function signature, used to type-check call sites."""
 
@@ -187,6 +202,11 @@ class Compiler:
     def __init__(self, module_name: str) -> None:
         self.module_name = module_name
         self.signatures: dict[str, FunctionSig] = {}
+        #: Translated `@dataclass` declarations, by name.
+        self.structs: dict[str, StructDef] = {}
+        #: Declared struct names, known before any body is translated so a
+        #: forward reference in an annotation resolves.
+        self._struct_names: frozenset[str] = frozenset()
         self.diagnostics: list[Diagnostic] = []
         self._imports: set[str] = set()
         # Statements that a translated expression needs emitted before the
@@ -201,7 +221,34 @@ class Compiler:
 
     def compile_module(self, tree: ast.Module, *, source: str) -> str:
         """Translate a parsed Python module into tuonelang source text."""
-        functions = self._collect_functions(tree)
+        functions, classes = self._collect_functions(tree)
+
+        # Struct NAMES come first, before any annotation is translated: a
+        # dataclass may refer to another (or to itself through a `list[T]`),
+        # and a signature may name a class declared later in the file.
+        for decl in classes:
+            if decl.name in self._struct_names:
+                raise error(
+                    "PY0002",
+                    f"class `{decl.name}` is defined more than once",
+                    decl,
+                    "tuonelang resolves one type per name",
+                )
+            self._struct_names = self._struct_names | {decl.name}
+        for decl in classes:
+            struct = self._struct(decl)
+            self.structs[struct.name] = struct
+        self._reject_recursive_structs(classes)
+
+        # Checked only after every class has been validated: a module whose
+        # dataclass is malformed should report *that*, not "no functions".
+        if not functions:
+            raise unsupported(
+                "module with no functions",
+                classes[0] if classes else tree,
+                "a translated module needs at least one `def`; a dataclass alone "
+                "declares a type but no program",
+            )
 
         # Two passes: signatures first, so a call to a function defined later
         # in the file resolves. Python allows forward references at runtime;
@@ -218,6 +265,7 @@ class Compiler:
                 )
             self.signatures[sig.name] = sig
 
+        struct_decls = [self._render_struct(self.structs[decl.name], decl) for decl in classes]
         bodies = [self._function(fn) for fn in functions]
 
         header = Writer()
@@ -227,11 +275,21 @@ class Compiler:
         header.line()
 
         helpers = [_HELPER_SOURCE[name] for name in sorted(self._helpers)]
-        return header.render() + "\n".join([*bodies, *helpers])
+        # Structs precede the functions that use them: tuonelang resolves the
+        # whole module either way, but declaration-before-use reads correctly.
+        return header.render() + "\n".join([*struct_decls, *bodies, *helpers])
 
-    def _collect_functions(self, tree: ast.Module) -> list[ast.FunctionDef]:
-        """Gather translatable top-level functions, refusing anything else."""
+    def _collect_functions(
+        self, tree: ast.Module
+    ) -> tuple[list[ast.FunctionDef], list[ast.ClassDef]]:
+        """Gather translatable top-level functions and classes.
+
+        Classes are collected rather than refused here; `_struct` decides
+        whether each one is a translatable `@dataclass` and refuses the rest
+        with a message naming what disqualified it.
+        """
         functions: list[ast.FunctionDef] = []
+        classes: list[ast.ClassDef] = []
         for stmt in tree.body:
             if isinstance(stmt, ast.FunctionDef):
                 functions.append(stmt)
@@ -243,12 +301,7 @@ class Compiler:
                     "fork-join via std::sync::par_map",
                 )
             elif isinstance(stmt, ast.ClassDef):
-                raise unsupported(
-                    "class definition",
-                    stmt,
-                    "tuonelang v0 has free functions only -- `impl` bodies parse "
-                    "but are not lowered, so a class cannot be translated faithfully",
-                )
+                classes.append(stmt)
             elif isinstance(stmt, (ast.Import, ast.ImportFrom)):
                 # `from typing import Optional` and friends are erased: the
                 # annotations they enable are handled by the type mapping.
@@ -266,15 +319,22 @@ class Compiler:
             else:
                 raise unsupported("top-level statement", stmt)
 
-        if not functions:
+        if not functions and not classes:
             raise unsupported("module with no functions", tree.body[0] if tree.body else ast.parse(""))
-        return functions
+        return functions, classes
 
     def _check_import(self, stmt: ast.Import | ast.ImportFrom) -> None:
-        """Allow only the typing imports the annotation subset needs."""
+        """Allow only the imports the subset needs, erasing them.
+
+        `typing` enables annotations the type mapping handles, and
+        `dataclasses` enables the `@dataclass` decorator that becomes a
+        `struct`. Neither survives into the output: both describe types the
+        translation has already resolved.
+        """
+        erased = {"typing", "dataclasses"}
         module = stmt.module if isinstance(stmt, ast.ImportFrom) else None
-        if module == "typing" or (
-            isinstance(stmt, ast.Import) and all(a.name == "typing" for a in stmt.names)
+        if module in erased or (
+            isinstance(stmt, ast.Import) and all(a.name in erased for a in stmt.names)
         ):
             return
         raise unsupported(
@@ -296,18 +356,333 @@ class Compiler:
             and isinstance(test.ops[0], ast.Eq)
         )
 
+    def _struct_of(self, ty: Type) -> StructDef | None:
+        """The `StructDef` a type names, or ``None`` if it is not a struct."""
+        return self.structs.get(ty.spelling) if ty.is_struct else None
+
+    def _field_read(self, node: ast.Attribute, scope: Scope) -> tuple[str, Type] | None:
+        """Translate `t.field` on a translated `@dataclass`.
+
+        Returns ``None`` when the receiver is not a struct, so the caller can
+        fall through to the general attribute refusal (a method call, say).
+        """
+        # A call to a struct name is a construction; if it is malformed, that
+        # is the real error and it must surface instead of being swallowed into
+        # the generic "attribute access" refusal (`T(1, 2).a` should complain
+        # about the positional arguments, not about `.a`).
+        receiver_is_struct_call = (
+            isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id in self.structs
+        )
+        try:
+            receiver, receiver_ty = self._expression(node.value, scope)
+        except CompileError:
+            if receiver_is_struct_call:
+                raise
+            # The receiver is not a translatable expression -- let the caller's
+            # attribute refusal report the attribute, which is the real problem.
+            return None
+        struct = self._struct_of(receiver_ty)
+        if struct is None:
+            return None
+        field_ty = struct.field_type(node.attr)
+        if field_ty is None:
+            raise error(
+                "TY0020",
+                f"`{struct.name}` has no field `{node.attr}`",
+                node,
+                "fields are: " + ", ".join(name for name, _ in struct.fields),
+            )
+        return (f"{receiver}.{node.attr}", field_ty)
+
+    def _field_assign(
+        self,
+        target: ast.Attribute,
+        value_node: ast.expr,
+        scope: Scope,
+        writer: Writer,
+    ) -> None:
+        """Translate `t.field = v` on a translated `@dataclass`.
+
+        tuonelang refuses a write through a read-only borrow (`O0004`), so the
+        binding behind the write must be mutable. `_mutated_names` counts a
+        field write as mutating its base, which makes a written-to parameter
+        `mut` and a written-to local `var` -- so the emitted code is accepted by
+        construction rather than by hope. A write through anything that is not
+        a plain name (a call result, an array element) has no mutable place to
+        borrow, and is refused.
+        """
+        if not isinstance(target.value, ast.Name):
+            raise unsupported(
+                "assignment to a field of a temporary",
+                target,
+                "tuonelang needs a mutable place to write through; bind the "
+                "struct to a name first",
+            )
+        receiver, receiver_ty = self._expression(target.value, scope)
+        struct = self._struct_of(receiver_ty)
+        if struct is None:
+            raise unsupported(
+                "attribute assignment",
+                target,
+                "only a field of a translated @dataclass can be assigned",
+            )
+        field_ty = struct.field_type(target.attr)
+        if field_ty is None:
+            raise error(
+                "TY0020",
+                f"`{struct.name}` has no field `{target.attr}`",
+                target,
+                "fields are: " + ", ".join(name for name, _ in struct.fields),
+            )
+        value, value_ty = self._expression(value_node, scope)
+        self._require_assignable(value_ty, field_ty, target, f"assignment to `{target.attr}`")
+        if field_ty == STRING:
+            value = self._as_owned_string(value, value_ty)
+
+        local = scope.get(target.value.id)
+        if local is not None and not local.mutable:
+            raise error(
+                "SEM0007",
+                f"`{local.name}` is written to but is not mutable",
+                target,
+                "tuonelang refuses a write through a read-only borrow (O0004)",
+            )
+        writer.line(f"{receiver}.{target.attr} = {value};")
+
+    def _struct_literal(self, node: ast.Call, name: str, scope: Scope) -> tuple[str, Type]:
+        """Translate `Task(id=1, retries=0)` into `Task { id: 1, retries: 0 }`.
+
+        **Keyword arguments are required.** A tuonelang struct literal names
+        every field, so a positional call would depend silently on declaration
+        order: reordering two same-typed fields in the Python would keep
+        compiling and change the meaning. Requiring keywords makes that
+        impossible rather than unlikely.
+        """
+        struct = self.structs[name]
+        if node.args:
+            spelled = ", ".join(f"{f}=..." for f, _ in struct.fields)
+            raise unsupported(
+                f"positional construction of `{name}`",
+                node,
+                "a tuonelang struct literal names every field, so positional "
+                "arguments would depend silently on field order; write "
+                f"`{name}({spelled})`",
+            )
+
+        given: dict[str, str] = {}
+        for keyword in node.keywords:
+            if keyword.arg is None:
+                raise unsupported("`**kwargs` in a struct construction", node)
+            field_ty = struct.field_type(keyword.arg)
+            if field_ty is None:
+                raise error(
+                    "TY0020",
+                    f"`{name}` has no field `{keyword.arg}`",
+                    node,
+                    "fields are: " + ", ".join(f for f, _ in struct.fields),
+                )
+            if keyword.arg in given:
+                raise error("PY0007", f"field `{keyword.arg}` given twice", node)
+            text, ty = self._expression(keyword.value, scope)
+            self._require_assignable(ty, field_ty, keyword.value, f"field `{keyword.arg}`")
+            if field_ty == STRING:
+                text = self._as_owned_string(text, ty)
+            given[keyword.arg] = text
+
+        missing = [f for f, _ in struct.fields if f not in given]
+        if missing:
+            raise error(
+                "TY0021",
+                f"`{name}` is missing field(s): {', '.join(missing)}",
+                node,
+                "a tuonelang struct literal names every field; there are no defaults",
+            )
+        # Emit in DECLARATION order, not call order, so the output is canonical.
+        rendered = ", ".join(f"{f}: {given[f]}" for f, _ in struct.fields)
+        return (f"{name} {{ {rendered} }}", Type(name))
+
+    def _render_struct(self, struct: StructDef, decl: ast.ClassDef) -> str:
+        """Render a translated `@dataclass` as a tuonelang `struct` declaration."""
+        writer = Writer()
+        doc = ast.get_docstring(decl)
+        if doc:
+            for line in doc.strip().splitlines():
+                writer.line(f"/// {line.strip()}".rstrip())
+        fields = ", ".join(f"{name}: {ty}" for name, ty in struct.fields)
+        writer.line(f"struct {struct.name} {{ {fields} }}")
+        return writer.render()
+
+    # -- dataclasses ----------------------------------------------------
+
+    def _struct(self, decl: ast.ClassDef) -> StructDef:
+        """Translate a `@dataclass` of annotated fields into a `struct`.
+
+        tuonelang v0 has structs (ADR-0004) but no method dispatch, so a class
+        translates exactly when it carries **no behaviour**: a `@dataclass`
+        whose body is annotated fields and nothing else. Everything else is
+        refused here, naming the specific feature rather than the class.
+        """
+        self._reject_non_dataclass(decl)
+        name = self._identifier(decl.name, decl)
+
+        fields: list[tuple[str, Type]] = []
+        for stmt in decl.body:
+            if _is_docstring(stmt) or isinstance(stmt, ast.Pass):
+                continue
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                method = stmt.name
+                if method == "__post_init__":
+                    raise unsupported(
+                        "`__post_init__`",
+                        stmt,
+                        "it runs code at construction, which a tuonelang struct "
+                        "literal does not; move the logic into a function that "
+                        "builds and returns the struct",
+                    )
+                raise unsupported(
+                    f"method `{method}` on a dataclass",
+                    stmt,
+                    "tuonelang v0 has no method dispatch (`impl` bodies parse but "
+                    "are not lowered), so only a dataclass of plain fields can be "
+                    "translated; make it a free function taking the struct",
+                )
+            if isinstance(stmt, ast.Assign):
+                raise unsupported(
+                    "unannotated dataclass field",
+                    stmt,
+                    "every struct field needs a type; write `name: int`",
+                )
+            if not isinstance(stmt, ast.AnnAssign) or not isinstance(stmt.target, ast.Name):
+                raise unsupported("statement in a dataclass body", stmt)
+
+            if _is_class_var(stmt.annotation):
+                raise unsupported(
+                    "`ClassVar` field",
+                    stmt,
+                    "a tuonelang struct has no per-type storage; use a `const` "
+                    "or pass the value explicitly",
+                )
+            if stmt.value is not None:
+                raise unsupported(
+                    "dataclass field default",
+                    stmt,
+                    "tuonelang struct literals name every field, so a default "
+                    "would silently vanish; construct with every field given",
+                )
+            field_name = self._identifier(stmt.target.id, stmt)
+            if any(existing == field_name for existing, _ in fields):
+                raise error("PY0006", f"duplicate field `{field_name}`", stmt)
+            fields.append(
+                (field_name, translate_annotation(stmt.annotation, owner=stmt, structs=self._struct_names))
+            )
+
+        if not fields:
+            raise unsupported(
+                "dataclass with no fields",
+                decl,
+                "a tuonelang struct needs at least one field",
+            )
+        return StructDef(name=name, fields=fields)
+
+    def _reject_recursive_structs(self, classes: list[ast.ClassDef]) -> None:
+        """Refuse a dataclass that reaches itself through its own fields.
+
+        tuonelang refuses this with `T0016`: a struct containing itself by value
+        has no finite size, and v0 has no heap-wrapper (`Box`) value to break
+        the cycle. Python allows it because every field is a reference. Catching
+        it here reports the *Python* class that closed the loop, rather than
+        emitting a struct the real compiler then rejects.
+
+        A `list[T]` field is **not** an escape, though it looks like one: the
+        target refuses `Array[Node]` inside `Node` with the same `T0016`
+        (verified against the real compiler), so the cycle is followed through
+        array elements too. The only v0 answer is to flatten the recursion into
+        an index arena, the way `std::json` stores its tree.
+        """
+        by_name = {decl.name: decl for decl in classes}
+
+        def reaches(start: str, ty: Type, seen: frozenset[str]) -> bool:
+            """Does `ty` reach `start` through by-value fields only?"""
+            element = element_of(ty)
+            if element is not None:
+                # `list[T]` is not an indirection here: the target rejects a
+                # struct reaching itself through an array element too.
+                return reaches(start, element, seen)
+            if not ty.is_struct:
+                return False
+            name = ty.spelling
+            if name == start:
+                return True
+            if name in seen or name not in self.structs:
+                return False
+            return any(
+                reaches(start, field_ty, seen | {name})
+                for _, field_ty in self.structs[name].fields
+            )
+
+        for name, struct in self.structs.items():
+            for field_name, field_ty in struct.fields:
+                if reaches(name, field_ty, frozenset()):
+                    raise error(
+                        "SEM0008",
+                        f"`{name}` contains itself through field `{field_name}`",
+                        by_name.get(name, next(iter(by_name.values()))),
+                        "tuonelang refuses a recursive struct with no indirection "
+                        "(T0016): it would have no finite size, and v0 has no "
+                        "`Box` value to break the cycle",
+                        "a `list[...]` field does not help -- the target refuses "
+                        "that too; flatten the recursion into an index arena "
+                        "(parallel lists indexed by position), the way "
+                        "std::json stores its tree",
+                    )
+
+    @staticmethod
+    def _reject_non_dataclass(decl: ast.ClassDef) -> None:
+        """Refuse a class that is not a plain `@dataclass`, naming the reason."""
+        if decl.bases or decl.keywords:
+            base = ", ".join(
+                ast.unparse(b) for b in [*decl.bases, *(k.value for k in decl.keywords)]
+            )
+            raise unsupported(
+                f"class with a base or metaclass argument ({base})",
+                decl,
+                "tuonelang has no inheritance; a struct stands alone. "
+                "`NamedTuple` and `TypedDict` bases are refused for the same reason",
+            )
+
+        decorators = [ast.unparse(d) for d in decl.decorator_list]
+        plain = [d for d in decorators if d in {"dataclass", "dataclasses.dataclass"}]
+        if not decorators:
+            raise unsupported(
+                "class definition",
+                decl,
+                "tuonelang v0 has free functions only, so a class with behaviour "
+                "cannot be translated. A `@dataclass` of annotated fields CAN be: "
+                "it becomes a `struct`. Add `@dataclass` if that is what this is",
+            )
+        if not plain:
+            raise unsupported(
+                f"class decorated with `{decorators[0]}`",
+                decl,
+                "only a bare `@dataclass` translates. Arguments such as "
+                "`frozen=`/`eq=`/`order=` request generated behaviour that "
+                "tuonelang has no method dispatch to carry",
+            )
+
     # -- signatures -----------------------------------------------------
 
     def _signature(self, fn: ast.FunctionDef) -> FunctionSig:
         """Translate a `def` header into a tuonelang signature."""
         self._reject_exotic_params(fn)
         name = self._identifier(fn.name, fn)
-        ret = translate_annotation(fn.returns, owner=fn)
+        ret = translate_annotation(fn.returns, owner=fn, structs=self._struct_names)
 
         params: list[tuple[str, str, Type]] = []
         mutated = _mutated_names(fn)
         for arg in fn.args.args:
-            ty = translate_annotation(arg.annotation, owner=arg)
+            ty = translate_annotation(arg.annotation, owner=arg, structs=self._struct_names)
             mode = self._parameter_mode(ty, arg.arg in mutated)
             # A borrowed string parameter is `Str`, the read-only view; an
             # owned `String` parameter would force the caller to give up
@@ -323,8 +698,24 @@ class Compiler:
         """Choose the tuonelang parameter mode for a translated parameter.
 
         Python passes object references and mutates in place; tuonelang makes
-        that explicit. A parameter the body assigns to needs `mut`; a scalar
-        that is only read is cheapest as `take`; anything else is borrowed `in`.
+        that explicit, so the mode is decided by what the body *does* with the
+        parameter:
+
+        * assigned to (rebound, or a field/element written) -> ``mut``. A
+          tuonelang `mut` borrow writes through to the caller's value, which is
+          exactly Python's observable behaviour for a mutated argument.
+        * only read, and a `Copy` scalar -> ``take``. Cheapest, and a scalar
+          copy is indistinguishable from Python's semantics.
+        * only read, anything else (a struct, an array, a string) -> ``in``, a
+          read-only borrow. No copy is made and the caller keeps ownership.
+
+        A **struct** needs no special case: it is not a `Copy` scalar, so a
+        read-only struct parameter borrows and a mutated one takes a `mut`
+        borrow. What makes structs different is only that the mutation can be a
+        *field* write (`t.id = 5`), which `_mutated_names` reports alongside
+        plain rebinding — so a dataclass parameter whose field is assigned is
+        `mut`, and writing to a field of an `in` parameter (the target's
+        `O0004`) is unrepresentable by construction.
         """
         if mutated:
             return "mut"
@@ -559,7 +950,7 @@ class Compiler:
         if stmt.value is None:
             raise error("PY0004", "declaration without an initialiser", stmt,
                         "tuonelang bindings are always initialised")
-        declared = translate_annotation(stmt.annotation, owner=stmt)
+        declared = translate_annotation(stmt.annotation, owner=stmt, structs=self._struct_names)
 
         # `d: dict[str, int] = {}` -- the annotation supplies the key/value
         # types an empty literal cannot carry on its own.
@@ -612,7 +1003,8 @@ class Compiler:
                 "tuonelang v0 has no tuple type; assign each name separately",
             )
         if isinstance(target, ast.Attribute):
-            raise unsupported("attribute assignment", stmt)
+            self._field_assign(target, stmt.value, scope, writer)
+            return
         raise unsupported("assignment target", stmt)
 
     def _subscript_assign(
@@ -876,10 +1268,15 @@ class Compiler:
                 "build strings with std::str::builder / push / push_int",
             )
         if isinstance(node, ast.Attribute):
+            field = self._field_read(node, scope)
+            if field is not None:
+                return field
             raise unsupported(
                 "attribute access",
                 node,
-                "tuonelang v0 has free functions only: write len(xs), never xs.len()",
+                "tuonelang v0 has free functions only: write len(xs), never "
+                "xs.len(). A struct FIELD read (`t.id`) does translate, when "
+                "`t` is a translated @dataclass",
             )
         if isinstance(node, ast.Tuple):
             raise unsupported("tuple expression", node, "tuonelang v0 has no tuple type")
@@ -983,6 +1380,18 @@ class Compiler:
 
         result = self._numeric_result(left_ty, right_ty, node)
         return (f"({left} {op} {right})", result)
+
+    @staticmethod
+    def _as_owned_string(rendered: str, ty: Type) -> str:
+        """Render a string value as the OWNED `String` a place demands.
+
+        A string literal is a borrowed `Str`; a struct field, an array element,
+        and a `String` parameter all hold an owned `String`. The two are
+        assignment-compatible in this tool's type rule but NOT in the target,
+        which reports `T0001` (expected `String`, found `Str`) -- so the
+        conversion has to appear in the emitted text, not just be permitted.
+        """
+        return f"std::string::from_str({rendered})" if ty == STR else rendered
 
     @staticmethod
     def _as_str(rendered: str, ty: Type) -> str:
@@ -1102,7 +1511,22 @@ class Compiler:
         return (call, BOOL)
 
     def _require_comparable(self, left: Type, right: Type, node: ast.AST) -> None:
-        """Require two compared operands to have a common type."""
+        """Require two compared operands to have a comparable common type.
+
+        Structs are refused even though both sides match: tuonelang's `==` is
+        defined on scalars, and comparing whole aggregates passes `tuo check`
+        but fails in codegen ("reading a whole aggregate as a scalar"). The
+        cheat sheet says the same thing about specs -- extract a scalar and
+        compare that.
+        """
+        if left.is_struct or right.is_struct:
+            raise unsupported(
+                f"comparing `{left}` values directly",
+                node,
+                "tuonelang compares SCALARS; a whole-struct `==` is accepted by "
+                "the type checker and then fails in codegen",
+                "compare the fields you mean, e.g. `a.id == b.id`",
+            )
         if left == right or (left.is_str_like and right.is_str_like):
             return
         raise error("TY0012", f"cannot compare `{left}` with `{right}`", node)
@@ -1363,7 +1787,11 @@ class Compiler:
 
     def _call(self, node: ast.Call, scope: Scope) -> tuple[str, Type]:
         """Translate a call to a builtin or to a translated function."""
-        if node.keywords:
+        if node.keywords and not (
+            isinstance(node.func, ast.Name) and node.func.id in self.structs
+        ):
+            # Function calls are positional; a struct literal is the one form
+            # that requires keywords (see `_struct_literal`).
             raise unsupported("keyword argument", node, "tuonelang calls are positional")
         if any(isinstance(a, ast.Starred) for a in node.args):
             raise unsupported("argument unpacking", node)
@@ -1381,6 +1809,11 @@ class Compiler:
             raise unsupported("indirect call expression", node)
 
         name = node.func.id
+        # A call to a translated @dataclass name is a struct literal, not a
+        # function call. Checked before builtins so a class may shadow nothing.
+        if name in self.structs:
+            return self._struct_literal(node, name, scope)
+
         builtin = self._builtin_call(name, node, scope)
         if builtin is not None:
             return builtin
@@ -1405,7 +1838,40 @@ class Compiler:
         for arg, (mode, _, param_ty) in zip(node.args, sig.params, strict=True):
             text, ty = self._expression(arg, scope)
             self._require_assignable(ty, param_ty, arg, f"argument to `{name}`")
-            _ = mode  # a call site never spells the mode; the compiler infers it
+            if param_ty == STRING:
+                text = self._as_owned_string(text, ty)
+            if mode == "mut":
+                # A `mut` parameter borrows a mutable PLACE, which a temporary
+                # (a struct literal, a call result) does not have.
+                #
+                # The target refuses this too (`O0004`: a `mut` argument needs
+                # a mutable place). Refusing here as well is deliberate: the
+                # diagnostic lands on the Python source, in Python terms, which
+                # is more useful than surfacing a tuonelang error about
+                # generated code the user did not write.
+                #
+                # This path once hid a real compiler bug: the ownership checker
+                # only inspected arguments that HAD a place, so a temporary
+                # passed as `mut` slipped through, and MIR lowering then
+                # declined the whole enclosing function -- surfacing as "the
+                # program has no function named `main` to compile". Fixed in
+                # tuo-ownership; pinned by tests/ownership/fixtures/err/.
+                if not isinstance(arg, ast.Name):
+                    raise unsupported(
+                        f"passing a temporary to `{name}`, which mutates that parameter",
+                        arg,
+                        "tuonelang needs a mutable place to take a `mut` borrow; "
+                        "bind the value to a variable and pass the variable",
+                    )
+                local = scope.get(arg.id)
+                if local is not None and not local.mutable:
+                    raise error(
+                        "SEM0003",
+                        f"`{arg.id}` is passed to `{name}`, which mutates it, "
+                        "but is not a mutable binding",
+                        arg,
+                        "tuonelang refuses a `mut` borrow of a `let` binding (O0004)",
+                    )
             rendered.append(text)
         return (f"{name}({', '.join(rendered)})", sig.ret)
 
@@ -1427,7 +1893,12 @@ class Compiler:
             if element_of(ty) is not None:
                 return (f"std::array::len({value})", INT)
             if ty.is_str_like:
-                return (f"std::string::len({value})", INT)
+                # The two string types have the same operation in DIFFERENT
+                # modules: `std::string::len` takes an owned `String`, and
+                # `std::str::len` takes a borrowed `Str`. Picking by the
+                # receiver's type is what the target's own help text advises.
+                module = "string" if ty == STRING else "str"
+                return (f"std::{module}::len({value})", INT)
             raise error("TY0017", f"`len` is not defined for `{ty}`", node)
 
         if name == "abs":
@@ -1615,6 +2086,14 @@ def _string_literal(value: str, node: ast.AST) -> str:
     return '"' + "".join(out) + '"'
 
 
+def _is_class_var(annotation: ast.expr) -> bool:
+    """Whether an annotation is `ClassVar[...]` (or a dotted spelling of it)."""
+    node = annotation.value if isinstance(annotation, ast.Subscript) else annotation
+    if isinstance(node, ast.Attribute):
+        return node.attr == "ClassVar"
+    return isinstance(node, ast.Name) and node.id == "ClassVar"
+
+
 def _is_docstring(stmt: ast.stmt) -> bool:
     """Whether a statement is a bare string expression."""
     return isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant) and isinstance(stmt.value.value, str)
@@ -1659,6 +2138,12 @@ def _mutated_names(fn: ast.FunctionDef) -> set[str]:
                         mutated.add(target.id)
                     seen.add(target.id)
                 elif isinstance(target, ast.Subscript) and isinstance(target.value, ast.Name):
+                    mutated.add(target.value.id)
+                elif isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name):
+                    # `t.field = v` mutates `t` itself. Without this the
+                    # parameter would be emitted `in` and the field write would
+                    # be an `O0004` in the real compiler -- the exact
+                    # mis-translation the mode rule exists to prevent.
                     mutated.add(target.value.id)
         elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
             if node.target.id in seen:

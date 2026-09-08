@@ -71,7 +71,7 @@ the replacement, preserving the decision history.
 | [ADR-0020](ADR-0020-constant-time-code.md) | Constant-time code — the branchless subset and what tuonelang can honestly promise | accepted |
 | [ADR-0021](ADR-0021-secret-taint-tracking.md) | Secret taint tracking — marking data, not just functions | proposed |
 | [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | proposed |
-| [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed |
+| [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed (Stages A/B/C landed; B2 open) |
 | [ADR-0024](ADR-0024-capturing-closures.md) | Capturing closures — the four decisions Tier 2 actually requires | proposed |
 | [ADR-0025](ADR-0025-no-exceptions.md) | No exceptions — `Result[T, E]` and the trap are the two failure modes | accepted |
 | [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
@@ -195,10 +195,30 @@ eagerly and returns early on an unsolved inference variable, so
 `Map[Int, Bool]`, `Map[Int, Float]`, and `Map[Int, Str]` built through
 `std::map::empty()` **pass `tuo check` and fail in codegen** — a violation of
 the never-mis-compile invariant, caught only incidentally for `Map[Str, Str]`
-because a string-literal key resolves immediately. Stages B and C widen `V` to
-the ADR-0012 element set over a value-stride-parametric runtime shim, reusing
-`ty_owns_heap`/`HeapGlue` rather than adding a shim per value type. User **key**
-types stay deferred to the trait system, unchanged.
+because a string-literal key resolves immediately. **Stage A has since landed** (2026-09-06): the
+check moved to a deferred re-run in `finish_body`, pinned by seven tests written
+in the inferred spelling — five of which were verified to fail without the fix.
+The parallel audit of `reject_unsupported_array_element` found it sound, because
+it treats an unsolved element as *supported* and rejects on structure, where the
+map guard treated an unsolved pair as a reason to skip the check. **Stages B and C have since landed too**, and
+three of Stage B's premises turned out to be wrong — recorded in the ADR rather
+than quietly corrected. Measuring first (by temporarily relaxing the guard and
+running all three engines) showed the **interpreter was already value-generic**,
+the **runtime C shim needed no change** (the value slot is one machine word, so
+the compiler widens on the way in and narrows on the way out), and the **ABI did
+not bump** (the entry strides are unchanged). The real blocker was in both
+native backends: every map-shim parameter is declared pointer-width and the
+result was materialized through a hardcoded `Option[Int]` writer, so a `Bool` or
+`Float` was a call-signature mismatch. `Float` crosses by **bitcast, never
+numeric conversion** — a conversion would turn 2.5 into 2, compiling and running
+and silently wrong. Landed scope is `V ∈ {Int, Bool, Float}`, pinned by two new
+three-way differential fixtures. Stage C's honest result is a **null**: the
+CPython dict-shape survey is unchanged at 4/58, because no `dict[str, bool]` or
+`dict[int, float]` annotation appears in that corpus — the widening's value is
+correctness, not coverage, and the coverage argument rests entirely on the still
+-open **Stage B2** (heap-owning values: `Str`, `String`, structs — where the
+original deep-copy/drop analysis does hold). User **key** types stay deferred to
+the trait system, unchanged.
 
 **ADR-0024** (capturing closures) converts ADR-0008's single deferred Tier 2
 item into **four separately decidable questions** — syntax, capture ownership,

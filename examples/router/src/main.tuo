@@ -410,6 +410,18 @@ fn io_timeout_ms() -> Int {
     5000
 }
 
+/// How many consecutive idle `accept_timeout` intervals `serve_on` tolerates
+/// before concluding its remaining clients are never coming.
+///
+/// `serve_on` is promised exactly `n` connections, so a single quiet interval
+/// says nothing — the caller may simply be between requests. Twelve strikes at
+/// `io_timeout_ms()` each is a full minute of silence, comfortably longer than
+/// any pause a live caller imposes and still bounded, so a genuinely abandoned
+/// server exits rather than lingering forever.
+fn idle_strike_limit() -> Int {
+    12
+}
+
 /// The status line for a routed status — the reverse of `method_tag`, mapping
 /// the router's answer back to the text HTTP puts on the wire. Pure, so it is
 /// spec-checked.
@@ -740,11 +752,32 @@ fn serve_on(take port: Int, take n: Int) -> Int {
     }
     var served = 0;
     var remaining = n;
+    var idle_strikes = 0;
     while remaining > 0 {
         let conn = std::rt::accept_timeout(listener, io_timeout_ms());
         if conn < 0 {
-            remaining = 0;
+            // An accept that times out means no client has arrived *yet* —
+            // not that no client ever will. This loop has a known budget
+            // (`n` connections were promised), so ending it on the first
+            // quiet interval is wrong: a caller that pauses between requests
+            // for longer than `io_timeout_ms` would find the server already
+            // gone, and its next connect refused. That is a real failure mode,
+            // not a hypothetical — it is what made the dogfood test flaky,
+            // since the suite compiles and links native binaries in parallel
+            // and can easily leave a multi-second gap between two requests.
+            //
+            // Give up only after `idle_strike_limit()` consecutive quiet
+            // intervals, so the loop still terminates when a client really
+            // has abandoned it, but tolerates an ordinary pause. The pool's
+            // worker uses the opposite policy on purpose (see `pool_worker`):
+            // there an idle worker must join promptly or it delays the whole
+            // fork-join, and its budget is a capacity rather than a promise.
+            idle_strikes = idle_strikes + 1;
+            if idle_strikes >= idle_strike_limit() {
+                remaining = 0;
+            }
         } else {
+            idle_strikes = 0;
             let status = serve_once(conn);
             if status > 0 {
                 served = served + 1;
