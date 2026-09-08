@@ -1,0 +1,66 @@
+module map_bool_values;
+
+// ADR-0023 Stage B: `Bool` map values on both key kinds. `Bool` is narrower
+// than a machine word, so the value is widened on the way into the
+// `tuo_rt_map_*` shim and narrowed on the way out; getting that round trip
+// wrong is invisible until a `false` reads back as `true` (or the backend's
+// verifier rejects the call outright, which is what happened before Stage B).
+// Both truth values are stored and read back, and a removed entry's previous
+// value comes back through the `Option[Bool]`, so a wrong narrowing cannot
+// pass by luck.
+
+fn main() -> Int {
+    var m = std::map::empty();
+    let fresh = std::map::insert(m, 1, true);
+    let _ = std::map::insert(m, 2, false);
+    let overwrite = std::map::insert(m, 1, false);
+
+    // The displaced value must be the `true` that was there.
+    let prev = match overwrite {
+        Some { value } => if value { 16 } else { 0 },
+        None => 0,
+    };
+    // A fresh key displaces nothing.
+    let was_fresh = match fresh {
+        Some { value } => 0,
+        None => 8,
+    };
+    // `false` must read back as `false`, not as "any non-zero word".
+    let stored_false = match std::map::get(m, 2) {
+        Some { value } => if value { 0 } else { 4 },
+        None => 0,
+    };
+    // The overwrite must have taken effect.
+    let now_false = match std::map::get(m, 1) {
+        Some { value } => if value { 0 } else { 2 },
+        None => 0,
+    };
+    let miss = match std::map::get(m, 99) {
+        Some { value } => 0,
+        None => 1,
+    };
+
+    var s = std::map::empty();
+    let _ = std::map::insert(s, "yes", true);
+    let _ = std::map::insert(s, "no", false);
+    let str_true = match std::map::get(s, "yes") {
+        Some { value } => if value { 32 } else { 0 },
+        None => 0,
+    };
+    let str_false = match std::map::get(s, "no") {
+        Some { value } => if value { 0 } else { 64 },
+        None => 0,
+    };
+
+    let removed = match std::map::remove(m, 2) {
+        Some { value } => if value { 0 } else { 128 },
+        None => 0,
+    };
+
+    // 16 + 8 + 4 + 2 + 1 + 32 + 64 + 128 = 255
+    prev + was_fresh + stored_false + now_false + miss + str_true + str_false + removed
+}
+
+spec main {
+    then main() == 255;
+}

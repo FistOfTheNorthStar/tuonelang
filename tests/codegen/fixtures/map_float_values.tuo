@@ -1,0 +1,49 @@
+module map_float_values;
+
+// ADR-0023 Stage B: `Float` map values. A float is the same width as a machine
+// word but a different *kind*, so it crosses the `tuo_rt_map_*` boundary by
+// BITCAST — never by numeric conversion. The distinction is the whole test: a
+// conversion would turn 2.5 into 2, which still compiles, still runs, and is
+// silently wrong. The fractional parts below are chosen so any int round trip
+// loses them and changes the result.
+
+fn main() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 1, 2.5);
+    let _ = std::map::insert(m, 2, 0.25);
+    let overwrite = std::map::insert(m, 1, 1.75);
+
+    // The displaced value must be 2.5 exactly — a conversion would yield 2.0.
+    let prev = match overwrite {
+        Some { value } => value,
+        None => 0.0,
+    };
+    let a = match std::map::get(m, 1) {
+        Some { value } => value,
+        None => 0.0,
+    };
+    let b = match std::map::get(m, 2) {
+        Some { value } => value,
+        None => 0.0,
+    };
+    let miss = match std::map::get(m, 77) {
+        Some { value } => value,
+        None => 0.5,
+    };
+
+    // A negative value exercises the sign bit through the bitcast.
+    var n = std::map::empty();
+    let _ = std::map::insert(n, "neg", 0.0 - 1.25);
+    let negative = match std::map::get(n, "neg") {
+        Some { value } => value,
+        None => 0.0,
+    };
+
+    // 2.5 + 1.75 + 0.25 + 0.5 + (-1.25) = 3.75; * 100 = 375
+    let total = prev + a + b + miss + negative;
+    (total * 100.0) as Int
+}
+
+spec main {
+    then main() == 375;
+}
