@@ -84,10 +84,70 @@ works (emitting unformatted source and saying so); `verify` requires it.
   `sorted`, `list(reversed(xs))`
 * string concatenation `a + b` → `std::string::concat`, with an owned `String`
   reaching the borrowed view through `std::string::as_str`
+* **`@dataclass` declarations** → tuonelang `struct` types (see below)
 * **`dict[str, int]` and `dict[int, int]`** — the two shapes tuonelang v0 has
   (ADR-0011): `d[k] = v`, `d.get(k, default)`, `k in d`, `len(d)`, `d.keys()`,
   and `d: dict[str, int] = {}`
 * docstrings, carried across as `///` doc comments
+
+### Dataclasses become structs
+
+A `@dataclass` whose body is annotated fields becomes a tuonelang `struct`
+(ADR-0004). This is what lets the subset reach programs built from record
+types — previously every class was refused, which left the tool limited to
+`int`/`bool`/`list`/`dict` even though `types.py` was already telling users to
+"use a struct".
+
+```python
+@dataclass
+class Task:
+    id: int
+    retries: int
+
+def cost(t: Task) -> int:      # only reads  -> `in`
+    return t.id + t.retries
+
+def bump(t: Task) -> int:      # writes a field -> `mut`
+    t.retries = t.retries + 1
+    return t.retries
+```
+
+```tuo
+struct Task { id: Int, retries: Int }
+
+pub fn cost(in t: Task) -> Int { (t.id + t.retries) }
+
+pub fn bump(mut t: Task) -> Int {
+    t.retries = (t.retries + 1);
+    t.retries
+}
+```
+
+Construction, field reads and writes, a struct as a parameter / return type /
+`list[T]` element, and nested structs all translate. The `dataclasses` import is
+erased, as `typing` already was.
+
+**Parameter modes.** Python has no equivalent, and the target's ownership
+checker enforces the choice, so the rule is stated explicitly:
+
+| what the body does with the parameter | mode | why |
+|---|---|---|
+| assigns to it — rebinds it, or writes a field or element | `mut` | a `mut` borrow writes through to the caller, which is exactly what Python observes for a mutated argument |
+| only reads it, and it is a `Copy` scalar (`int`/`bool`/`float`) | `take` | cheapest, and a scalar copy is indistinguishable from Python's semantics |
+| only reads it, anything else (struct, list, str) | `in` | a read-only borrow: no copy, and the caller keeps ownership |
+
+Structs need no special case — they are not `Copy` scalars, so a read-only one
+borrows. What is new is that a **field write counts as mutating its base**, so
+`t.id = 5` makes `t` a `mut` parameter. Without that, the tool would emit a
+field write through an `in` parameter, which is `O0004` in the real compiler —
+the exact mis-translation the rule exists to prevent. The same pre-scan makes a
+written-to *local* a `var`, since `O0004` applies there too.
+
+**Keyword arguments are required** for construction. A tuonelang struct literal
+names every field, so `Task(1, 0)` would depend silently on declaration order:
+reordering two same-typed fields in the Python would keep compiling and change
+the meaning. Fields are emitted in declaration order regardless of call order,
+so the output is canonical.
 
 Three translations are worth calling out because the naive version compiles and
 is *wrong*:
@@ -101,6 +161,13 @@ is *wrong*:
   tuonelang has no exceptions. The default is exactly what collapses the
   `Option`, so the two-argument `get` becomes a `match` and the raising form is
   refused with that explanation.
+* **A whole-struct `==` is refused.** It passes `tuo check` and *then* fails in
+  codegen ("reading a whole aggregate as a scalar"), so the tool refuses it and
+  points at comparing the fields instead.
+* **A string literal is converted where an owned `String` is wanted.** A `str`
+  field holds an owned `String`; a literal is a borrowed `Str`. The target
+  rejects the mismatch (`T0001`), so `std::string::from_str` appears in the
+  emitted text rather than the types merely being treated as compatible.
 * **`let` vs `var` is decided by a pre-scan.** A local is `var` when the body
   reassigns it *or* passes it to a function that takes it `mut`, because a
   `mut` borrow of a `let` binding is refused (`O0004`).
@@ -114,7 +181,13 @@ builtins, and Python builtins with no builtin equivalent become small private
 Each of these produces a diagnostic naming the construct and pointing at the
 line — never a silent mistranslation:
 
-classes · decorators · nested functions · lambdas · comprehensions ·
+classes **with behaviour** (methods, `__post_init__`, inheritance,
+`@dataclass(frozen=…)`, `ClassVar`, field defaults, `NamedTuple`, and bare
+non-dataclass classes — each named specifically rather than as "a class") ·
+recursive dataclasses (`T0016`: a struct reaching itself has no finite size, and
+a `list[T]` field is **not** an escape — the target refuses that too) ·
+whole-struct `==` · positional struct construction · passing a temporary to a
+`mut` parameter · decorators · nested functions · lambdas · comprehensions ·
 `try`/`except`/`raise` · `async`/`await` · `set`/`tuple` · slicing ·
 f-strings · `*args`/`**kwargs` · default arguments · `is` · `in` · truthiness ·
 method-call syntax · library imports · unannotated parameters · mixed
@@ -182,5 +255,6 @@ src/py2tuo/
   verify.py       drives the real `tuo` binary
   cli.py          the command-line front end
 examples/         Python inputs that translate, compile, and run
+                  (records.py is the @dataclass -> struct worked example)
 tests/            translation, acceptance, and Python-agreement tests
 ```

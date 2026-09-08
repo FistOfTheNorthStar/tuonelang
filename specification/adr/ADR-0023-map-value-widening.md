@@ -1,6 +1,6 @@
 # ADR-0023: Widening the map surface — values beyond `Int`, and what still needs traits
 
-- **Status:** proposed
+- **Status:** proposed (Stages A, B, C **landed** 2026-09-06; Stage **B2** — heap-owning values — open)
 - **Date:** 2026-09-06
 
 ## Context
@@ -77,7 +77,7 @@ deferred to the trait system**, unchanged from ADR-0011.
 
 Staged, each stage independently shippable and independently pinned:
 
-### Stage A — make the boundary sound (no surface change)
+### Stage A — make the boundary sound (no surface change) — **LANDED**
 
 Move the pair check from an eager per-call-site test to a **post-inference
 pass** over recorded map-builtin sites, so a pair solved after the fact is still
@@ -94,7 +94,74 @@ Pinned by: a checker test per unsupported pair in both the *inferred* and
 is the one that must be tested. A test that only writes the annotation would
 have passed throughout the defect's life.
 
-### Stage B — widen `V` to the ADR-0012 element set
+**Landed 2026-09-06.** `Checker` gains a `deferred_map_pairs` buffer: a
+map-builtin site whose pair is still an inference variable is *recorded* rather
+than dropped, and `finish_body` — which already runs after `icx.finalize()` —
+re-applies the substitution and runs the identical rule. The rule itself is
+factored into `check_map_pair` so the eager and deferred paths cannot drift.
+A pair still undetermined after inference is left alone, so a genuinely
+unconstrained `empty()` remains `T0011` ("type annotation needed") rather than
+gaining a second, spurious complaint.
+
+Seven tests in `crates/tuo-types/tests/typeck.rs` pin it, all written in the
+*inferred* spelling. Their value was verified by reverting the fix: **five fail
+without it** and all pass with it. The two that pass either way are the
+guard tests — that supported pairs are not over-refused, and that an
+unconstrained `empty()` does not report a pair error.
+
+The audit of `reject_unsupported_array_element` found it **not** vulnerable,
+and for a specific reason worth recording: it treats an unsolved element as
+*supported* and rejects on structure, so `Array[Array[_]]` is caught even while
+the inner element is a variable. The map guard's defect was that it treated an
+unsolved pair as a reason to skip the check entirely. Same shape, opposite
+default — and the map's default was the unsound one.
+
+### Stage B — widen `V` to the `Copy` scalars — **LANDED**
+
+**Implementation note (2026-09-06): three of this stage's premises were wrong,
+and the measured shape is simpler than what follows.** Before writing code the
+guard was temporarily relaxed and all three engines were run against `Bool`,
+`Float`, and `Str` values. What that found:
+
+1. **The interpreter needed no change at all.** It stores a `Value` and never
+   inspects the value's type, so it was already value-generic. The plan below
+   implies a three-engine change; it was a two-engine change.
+2. **The runtime C shim needed no change either.** It is *already*
+   stride-parametric internally (`tuo_map_grow`, `tuo_map_block_size`, and
+   `tuo_rt_map_drop` all take a stride), and — more to the point — the value
+   slot is one machine word. The compiler widens a `Copy` scalar into that word
+   on the way in and narrows it back on the way out, so the shim never learns
+   which scalar it carries. **No `tuo_rt_map_*` symbol changed.**
+3. **The ABI did not bump.** Because the value is word-widened rather than
+   stored at its natural width, `INT_ENTRY_STRIDE` (16) and `STR_ENTRY_STRIDE`
+   (24) are unchanged. The plan below asserted a bump was required; it was not.
+
+The actual blocker was in neither the checker nor the runtime: **both native
+backends declare every map-shim parameter as pointer-width** (`call_map_shim`),
+and materialize the result through a hardcoded `Option[Int]` writer. Passing a
+`Bool` (i1/I8) or `Float` (double/F64) raw is a call-signature mismatch — the
+"Verifier errors" and "Call parameter type mismatch" that made non-`Int` values
+unsound. The fix is a matched pair per backend: `value_as_word` on the way in
+and a payload-typed narrowing on the way out, with `Float` crossing by
+**bitcast, never numeric conversion** (a conversion would turn 2.5 into 2 —
+compiling, running, and silently wrong; the `map_float_values` fixture is built
+to catch exactly that).
+
+**Landed scope:** `V ∈ {Int, Bool, Float}` — the `Copy` scalars — on both key
+kinds. Pinned by two new three-way differential fixtures
+(`tests/codegen/fixtures/map_bool_values.tuo`, `map_float_values.tuo`) proving
+interpreter == Cranelift == LLVM, plus checker tests for the new boundary. The
+`Bool` fixture stores *both* truth values and reads back a displaced one, so a
+wrong narrowing cannot pass by luck; the `Float` fixture uses fractional and
+negative values, so a numeric conversion or a lost sign bit changes the result.
+
+**Deferred to Stage B2:** `Str`, `String`, and struct/enum values — everything
+that owns or borrows heap. Those genuinely need the deep-copy-on-read and
+recursive-drop path (and there the original plan's analysis holds, including
+`tuo_rt_map_drop` not currently running per-value glue). They remain refused by
+the type checker, pinned by a test.
+
+### Stage B (original plan) — widen `V` to the ADR-0012 element set
 
 `V` becomes the set ADR-0012 already admits for array elements: `Int`, `Bool`,
 `Float`, `Str`, `String`, and structs/enums whose fields are themselves
@@ -128,7 +195,23 @@ heap. This stage makes the specified behavior real.
 
 ABI version **bumps** (the map's value slot changes width and gains ownership).
 
-### Stage C — the stdlib and dogfooding payoff
+### Stage C — the dogfooding payoff — **LANDED (with a null result)**
+
+`tools/py2tuo` now translates `dict[K, V]` for the widened value set, and a
+`dict[int, bool]` Python program compiles and agrees with CPython at runtime —
+which was impossible before Stage B.
+
+**The coverage delta on the motivating corpus is zero, and that is reported
+rather than hidden.** Re-running the 1,870-file CPython survey: 4/58 dict-typed
+annotations were translatable before Stage B, and 4/58 after. No
+`dict[str, bool]` or `dict[int, float]` annotation appears in that corpus at
+all. The widening's value is therefore **not** more Python coverage; it is that
+`Bool` and `Float` map values now *work correctly on all three engines* instead
+of passing `tuo check` and failing in the backend. The coverage argument for
+this ADR rests entirely on Stage B2 (`dict[str, str]` is the most common
+unsupported shape), which is exactly the stage still open.
+
+### Stage C (original plan) — the stdlib and dogfooding payoff
 
 `std::collections` gains the map combinators the widened surface makes
 writable, and `tools/py2tuo` widens its `dict[K, V]` translation to the new

@@ -775,10 +775,33 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
             .then(tok(K::Colon))
             .then(ty.clone()),
     );
+    // A parameter written without its mode (`fn f(x: Int)`) is the most likely
+    // mistake in a tuonelang signature, since every other language spells it
+    // that way. Diagnose it here rather than letting item-level recovery
+    // report a generic "malformed item: skipped N tokens", which names neither
+    // the parameter nor the missing keyword. The grammar sees only token
+    // kinds, so it emits a marker and `oracle::to_diagnostic` reads the name
+    // off the span; the handwritten engine builds the identical diagnostic
+    // directly, and `oracle_parity` over the `invalid/` corpus pins them
+    // together.
+    let param_missing_mode = node!(
+        SyntaxKind::Param,
+        tok(K::Ident).then(tok(K::Colon)).then(ty.clone()),
+    )
+    .validate(|node, extra, emitter| {
+        emitter.emit(Rich::custom(
+            extra.span(),
+            format!("{}param-missing-mode", crate::oracle::TARGETED),
+        ));
+        node
+    })
+    .boxed();
     let param_list = node!(
         SyntaxKind::ParamList,
         tok(K::OpenParen)
-            .then(comma_list(choice((receiver, normal_param)).boxed()))
+            .then(comma_list(
+                choice((receiver, normal_param, param_missing_mode)).boxed()
+            ))
             .then(tok(K::CloseParen)),
     )
     .boxed();

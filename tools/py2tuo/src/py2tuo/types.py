@@ -37,6 +37,21 @@ class Type:
         """Whether the type is one of tuonelang's two string types."""
         return self.spelling in {"Str", "String"}
 
+    @property
+    def is_struct(self) -> bool:
+        """Whether the type names a translated `@dataclass` struct.
+
+        Struct spellings are the Python class name verbatim, and every other
+        type this module produces is either a known scalar or a bracketed
+        generic, so a bare non-scalar identifier is a struct.
+        """
+        return (
+            self.spelling.isidentifier()
+            and not self.is_scalar
+            and not self.is_str_like
+            and self.spelling != "()"
+        )
+
 
 INT = Type("Int")
 BOOL = Type("Bool")
@@ -58,12 +73,17 @@ _SCALARS: dict[str, Type] = {
 }
 
 
-#: The only two map shapes tuonelang v0 has an operation surface for
-#: (ADR-0011). Any other key/value pair is a `T0001` in the target compiler,
-#: so it is refused here where the message can name the Python type.
+#: The map shapes tuonelang has an operation surface for: an `Int`/`Str` key
+#: with a `Copy`-scalar value (ADR-0011, widened to `Bool`/`Float` values by
+#: ADR-0023 Stage B). Any other pair is a `T0001` in the target compiler, so it
+#: is refused here where the message can name the Python type the user wrote.
+#:
+#: Keys stay `Int`/`Str`: a user key type needs the trait system's `Hash`/`Eq`,
+#: which is a separate decision from the value set.
+_MAP_KEYS = ("Str", "Int")
+_MAP_VALUES = ("Int", "Bool", "Float")
 SUPPORTED_MAPS: dict[tuple[str, str], str] = {
-    ("Str", "Int"): "Map[Str, Int]",
-    ("Int", "Int"): "Map[Int, Int]",
+    (key, value): f"Map[{key}, {value}]" for key in _MAP_KEYS for value in _MAP_VALUES
 }
 
 
@@ -98,7 +118,12 @@ def element_of(ty: Type) -> Type | None:
     return None
 
 
-def translate_annotation(node: ast.expr | None, *, owner: ast.AST) -> Type:
+def translate_annotation(
+    node: ast.expr | None,
+    *,
+    owner: ast.AST,
+    structs: frozenset[str] = frozenset(),
+) -> Type:
     """Translate a Python annotation expression into a tuonelang :class:`Type`.
 
     ``owner`` is the node blamed when the annotation is missing entirely, so a
@@ -113,16 +138,21 @@ def translate_annotation(node: ast.expr | None, *, owner: ast.AST) -> Type:
             "example: def add(a: int, b: int) -> int:",
         )
 
-    # `x: int`, `x: str`, ...
+    # `x: int`, `x: str`, `x: Task`, ...
     if isinstance(node, ast.Name):
         mapped = _SCALARS.get(node.id)
         if mapped is not None:
             return mapped
+        if node.id in structs:
+            # A translated `@dataclass` becomes a tuonelang `struct` of the
+            # same name (ADR-0004), so the annotation is the name verbatim.
+            return Type(node.id)
         raise error(
             "TY0002",
             f"unsupported type annotation `{node.id}`",
             node,
-            "supported: int, bool, float, str, None, list[T], Optional[T]",
+            "supported: int, bool, float, str, None, list[T], Optional[T], "
+            "and the @dataclass types declared in this module",
         )
 
     # `x: None` is spelled as a constant, not a Name.
@@ -131,7 +161,7 @@ def translate_annotation(node: ast.expr | None, *, owner: ast.AST) -> Type:
 
     # `list[int]`, `Optional[int]`, `list[list[int]]`, ...
     if isinstance(node, ast.Subscript):
-        return _translate_generic(node)
+        return _translate_generic(node, structs)
 
     raise error(
         "TY0002",
@@ -141,7 +171,7 @@ def translate_annotation(node: ast.expr | None, *, owner: ast.AST) -> Type:
     )
 
 
-def _translate_generic(node: ast.Subscript) -> Type:
+def _translate_generic(node: ast.Subscript, structs: frozenset[str] = frozenset()) -> Type:
     """Translate a subscripted annotation such as ``list[int]``."""
     base = node.value
     if not isinstance(base, ast.Name):
@@ -149,13 +179,13 @@ def _translate_generic(node: ast.Subscript) -> Type:
 
     name = base.id
     if name in {"list", "List"}:
-        element = translate_annotation(node.slice, owner=node)
+        element = translate_annotation(node.slice, owner=node, structs=structs)
         if element == UNIT:
             raise error("TY0003", "`list[None]` has no tuonelang equivalent", node)
         return array_of(element)
 
     if name in {"Optional"}:
-        inner = translate_annotation(node.slice, owner=node)
+        inner = translate_annotation(node.slice, owner=node, structs=structs)
         return Type(f"Option[{inner}]")
 
     if name in {"dict", "Dict"}:
@@ -200,10 +230,11 @@ def _translate_dict(node: ast.Subscript) -> Type:
             "TY0004",
             f"`{written}` has no tuonelang equivalent",
             node,
-            "tuonelang v0 has exactly two map shapes: Map[Str, Int] and "
-            "Map[Int, Int] (ADR-0011)",
-            "translate as dict[str, int] or dict[int, int], or use a struct "
-            "when the value type is fixed and known",
+            "tuonelang maps take an Int or Str key with an Int, Bool, or Float "
+            "value (ADR-0011, widened by ADR-0023 Stage B)",
+            "a str or nested-collection value needs the deep-copy path that is "
+            "still deferred (Stage B2); use a supported value type, or a struct "
+            "when the shape is fixed and known",
         )
     return map_of(Type(key_spelling), value)
 

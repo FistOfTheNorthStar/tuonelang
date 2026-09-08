@@ -67,7 +67,16 @@ fn corpus_root() -> PathBuf {
 #[test]
 fn every_fixture_parses_identically_on_both_engines() {
     let mut checked = 0;
-    for sub in ["ok", "err"] {
+    // **Every** fixture directory, not a chosen few. This test once walked
+    // only `ok/` and `err/` — six files out of the corpus's 248 — so a real
+    // divergence (a handwritten-only targeted recovery the oracle answered
+    // with generic resynchronization) passed a green parity run untouched.
+    // `invalid/` matters most, being where the *recovery* fixtures live and
+    // recovery being where two engines are likeliest to drift; `valid/` is
+    // the bulk of the corpus and covers the ordinary grammar. A new
+    // subdirectory must be added here, and the floor below is what makes
+    // forgetting loud.
+    for sub in ["ok", "err", "invalid", "valid"] {
         let dir = corpus_root().join(sub);
         let mut entries: Vec<_> = fs::read_dir(&dir)
             .expect("fixture dir exists")
@@ -81,8 +90,13 @@ fn every_fixture_parses_identically_on_both_engines() {
             checked += 1;
         }
     }
+    // The floor is set just under the real corpus size (248 files), not at a
+    // token handful: the original `>= 5` was weak enough that checking 2.4% of
+    // the corpus still looked healthy, which is exactly how the blind spot
+    // survived. A floor this close to the true count fails loudly if any
+    // directory stops being swept.
     assert!(
-        checked >= 5,
+        checked >= 240,
         "fixture corpus went missing ({checked} files)"
     );
 }

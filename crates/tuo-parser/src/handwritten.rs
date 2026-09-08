@@ -393,12 +393,57 @@ impl Parser<'_> {
     fn param(&mut self) -> R {
         let mode = match self.peek() {
             K::KwIn | K::KwMut | K::KwTake => self.bump(),
+            // A parameter whose mode was omitted (`fn f(s: String)`) is the
+            // most likely mistake in a tuonelang signature — every other
+            // language the author knows writes exactly that. Falling through
+            // to `Err(Fail)` here would discard the shape we can already see
+            // (`IDENT :`) and let the item-level recovery report a generic
+            // "malformed item: skipped N tokens", which names neither the
+            // parameter nor the missing keyword.
+            //
+            // Recover instead: report the omission at the parameter's own
+            // span, then parse the rest of the parameter normally so the
+            // node is well-formed and the later stages see an ordinary
+            // parameter (both `param_mode` and `mode_from_text` default an
+            // absent mode to `in`, the safest reading). The parse must
+            // *succeed* for the diagnostic to survive — `comma_list` rolls
+            // back on failure and truncates diagnostics with it.
+            K::Ident if self.peek2() == K::Colon => return self.param_missing_mode(),
             _ => return Err(Fail),
         };
         if self.at(K::KwSelfValue) {
             return Ok(node(SyntaxKind::Receiver, vec![mode, self.bump()]));
         }
         let mut els = vec![mode];
+        self.expect(K::Ident, &mut els)?;
+        self.expect(K::Colon, &mut els)?;
+        els.push(self.ty()?);
+        Ok(node(SyntaxKind::Param, els))
+    }
+
+    /// One parameter written without its `in`/`mut`/`take` mode: report the
+    /// omission and parse `IDENT : type` anyway, so one clear diagnostic
+    /// replaces a generic recovery message and the rest of the signature
+    /// still parses.
+    fn param_missing_mode(&mut self) -> R {
+        let start = self.pos;
+        let primary = byte_span(start, self.toks, self.lex, self.source);
+        let range = primary.range();
+        let text = self.source.text()[range.start().as_usize()..range.end().as_usize()].to_owned();
+        self.diagnostics.push(
+            Diagnostic::error(
+                code(1),
+                format!("parameter `{text}` is missing its passing mode"),
+                primary,
+            )
+            .with_primary_label("expected `in`, `mut`, or `take` before this name")
+            .with_help(concat!(
+                "every parameter states how it takes its argument: `in` borrows it ",
+                "read-only, `mut` borrows it mutably, `take` moves it — there is no ",
+                "default, so the choice is always written",
+            )),
+        );
+        let mut els = Els::new();
         self.expect(K::Ident, &mut els)?;
         self.expect(K::Colon, &mut els)?;
         els.push(self.ty()?);

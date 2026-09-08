@@ -1168,14 +1168,36 @@ impl<'a> Body<'a> {
             let span = self.at(arg.span());
             match self.place_of(arg) {
                 Some(place) => recs.push(ArgRec { place, mode, span }),
-                None => self.expr(
-                    arg,
-                    if mode == Mode::Take {
-                        Use::Value
-                    } else {
-                        Use::Read
-                    },
-                ),
+                None => {
+                    // A `mut` parameter borrows a mutable *place*, and this
+                    // argument has none (a literal, a call result, a struct
+                    // literal). Report it here: MIR lowering cannot build a
+                    // `Place` for it either, and its only recourse is to skip
+                    // the whole enclosing function, which surfaces much later
+                    // as "the program has no function named `main` to compile"
+                    // — an accepted program that then fails to build.
+                    if mode == Mode::Mut {
+                        self.report(
+                            Diagnostic::error(
+                                code(4),
+                                "cannot pass a temporary as `mut`: it is not a place",
+                                span,
+                            )
+                            .with_primary_label("a `mut` argument needs a mutable place")
+                            .with_help(
+                                "bind the value to a `var` first and pass that binding",
+                            ),
+                        );
+                    }
+                    self.expr(
+                        arg,
+                        if mode == Mode::Take {
+                            Use::Value
+                        } else {
+                            Use::Read
+                        },
+                    );
+                }
             }
         }
         // Borrow arguments must be usable and — for `mut` — mutable (§4, §7).

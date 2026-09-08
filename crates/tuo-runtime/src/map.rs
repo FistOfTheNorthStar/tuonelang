@@ -33,10 +33,20 @@
 //! carries a fourth word. An empty map is the sentinel header
 //! `{ZERO_SIZE_SENTINEL, 0, 0}` with no allocation at all.
 //!
-//! Entry strides: `Map[Int, Int]` entries are `{i64 key, i64 value}`
-//! ([`INT_ENTRY_STRIDE`]); `Map[Str, Int]` entries are
+//! Entry strides: an `Int`-keyed entry is `{i64 key, i64 value}`
+//! ([`INT_ENTRY_STRIDE`]); a `Str`-keyed entry is
 //! `{const u8 *key_ptr, u64 key_len, i64 value}` ([`STR_ENTRY_STRIDE`]) —
 //! the borrowed `Str` key is stored as its two-word view, never copied.
+//!
+//! The value slot is **one machine word of opaque bytes**, not an `Int`. Since
+//! ADR-0023 Stage B the v0 value set is the `Copy` scalars `Int`/`Bool`/`Float`,
+//! and the *compiler* widens the value into a word on the way in and narrows it
+//! back on the way out (a `Float` is bitcast, never converted, so its bits
+//! survive the round trip). That keeps the strides — and therefore the ABI —
+//! unchanged across the widening: this shim never needs to know which scalar it
+//! is carrying. A value type that owns or borrows heap (`Str`, `String`, a
+//! struct) does **not** fit that scheme and stays refused by the type checker
+//! pending the deep-copy/drop path (Stage B2).
 //!
 //! What lives here in Rust is the part that is pure and testable without a C
 //! compiler: the two hash functions ([`hash_int`], [`hash_str`]) with their

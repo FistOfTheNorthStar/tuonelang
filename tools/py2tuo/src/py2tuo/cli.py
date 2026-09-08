@@ -248,11 +248,22 @@ TRANSLATED
   * calls to functions defined in the same module, and passing a function by name
   * builtins: len, abs, min, max, sum, print, str, int, float, sorted
   * string concatenation (a + b) via std::string::concat
+  * @dataclass declarations -> tuonelang `struct` types: construction (with
+    KEYWORD arguments), field read and write, and a struct as a parameter,
+    a return type, or a list[T] element. A parameter whose field is written
+    becomes `mut`; one only read becomes `in`.
   * dict[str, int] and dict[int, int] -- the two map shapes tuonelang v0 has:
     d[k] = v, d.get(k, default), k in d, len(d), d.keys(), and `= {}`
 
 REFUSED, with a positioned diagnostic naming the construct
-  * classes, decorators, nested functions, lambdas, comprehensions
+  * classes with BEHAVIOUR: methods, __post_init__, inheritance, ClassVar,
+    field defaults, @dataclass(frozen=...), NamedTuple, and bare classes.
+    A @dataclass of plain annotated fields DOES translate, as a struct.
+  * recursive dataclasses (a struct reaching itself has no finite size in v0;
+    a list[T] field is not an escape -- the target refuses that too)
+  * whole-struct `==` (accepted by tuo check, then fails in codegen);
+    positional struct construction; passing a temporary to a `mut` parameter
+  * decorators, nested functions, lambdas, comprehensions
   * exceptions (try/except/raise) -- return Result[T, E] and match instead
   * async/await -- tuonelang concurrency is structured fork-join only
   * set/tuple, slicing, f-strings, *args/**kwargs, default arguments

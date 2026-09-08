@@ -99,3 +99,36 @@ fn case_mut_arg_through_fn_value(take f: fn(mut Int) -> Int, in n: Int) -> Int {
     let m = n;
     f(m) // ERROR: O0004 `m` is a `let` binding, but the fn value's parameter is `mut`
 }
+
+// A `mut` argument needs a mutable PLACE, and a temporary has none. This was
+// once missed here entirely: the checker only inspected arguments that had a
+// root place, so a literal or a struct literal passed as `mut` slipped past
+// the front end. MIR lowering then could not build a `Place` for it either,
+// and its only recourse was to skip the whole enclosing function — surfacing
+// much later as "the program has no function named `main` to compile", an
+// accepted program that fails to build.
+fn case_mut_arg_is_an_int_literal() -> Int {
+    mutating_int(2) // ERROR: O0004 a literal is not a place
+}
+
+fn case_mut_arg_is_a_struct_literal() -> Int {
+    mutating_counter(Counter { count: 1 }) // ERROR: O0004 a struct literal is not a place
+}
+
+fn case_mut_arg_is_a_call_result() -> Int {
+    mutating_counter(fresh_counter()) // ERROR: O0004 a call result is not a place
+}
+
+fn mutating_int(mut n: Int) -> Int {
+    n = 5;
+    n
+}
+
+fn mutating_counter(mut c: Counter) -> Int {
+    c.count = 5;
+    c.count
+}
+
+fn fresh_counter() -> Counter {
+    Counter { count: 0 }
+}
