@@ -28,8 +28,14 @@
 //   reports its length and stages the payload; `udp_byte_at` indexes it and
 //   `udp_peer_port` names the sender, which is what lets a server reply.
 //
-// `listen`/`listen6`/`udp_bind` bind loopback; `connect`/`udp_send` take a
-// numeric address (v4 or v6), never a name — DNS is deliberately absent.
+// `listen`/`listen6` bind loopback — an inbound guarantee, so nothing
+// committed opens an externally reachable listening port. `udp_bind` binds
+// `INADDR_ANY` instead: a bind fixes a socket's *source* address, and a
+// loopback-bound datagram socket cannot send off-machine at all. A datagram
+// socket accepts nothing, so the inbound guarantee does not rest on it.
+// `connect`/`udp_send` take a numeric address (v4 or v6), never a name —
+// DNS is deliberately absent (and is meant to be written *in* tuonelang on
+// these UDP primitives).
 
 module std::net;
 
@@ -232,8 +238,16 @@ pub fn peer_family(take fd: Int) -> Int {
 }
 
 /// EFFECT (executable and effectful): create an IPv4 UDP socket bound to
-/// `127.0.0.1:port` (ADR-0017). Returns the descriptor (`>= 0`) or a
-/// negative value on host error.
+/// `0.0.0.0:port` (ADR-0017). Returns the descriptor (`>= 0`) or a negative
+/// value on host error.
+///
+/// The socket binds `INADDR_ANY`, not loopback: a bind fixes the socket's
+/// *source* address, so a loopback-bound datagram socket cannot send to any
+/// off-machine destination — the host refuses it before it reaches the wire.
+/// `listen`/`listen6` do still bind loopback, because that is an **inbound**
+/// guarantee (nothing committed opens an externally reachable listening
+/// port), and it is untouched. A datagram socket accepts no connections, so
+/// the guarantee does not rest on its source address.
 ///
 /// Port `0` asks for an ephemeral port — pair with `bound_port`, which reads
 /// a UDP descriptor's port just as it does a TCP one. Effectful, so no spec

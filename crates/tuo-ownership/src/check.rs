@@ -1184,9 +1184,7 @@ impl<'a> Body<'a> {
                                 span,
                             )
                             .with_primary_label("a `mut` argument needs a mutable place")
-                            .with_help(
-                                "bind the value to a `var` first and pass that binding",
-                            ),
+                            .with_help("bind the value to a `var` first and pass that binding"),
                         );
                     }
                     self.expr(

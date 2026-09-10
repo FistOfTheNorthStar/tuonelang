@@ -17,9 +17,7 @@ use tuo_ast::{
     ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, GenericParams, ImportDecl,
     Item, Name, Pattern, SpecDecl, SpecStatement, Statement, TypeArgs, TypePath, TypeRef,
 };
-use tuo_diagnostics::{
-    Confidence, Diagnostic, DiagnosticCode, Edit, Namespace, StructuredValue,
-};
+use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace, StructuredValue};
 use tuo_source::Span;
 
 use crate::builtin::Builtin;

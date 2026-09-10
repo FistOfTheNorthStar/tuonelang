@@ -195,13 +195,34 @@ three-word header** as `String`/`Array` — `(ptr, len, cap)`, `Layout::words(3)
 — where `ptr` points at the **dense entries** buffer, `len` is the live entry
 count, and `cap` the entry capacity. An empty map is the sentinel header
 `(ZERO_SIZE_SENTINEL, 0, 0)` with no allocation. The v0 operation surface is
-`Map[Int, Int]` and `Map[Str, Int]`; entries are stored **in insertion
-order**:
+an `Int`/`Str` key with an `Int`/`Bool`/`Float`/`Str` value; entries are
+stored **in insertion order**.
 
-- `Map[Int, Int]` entry: `{ i64 key, i64 value }`, stride 16.
-- `Map[Str, Int]` entry: `{ const u8 *key_ptr, u64 key_len, i64 value }`,
-  stride 24 — the borrowed `Str` key stored as its two-word view, never
-  copied.
+An entry is its **key followed by its value**, so the entry stride is
+`key_size + value_stride`:
+
+| part | bytes | note |
+|---|---|---|
+| `Int` key | 8 | the key word |
+| `Str` key | 16 | the borrowed `{ptr, len}` view, never copied |
+| `Int`/`Bool`/`Float` value | 8 | widened by the *compiler* into one machine word (ADR-0023 Stage B) |
+| `Str` value | 16 | the borrowed `{ptr, len}` view (ADR-0023 Stage B2) |
+
+So `Map[Int, Int]` strides 16 and `Map[Str, Int]` strides 24 as before, while
+`Map[Int, Str]` strides 24 and `Map[Str, Str]` strides 32.
+
+The **value stride is a caller-supplied argument** (`vs`), not a constant: the
+shim copies `vs` opaque bytes and never learns the value's type. A `Copy`
+scalar narrower than a word (`Bool`) or of a different kind (`Float`) is
+widened into a word by the compiler on the way in and narrowed back on the way
+out — a `Float` by **bitcast, never numeric conversion**, so `2.5` survives the
+round trip. A `Str` value crosses as its two-word view, exactly like a `Str`
+key; it *borrows* rather than owns, so it needs no deep copy on read-out and no
+drop glue.
+
+Value types that **own** heap (`String`, structs containing one) are refused by
+the type checker: they need the deep-copy-on-read and recursive-drop path, and
+`tuo_rt_map_drop` does not yet run per-value glue.
 
 Every observable is defined by the insertion-ordered dense region: `keys`
 lists keys in insertion order, `remove` shifts the tail down one slot
@@ -223,17 +244,28 @@ with 64-bit FNV-1a over their bytes, both vector-pinned in
 `tuo_runtime::map`.
 
 ```c
-void tuo_rt_map_int_insert(long long *hdr, long long k, long long v, long long *out);
-void tuo_rt_map_int_get(const long long *hdr, long long k, long long *out);
-void tuo_rt_map_int_remove(long long *hdr, long long k, long long *out);
-void tuo_rt_map_int_keys(const long long *hdr, long long *out_hdr);
+/* `vs` is the value stride in bytes; `v` points at `vs` bytes of value    */
+/* payload. `out[0]` is the found flag, and the previous value (when       */
+/* found) occupies `vs` bytes starting at `&out[1]`.                       */
+void tuo_rt_map_int_insert(long long *hdr, long long k, const void *v,
+                           unsigned long long vs, long long *out);
+void tuo_rt_map_int_get(const long long *hdr, long long k,
+                        unsigned long long vs, long long *out);
+void tuo_rt_map_int_remove(long long *hdr, long long k,
+                           unsigned long long vs, long long *out);
+void tuo_rt_map_int_keys(const long long *hdr, unsigned long long vs,
+                         long long *out_hdr);
 void tuo_rt_map_str_insert(long long *hdr, const unsigned char *kp,
-                           unsigned long long kn, long long v, long long *out);
+                           unsigned long long kn, const void *v,
+                           unsigned long long vs, long long *out);
 void tuo_rt_map_str_get(const long long *hdr, const unsigned char *kp,
-                        unsigned long long kn, long long *out);
+                        unsigned long long kn, unsigned long long vs,
+                        long long *out);
 void tuo_rt_map_str_remove(long long *hdr, const unsigned char *kp,
-                           unsigned long long kn, long long *out);
-void tuo_rt_map_str_keys(const long long *hdr, long long *out_hdr);
+                           unsigned long long kn, unsigned long long vs,
+                           long long *out);
+void tuo_rt_map_str_keys(const long long *hdr, unsigned long long vs,
+                         long long *out_hdr);
 void tuo_rt_map_drop(long long *hdr, long long stride);
 ```
 
@@ -658,7 +690,8 @@ untouched — it calls `read(2)` directly and never consults the staging table,
 so no file or TCP read pays for UDP's existence.
 
 ```c
-long long tuo_rt_udp_bind(long long port);    /* fd >= 0; -1 host error */
+long long tuo_rt_udp_bind(long long port);    /* fd >= 0; -1 host error;
+                                                 binds INADDR_ANY */
 long long tuo_rt_udp_send(long long fd, const unsigned char *hptr,
                           unsigned long long hlen, long long port,
                           const unsigned char *bptr,
@@ -672,6 +705,17 @@ long long tuo_rt_udp_peer_port(long long fd);
                           /* source port of the last recv; -1 if none */
 ```
 
+- **`tuo_rt_udp_bind` binds `INADDR_ANY` (`0.0.0.0`), not loopback.** This
+  is the one place the socket seam's bind policy differs, and deliberately
+  (ADR-0017 amendment, 2026-09-08). A bind fixes a socket's **source**
+  address, so a datagram socket bound to `127.0.0.1` cannot address any
+  off-machine destination: the host fails the `sendto` with `EADDRNOTAVAIL`
+  before a packet reaches the wire, which made every outbound datagram
+  impossible. ADR-0014's loopback rule is an **inbound reachability**
+  guarantee — no committed test or benchmark may open an externally reachable
+  *listening* port — and it is unchanged: `tuo_rt_listen` and
+  `tuo_rt_listen6` still bind loopback. A UDP socket accepts no connections,
+  so that guarantee never rested on its source address.
 - `tuo_rt_udp_send` is the seam's first **four-operand** effect and carries
   two `Str` values, so it takes six machine arguments (`{ptr, len}` each).
   The host address is parsed by the same `tuo_rt_addr_parse` helper

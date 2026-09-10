@@ -3053,32 +3053,36 @@ impl<'a> Checker<'a> {
             )
             .with_primary_label(format!(
                 "the v0 map operation surface is an `Int`/`Str` key with an \
-                     `Int`/`Bool`/`Float` value, not `{rendered}`"
+                     `Int`/`Bool`/`Float`/`Str` value, not `{rendered}`"
             ))
             .with_help(
                 "user key types await the trait system's `Hash`/`Eq` (ADR-0011), and \
-                     `Str`/`String`/struct values await the deep-copy and drop path \
+                     `String`/struct values await the deep-copy and drop path \
                      (ADR-0023 Stage B2); use an `Int` or `Str` key with an \
-                     `Int`/`Bool`/`Float` value",
+                     `Int`/`Bool`/`Float`/`Str` value",
             )
             .with_actual(StructuredValue::Type(rendered)),
         );
     }
 
-    /// Is `ty` a v0-supported map **value** type (ADR-0023 Stage B)?
+    /// Is `ty` a v0-supported map **value** type (ADR-0023 Stages B/B2)?
     ///
-    /// The set is the `Copy` scalars: `Int`, `Bool`, and `Float`. Each is a
-    /// fixed-size value the table can hold inline, so `get` is a plain load and
-    /// destruction needs no per-value glue — which is exactly why this subset
-    /// lands first. `Str`/`String` values and struct/enum values own or borrow
-    /// data and need the deep-copy-on-read and recursive-drop machinery
-    /// ADR-0012 built for array elements; they stay refused until that path is
-    /// wired through both backends (Stage B2).
+    /// The set is the `Copy` scalars `Int`/`Bool`/`Float` (Stage B) plus the
+    /// borrowed `Str` (Stage B2). Each is a fixed-size value the table holds
+    /// inline at a stride the compiler supplies, so `get` is a plain copy out
+    /// and destruction needs no per-value glue: a scalar owns nothing, and a
+    /// `Str` *borrows* its bytes rather than owning them.
+    ///
+    /// `String` values and struct/enum values genuinely **own** heap, so they
+    /// need the deep-copy-on-read and recursive-drop machinery ADR-0012 built
+    /// for array elements, plus a `tuo_rt_map_drop` that runs per-value glue.
+    /// They stay refused until that path is wired through both backends (the
+    /// second half of Stage B2).
     ///
     /// Keys are deliberately **not** widened here: a user key type needs the
     /// trait system's `Hash`/`Eq` (ADR-0011), which is a different decision.
     fn is_supported_map_value(ty: &Ty) -> bool {
-        matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Float(_))
+        matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Float(_) | Ty::Str)
     }
 
     /// Refuse an `Array[T]` whose element type `T` is outside the v0-supported
@@ -3226,8 +3230,10 @@ impl<'a> Checker<'a> {
                         .turbofish()
                         .map(|list| list.types().map(|ty| self.lower_type(ty)).collect());
                     let (params, ret) = self.instantiate_fn(symbol, given_args, span);
-                    let outer =
-                        std::mem::replace(&mut self.current_callee, self.resolution.builtin(symbol));
+                    let outer = std::mem::replace(
+                        &mut self.current_callee,
+                        self.resolution.builtin(symbol),
+                    );
                     self.check_args(&params, &args, span);
                     self.current_callee = outer;
                     return ret;

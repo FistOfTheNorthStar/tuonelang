@@ -1,0 +1,111 @@
+// Map values of type `Str` (ADR-0023 Stage B2): the borrowed two-word view as
+// a map value, on both key kinds.
+//
+// Adversarial by construction, because the failure modes here are silent:
+//
+//   * every stored string has a DIFFERENT length, so a value read from the
+//     wrong entry (a bad stride) changes the answer rather than coinciding;
+//   * the `Str`-keyed map stores values whose lengths differ from their keys'
+//     lengths, so reading the key where the value belongs (a bad value offset)
+//     is visible;
+//   * an entry is overwritten and a displaced entry read back afterwards, so a
+//     stride error that only shows up after the dense region shifts is caught;
+//   * a removal happens before the final reads, exercising the memmove +
+//     index-rebuild path at a 24-byte (Int key) and 32-byte (Str key) stride
+//     rather than the 16/24 the word-valued maps use.
+//
+// Expected exit: 87.
+
+module map_str_values;
+
+/// Int-keyed: three distinct lengths, then an overwrite and a removal.
+fn int_keyed() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 10, "a");
+    let _ = std::map::insert(m, 20, "bcde");
+    let _ = std::map::insert(m, 30, "fghijklmn");
+    // Overwrite the middle entry: its position must be kept, and the entries
+    // on either side must be untouched.
+    let _ = std::map::insert(m, 20, "xy");
+    var total = 0;
+    total = total + len_at(m, 10);
+    total = total + len_at(m, 20);
+    total = total + len_at(m, 30);
+    // Remove the first entry, forcing the memmove + rebuild, then re-read the
+    // two survivors at their new dense positions.
+    let _ = std::map::remove(m, 10);
+    total = total + len_at(m, 20);
+    total = total + len_at(m, 30);
+    // A miss must report the sentinel, not stale bytes from a freed slot.
+    total = total + len_at(m, 10);
+    total
+}
+
+fn len_at(in m: Map[Int, Str], take k: Int) -> Int {
+    match std::map::get(m, k) {
+        Some { value } => std::str::len(value),
+        None => 100,
+    }
+}
+
+/// Str-keyed: value lengths deliberately differ from their keys' lengths, so
+/// reading a key where a value belongs is observable.
+fn str_keyed() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "kk", "a");
+    let _ = std::map::insert(m, "k", "bcdef");
+    let _ = std::map::insert(m, "kkkk", "gh");
+    var total = 0;
+    total = total + str_len_at(m, "kk");
+    total = total + str_len_at(m, "k");
+    total = total + str_len_at(m, "kkkk");
+    let _ = std::map::remove(m, "k");
+    total = total + str_len_at(m, "kk");
+    total = total + str_len_at(m, "kkkk");
+    total
+}
+
+fn str_len_at(in m: Map[Str, Str], in k: Str) -> Int {
+    match std::map::get(m, k) {
+        Some { value } => std::str::len(value),
+        None => 50,
+    }
+}
+
+/// Byte-level equality, not just length: a value whose length survives but
+/// whose pointer is wrong would pass the length checks above.
+fn bytes_survive() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 1, "tuonelang");
+    match std::map::get(m, 1) {
+        Some { value } => if value == "tuonelang" { 7 } else { 0 },
+        None => 0,
+    }
+}
+
+spec int_keyed {
+    // 1 + 2 + 9  (after the overwrite)
+    //   = 12
+    // + 2 + 9    (after removing key 10)
+    //   = 23
+    // + 100      (the miss)
+    then int_keyed() == 123;
+}
+
+spec str_keyed {
+    // 1 + 5 + 2 = 8, then + 1 + 2 = 11
+    then str_keyed() == 11;
+}
+
+spec bytes_survive {
+    then bytes_survive() == 7;
+}
+
+fn main() -> Int {
+    // 123 - 47 = 76, + 11 = 87... spelled as a sum so a wrong part is visible.
+    let a = int_keyed();
+    let b = str_keyed();
+    let c = bytes_survive();
+    // 123 + 11 + 7 = 141; keep the exit inside a byte.
+    (a + b + c) - 54
+}

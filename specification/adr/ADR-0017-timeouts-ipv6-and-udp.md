@@ -1,6 +1,8 @@
 # ADR-0017: Timeouts, IPv6, and UDP — the socket seam's additive increment
 
-- **Status:** accepted (2026-08-25 — all three stages landed; see the stage resolutions)
+- **Status:** accepted (2026-08-25 — all three stages landed; see the stage resolutions).
+  **Amended 2026-09-08** — see [Amendments](#amendments-2026-09-08): `udp_bind`
+  binds `INADDR_ANY`, not loopback.
 - **Date:** 2026-08-25
 - **Context:** ADR-0014 landed the socket effects (`listen`/`bound_port`/
   `accept`/`connect`) on the ADR-0006/0013 descriptor seam and, in its
@@ -107,8 +109,15 @@ address length. Stage B rewrote it to read through `sockaddr_storage` and
 switch on `ss_family`, which is correct by construction. The ADR originally
 claimed it "works unchanged"; that was true in observable effect on these
 hosts, but not for a reason worth relying on.)*
-Binding stays **loopback-only** for the same reason ADR-0014 gave: no committed
-test or benchmark may open an externally reachable port.
+**Listening** stays **loopback-only** for the same reason ADR-0014 gave: no
+committed test or benchmark may open an externally reachable *listening*
+port. *(Amended 2026-09-08: this sentence originally read "Binding stays
+loopback-only … an externally reachable port". Read as a rule about every
+`bind`, it was implemented on `udp_bind` too, where it has the entirely
+different effect of constraining the socket's **source** address and so
+forbidding every off-machine **destination**. The guarantee is about
+inbound reachability and it is unchanged for `listen`/`listen6`; see
+[Amendments](#amendments-2026-09-08).)*
 
 ### Group 3 — UDP (5 builtins)
 
@@ -117,7 +126,7 @@ arbitrary senders are both expressible.
 
 | Signature | Meaning |
 |-----------|---------|
-| `fn udp_bind(take port: Int) -> Int` | Creates an IPv4 UDP socket bound to `127.0.0.1:port`; returns the descriptor (`>= 0`) or `NET_ERROR`. Port `0` asks for an ephemeral port — pair with `bound_port`, which works unchanged on a UDP descriptor. |
+| `fn udp_bind(take port: Int) -> Int` | Creates an IPv4 UDP socket bound to `0.0.0.0:port` (`INADDR_ANY`; **amended 2026-09-08** — this row originally said `127.0.0.1:port`, which severed all outbound UDP); returns the descriptor (`>= 0`) or `NET_ERROR`. Port `0` asks for an ephemeral port — pair with `bound_port`, which works unchanged on a UDP descriptor. |
 | `fn udp_send(take fd: Int, in host: Str, take port: Int, in bytes: Str) -> Int` | Sends one datagram of `bytes` to `host:port` (numeric address, family inferred as in `connect`). Returns the number of bytes sent (`>= 0`) or `NET_ERROR`. |
 | `fn udp_recv(take fd: Int, take ms: Int) -> Int` | Receives one datagram, waiting at most `ms` milliseconds, and stages it on the descriptor. Returns the datagram's length (`>= 0`), `NET_TIMEOUT`, or `NET_ERROR`. The bytes are then read with `udp_byte_at`, and the sender is available via `udp_peer_port`. |
 | `fn udp_byte_at(take fd: Int, take i: Int) -> Int` | Byte `i` of the datagram most recently staged on `fd` (`0..=255`), or `NET_ERROR` if `i` is out of range or nothing is staged. |
@@ -148,9 +157,15 @@ for effectively-blocking behavior.
 
 The source *address* is deliberately not exposed as a `Str` in this increment:
 returning host-allocated text would need a new `String`-producing effect shape,
-which is a larger change than the seam warrants. Loopback-only binding means
-the address is known; the port is the part that varies. A future additive
-primitive can widen this when dogfooding demands it.
+which is a larger change than the seam warrants. A future additive primitive
+can widen this when dogfooding demands it. *(Amended 2026-09-08: this
+paragraph originally justified the omission with "Loopback-only binding means
+the address is known; the port is the part that varies." That reasoning is
+withdrawn along with the loopback bind — a socket that can send anywhere can
+be replied to from anywhere, so a datagram server that must distinguish its
+senders by address now genuinely lacks a primitive. The omission stands on
+the effect-shape cost alone, and is a real, named gap rather than a
+consequence of a binding restriction.)*
 
   **Runtime obligations (ABI):** the runtime shim gains `tuo_rt_accept_timeout`,
   `tuo_rt_connect_timeout`, and `tuo_rt_read_byte_timeout` (each `poll(2)` with
@@ -357,3 +372,87 @@ The lab catalog now holds **fifteen** supported runtime workloads, none
 unsupported. `crates/tuo-cli/tests/lab_command.rs` drives both host seams
 live: all fifteen tuonelang programs compile-link-run to their expected exit
 byte, and the C and Go peers agree where the toolchains exist.
+
+
+## Amendments (2026-09-08)
+
+One correction to the accepted decision above, found by dogfooding — a DNS
+resolver written entirely in tuonelang on these UDP primitives, which is
+precisely the use case this ADR's **Deliberately out of scope** section
+names as the honest way for name resolution to arrive.
+
+1. **`udp_bind` binds `INADDR_ANY`, not `INADDR_LOOPBACK`.** As specified and
+   implemented, `tuo_rt_udp_bind` bound `127.0.0.1:port`. That made **all
+   outbound UDP impossible**: a bind fixes a socket's *source* address, so
+   the host refuses (`EADDRNOTAVAIL`) every datagram addressed off-machine,
+   and `udp_send` returned `NET_ERROR` for every destination outside
+   `127.0.0.0/8`. The whole of `tuo_rt_addr_parse`'s v4-and-v6 destination
+   parsing, and `udp_send`'s own documented ability to send "to `host:port`",
+   were unreachable in practice for every address but one.
+
+   The bind is now `INADDR_ANY`. The reasoning:
+
+   - **The rationale being applied was the wrong one.** ADR-0014 stated the
+     restriction as *"listening on non-loopback addresses (binding `127.0.0.1`
+     only keeps every committed test and benchmark from opening an externally
+     reachable port)"*, and this ADR restated it as *"no committed test or
+     benchmark may open an externally reachable port"*. That is an **inbound
+     reachability** guarantee: it exists so nothing committed stands up a
+     service the outside world can reach. It is a good rule and it is
+     **unchanged** — `tuo_rt_listen` and `tuo_rt_listen6` still bind loopback,
+     and no committed test or benchmark opens an externally reachable
+     *listening* port. But on a datagram socket the same `bind` call does
+     something else entirely: it constrains **outbound** destinations. The
+     original text said "binding", the guarantee meant "listening", and UDP is
+     where the two come apart.
+   - **Nothing in the threat model rests on it.** A UDP socket bound to
+     `0.0.0.0:0` on a kernel-chosen ephemeral port accepts no connections and
+     receives only datagrams something already chose to send it. It is not an
+     externally reachable service in any sense the rule cares about. A program
+     that *wants* to receive unsolicited datagrams already asks for that by
+     binding a fixed port and calling `udp_recv`, which was true before this
+     amendment and is true after it.
+   - **The alternative was considered and rejected.** A separate
+     `udp_bind_any` builtin, leaving `udp_bind` untouched, is the more
+     conservative reading of this ADR's own "additive when dogfooding demands
+     it" clause, and it was weighed. It is the wrong shape here. It would
+     leave `udp_bind` — the obvious name, the one every example and the
+     benchmark already call — permanently broken for the ADR's own stated
+     purpose, and it would put two spellings on one fundamental task in
+     violation of the stdlib's one-obvious-API rule, with the obvious spelling
+     being the trap. And it would restore nothing: no committed test,
+     benchmark, or example depends on a UDP socket's source address being
+     `127.0.0.1`, so the "conservative" option preserves a property nothing
+     uses at the cost of a capability everything needs. This is a **bug fix**,
+     not a widening — the ADR's own `udp_send` row already promises sending to
+     an arbitrary `host:port`.
+
+   *Scope.* No signature, no return value, no sentinel, and no layout changed,
+   so **`ABI_VERSION` stays at `12`** — this restores documented behavior
+   rather than extending the ABI. `specification/abi.md`'s UDP section states
+   the divergent bind policy and why the seam has exactly one.
+
+   *Proof.* `a_udp_sockets_source_address_does_not_confine_its_destination`
+   in `crates/tuo-cli/tests/effects_native.rs` runs on **both** backends and
+   pins the property that actually broke: one program sends to loopback (the
+   leg that always worked) *and* to `192.0.2.1` and `198.51.100.7` (RFC 5737
+   reserved documentation ranges, routed nowhere), asserting both succeed.
+   It **does not touch the public internet** and needs no peer: UDP has no
+   handshake, so a `sendto` to an unreachable host succeeds locally, while
+   the step the old code failed — choosing a source address for a
+   non-loopback destination — is decided entirely by the local routing table.
+   Every previously committed UDP test sends to loopback, which is exactly
+   why all of them passed while the transport was unusable. At the source
+   level, `the_c_source_defines_the_socket_symbols_and_matches_the_policy`
+   in `crates/tuo-runtime/src/effect.rs` now asserts the two bind addresses
+   **per call site** rather than as a bare substring, which could not tell
+   `listen`'s loopback bind from `udp_bind`'s.
+
+   *Dogfooding oracle (not a committed test).* The finding came from a DNS
+   resolver written entirely in tuonelang on these primitives. Before the
+   fix its live suite printed "send failed" on every lookup; after it, the
+   resolver returns real addresses for `example.com`, `cloudflare.com`, and
+   `github.com` and reports `NXDOMAIN` for a name that does not exist. That
+   exercise depends on the public internet, so it stays **outside** this
+   repository's test suite — the committed regression test above pins the
+   same property hermetically.

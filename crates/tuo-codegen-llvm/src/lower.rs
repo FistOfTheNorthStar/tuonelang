@@ -3170,7 +3170,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
             // A map's entry stride is fixed by its key kind (ADR-0011): the
             // dense entries the `tuo_rt_map_*` shim maintains.
-            Ty::Map(key, _) => Ok(map_entry_stride(&key)),
+            Ty::Map(key, value) => Ok(map_entry_stride(&key, &value)),
             other => Err(CodegenError::backend(format!(
                 "a heap operation targeted a non-heap type: {other:?}"
             ))),
@@ -3373,6 +3373,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 } else {
                     call_args.push(self.lower_operand(key)?.into());
                 }
+                call_args.push(self.map_value_stride_of(subject)?.into());
                 call_args.push(out.into());
                 let symbol = if key_is_str {
                     map::MAP_STR_GET_SYMBOL
@@ -3395,7 +3396,8 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 } else {
                     map::MAP_INT_KEYS_SYMBOL
                 };
-                self.call_map_shim(symbol, &[header.into(), dest_addr.into()])
+                let vs = self.map_value_stride_of(subject)?;
+                self.call_map_shim(symbol, &[header.into(), vs.into(), dest_addr.into()])
             }
             _ => Err(CodegenError::backend(
                 "a non-aggregate heap op reached `lower_heap_op_aggregate`",
@@ -3414,10 +3416,26 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         }
     }
 
-    /// A fresh two-word `{found, value}` out buffer for the map shim calls.
+    /// The value stride of a map place's value type, as a shim argument
+    /// (ADR-0023 Stage B2). See [`map_value_stride`].
+    fn map_value_stride_of(&self, place: &Place) -> Result<IntValue<'ctx>, CodegenError> {
+        match self.place_type(place) {
+            Ty::Map(_, value) => Ok(self
+                .ctx
+                .i64_type()
+                .const_int(map_value_stride(&value), false)),
+            other => Err(CodegenError::backend(format!(
+                "a map operation targeted a non-map place: {other:?}"
+            ))),
+        }
+    }
+
+    /// A fresh `{found, value}` out buffer for the map shim calls. One word for
+    /// the found flag plus the widest value stride, so the same buffer serves a
+    /// word-sized value and a two-word `Str` view.
     fn map_out_addr(&mut self) -> Result<PointerValue<'ctx>, CodegenError> {
         self.builder
-            .build_alloca(self.ctx.i64_type().array_type(2), "map_out")
+            .build_alloca(self.ctx.i64_type().array_type(3), "map_out")
             .map_err(builder_err("allocating the map out buffer"))
     }
 
@@ -3546,9 +3564,27 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .first()
             .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
         let payload_addr = self.byte_gep(dest_base, payload_offset)?;
-        self.builder
-            .build_store(payload_addr, value)
-            .map_err(builder_err("storing the Option payload"))?;
+        if matches!(payload_ty, Ty::Str) {
+            // A `Str` value (ADR-0023 Stage B2) is a two-word view, copied out
+            // verbatim rather than narrowed. `Str` borrows, so there is nothing
+            // to deep-copy and nothing to drop.
+            let len_src = self.byte_gep(out, 16)?;
+            let vn = self
+                .builder
+                .build_load(i64_ty, len_src, "map_value_len")
+                .map_err(builder_err("loading the map Str value length"))?;
+            self.builder
+                .build_store(payload_addr, word)
+                .map_err(builder_err("storing the Option Str payload pointer"))?;
+            let len_addr = self.byte_gep(dest_base, payload_offset + 8)?;
+            self.builder
+                .build_store(len_addr, vn)
+                .map_err(builder_err("storing the Option Str payload length"))?;
+        } else {
+            self.builder
+                .build_store(payload_addr, value)
+                .map_err(builder_err("storing the Option payload"))?;
+        }
         Ok(())
     }
 
@@ -3596,6 +3632,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 } else {
                     call_args.push(self.lower_operand(key)?.into());
                 }
+                call_args.push(self.map_value_stride_of(subject)?.into());
                 call_args.push(out.into());
                 let symbol = if key_is_str {
                     map::MAP_STR_GET_SYMBOL
@@ -3812,15 +3849,49 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     let value = args.get(1).ok_or_else(|| {
                         CodegenError::backend("a map insert is missing its value")
                     })?;
-                    let lowered = self.lower_operand(value)?;
-                    // `call_map_shim` declares every non-pointer parameter as
-                    // `i64`, so a `Copy` value that is not already an i64 —
-                    // `Bool` (i1) or `Float` (double) — must be reinterpreted
-                    // into a word first. Passing it raw is the "Call parameter
-                    // type mismatch" LLVM's verifier rejects, which is what made
-                    // non-`Int` values unsound before ADR-0023 Stage B.
-                    call_args.push(self.value_as_word(lowered)?.into());
+                    // Since ADR-0023 Stage B2 the shim takes the value **by
+                    // pointer** and copies `vs` opaque bytes, so it never
+                    // learns the value's type. Spill the value into an alloca
+                    // and pass its address.
+                    //
+                    // A `Copy` scalar is still widened into one machine word
+                    // first (`value_as_word`): a narrower or differently-typed
+                    // value — `Bool` (i1) or `Float` (double) — would otherwise
+                    // write fewer bytes than the word stride the shim reads,
+                    // leaving the rest of the slot undefined. A `Float` is
+                    // *bitcast*, never converted, so 2.5 stays 2.5.
+                    let value_ty = self.operand_ty(value);
+                    let slot = if matches!(value_ty, Some(Ty::Str)) {
+                        // A `Str` value is its two-word view: store the parts
+                        // as-is, exactly as a `Str` *key* is stored.
+                        let (vp, vn) = self.str_operand_parts(value)?;
+                        let slot = self
+                            .builder
+                            .build_alloca(self.ctx.i64_type().array_type(2), "map_val")
+                            .map_err(builder_err("allocating the map value slot"))?;
+                        self.builder
+                            .build_store(slot, vp)
+                            .map_err(builder_err("storing a map Str value pointer"))?;
+                        let len_addr = self.byte_gep(slot, 8)?;
+                        self.builder
+                            .build_store(len_addr, vn)
+                            .map_err(builder_err("storing a map Str value length"))?;
+                        slot
+                    } else {
+                        let lowered = self.lower_operand(value)?;
+                        let word = self.value_as_word(lowered)?;
+                        let slot = self
+                            .builder
+                            .build_alloca(self.ctx.i64_type(), "map_val")
+                            .map_err(builder_err("allocating the map value slot"))?;
+                        self.builder
+                            .build_store(slot, word)
+                            .map_err(builder_err("storing a map scalar value"))?;
+                        slot
+                    };
+                    call_args.push(slot.into());
                 }
+                call_args.push(self.map_value_stride_of(target)?.into());
                 call_args.push(out.into());
                 let symbol = match (insert, key_is_str) {
                     (true, false) => map::MAP_INT_INSERT_SYMBOL,
@@ -4143,7 +4214,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 Ok(())
             }
-            Ty::Map(key, _) => match glue {
+            Ty::Map(key, value) => match glue {
                 // A map cannot be an array element (the checker's ADR-0011
                 // surface refuses it), so the deep-copy fixup can never reach
                 // one; refusing keeps the walk honest if that ever changes.
@@ -4153,7 +4224,10 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 // The whole block (index + entries) is freed by the shim,
                 // which alone knows the internal layout (ADR-0011).
                 HeapGlue::DropInPlace => {
-                    let stride = self.ctx.i64_type().const_int(map_entry_stride(key), false);
+                    let stride = self
+                        .ctx
+                        .i64_type()
+                        .const_int(map_entry_stride(key, value), false);
                     self.call_map_shim(map::MAP_DROP_SYMBOL, &[addr.into(), stride.into()])
                 }
             },
@@ -4862,15 +4936,31 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
     )
 }
 
-/// The dense-entry stride of a map's table, fixed by its key kind
-/// (ADR-0011): `{key, value}` two words for an `Int` key, `{ptr, len, value}`
-/// three words for a `Str` key. Mirrors `tuo_runtime::map`'s constants.
-fn map_entry_stride(key: &Ty) -> u64 {
-    if matches!(key, Ty::Str) {
-        map::STR_ENTRY_STRIDE
+/// The value stride of a map's value type in bytes (ADR-0023 Stage B2).
+///
+/// A `Copy` scalar (`Int`/`Bool`/`Float`) is widened into one machine word by
+/// `value_as_word`, so it strides a word regardless of its natural width. A
+/// borrowed `Str` value is its two-word `{ptr, len}` view, copied bytewise —
+/// it borrows rather than owns, so it needs no deep copy and no drop glue.
+/// Anything else is refused by the checker (`is_supported_map_value`).
+fn map_value_stride(value: &Ty) -> u64 {
+    if matches!(value, Ty::Str) {
+        map::STR_VALUE_STRIDE
     } else {
-        map::INT_ENTRY_STRIDE
+        map::WORD_VALUE_STRIDE
     }
+}
+
+/// The dense-entry stride of a map's table: its key size plus its value
+/// stride (ADR-0023 Stage B2). An `Int` key is one word, a `Str` key its
+/// two-word view. Mirrors `tuo_runtime::map`'s `entry_stride`.
+fn map_entry_stride(key: &Ty, value: &Ty) -> u64 {
+    let key_size = if matches!(key, Ty::Str) {
+        map::STR_KEY_SIZE
+    } else {
+        map::INT_KEY_SIZE
+    };
+    map::entry_stride(key_size, map_value_stride(value))
 }
 
 /// The exported symbol name of a MIR function, from its stable symbol id.

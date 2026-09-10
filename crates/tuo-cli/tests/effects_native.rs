@@ -531,6 +531,71 @@ fn udp_datagram_roundtrip_with_reply_to_sender() {
     }
 }
 
+/// A UDP socket's **source** address must not confine its destination
+/// (ADR-0017 amendment, 2026-09-08) — the regression test for the bug that
+/// made all outbound UDP impossible.
+///
+/// `tuo_rt_udp_bind` used to bind `INADDR_LOOPBACK`. A bind fixes a socket's
+/// *source* address, so the kernel then refused (`EADDRNOTAVAIL`) every
+/// datagram addressed off-machine: `udp_send` to anything but `127.0.0.0/8`
+/// returned `NET_ERROR` before a packet reached the wire. Every committed
+/// test passed regardless, because all of them send to loopback — which is
+/// exactly why the property needs its own test.
+///
+/// **This test does not touch the public internet.** The destination is
+/// `192.0.2.1` (RFC 5737 TEST-NET-1, reserved for documentation and routed
+/// nowhere). It does not need to exist: UDP has no handshake, so a `sendto`
+/// to an unreachable host succeeds locally — the datagram is simply
+/// launched. What the old code failed at was *earlier* and purely local:
+/// choosing a source address for a non-loopback destination. That is the
+/// step being pinned, and it is decided entirely by the kernel's routing
+/// table without a peer, a listener, or a network round trip.
+///
+/// The two directions are asserted together so the test cannot pass for the
+/// wrong reason: the same program sends to loopback (which worked before the
+/// fix and must keep working) *and* to TEST-NET-1 (which is the bug). A
+/// host with no route at all for TEST-NET-1 would fail the send with
+/// `ENETUNREACH` rather than `EADDRNOTAVAIL`; both surface as `NET_ERROR`,
+/// which the seam cannot distinguish, so on such a host this test would
+/// fail rather than silently pass — a loud, correct outcome, and the reason
+/// the loopback leg is asserted alongside it.
+#[test]
+fn a_udp_sockets_source_address_does_not_confine_its_destination() {
+    let dir = workspace("udp_outbound");
+    // 192.0.2.1 is RFC 5737 TEST-NET-1: reserved for documentation, routed
+    // nowhere, and required by the RFC not to appear on the public network.
+    let source = "fn main() -> Int {\n    \
+        let sock = std::rt::udp_bind(0);\n    \
+        if sock < 0 { return 10; }\n    \
+        let port = std::rt::bound_port(sock);\n    \
+        if port <= 0 { return 11; }\n    \
+        // The leg that always worked: a loopback destination.\n    \
+        if std::rt::udp_send(sock, \"127.0.0.1\", port, \"hello\") != 5 { return 12; }\n    \
+        // The leg the loopback bind severed: a non-loopback destination.\n    \
+        // No peer need exist -- UDP has no handshake -- so this fails only\n    \
+        // if the *source* address forbids the destination.\n    \
+        if std::rt::udp_send(sock, \"192.0.2.1\", 53, \"hello\") != 5 { return 13; }\n    \
+        // And once more with a second reserved range, so the result cannot\n    \
+        // hinge on one host's route for one prefix.\n    \
+        if std::rt::udp_send(sock, \"198.51.100.7\", 53, \"hello\") != 5 { return 14; }\n    \
+        if std::rt::close(sock) != 0 { return 15; }\n    \
+        0\n}\n";
+    for release in [false, true] {
+        let which = backend_name(release);
+        let output = run_program(&dir, &format!("udp_out_{which}.tuo"), source, release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: a UDP socket bound for an ephemeral port must be able to \
+             address a non-loopback destination -- 13/14 mean the source \
+             address confined the destination, which is the bug that made all \
+             outbound UDP impossible (a nonzero status names the failing \
+             step); stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// The ADR-0015 channel and mutex primitives obey their documented policy,
 /// single-threaded: FIFO order, negative payloads refused (so the closed
 /// signal stays unambiguous), sends to a closed channel refused, `-1` after

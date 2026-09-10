@@ -135,9 +135,13 @@ pub enum Builtin {
     /// traps. **Effectful.** (ADR-0017.)
     RtPeerFamily,
     /// `std::rt::udp_bind(take port: Int) -> Int` — an IPv4 UDP socket bound
-    /// to `127.0.0.1:port`; the descriptor (`>= 0`) or `-1` on host error.
-    /// Port `0` asks for an ephemeral port. Never traps. **Effectful.**
-    /// (ADR-0017.)
+    /// to `0.0.0.0:port` (`INADDR_ANY`); the descriptor (`>= 0`) or `-1` on
+    /// host error. Port `0` asks for an ephemeral port. Never traps.
+    /// **Effectful.** (ADR-0017, amended 2026-09-08: the bind is
+    /// `INADDR_ANY`, since a bind fixes the socket's *source* address and a
+    /// loopback-bound datagram socket cannot send off-machine at all.
+    /// `listen`/`listen6` still bind loopback — that is the inbound
+    /// guarantee, and it is unchanged.)
     RtUdpBind,
     /// `std::rt::udp_send(take fd: Int, in host: Str, take port: Int,
     /// in bytes: Str) -> Int` — send one datagram; the byte count (`>= 0`)

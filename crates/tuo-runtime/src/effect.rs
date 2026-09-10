@@ -157,9 +157,17 @@ pub const LISTEN6_SYMBOL: &str = "tuo_rt_listen6";
 pub const PEER_FAMILY_SYMBOL: &str = "tuo_rt_peer_family";
 
 /// The name of the C-ABI symbol generated code calls for `std::rt::udp_bind`
-/// (ADR-0017): `long long tuo_rt_udp_bind(long long port)` — an IPv4 UDP
-/// socket bound to `127.0.0.1:port`; the descriptor (`>= 0`) or
-/// [`NET_ERROR`].
+/// (ADR-0017, amended 2026-09-08): `long long tuo_rt_udp_bind(long long
+/// port)` — an IPv4 UDP socket bound to `0.0.0.0:port` (`INADDR_ANY`); the
+/// descriptor (`>= 0`) or [`NET_ERROR`].
+///
+/// The bind address is `INADDR_ANY`, **not** loopback. A bound address is a
+/// socket's *source* address, so binding `127.0.0.1` makes the kernel refuse
+/// (`EADDRNOTAVAIL`) every datagram addressed off-machine — which severed
+/// all outbound UDP. ADR-0014's loopback rule is about **inbound
+/// reachability** (`listen`/`listen6` still bind loopback, unchanged); an
+/// unconnected datagram socket on an ephemeral port that nothing is sending
+/// to is not an externally reachable service.
 pub const UDP_BIND_SYMBOL: &str = "tuo_rt_udp_bind";
 
 /// The name of the C-ABI symbol generated code calls for `std::rt::udp_send`
@@ -844,6 +852,18 @@ pub fn effect_runtime_c_source() -> String {
          \x20   return 0;\n\
          }}\n\
          \n\
+         /* ADR-0017, amended 2026-09-08: this binds INADDR_ANY, not\n\
+         \x20  INADDR_LOOPBACK. A bind fixes the socket's *source* address,\n\
+         \x20  so a loopback-bound socket cannot send to an off-machine\n\
+         \x20  destination at all -- the kernel fails the sendto with\n\
+         \x20  EADDRNOTAVAIL before anything reaches the wire, which made\n\
+         \x20  every outbound datagram impossible. ADR-0014's loopback rule\n\
+         \x20  is an *inbound* guarantee -- no committed test or benchmark\n\
+         \x20  may open an externally reachable listening port -- and it is\n\
+         \x20  untouched: tuo_rt_listen and tuo_rt_listen6 still bind\n\
+         \x20  loopback. An unconnected UDP socket on an ephemeral port that\n\
+         \x20  nothing sends to accepts no service; the guarantee does not\n\
+         \x20  rest on it. */\n\
          long long {UDP_BIND_SYMBOL}(long long port) {{\n\
          \x20   struct sockaddr_in addr;\n\
          \x20   int one = 1;\n\
@@ -855,7 +875,7 @@ pub fn effect_runtime_c_source() -> String {
          \x20   memset(&addr, 0, sizeof(addr));\n\
          \x20   addr.sin_family = AF_INET;\n\
          \x20   addr.sin_port = htons((unsigned short)port);\n\
-         \x20   addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);\n\
+         \x20   addr.sin_addr.s_addr = htonl(INADDR_ANY);\n\
          \x20   if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {{\n\
          \x20       close(fd);\n\
          \x20       return {NET_ERROR};\n\
@@ -1083,7 +1103,7 @@ mod tests {
         CONNECT_SYMBOL, EXIT_SYMBOL, FILE_ERROR, FILE_NOT_FOUND, LISTEN_SYMBOL, MUTEX_LOCK_SYMBOL,
         MUTEX_NEW_SYMBOL, MUTEX_UNLOCK_SYMBOL, NET_ERROR, NOW_NANOS_SYMBOL, OPEN_SYMBOL,
         READ_BYTE_SYMBOL, READ_EOF, READ_ERROR, REMOVE_FILE_SYMBOL, SYNC_ERROR, SYNC_REGISTRY_CAP,
-        WRITE_ERROR, WRITE_SYMBOL, effect_runtime_c_source, exit_status_of,
+        UDP_BIND_SYMBOL, WRITE_ERROR, WRITE_SYMBOL, effect_runtime_c_source, exit_status_of,
     };
 
     #[test]
@@ -1175,7 +1195,43 @@ mod tests {
         )));
         // Loopback-only listening, SO_REUSEADDR, the ephemeral-port query,
         // numeric-host parsing, and the EINTR/EISCONN connect policy.
-        assert!(source.contains("htonl(INADDR_LOOPBACK)"));
+        //
+        // The bind policy is asserted per call site rather than as a bare
+        // substring, because the two are deliberately different and a bare
+        // `contains` could not tell them apart. `tuo_rt_listen` binds
+        // loopback: that is ADR-0014's **inbound** guarantee, that no
+        // committed test or benchmark opens an externally reachable
+        // listening port. `tuo_rt_udp_bind` binds `INADDR_ANY`, because a
+        // bind fixes the *source* address and a loopback-bound datagram
+        // socket cannot send off-machine at all (ADR-0017 amendment,
+        // 2026-09-08).
+        assert!(source.contains(&format!("long long {LISTEN_SYMBOL}(long long port)")));
+        let listen_body = source
+            .split_once(&format!("long long {LISTEN_SYMBOL}(long long port)"))
+            .expect("the listen body follows its signature")
+            .1;
+        assert!(
+            listen_body
+                .split_once("\n         }")
+                .map_or(listen_body, |(body, _)| body)
+                .contains("htonl(INADDR_LOOPBACK)"),
+            "tuo_rt_listen must stay loopback-bound: the inbound guarantee"
+        );
+        let udp_bind_body = source
+            .split_once(&format!("long long {UDP_BIND_SYMBOL}(long long port)"))
+            .expect("the udp_bind body follows its signature")
+            .1;
+        let udp_bind_body = udp_bind_body
+            .split_once("\n         }")
+            .map_or(udp_bind_body, |(body, _)| body);
+        assert!(
+            udp_bind_body.contains("htonl(INADDR_ANY)"),
+            "tuo_rt_udp_bind must bind INADDR_ANY, or outbound UDP is impossible"
+        );
+        assert!(
+            !udp_bind_body.contains("INADDR_LOOPBACK"),
+            "a loopback source address severs every off-machine datagram"
+        );
         assert!(source.contains("SO_REUSEADDR"));
         assert!(source.contains("getsockname((int)fd"));
         assert!(source.contains("inet_pton(AF_INET, host"));
