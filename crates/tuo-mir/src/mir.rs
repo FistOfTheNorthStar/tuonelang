@@ -419,8 +419,9 @@ pub enum EffectOp {
     /// or `6`), or `-1` on host error. Never traps. (ADR-0017.)
     PeerFamily,
     /// `udp_bind(port: I64) -> I64` — an IPv4 UDP socket bound to
-    /// `127.0.0.1:port`; the descriptor (`>= 0`) or `-1`. Never traps.
-    /// (ADR-0017.)
+    /// `0.0.0.0:port` (`INADDR_ANY`, so the source address does not confine
+    /// the destination); the descriptor (`>= 0`) or `-1`. Never traps.
+    /// (ADR-0017, amended 2026-09-08.)
     UdpBind,
     /// `udp_send(fd: I64, host: Str, port: I64, bytes: Str) -> I64` — send
     /// one datagram; the byte count (`>= 0`) or `-1`. Never traps.

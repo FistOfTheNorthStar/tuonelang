@@ -245,7 +245,11 @@ fn a_parameter_missing_its_mode_is_diagnosed_at_the_parameter() {
         .iter()
         .map(|d| d.code.to_string())
         .collect();
-    assert_eq!(codes, vec!["P0001".to_owned()], "exactly one targeted error");
+    assert_eq!(
+        codes,
+        vec!["P0001".to_owned()],
+        "exactly one targeted error"
+    );
 
     let diagnostics = result.all_diagnostics();
     let diagnostic = &diagnostics[0];
@@ -271,7 +275,11 @@ fn every_mode_less_parameter_in_a_list_is_reported() {
     let result = parse_str("fn f(x: Int, in y: Str, z: Bool) -> Int {\n    1\n}\n");
     let diagnostics = result.all_diagnostics();
     let messages: Vec<&str> = diagnostics.iter().map(|d| d.message.as_str()).collect();
-    assert_eq!(messages.len(), 2, "two of the three lack a mode: {messages:?}");
+    assert_eq!(
+        messages.len(),
+        2,
+        "two of the three lack a mode: {messages:?}"
+    );
     assert!(messages[0].contains('x'), "first: {}", messages[0]);
     assert!(messages[1].contains('z'), "second: {}", messages[1]);
     assert_eq!(count(&result, SyntaxKind::Param), 3);

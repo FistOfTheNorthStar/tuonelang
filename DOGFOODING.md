@@ -419,6 +419,42 @@ purpose — was true when written and is recorded as superseded rather than
 silently rewritten.) DNS is properly written *in tuonelang* on the UDP
 primitives this ADR added, rather than bolted into the runtime shim.
 
+**Post-exercise update (2026-09-08) — the DNS resolver found a runtime bug
+the whole committed suite had missed.** Somebody took the paragraph above
+literally and wrote a DNS resolver entirely in tuonelang on the ADR-0017 UDP
+primitives (82 specs, all passing). It could not resolve a single name:
+`tuo_rt_udp_bind` bound `INADDR_LOOPBACK`, and because a bind fixes a
+socket's **source** address, the host refused every datagram addressed
+off-machine — `udp_send` returned `NET_ERROR` for every destination outside
+`127.0.0.0/8`. **All outbound UDP was impossible**, and the transport had
+shipped that way since Stage C.
+
+The reason nothing caught it is the interesting part, and it is a lesson
+about the shape of a test suite rather than about UDP. Every committed UDP
+test, the `udp-echo` benchmark included, sends to **loopback** — the one
+destination that works either way. The suite was self-consistent and
+complete against its own assumptions, and simply never asked the question
+the bug answers. A property that holds in every committed test can still be
+false in general when every test shares the same blind spot; the fix is a
+test that pins the property that actually varies, not more tests of the
+same shape.
+
+The root cause was a rationale applied one call too far. ADR-0014's
+loopback rule is an **inbound reachability** guarantee — nothing committed
+may open an externally reachable *listening* port — and it is a good rule,
+kept intact: `listen`/`listen6` still bind loopback. But on a datagram
+socket the same `bind` constrains **outbound** destinations instead, which
+nothing in the threat model ever asked for. `udp_bind` now binds
+`INADDR_ANY`; see [ADR-0017's
+Amendments](specification/adr/ADR-0017-timeouts-ipv6-and-udp.md#amendments-2026-09-08)
+for the full reasoning and why a separate `udp_bind_any` builtin was
+rejected. The regression test
+(`a_udp_sockets_source_address_does_not_confine_its_destination`) pins the
+property hermetically against RFC 5737 reserved ranges, so it depends on no
+network. The resolver itself now returns real addresses and stays outside
+this repository, since a committed test may not depend on the public
+internet.
+
 ### ADR-0019 — bitwise operations and the crypto primitives
 
 The first dogfooding target the language could not express **at all**, rather

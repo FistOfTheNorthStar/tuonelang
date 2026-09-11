@@ -840,11 +840,11 @@ fn inferred_map_with_copy_scalar_values_is_accepted() {
 }
 
 #[test]
-fn inferred_map_with_str_value_is_refused() {
-    let (_, result) = check_one(&inferred_map_program("1, \"s\""));
+fn inferred_map_with_owned_string_value_is_refused() {
+    let (_, result) = check_one(&inferred_map_program("1, std::string::from_str(\"s\")"));
     assert!(
         codes(&result).iter().any(|code| code == "T0001"),
-        "`Map[Int, Str]` built through `empty()` must be refused; got {:?}",
+        "`Map[Int, String]` built through `empty()` must be refused; got {:?}",
         codes(&result)
     );
 }
@@ -852,9 +852,10 @@ fn inferred_map_with_str_value_is_refused() {
 #[test]
 fn inferred_map_error_names_the_solved_pair() {
     // The diagnostic must name the pair inference actually produced, so the
-    // message is actionable rather than mentioning an unsolved variable. `Str`
-    // is used because it is still outside the value set after Stage B.
-    let (_, result) = check_one(&inferred_map_program("1, \"s\""));
+    // message is actionable rather than mentioning an unsolved variable.
+    // `String` is used because it is still outside the value set after
+    // Stage B2 (the borrowed `Str` is now in it).
+    let (_, result) = check_one(&inferred_map_program("1, std::string::from_str(\"s\")"));
     let message = result
         .diagnostics()
         .iter()
@@ -862,7 +863,7 @@ fn inferred_map_error_names_the_solved_pair() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        message.contains("Str"),
+        message.contains("String"),
         "the diagnostic should name the solved value type; got: {message}"
     );
 }
@@ -880,7 +881,8 @@ fn an_unconstrained_empty_map_is_an_annotation_error_not_a_pair_error() {
     // needed"), reported by the unsolved-variable path. The deferred re-check
     // must stay silent here rather than inventing a second complaint about a
     // pair the program never chose.
-    let (_, result) = check_one("module m;\nfn f() -> Int {\n    let m = std::map::empty();\n    0\n}\n");
+    let (_, result) =
+        check_one("module m;\nfn f() -> Int {\n    let m = std::map::empty();\n    0\n}\n");
     let codes = codes(&result);
     assert!(
         codes.iter().any(|code| code == "T0011"),
@@ -896,12 +898,12 @@ fn an_unconstrained_empty_map_is_an_annotation_error_not_a_pair_error() {
 fn a_map_pair_solved_by_a_later_call_is_still_refused() {
     // The value type is determined by `insert` *after* `get` has been checked.
     // Both sites defer, and both must be re-checked once inference has run.
-    // The value is a `Str`, still outside the Stage B value set.
+    // The value is an owned `String`, still outside the Stage B2 value set.
     let source = "module m;\n\
                   fn f() -> Int {\n\
                   \x20   var m = std::map::empty();\n\
                   \x20   let seen = std::map::get(m, 1);\n\
-                  \x20   std::map::insert(m, 1, \"s\");\n\
+                  \x20   std::map::insert(m, 1, std::string::from_str(\"s\"));\n\
                   \x20   std::map::len(m)\n\
                   }\n";
     let (_, result) = check_one(source);
@@ -914,18 +916,54 @@ fn a_map_pair_solved_by_a_later_call_is_still_refused() {
 
 #[test]
 fn map_values_that_own_heap_stay_refused() {
-    // ADR-0023 Stage B widened the value set to `Copy` scalars only. A value
-    // that owns or borrows heap needs the deep-copy-on-read and recursive-drop
-    // path (Stage B2) and must not slip in with the scalars — the shim stores
-    // one opaque word per value, which a `Str`'s two words do not fit.
-    for value in ["\"s\"", "std::string::from_str(\"s\")"] {
-        let result = check_one(&inferred_map_program(&format!("1, {value}"))).1;
-        assert!(
-            codes(&result).iter().any(|code| code == "T0001"),
-            "a heap-owning map value ({value}) must stay refused; got {:?}",
-            codes(&result)
-        );
+    // ADR-0023 Stage B2 widened the value set to include the *borrowed* `Str`,
+    // which needs no deep copy and no drop glue. A value that genuinely
+    // **owns** heap still needs the deep-copy-on-read and recursive-drop path
+    // (the second half of Stage B2) and must not slip in behind `Str`:
+    // `tuo_rt_map_drop` does not yet run per-value glue, so admitting one
+    // would leak an allocation per entry.
+    let value = "std::string::from_str(\"s\")";
+    let result = check_one(&inferred_map_program(&format!("1, {value}"))).1;
+    assert!(
+        codes(&result).iter().any(|code| code == "T0001"),
+        "a heap-owning map value ({value}) must stay refused; got {:?}",
+        codes(&result)
+    );
+}
+
+#[test]
+fn inferred_map_with_str_values_is_accepted() {
+    // ADR-0023 Stage B2: the borrowed `Str` joins the value set. It is a
+    // fixed-size two-word view that borrows rather than owns, so the table
+    // copies it bytewise with no deep copy and no drop glue — the reason it
+    // lands before the owned `String`. Written in the *inferred* spelling,
+    // which is the one the Stage A defect made unsound.
+    for value in ["1, \"s\"", "\"k\", \"v\""] {
+        assert_clean(&check_one(&inferred_map_program(value)).1);
     }
+}
+
+#[test]
+fn nested_maps_stay_refused_as_map_values() {
+    // A `Map` value is deliberately out of scope (ADR-0023): the recursion
+    // boundary and the deep-copy cost of a nested container are their own
+    // decision. `is_supported_array_element` — which the value predicate
+    // mirrors — excludes `Ty::Map` only via its catch-all arm, so pin it
+    // explicitly rather than leaving it to an implicit default.
+    let source = "module m;\n\
+                  fn f() -> Int {\n\
+                  \x20   var inner = std::map::empty();\n\
+                  \x20   std::map::insert(inner, 1, 2);\n\
+                  \x20   var outer = std::map::empty();\n\
+                  \x20   std::map::insert(outer, 1, inner);\n\
+                  \x20   std::map::len(outer)\n\
+                  }\n";
+    let (_, result) = check_one(source);
+    assert!(
+        codes(&result).iter().any(|code| code == "T0001"),
+        "a `Map`-valued map must stay refused; got {:?}",
+        codes(&result)
+    );
 }
 
 #[test]

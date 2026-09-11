@@ -118,7 +118,8 @@ fn a_bare_ambiguous_name_lists_every_owning_module() {
 fn a_bare_unique_name_is_machine_applicable() {
     let mut map = SourceMap::new();
     let file = map.intern_file("unique.tuo");
-    let source = "fn main() -> Int {\n    let s: String = std::string::empty();\n    push_byte(s, 65)\n}\n";
+    let source =
+        "fn main() -> Int {\n    let s: String = std::string::empty();\n    push_byte(s, 65)\n}\n";
     let id = map.add_source(file, source).expect("fits");
     let parse = tuo_parser::parse(map.source(id));
     let asts = [Ast::new(&parse.tree, source)];

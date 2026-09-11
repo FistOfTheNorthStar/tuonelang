@@ -406,6 +406,18 @@ fn map_operations_agree_across_all_three_engines() {
         "map_int_ops.tuo", // Map[Int, Int]: the whole surface on one map
         "map_str_ops.tuo", // Map[Str, Int]: byte-hashed borrowed keys
         "map_churn.tuo",   // growth + sliding-window remove churn (leak proxy)
+        // ADR-0023 Stage B widened `V` to the `Copy` scalars. Both fixtures are
+        // adversarial about the narrowing each needs: the `Bool` one stores
+        // both truth values and reads back a displaced one, and the `Float` one
+        // uses fractional and negative values, so a numeric conversion (2.5 →
+        // 2) or a lost sign bit changes the exit rather than passing by luck.
+        "map_bool_values.tuo",  // Map[K, Bool]
+        "map_float_values.tuo", // Map[K, Float]
+        // ADR-0023 Stage B2 widened `V` to the borrowed `Str`: a two-word view
+        // in the value slot, which is what made the entry stride value-
+        // dependent. Every stored string has a distinct length, so a wrong
+        // stride or value offset changes the answer.
+        "map_str_values.tuo", // Map[Int, Str] and Map[Str, Str]
     ] {
         assert_three_way_agreement(name);
     }

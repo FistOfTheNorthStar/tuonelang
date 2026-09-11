@@ -83,7 +83,17 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `tuo_rt_mutex_new`/`lock`/`unlock`; see [`crate::effect`]) — runtime-owned
 /// synchronization objects behind opaque `Int` handles. No layout changed;
 /// the bump reflects the new load-bearing runtime symbols.
-pub const ABI_VERSION: u32 = 12;
+///
+/// `13` — the map's **entry stride becomes value-dependent** (ADR-0023 Stage
+/// B2). An entry was `{key, i64 value}` at one of two fixed strides; it is now
+/// `{key, value}` at `key_size + value_stride`, where the value stride is a
+/// **caller-supplied** argument. Every `tuo_rt_map_*` signature changed: the
+/// value crosses **by pointer** (`const void *v`) rather than by value, and
+/// each entry point takes an `unsigned long long vs`. This admits the borrowed
+/// `Str` value (a two-word view, [`crate::map::STR_VALUE_STRIDE`]) alongside
+/// the word-sized `Copy` scalars. A changed entry layout *and* a changed
+/// runtime-symbol signature are both layout-affecting, so the version bumps.
+pub const ABI_VERSION: u32 = 13;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -488,14 +498,16 @@ mod tests {
     }
 
     #[test]
-    fn the_abi_is_version_nine() {
+    fn the_abi_is_the_pinned_version() {
         // A deliberate tripwire: bump this in the same commit that changes a
         // layout (or, as with the ADR-0006 effect symbols and the ADR-0009
         // allocator seam, the runtime surface), never silently. Version 8
         // added the ADR-0014 socket effect symbols
         // (listen/bound_port/accept/connect); version 9 added the ADR-0015
-        // channel and mutex symbols.
-        assert_eq!(ABI_VERSION, 12);
+        // channel and mutex symbols. Version 13 made the map's value slot a
+        // caller-supplied stride and its value a by-pointer argument
+        // (ADR-0023 Stage B2), so every `tuo_rt_map_*` signature changed.
+        assert_eq!(ABI_VERSION, 13);
     }
 
     #[test]

@@ -1,6 +1,6 @@
 # ADR-0023: Widening the map surface — values beyond `Int`, and what still needs traits
 
-- **Status:** proposed (Stages A, B, C **landed** 2026-09-06; Stage **B2** — heap-owning values — open)
+- **Status:** proposed (Stages A, B, C **landed** 2026-09-06; Stage **B2.1** — the borrowed `Str` value — **landed** 2026-09-08; Stage **B2.2** — owned values — open)
 - **Date:** 2026-09-06
 
 ## Context
@@ -160,6 +160,67 @@ that owns or borrows heap. Those genuinely need the deep-copy-on-read and
 recursive-drop path (and there the original plan's analysis holds, including
 `tuo_rt_map_drop` not currently running per-value glue). They remain refused by
 the type checker, pinned by a test.
+
+### Stage B2.1 — the borrowed `Str` value — **LANDED (2026-09-08)**
+
+Stage B2 splits, because `Str` and `String` need different things and only one
+of them needs the ownership machinery:
+
+- a **borrowed `Str`** is a fixed-size two-word view. It needs the *value slot*
+  to stop being one machine word, but it **borrows** — so no deep copy on
+  read-out, no drop glue, no per-entry ownership at all;
+- an **owned `String`** (and structs containing one) additionally needs
+  `HeapGlue::DeepFixup` on `get` and a per-entry drop loop.
+
+Splitting there isolates the risky part. This stage does the slot; B2.2 does
+the ownership.
+
+**What changed.** The premise in the Stage B note — "the runtime C shim needed
+no change, it is *already* stride-parametric" — is true of the **entry** stride
+(`tuo_map_grow`, `tuo_map_block_size`, `tuo_rt_map_drop` all took one) but was
+**not** true of the value slot: `INT_ENTRY_STRIDE`/`STR_ENTRY_STRIDE` were
+compile-time constants with the value's `+ 8`/`+ 16` offset baked into ~20
+memcpy sites. So:
+
+- the entry stride is now **computed** (`entry_stride(key_size, value_stride)`),
+  with `INT_KEY_SIZE`/`STR_KEY_SIZE` and `WORD_VALUE_STRIDE`/`STR_VALUE_STRIDE`
+  as the primitives; the old `INT_ENTRY_STRIDE`/`STR_ENTRY_STRIDE` survive as
+  derived constants;
+- every `tuo_rt_map_*` entry point takes an `unsigned long long vs`, and the
+  value crosses **by pointer** (`const void *v`) rather than by value. The shim
+  memcpy's `vs` opaque bytes and never learns the value's type — the
+  stride-parametric option (2) the original Stage B plan picked, now actually
+  built;
+- both backends gained `map_value_stride` and pass the stride at every call
+  site; the `{found, previous}` out buffer widened from two words to three, so
+  the same buffer serves a word value and a two-word view;
+- `is_supported_map_value` gains `Ty::Str`.
+
+**ABI version 12 → 13.** Both the entry layout *and* every shim signature
+changed. Stage B did not bump (it word-widened into the existing slot); this
+stage must, and the pinning test moved in the same commit.
+
+**Pinned by** `tests/codegen/fixtures/map_str_values.tuo`, a three-way
+differential fixture (interpreter == Cranelift == LLVM, exit 87) built
+adversarially: every stored string has a **distinct length**, so a wrong stride
+reads a wrong answer rather than coinciding; the `Str`-keyed map's value lengths
+differ from its key lengths, so reading the key where the value belongs is
+visible; an overwrite and a removal happen before the final reads, exercising
+the memmove + index-rebuild at the new 24/32-byte strides; and one case compares
+the returned bytes with `==` rather than only its length, so a surviving length
+with a wrong pointer is caught.
+
+**Found while landing this:** the Stage B fixtures `map_bool_values.tuo` and
+`map_float_values.tuo` were committed but **never registered in any test**, so
+they had never run. They are now in
+`codegen_three_way.rs::map_operations_agree_across_all_three_engines` with the
+new one, and all six map fixtures pass three-way.
+
+**Still refused, deliberately:** owned `String` and struct/enum values
+(Stage B2.2 — they need the drop loop, and admitting them now would leak one
+allocation per entry), and nested `Map` values (out of scope; now pinned by
+`nested_maps_stay_refused_as_map_values` rather than resting on an implicit
+catch-all arm).
 
 ### Stage B (original plan) — widen `V` to the ADR-0012 element set
 
