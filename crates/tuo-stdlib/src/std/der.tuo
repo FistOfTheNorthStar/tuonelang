@@ -1,0 +1,1226 @@
+// std::der — DER decoding (ITU-T X.690) and the X.509 certificate fields
+// TLS needs (RFC 5280).
+//
+// This module is entirely executable: every function is pure computation over
+// `Array[Int]`, and the specs pin it against a **real** certificate emitted by
+// OpenSSL rather than against bytes this module invented. That distinction is
+// the whole point for a parser: a decoder that only reads its own encoder's
+// output will happily reject every certificate in the world.
+//
+// WHY DER IS PARSED AT ALL. A TLS server sends its certificate as DER, and a
+// client must at minimum extract the public key to check the handshake
+// signature. There is no way around it: the certificate is the binding
+// between a name and a key, and DER is how that binding is written down.
+//
+// WHAT A PARSER MUST NOT DO. Certificates arrive from the network, before any
+// authentication, so this code runs on hostile input by definition. Every
+// function here is **total**: a length that overflows, a nesting depth that
+// runs away, a field that claims to extend past the end — each returns a
+// failure value rather than trapping. tuonelang traps on integer overflow and
+// on out-of-bounds indexing, and a trap aborts the *process*, so a parser
+// that can trap is a remote denial of service. That is not hypothetical; it
+// was a real bug in this repository's HTTP router, found by exactly this
+// reasoning (`Content-Length: 99999999999999999999`).
+//
+// WHAT THIS IS NOT. This is a *decoder*, not a *validator*. It reads fields.
+// It does not verify signatures, check validity dates, walk a chain to a
+// trust anchor, enforce name constraints, or process extensions. Using it to
+// decide whether to trust a peer would be a serious error — see the
+// `std::x509` notes on `parse_certificate`.
+
+module std::der;
+
+/// The DER tag for a SEQUENCE (constructed, universal 16).
+///
+/// # Example
+///
+/// ```tuo
+/// let t = std::der::tag_sequence(); // 48
+/// ```
+pub fn tag_sequence() -> Int {
+    48
+}
+
+/// The DER tag for an INTEGER (universal 2).
+pub fn tag_integer() -> Int {
+    2
+}
+
+/// The DER tag for a BIT STRING (universal 3).
+pub fn tag_bit_string() -> Int {
+    3
+}
+
+/// The DER tag for an OCTET STRING (universal 4).
+pub fn tag_octet_string() -> Int {
+    4
+}
+
+/// The DER tag for an OBJECT IDENTIFIER (universal 6).
+pub fn tag_oid() -> Int {
+    6
+}
+
+/// The largest encoded length this parser will accept, and the ceiling its
+/// length decoder refuses to read past.
+///
+/// The bound is a safety property, not a policy knob. A DER length is a
+/// base-256 integer of up to 126 bytes, so a hostile certificate can claim a
+/// length far beyond `Int`'s range; accumulating it would **trap on integer
+/// overflow**, and a trap aborts the process. Stopping at the ceiling means
+/// the accumulation cannot overflow, because the value is bounded before the
+/// multiply happens.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::der::max_length(); // 16777216
+/// ```
+pub fn max_length() -> Int {
+    16777216
+}
+
+/// The byte at `index`, or -1 when the index is outside `bytes`.
+///
+/// Every read in this module goes through here. Indexing out of bounds
+/// **traps** in tuonelang, and this parser runs on unauthenticated network
+/// input, so a direct `std::array::get` anywhere in this file would be a
+/// remote crash.
+///
+/// # Example
+///
+/// ```tuo
+/// let b = std::der::byte_at(der, 0); // 48 for a SEQUENCE
+/// ```
+pub fn byte_at(in bytes: Array[Int], take index: Int) -> Int {
+    if index < 0 || index >= std::array::len(bytes) {
+        0 - 1
+    } else {
+        std::array::get(bytes, index) & 255
+    }
+}
+
+/// A decoded tag-length-value header: where the content starts, how long it
+/// is, and what tag introduced it.
+///
+/// `content_start` is -1 when the header could not be decoded, which is the
+/// single failure signal every caller checks.
+struct Header {
+    tag: Int,
+    content_start: Int,
+    length: Int,
+}
+
+/// A header that failed to decode.
+///
+/// # Example
+///
+/// ```tuo
+/// let bad = std::der::bad_header();
+/// ```
+pub fn bad_header() -> Header {
+    Header { tag: 0 - 1, content_start: 0 - 1, length: 0 - 1 }
+}
+
+/// Whether a header decoded successfully.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::der::header_ok(h) { /* … */ }
+/// ```
+pub fn header_ok(in header: Header) -> Bool {
+    header.content_start >= 0
+}
+
+/// Decode the tag-length header at `offset` (X.690 §8.1).
+///
+/// Returns `bad_header()` for anything malformed: a truncated header, a
+/// multi-byte tag (not used by X.509, and refused rather than mis-decoded), a
+/// length above `max_length()`, an indefinite length (not legal in DER), or a
+/// value that would extend past the end of `bytes`.
+///
+/// The final check is the important one. A certificate that declares a
+/// 4-gigabyte field inside a 300-byte file is the most obvious attack on a
+/// parser, and a decoder that returns the declared length without comparing
+/// it to what is actually present hands that lie to every caller.
+///
+/// # Example
+///
+/// ```tuo
+/// let h = std::der::read_header(der, 0);
+/// ```
+pub fn read_header(in bytes: Array[Int], take offset: Int) -> Header {
+    let tag = byte_at(bytes, offset);
+    if tag < 0 {
+        return bad_header();
+    }
+    // A tag byte whose low five bits are all set introduces a multi-byte tag
+    // form. X.509 does not use it; refusing is safer than guessing.
+    if (tag & 31) == 31 {
+        return bad_header();
+    }
+    let first = byte_at(bytes, offset + 1);
+    if first < 0 {
+        return bad_header();
+    }
+    if first < 128 {
+        // Short form: the length is the byte itself.
+        let start = offset + 2;
+        if !fits(bytes, start, first) {
+            return bad_header();
+        }
+        return Header { tag: tag, content_start: start, length: first };
+    }
+    let count = first & 127;
+    if count == 0 {
+        // Indefinite length: legal in BER, forbidden in DER.
+        return bad_header();
+    }
+    if count > 4 {
+        // More than four length bytes means a value larger than this parser
+        // accepts, and accumulating them could overflow.
+        return bad_header();
+    }
+    var length = 0;
+    var i = 0;
+    while i < count {
+        let b = byte_at(bytes, offset + 2 + i);
+        if b < 0 {
+            return bad_header();
+        }
+        // Check the ceiling BEFORE multiplying, so the multiply cannot
+        // overflow and trap.
+        if length > (max_length() - b) / 256 {
+            return bad_header();
+        }
+        length = length * 256 + b;
+        i = i + 1;
+    }
+    let start = offset + 2 + count;
+    if !fits(bytes, start, length) {
+        return bad_header();
+    }
+    Header { tag: tag, content_start: start, length: length }
+}
+
+/// Whether `length` bytes really are present starting at `start`.
+///
+/// The addition is guarded: `start + length` with attacker-chosen values
+/// could overflow and trap before the comparison ever happened.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::der::fits(der, 4, 100) { /* … */ }
+/// ```
+pub fn fits(in bytes: Array[Int], take start: Int, take length: Int) -> Bool {
+    if start < 0 || length < 0 {
+        return false;
+    }
+    if length > max_length() {
+        return false;
+    }
+    let available = std::array::len(bytes) - start;
+    if available < 0 {
+        return false;
+    }
+    length <= available
+}
+
+/// The offset just past the value a header describes — where the next
+/// element of a sequence begins.
+///
+/// # Example
+///
+/// ```tuo
+/// let next = std::der::end_of(h);
+/// ```
+pub fn end_of(in header: Header) -> Int {
+    if !header_ok(header) {
+        return 0 - 1;
+    }
+    header.content_start + header.length
+}
+
+/// Copy the `length` bytes a header describes out of `bytes`.
+///
+/// Returns an empty array for a failed header, so a caller that forgets to
+/// check gets nothing rather than someone else's bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let value = std::der::value_of(der, h);
+/// ```
+pub fn value_of(in bytes: Array[Int], in header: Header) -> Array[Int] {
+    var out = std::array::empty();
+    if !header_ok(header) {
+        return out;
+    }
+    var i = 0;
+    while i < header.length {
+        let b = byte_at(bytes, header.content_start + i);
+        if b < 0 {
+            // Cannot happen for a header `read_header` accepted, but the
+            // parser stays total rather than relying on that.
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// Read the header of the `index`-th child inside a constructed value.
+///
+/// Walking children by index rather than exposing a cursor keeps every caller
+/// on the bounds-checked path.
+///
+/// # Example
+///
+/// ```tuo
+/// let first = std::der::child_at(der, outer, 0);
+/// ```
+pub fn child_at(in bytes: Array[Int], in parent: Header, take index: Int) -> Header {
+    if !header_ok(parent) || index < 0 {
+        return bad_header();
+    }
+    let limit = end_of(parent);
+    var offset = parent.content_start;
+    var seen = 0;
+    while offset < limit {
+        let child = read_header(bytes, offset);
+        if !header_ok(child) {
+            return bad_header();
+        }
+        if seen == index {
+            return child;
+        }
+        let next = end_of(child);
+        if next <= offset {
+            // A zero-length step would loop forever on malformed input.
+            return bad_header();
+        }
+        offset = next;
+        seen = seen + 1;
+    }
+    bad_header()
+}
+
+/// How many children a constructed value contains.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::der::child_count(der, outer);
+/// ```
+pub fn child_count(in bytes: Array[Int], in parent: Header) -> Int {
+    if !header_ok(parent) {
+        return 0;
+    }
+    let limit = end_of(parent);
+    var offset = parent.content_start;
+    var seen = 0;
+    while offset < limit {
+        let child = read_header(bytes, offset);
+        if !header_ok(child) {
+            return seen;
+        }
+        let next = end_of(child);
+        if next <= offset {
+            return seen;
+        }
+        offset = next;
+        seen = seen + 1;
+    }
+    seen
+}
+
+/// The contents of a BIT STRING, dropping its leading "unused bits" byte.
+///
+/// X.509 wraps public keys in a BIT STRING, whose first content byte counts
+/// the unused trailing bits — always 0 for a key. Returning the raw value
+/// would hand the caller a key with a spurious leading byte, which is a
+/// classic way to get a public key that is off by one byte and fails every
+/// signature check for no visible reason.
+///
+/// # Example
+///
+/// ```tuo
+/// let key = std::der::bit_string_bytes(der, h);
+/// ```
+pub fn bit_string_bytes(in bytes: Array[Int], in header: Header) -> Array[Int] {
+    var out = std::array::empty();
+    if !header_ok(header) || header.tag != tag_bit_string() || header.length < 1 {
+        return out;
+    }
+    let unused = byte_at(bytes, header.content_start);
+    if unused != 0 {
+        // A key is a whole number of bytes; anything else is malformed.
+        return out;
+    }
+    var i = 1;
+    while i < header.length {
+        let b = byte_at(bytes, header.content_start + i);
+        if b < 0 {
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// Whether the value a header describes equals `expected`, byte for byte —
+/// the comparison an OID check needs.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::der::value_equals(der, h, std::der::oid_ed25519()) { /* … */ }
+/// ```
+pub fn value_equals(in bytes: Array[Int], in header: Header, in expected: Array[Int]) -> Bool {
+    if !header_ok(header) {
+        return false;
+    }
+    if header.length != std::array::len(expected) {
+        return false;
+    }
+    var i = 0;
+    var same = true;
+    while i < header.length {
+        if byte_at(bytes, header.content_start + i) != std::array::get(expected, i) {
+            same = false;
+        }
+        i = i + 1;
+    }
+    same
+}
+
+/// The OID for Ed25519 (1.3.101.112), as its DER content bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let oid = std::der::oid_ed25519();
+/// ```
+pub fn oid_ed25519() -> Array[Int] {
+    var oid = std::array::empty();
+    std::array::push(oid, 43);
+    std::array::push(oid, 101);
+    std::array::push(oid, 112);
+    oid
+}
+
+// --- X.509 (RFC 5280) -------------------------------------------------------
+//
+// Only the fields TLS actually needs. A Certificate is:
+//
+//   Certificate ::= SEQUENCE {
+//       tbsCertificate       TBSCertificate,
+//       signatureAlgorithm   AlgorithmIdentifier,
+//       signatureValue       BIT STRING }
+//
+// and inside the TBS, the field this module is really after:
+//
+//   subjectPublicKeyInfo ::= SEQUENCE {
+//       algorithm   AlgorithmIdentifier,
+//       subjectPublicKey BIT STRING }
+//
+// The TBS's optional `[0] version` prefix is what makes the field index
+// vary, and getting it wrong silently yields the *serial number* where the
+// public key should be — a bug that produces a plausible-looking 20-byte
+// value rather than an error.
+
+/// The index of `subjectPublicKeyInfo` within a TBSCertificate, accounting
+/// for the optional version prefix.
+///
+/// A v3 certificate opens with a `[0]` context-tagged version, shifting every
+/// later field by one; a v1 certificate has none. Deciding by *looking* is
+/// what keeps this correct for both, rather than assuming v3 and reading the
+/// wrong field off a v1 certificate.
+///
+/// # Example
+///
+/// ```tuo
+/// let index = std::der::spki_index(der, tbs);
+/// ```
+pub fn spki_index(in bytes: Array[Int], in tbs: Header) -> Int {
+    let first = child_at(bytes, tbs, 0);
+    if !header_ok(first) {
+        return 0 - 1;
+    }
+    // A context-specific constructed [0] is tag 0xa0.
+    if first.tag == 160 {
+        // version, serial, sigAlg, issuer, validity, subject, SPKI
+        6
+    } else {
+        // serial, sigAlg, issuer, validity, subject, SPKI
+        5
+    }
+}
+
+/// The `subjectPublicKeyInfo` header inside a DER certificate.
+///
+/// # Example
+///
+/// ```tuo
+/// let spki = std::der::certificate_spki(der);
+/// ```
+pub fn certificate_spki(in bytes: Array[Int]) -> Header {
+    let certificate = read_header(bytes, 0);
+    if !header_ok(certificate) || certificate.tag != tag_sequence() {
+        return bad_header();
+    }
+    let tbs = child_at(bytes, certificate, 0);
+    if !header_ok(tbs) || tbs.tag != tag_sequence() {
+        return bad_header();
+    }
+    let index = spki_index(bytes, tbs);
+    if index < 0 {
+        return bad_header();
+    }
+    let spki = child_at(bytes, tbs, index);
+    if !header_ok(spki) || spki.tag != tag_sequence() {
+        return bad_header();
+    }
+    spki
+}
+
+/// Whether a certificate's subject public key is an Ed25519 key.
+///
+/// Checked rather than assumed: handing an RSA or P-256 key to an Ed25519
+/// verifier would not fail loudly, it would simply never verify, and the
+/// resulting "signature invalid" is a deeply misleading error to debug.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::der::certificate_is_ed25519(der) { /* … */ }
+/// ```
+pub fn certificate_is_ed25519(in bytes: Array[Int]) -> Bool {
+    let spki = certificate_spki(bytes);
+    if !header_ok(spki) {
+        return false;
+    }
+    let algorithm = child_at(bytes, spki, 0);
+    if !header_ok(algorithm) || algorithm.tag != tag_sequence() {
+        return false;
+    }
+    let oid = child_at(bytes, algorithm, 0);
+    if !header_ok(oid) || oid.tag != tag_oid() {
+        return false;
+    }
+    value_equals(bytes, oid, oid_ed25519())
+}
+
+/// The 32-byte Ed25519 public key from a DER certificate.
+///
+/// Returns an empty array when the certificate is malformed or carries some
+/// other key type.
+///
+/// **This does not authenticate anything.** It reads a key out of a
+/// structure. The certificate's own signature is unchecked, its validity
+/// dates are unchecked, and no chain is walked to a trust anchor. A caller
+/// that treats the returned key as trusted has verified nothing at all — an
+/// attacker can mint a certificate containing any key they like.
+///
+/// # Example
+///
+/// ```tuo
+/// let key = std::der::certificate_public_key(der); // 32 bytes
+/// ```
+pub fn certificate_public_key(in bytes: Array[Int]) -> Array[Int] {
+    let spki = certificate_spki(bytes);
+    if !header_ok(spki) {
+        return std::array::empty();
+    }
+    if !certificate_is_ed25519(bytes) {
+        return std::array::empty();
+    }
+    let key = child_at(bytes, spki, 1);
+    if !header_ok(key) || key.tag != tag_bit_string() {
+        return std::array::empty();
+    }
+    let raw = bit_string_bytes(bytes, key);
+    if std::array::len(raw) != 32 {
+        return std::array::empty();
+    }
+    raw
+}
+
+/// The raw `tbsCertificate` bytes — the region a certificate's signature is
+/// computed over, header included.
+///
+/// The header must be included: the signature covers the TBS as a complete
+/// DER element, so signing or verifying the content alone silently fails.
+///
+/// # Example
+///
+/// ```tuo
+/// let signed = std::der::certificate_tbs(der);
+/// ```
+pub fn certificate_tbs(in bytes: Array[Int]) -> Array[Int] {
+    let certificate = read_header(bytes, 0);
+    if !header_ok(certificate) || certificate.tag != tag_sequence() {
+        return std::array::empty();
+    }
+    let tbs = child_at(bytes, certificate, 0);
+    if !header_ok(tbs) {
+        return std::array::empty();
+    }
+    // From the TBS's own tag byte through the end of its content.
+    var out = std::array::empty();
+    let start = tbs_start(bytes, certificate);
+    if start < 0 {
+        return out;
+    }
+    var i = start;
+    let limit = end_of(tbs);
+    while i < limit {
+        let b = byte_at(bytes, i);
+        if b < 0 {
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// Where the TBS element begins — its tag byte, not its content.
+///
+/// # Example
+///
+/// ```tuo
+/// let start = std::der::tbs_start(der, certificate);
+/// ```
+pub fn tbs_start(in bytes: Array[Int], in certificate: Header) -> Int {
+    if !header_ok(certificate) {
+        return 0 - 1;
+    }
+    certificate.content_start
+}
+
+/// The signature bytes from a certificate — the third element of the outer
+/// SEQUENCE, unwrapped from its BIT STRING.
+///
+/// # Example
+///
+/// ```tuo
+/// let signature = std::der::certificate_signature(der); // 64 bytes for Ed25519
+/// ```
+pub fn certificate_signature(in bytes: Array[Int]) -> Array[Int] {
+    let certificate = read_header(bytes, 0);
+    if !header_ok(certificate) || certificate.tag != tag_sequence() {
+        return std::array::empty();
+    }
+    let signature = child_at(bytes, certificate, 2);
+    if !header_ok(signature) || signature.tag != tag_bit_string() {
+        return std::array::empty();
+    }
+    bit_string_bytes(bytes, signature)
+}
+
+// --- Specs: a REAL certificate, and hostile input ---------------------------
+//
+// The certificate below was emitted by OpenSSL (`openssl req -x509 -newkey
+// ed25519`), not written by hand. That is deliberate: a DER decoder checked
+// only against bytes this module invented would encode its own
+// misunderstandings into the test and reject every real certificate while
+// passing.
+
+/// A real 320-byte Ed25519 certificate emitted by OpenSSL.
+fn sample_certificate() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 48);
+    std::array::push(a, 130);
+    std::array::push(a, 1);
+    std::array::push(a, 60);
+    std::array::push(a, 48);
+    std::array::push(a, 129);
+    std::array::push(a, 239);
+    std::array::push(a, 160);
+    std::array::push(a, 3);
+    std::array::push(a, 2);
+    std::array::push(a, 1);
+    std::array::push(a, 2);
+    std::array::push(a, 2);
+    std::array::push(a, 20);
+    std::array::push(a, 74);
+    std::array::push(a, 226);
+    std::array::push(a, 75);
+    std::array::push(a, 255);
+    std::array::push(a, 194);
+    std::array::push(a, 84);
+    std::array::push(a, 177);
+    std::array::push(a, 189);
+    std::array::push(a, 68);
+    std::array::push(a, 2);
+    std::array::push(a, 195);
+    std::array::push(a, 137);
+    std::array::push(a, 167);
+    std::array::push(a, 148);
+    std::array::push(a, 68);
+    std::array::push(a, 38);
+    std::array::push(a, 203);
+    std::array::push(a, 55);
+    std::array::push(a, 136);
+    std::array::push(a, 227);
+    std::array::push(a, 48);
+    std::array::push(a, 5);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 43);
+    std::array::push(a, 101);
+    std::array::push(a, 112);
+    std::array::push(a, 48);
+    std::array::push(a, 20);
+    std::array::push(a, 49);
+    std::array::push(a, 18);
+    std::array::push(a, 48);
+    std::array::push(a, 16);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 85);
+    std::array::push(a, 4);
+    std::array::push(a, 3);
+    std::array::push(a, 12);
+    std::array::push(a, 9);
+    std::array::push(a, 108);
+    std::array::push(a, 111);
+    std::array::push(a, 99);
+    std::array::push(a, 97);
+    std::array::push(a, 108);
+    std::array::push(a, 104);
+    std::array::push(a, 111);
+    std::array::push(a, 115);
+    std::array::push(a, 116);
+    std::array::push(a, 48);
+    std::array::push(a, 30);
+    std::array::push(a, 23);
+    std::array::push(a, 13);
+    std::array::push(a, 50);
+    std::array::push(a, 54);
+    std::array::push(a, 48);
+    std::array::push(a, 57);
+    std::array::push(a, 49);
+    std::array::push(a, 51);
+    std::array::push(a, 49);
+    std::array::push(a, 53);
+    std::array::push(a, 53);
+    std::array::push(a, 56);
+    std::array::push(a, 50);
+    std::array::push(a, 55);
+    std::array::push(a, 90);
+    std::array::push(a, 23);
+    std::array::push(a, 13);
+    std::array::push(a, 50);
+    std::array::push(a, 55);
+    std::array::push(a, 48);
+    std::array::push(a, 57);
+    std::array::push(a, 49);
+    std::array::push(a, 51);
+    std::array::push(a, 49);
+    std::array::push(a, 53);
+    std::array::push(a, 53);
+    std::array::push(a, 56);
+    std::array::push(a, 50);
+    std::array::push(a, 55);
+    std::array::push(a, 90);
+    std::array::push(a, 48);
+    std::array::push(a, 20);
+    std::array::push(a, 49);
+    std::array::push(a, 18);
+    std::array::push(a, 48);
+    std::array::push(a, 16);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 85);
+    std::array::push(a, 4);
+    std::array::push(a, 3);
+    std::array::push(a, 12);
+    std::array::push(a, 9);
+    std::array::push(a, 108);
+    std::array::push(a, 111);
+    std::array::push(a, 99);
+    std::array::push(a, 97);
+    std::array::push(a, 108);
+    std::array::push(a, 104);
+    std::array::push(a, 111);
+    std::array::push(a, 115);
+    std::array::push(a, 116);
+    std::array::push(a, 48);
+    std::array::push(a, 42);
+    std::array::push(a, 48);
+    std::array::push(a, 5);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 43);
+    std::array::push(a, 101);
+    std::array::push(a, 112);
+    std::array::push(a, 3);
+    std::array::push(a, 33);
+    std::array::push(a, 0);
+    std::array::push(a, 15);
+    std::array::push(a, 213);
+    std::array::push(a, 65);
+    std::array::push(a, 171);
+    std::array::push(a, 25);
+    std::array::push(a, 24);
+    std::array::push(a, 82);
+    std::array::push(a, 85);
+    std::array::push(a, 197);
+    std::array::push(a, 221);
+    std::array::push(a, 199);
+    std::array::push(a, 43);
+    std::array::push(a, 46);
+    std::array::push(a, 171);
+    std::array::push(a, 85);
+    std::array::push(a, 4);
+    std::array::push(a, 97);
+    std::array::push(a, 150);
+    std::array::push(a, 244);
+    std::array::push(a, 80);
+    std::array::push(a, 117);
+    std::array::push(a, 205);
+    std::array::push(a, 135);
+    std::array::push(a, 54);
+    std::array::push(a, 165);
+    std::array::push(a, 246);
+    std::array::push(a, 145);
+    std::array::push(a, 214);
+    std::array::push(a, 146);
+    std::array::push(a, 92);
+    std::array::push(a, 6);
+    std::array::push(a, 103);
+    std::array::push(a, 163);
+    std::array::push(a, 83);
+    std::array::push(a, 48);
+    std::array::push(a, 81);
+    std::array::push(a, 48);
+    std::array::push(a, 29);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 85);
+    std::array::push(a, 29);
+    std::array::push(a, 14);
+    std::array::push(a, 4);
+    std::array::push(a, 22);
+    std::array::push(a, 4);
+    std::array::push(a, 20);
+    std::array::push(a, 67);
+    std::array::push(a, 88);
+    std::array::push(a, 241);
+    std::array::push(a, 182);
+    std::array::push(a, 37);
+    std::array::push(a, 191);
+    std::array::push(a, 215);
+    std::array::push(a, 135);
+    std::array::push(a, 79);
+    std::array::push(a, 225);
+    std::array::push(a, 21);
+    std::array::push(a, 55);
+    std::array::push(a, 224);
+    std::array::push(a, 21);
+    std::array::push(a, 199);
+    std::array::push(a, 86);
+    std::array::push(a, 159);
+    std::array::push(a, 36);
+    std::array::push(a, 232);
+    std::array::push(a, 175);
+    std::array::push(a, 48);
+    std::array::push(a, 31);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 85);
+    std::array::push(a, 29);
+    std::array::push(a, 35);
+    std::array::push(a, 4);
+    std::array::push(a, 24);
+    std::array::push(a, 48);
+    std::array::push(a, 22);
+    std::array::push(a, 128);
+    std::array::push(a, 20);
+    std::array::push(a, 67);
+    std::array::push(a, 88);
+    std::array::push(a, 241);
+    std::array::push(a, 182);
+    std::array::push(a, 37);
+    std::array::push(a, 191);
+    std::array::push(a, 215);
+    std::array::push(a, 135);
+    std::array::push(a, 79);
+    std::array::push(a, 225);
+    std::array::push(a, 21);
+    std::array::push(a, 55);
+    std::array::push(a, 224);
+    std::array::push(a, 21);
+    std::array::push(a, 199);
+    std::array::push(a, 86);
+    std::array::push(a, 159);
+    std::array::push(a, 36);
+    std::array::push(a, 232);
+    std::array::push(a, 175);
+    std::array::push(a, 48);
+    std::array::push(a, 15);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 85);
+    std::array::push(a, 29);
+    std::array::push(a, 19);
+    std::array::push(a, 1);
+    std::array::push(a, 1);
+    std::array::push(a, 255);
+    std::array::push(a, 4);
+    std::array::push(a, 5);
+    std::array::push(a, 48);
+    std::array::push(a, 3);
+    std::array::push(a, 1);
+    std::array::push(a, 1);
+    std::array::push(a, 255);
+    std::array::push(a, 48);
+    std::array::push(a, 5);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 43);
+    std::array::push(a, 101);
+    std::array::push(a, 112);
+    std::array::push(a, 3);
+    std::array::push(a, 65);
+    std::array::push(a, 0);
+    std::array::push(a, 17);
+    std::array::push(a, 220);
+    std::array::push(a, 255);
+    std::array::push(a, 22);
+    std::array::push(a, 194);
+    std::array::push(a, 187);
+    std::array::push(a, 166);
+    std::array::push(a, 12);
+    std::array::push(a, 1);
+    std::array::push(a, 228);
+    std::array::push(a, 123);
+    std::array::push(a, 35);
+    std::array::push(a, 169);
+    std::array::push(a, 201);
+    std::array::push(a, 33);
+    std::array::push(a, 254);
+    std::array::push(a, 18);
+    std::array::push(a, 199);
+    std::array::push(a, 133);
+    std::array::push(a, 133);
+    std::array::push(a, 228);
+    std::array::push(a, 109);
+    std::array::push(a, 182);
+    std::array::push(a, 91);
+    std::array::push(a, 107);
+    std::array::push(a, 110);
+    std::array::push(a, 21);
+    std::array::push(a, 173);
+    std::array::push(a, 3);
+    std::array::push(a, 175);
+    std::array::push(a, 144);
+    std::array::push(a, 13);
+    std::array::push(a, 10);
+    std::array::push(a, 30);
+    std::array::push(a, 72);
+    std::array::push(a, 81);
+    std::array::push(a, 42);
+    std::array::push(a, 193);
+    std::array::push(a, 58);
+    std::array::push(a, 251);
+    std::array::push(a, 174);
+    std::array::push(a, 92);
+    std::array::push(a, 143);
+    std::array::push(a, 193);
+    std::array::push(a, 43);
+    std::array::push(a, 111);
+    std::array::push(a, 156);
+    std::array::push(a, 226);
+    std::array::push(a, 212);
+    std::array::push(a, 207);
+    std::array::push(a, 252);
+    std::array::push(a, 15);
+    std::array::push(a, 159);
+    std::array::push(a, 141);
+    std::array::push(a, 207);
+    std::array::push(a, 135);
+    std::array::push(a, 92);
+    std::array::push(a, 164);
+    std::array::push(a, 163);
+    std::array::push(a, 39);
+    std::array::push(a, 159);
+    std::array::push(a, 199);
+    std::array::push(a, 195);
+    std::array::push(a, 13);
+    a
+}
+
+/// The public key OpenSSL reports for `sample_certificate`.
+fn sample_public_key() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 15);
+    std::array::push(a, 213);
+    std::array::push(a, 65);
+    std::array::push(a, 171);
+    std::array::push(a, 25);
+    std::array::push(a, 24);
+    std::array::push(a, 82);
+    std::array::push(a, 85);
+    std::array::push(a, 197);
+    std::array::push(a, 221);
+    std::array::push(a, 199);
+    std::array::push(a, 43);
+    std::array::push(a, 46);
+    std::array::push(a, 171);
+    std::array::push(a, 85);
+    std::array::push(a, 4);
+    std::array::push(a, 97);
+    std::array::push(a, 150);
+    std::array::push(a, 244);
+    std::array::push(a, 80);
+    std::array::push(a, 117);
+    std::array::push(a, 205);
+    std::array::push(a, 135);
+    std::array::push(a, 54);
+    std::array::push(a, 165);
+    std::array::push(a, 246);
+    std::array::push(a, 145);
+    std::array::push(a, 214);
+    std::array::push(a, 146);
+    std::array::push(a, 92);
+    std::array::push(a, 6);
+    std::array::push(a, 103);
+    a
+}
+
+/// A byte of the parsed public key, for the spec below.
+fn parsed_key_byte(take i: Int) -> Int {
+    std::array::get(certificate_public_key(sample_certificate()), i)
+}
+
+/// The certificate truncated to `n` bytes — the most basic hostile input.
+fn truncated(take n: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < n {
+        std::array::push(out, std::array::get(sample_certificate(), i));
+        i = i + 1;
+    }
+    out
+}
+
+spec read_header {
+    // The certificate opens with a SEQUENCE whose length is long-form.
+    then header_ok(read_header(sample_certificate(), 0));
+    then read_header(sample_certificate(), 0).tag == tag_sequence();
+    then read_header(sample_certificate(), 0).length == 316;
+    // Past the end is a clean failure, not a trap.
+    then !header_ok(read_header(sample_certificate(), 9999));
+    then !header_ok(read_header(std::array::empty(), 0));
+    // A header whose length runs past the data is refused — the single most
+    // obvious attack on a parser.
+    then !header_ok(read_header(truncated(10), 0));
+}
+
+spec fits {
+    then fits(sample_certificate(), 0, 320);
+    then !fits(sample_certificate(), 0, 321);
+    then !fits(sample_certificate(), 300, 100);
+    // Negative and absurd values answer rather than trapping.
+    then !fits(sample_certificate(), 0 - 1, 1);
+    then !fits(sample_certificate(), 0, 0 - 1);
+    then !fits(sample_certificate(), 0, max_length() + 1);
+}
+
+spec byte_at {
+    then byte_at(sample_certificate(), 0) == 48;
+    // Out of bounds is -1, never a trap — every read in this module goes
+    // through here precisely for that reason.
+    then byte_at(sample_certificate(), 0 - 1) == 0 - 1;
+    then byte_at(sample_certificate(), 320) == 0 - 1;
+    then byte_at(std::array::empty(), 0) == 0 - 1;
+}
+
+spec max_length {
+    then max_length() == 16777216;
+}
+
+spec bad_header {
+    then !header_ok(bad_header());
+    then bad_header().content_start == 0 - 1;
+}
+
+spec header_ok {
+    then header_ok(read_header(sample_certificate(), 0));
+    then !header_ok(bad_header());
+}
+
+spec end_of {
+    // The outer SEQUENCE ends at the end of the certificate: 4 header bytes
+    // plus 316 content bytes.
+    then end_of(read_header(sample_certificate(), 0)) == 320;
+    then end_of(bad_header()) == 0 - 1;
+}
+
+spec value_of {
+    then std::array::len(value_of(sample_certificate(), read_header(sample_certificate(), 0)))
+        == 316;
+    then std::array::len(value_of(sample_certificate(), bad_header())) == 0;
+}
+
+spec child_at {
+    // The first child of the certificate is the TBS SEQUENCE.
+    then header_ok(child_at(sample_certificate(), read_header(sample_certificate(), 0), 0));
+    then child_at(sample_certificate(), read_header(sample_certificate(), 0), 0).tag
+        == tag_sequence();
+    // The third is the signature BIT STRING.
+    then child_at(sample_certificate(), read_header(sample_certificate(), 0), 2).tag
+        == tag_bit_string();
+    // Past the end, and a negative index, both fail cleanly.
+    then !header_ok(child_at(sample_certificate(), read_header(sample_certificate(), 0), 99));
+    then !header_ok(child_at(sample_certificate(), read_header(sample_certificate(), 0), 0 - 1));
+    then !header_ok(child_at(sample_certificate(), bad_header(), 0));
+}
+
+spec child_count {
+    // A Certificate is exactly three elements.
+    then child_count(sample_certificate(), read_header(sample_certificate(), 0)) == 3;
+    then child_count(sample_certificate(), bad_header()) == 0;
+}
+
+spec tag_sequence {
+    then tag_sequence() == 48;
+}
+
+spec tag_integer {
+    then tag_integer() == 2;
+}
+
+spec tag_bit_string {
+    then tag_bit_string() == 3;
+}
+
+spec tag_octet_string {
+    then tag_octet_string() == 4;
+}
+
+spec tag_oid {
+    then tag_oid() == 6;
+}
+
+spec oid_ed25519 {
+    // 1.3.101.112 encodes as 2b 65 70.
+    then std::array::len(oid_ed25519()) == 3;
+    then std::array::get(oid_ed25519(), 0) == 43;
+    then std::array::get(oid_ed25519(), 1) == 101;
+    then std::array::get(oid_ed25519(), 2) == 112;
+}
+
+spec value_equals {
+    then !value_equals(sample_certificate(), bad_header(), oid_ed25519());
+    then !value_equals(sample_certificate(), read_header(sample_certificate(), 0), oid_ed25519());
+}
+
+spec bit_string_bytes {
+    // The signature BIT STRING unwraps to 64 bytes — an Ed25519 signature —
+    // with its "unused bits" prefix dropped.
+    then std::array::len(
+        bit_string_bytes(
+            sample_certificate(),
+            child_at(sample_certificate(), read_header(sample_certificate(), 0), 2),
+        ),
+    ) == 64;
+    then std::array::len(bit_string_bytes(sample_certificate(), bad_header())) == 0;
+    // A non-BIT-STRING header yields nothing rather than raw bytes.
+    then std::array::len(
+        bit_string_bytes(sample_certificate(), read_header(sample_certificate(), 0)),
+    ) == 0;
+}
+
+spec spki_index {
+    // This is a v3 certificate, so its TBS opens with a [0] version tag and
+    // the SPKI is field 6. Reading field 5 here would silently return the
+    // SUBJECT rather than the key.
+    then spki_index(
+        sample_certificate(),
+        child_at(sample_certificate(), read_header(sample_certificate(), 0), 0),
+    ) == 6;
+    then spki_index(sample_certificate(), bad_header()) == 0 - 1;
+}
+
+spec certificate_spki {
+    then header_ok(certificate_spki(sample_certificate()));
+    then certificate_spki(sample_certificate()).tag == tag_sequence();
+    then !header_ok(certificate_spki(std::array::empty()));
+}
+
+spec certificate_is_ed25519 {
+    then certificate_is_ed25519(sample_certificate());
+    then !certificate_is_ed25519(std::array::empty());
+    then !certificate_is_ed25519(truncated(50));
+}
+
+spec certificate_public_key {
+    // Every byte of the key OpenSSL itself reports for this certificate.
+    then parsed_key_byte(0) == 15;
+    then parsed_key_byte(1) == 213;
+    then parsed_key_byte(2) == 65;
+    then parsed_key_byte(3) == 171;
+    then parsed_key_byte(4) == 25;
+    then parsed_key_byte(5) == 24;
+    then parsed_key_byte(6) == 82;
+    then parsed_key_byte(7) == 85;
+    then parsed_key_byte(8) == 197;
+    then parsed_key_byte(9) == 221;
+    then parsed_key_byte(10) == 199;
+    then parsed_key_byte(11) == 43;
+    then parsed_key_byte(12) == 46;
+    then parsed_key_byte(13) == 171;
+    then parsed_key_byte(14) == 85;
+    then parsed_key_byte(15) == 4;
+    then parsed_key_byte(16) == 97;
+    then parsed_key_byte(17) == 150;
+    then parsed_key_byte(18) == 244;
+    then parsed_key_byte(19) == 80;
+    then parsed_key_byte(20) == 117;
+    then parsed_key_byte(21) == 205;
+    then parsed_key_byte(22) == 135;
+    then parsed_key_byte(23) == 54;
+    then parsed_key_byte(24) == 165;
+    then parsed_key_byte(25) == 246;
+    then parsed_key_byte(26) == 145;
+    then parsed_key_byte(27) == 214;
+    then parsed_key_byte(28) == 146;
+    then parsed_key_byte(29) == 92;
+    then parsed_key_byte(30) == 6;
+    then parsed_key_byte(31) == 103;
+    then std::array::len(certificate_public_key(sample_certificate())) == 32;
+    // Hostile input yields nothing rather than trapping.
+    then std::array::len(certificate_public_key(std::array::empty())) == 0;
+    then std::array::len(certificate_public_key(truncated(1))) == 0;
+    then std::array::len(certificate_public_key(truncated(100))) == 0;
+    then std::array::len(certificate_public_key(truncated(319))) == 0;
+}
+
+spec certificate_signature {
+    // Ed25519 signatures are 64 bytes.
+    then std::array::len(certificate_signature(sample_certificate())) == 64;
+    then std::array::len(certificate_signature(std::array::empty())) == 0;
+    then std::array::len(certificate_signature(truncated(200))) == 0;
+}
+
+spec certificate_tbs {
+    // The signed region is a real subset of the certificate, and includes
+    // its own header (the signature covers the complete DER element).
+    // 3 header bytes (tag, 0x81, 239) plus 239 content bytes.
+    then std::array::len(certificate_tbs(sample_certificate())) == 242;
+    then std::array::get(certificate_tbs(sample_certificate()), 0) == tag_sequence();
+    then std::array::len(certificate_tbs(std::array::empty())) == 0;
+}
+
+spec tbs_start {
+    then tbs_start(sample_certificate(), read_header(sample_certificate(), 0)) == 4;
+    then tbs_start(sample_certificate(), bad_header()) == 0 - 1;
+}

@@ -113,6 +113,116 @@ pub const BITS: Module = Module {
     source: include_str!("std/bits.tuo"),
 };
 
+/// `std::sha512` — SHA-512 (FIPS 180-4), the hash Ed25519 is defined over:
+/// the round constants and initial values, the sigma/Ch/Maj functions,
+/// 128-byte padding with its **128-bit** length field, and `hash`. Entirely
+/// executable, pinned against FIPS 180-4's **published** digests. Separate
+/// from `std::crypto`'s SHA-256 because they are different algorithms, not
+/// one parameterized by width. Its `add64`/`shr64` exist because tuonelang's
+/// `Int` is a *signed* i64 whose `+` **traps** on overflow and whose `>>`
+/// sign-extends, while SHA-512 is defined over wrapping 64-bit arithmetic
+/// and logical shifts.
+pub const SHA512: Module = Module {
+    path: "std::sha512",
+    name: "std/sha512.tuo",
+    source: include_str!("std/sha512.tuo"),
+};
+
+/// `std::ed25519` — Ed25519 signature **verification** (RFC 8032), the
+/// algorithm a TLS 1.3 server proves its identity with: twisted-Edwards
+/// arithmetic in extended coordinates, point decompression with its curve
+/// check, scalar reduction mod the group order, and `verify`. Entirely
+/// executable; RFC 8032 §7.1's published vectors are pinned **natively**
+/// (`ed25519_matches_rfc_8032`) since one verification exceeds the spec
+/// sandbox's fuel. **Verify only, deliberately** — signing needs the secret
+/// key handled in constant time, which `std::bignum` cannot provide, so
+/// shipping a verifier alone is the honest subset. Not constant time, which
+/// here costs nothing: every input to verification is public.
+pub const ED25519: Module = Module {
+    path: "std::ed25519",
+    name: "std/ed25519.tuo",
+    source: include_str!("std/ed25519.tuo"),
+};
+
+/// `std::tls` — the TLS 1.3 handshake and record layer (RFC 8446): record
+/// framing, ClientHello parsing, ServerHello and the server's encrypted
+/// flight, the transcript hash, the key schedule, and ChaCha20-Poly1305
+/// record protection. Entirely executable; its key schedule is pinned against
+/// **RFC 8448's published** secrets and its whole server flight against a
+/// live **OpenSSL** client (`tls_server_completes_handshake_with_openssl`).
+/// Every reader is **total** — a ClientHello arrives unauthenticated, and
+/// tuonelang traps on overflow and out-of-bounds indexing, so a parser that
+/// can trap is a remote denial of service. Supports X25519 + Ed25519 +
+/// ChaCha20-Poly1305 only; no resumption, 0-RTT, client certificates,
+/// HelloRetryRequest, or X.509 chain validation.
+pub const TLS: Module = Module {
+    path: "std::tls",
+    name: "std/tls.tuo",
+    source: include_str!("std/tls.tuo"),
+};
+
+/// `std::der` — DER decoding (ITU-T X.690) and the X.509 certificate fields
+/// TLS needs (RFC 5280): bounds-checked tag/length headers, sequence
+/// traversal, BIT STRING unwrapping, and the Ed25519 `subjectPublicKeyInfo`,
+/// signature and signed-region extractors. Entirely executable, pinned
+/// against a **real OpenSSL-emitted certificate** rather than bytes the
+/// module invented. Every function is **total**: certificates arrive
+/// unauthenticated, and tuonelang traps on overflow and out-of-bounds
+/// indexing, so a parser that can trap is a remote denial of service. It is
+/// a *decoder*, not a *validator* — it checks no signature, no date, and no
+/// chain.
+pub const DER: Module = Module {
+    path: "std::der",
+    name: "std/der.tuo",
+    source: include_str!("std/der.tuo"),
+};
+
+/// `std::hkdf` — HMAC-based key derivation (RFC 5869) and TLS 1.3's key
+/// schedule (RFC 8446 §7.1): `extract`/`expand`, TLS's `HKDF-Expand-Label`
+/// and `Derive-Secret` with their `"tls13 "` domain separation, the
+/// early/handshake/master secret chain, and the per-record traffic key, IV
+/// and nonce. Entirely executable, pinned against RFC 5869's **published**
+/// vectors — a key schedule that agrees only with itself yields a connection
+/// where every record fails to decrypt. **Not constant time** (it builds on
+/// `std::crypto`'s SHA-256/HMAC).
+pub const HKDF: Module = Module {
+    path: "std::hkdf",
+    name: "std/hkdf.tuo",
+    source: include_str!("std/hkdf.tuo"),
+};
+
+/// `std::x25519` — the X25519 Diffie-Hellman function (RFC 7748), TLS 1.3's
+/// key-exchange primitive: field arithmetic mod 2^255 - 19, the Montgomery
+/// ladder, scalar/u decoding with RFC 7748's mandatory clamping, and
+/// `scalar_mult`/`public_key`. Entirely executable. The published RFC vector
+/// is pinned **natively** (`x25519_matches_rfc_7748`) rather than in a spec:
+/// one scalar multiplication is 255 ladder steps of 255-bit bignum
+/// arithmetic, which exceeds the spec sandbox's fuel. **Not constant time**
+/// — the ladder's structure is uniform, but `std::bignum` underneath is not,
+/// so this is correctness without a timing guarantee.
+pub const X25519: Module = Module {
+    path: "std::x25519",
+    name: "std/x25519.tuo",
+    source: include_str!("std/x25519.tuo"),
+};
+
+/// `std::chacha` — the ChaCha20 stream cipher and Poly1305 authenticator
+/// (RFC 8439), the AEAD half of a TLS 1.3 record layer: the quarter round and
+/// block function, keystream application (`apply`, its own inverse), and the
+/// Poly1305 one-time authenticator. Entirely executable, and pinned against
+/// the RFC's **published** test vectors rather than its own reasoning — a
+/// cipher that merely agrees with itself is worthless on the wire. Chosen
+/// over AES because ChaCha20 is defined over the add/XOR/rotate operations
+/// ADR-0019 gave the language, so it needs no lookup table and therefore has
+/// no data-dependent memory access; AES in a high-level language is the
+/// textbook cache-timing vulnerability. **Not** marked `#[constant_time]` —
+/// see the module header for the exact scope of that claim.
+pub const CHACHA: Module = Module {
+    path: "std::chacha",
+    name: "std/chacha.tuo",
+    source: include_str!("std/chacha.tuo"),
+};
+
 /// `std::bignum` — arbitrary-precision non-negative integer arithmetic over
 /// 28-bit limbs (ADR-0019 successor work): construction/normalization,
 /// comparison and `bit_length`, `add`/`sub` (saturating at zero — there is no
@@ -264,6 +374,13 @@ pub const MODULES: &[Module] = &[
     MATH,
     BITS,
     BIGNUM,
+    CHACHA,
+    X25519,
+    HKDF,
+    DER,
+    SHA512,
+    ED25519,
+    TLS,
     CT,
     CRYPTO,
     STR,

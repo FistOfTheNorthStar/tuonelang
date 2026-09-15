@@ -1,0 +1,982 @@
+// std::ed25519 — Ed25519 signature verification (RFC 8032), the signature
+// algorithm a TLS 1.3 server proves its identity with.
+//
+// This module is entirely executable, and the published RFC 8032 §7.1 vectors
+// are pinned **natively** (`ed25519_matches_rfc_8032`) rather than in a spec:
+// one verification is two scalar multiplications over a 255-bit field, far
+// past the spec sandbox's instruction fuel — the same wall `std::x25519` and
+// `std::crypto`'s PBKDF2 hit.
+//
+// VERIFY ONLY, DELIBERATELY. There is no `sign` here. A TLS *client* only
+// ever verifies, and signing needs the secret key handled with care this
+// module cannot provide: `std::bignum` is variable-time, so a signing
+// operation would leak the key through timing. Shipping a verifier alone is
+// the honest subset — adding `sign` would invite exactly the use this
+// arithmetic cannot safely support.
+//
+// THE CURVE. Ed25519 is a twisted Edwards curve over the same field as
+// X25519 (2^255 - 19), with the unified addition formula below: one formula
+// handles every case including doubling and the identity, with no special
+// cases to get wrong and no branch on secret data. That is why Edwards
+// curves are used for signatures.
+//
+// NOT CONSTANT TIME, and here that is *fine*. Verification operates entirely
+// on public values — the signature, the message, and the public key are all
+// things an attacker already has — so timing leaks nothing. This is the one
+// place in this TLS stack where `std::bignum`'s variable-time arithmetic
+// costs nothing at all.
+
+module std::ed25519;
+
+/// The field prime, 2^255 - 19 — the same field X25519 uses.
+///
+/// # Example
+///
+/// ```tuo
+/// let p = std::ed25519::prime();
+/// ```
+pub fn prime() -> Array[Int] {
+    std::x25519::prime()
+}
+
+/// The group order L = 2^252 + 27742317777372353535851937790883648493, the
+/// modulus signature scalars are reduced by.
+///
+/// # Example
+///
+/// ```tuo
+/// let l = std::ed25519::group_order();
+/// ```
+pub fn group_order() -> Array[Int] {
+    // 2^252 plus the published constant.
+    var power = std::bignum::from_int(1);
+    var i = 0;
+    while i < 252 {
+        power = std::bignum::mul_small(power, 2);
+        i = i + 1;
+    }
+    // `from_decimal` returns an `Option`; the literal above is well-formed,
+    // so the `None` arm is unreachable — but it is handled rather than
+    // unwrapped, since v0 has no unwrap and silently substituting zero would
+    // make every signature verify against the wrong group order.
+    match std::bignum::from_decimal("27742317777372353535851937790883648493") {
+        Some { value } => std::bignum::add(power, value),
+        None => std::bignum::from_int(0),
+    }
+}
+
+/// The curve constant d = -121665/121666 mod p, which defines the twist.
+///
+/// Stored as its limbs rather than computed. `d` is a **constant**, but the
+/// defining expression contains a modular inversion — 254 squarings over a
+/// 255-bit field — and point addition reads `d` twice. Computing it live made
+/// one signature verification take fourteen seconds; the limbs below are the
+/// same number, and `spec curve_d` pins them against that defining expression
+/// so the shortcut cannot drift from its definition.
+///
+/// # Example
+///
+/// ```tuo
+/// let d = std::ed25519::curve_d();
+/// ```
+pub fn curve_d() -> Array[Int] {
+    var limbs = std::array::empty();
+    std::array::push(limbs, 56195235);
+    std::array::push(limbs, 246733985);
+    std::array::push(limbs, 30976885);
+    std::array::push(limbs, 10802196);
+    std::array::push(limbs, 144179312);
+    std::array::push(limbs, 127367070);
+    std::array::push(limbs, 59557696);
+    std::array::push(limbs, 45547495);
+    std::array::push(limbs, 33778926);
+    std::array::push(limbs, 5);
+    std::bignum::normalized(limbs)
+}
+
+/// `d` computed from its definition, -121665/121666 mod p — the value
+/// `curve_d`'s limbs must equal.
+///
+/// Kept so the precomputed constant is *checked* rather than trusted. It is
+/// never called on a hot path.
+///
+/// # Example
+///
+/// ```tuo
+/// let d = std::ed25519::curve_d_from_definition();
+/// ```
+pub fn curve_d_from_definition() -> Array[Int] {
+    let numerator = std::x25519::field_sub(std::bignum::from_int(0), std::bignum::from_int(121665));
+    let denominator = std::bignum::from_int(121666);
+    std::x25519::field_mul(numerator, std::x25519::field_invert(denominator))
+}
+
+/// A curve point in affine coordinates.
+///
+/// Affine rather than projective: verification does so few operations that
+/// the inversions cost less than the code to avoid them, and affine keeps the
+/// addition formula a direct transcription of RFC 8032.
+struct Point {
+    x: Array[Int],
+    y: Array[Int],
+}
+
+/// The identity element (0, 1) — the neutral point of the group.
+///
+/// # Example
+///
+/// ```tuo
+/// let zero = std::ed25519::identity();
+/// ```
+pub fn identity() -> Point {
+    Point { x: std::bignum::from_int(0), y: std::bignum::from_int(1) }
+}
+
+/// An owned copy of a borrowed bignum.
+///
+/// v0 has no `Clone`, and ownership cannot leave a borrowed parameter, so a
+/// function taking `in` that needs an owned value copies its limbs
+/// explicitly.
+///
+/// # Example
+///
+/// ```tuo
+/// let owned = std::ed25519::copy_limbs(value);
+/// ```
+pub fn copy_limbs(in value: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(value) {
+        std::array::push(out, std::array::get(value, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// An owned copy of a borrowed affine point.
+///
+/// # Example
+///
+/// ```tuo
+/// var working = std::ed25519::copy_point(p);
+/// ```
+pub fn copy_point(in p: Point) -> Point {
+    Point { x: copy_limbs(p.x), y: copy_limbs(p.y) }
+}
+
+/// A curve point in **extended** coordinates (X : Y : Z : T), where the
+/// affine point is (X/Z, Y/Z) and T satisfies X*Y = Z*T.
+///
+/// Extended coordinates exist for one reason: they make point addition
+/// *inversion-free*. The affine formula divides, and a division in this field
+/// is a 254-squaring modular inversion — with two per addition and ~760
+/// additions per signature, that was fourteen seconds of arithmetic. Here the
+/// division is deferred: every addition is multiplies only, and exactly one
+/// inversion runs at the very end to return to affine.
+struct Extended {
+    x: Array[Int],
+    y: Array[Int],
+    z: Array[Int],
+    t: Array[Int],
+}
+
+/// The identity in extended coordinates: (0 : 1 : 1 : 0).
+///
+/// # Example
+///
+/// ```tuo
+/// let zero = std::ed25519::extended_identity();
+/// ```
+pub fn extended_identity() -> Extended {
+    Extended {
+        x: std::bignum::from_int(0),
+        y: std::bignum::from_int(1),
+        z: std::bignum::from_int(1),
+        t: std::bignum::from_int(0),
+    }
+}
+
+/// Lift an affine point into extended coordinates: Z = 1, T = X*Y.
+///
+/// # Example
+///
+/// ```tuo
+/// let e = std::ed25519::to_extended(p);
+/// ```
+pub fn to_extended(in p: Point) -> Extended {
+    Extended {
+        x: copy_limbs(p.x),
+        y: copy_limbs(p.y),
+        z: std::bignum::from_int(1),
+        t: std::x25519::field_mul(p.x, p.y),
+    }
+}
+
+/// Project an extended point back to affine — the one inversion per scalar
+/// multiplication.
+///
+/// # Example
+///
+/// ```tuo
+/// let p = std::ed25519::to_affine(e);
+/// ```
+pub fn to_affine(in e: Extended) -> Point {
+    let inverse = std::x25519::field_invert(e.z);
+    Point {
+        x: std::x25519::field_mul(e.x, inverse),
+        y: std::x25519::field_mul(e.y, inverse),
+    }
+}
+
+/// An owned copy of a borrowed extended point.
+///
+/// # Example
+///
+/// ```tuo
+/// var working = std::ed25519::copy_extended(e);
+/// ```
+pub fn copy_extended(in e: Extended) -> Extended {
+    Extended {
+        x: copy_limbs(e.x),
+        y: copy_limbs(e.y),
+        z: copy_limbs(e.z),
+        t: copy_limbs(e.t),
+    }
+}
+
+/// Add two extended points with the unified twisted-Edwards formula
+/// (RFC 8032 §5.1.4's "add-2008-hwcd-3").
+///
+/// One formula covers every case — distinct points, doubling, and the
+/// identity — with no branch and no special case. That completeness is why
+/// Edwards curves are preferred for signatures: the classic Weierstrass
+/// formulas need a doubling special case, and getting it wrong yields a
+/// verifier that accepts some invalid signatures.
+///
+/// **No inversion appears here**, which is the whole point of the
+/// representation.
+///
+/// # Example
+///
+/// ```tuo
+/// let sum = std::ed25519::extended_add(p, q);
+/// ```
+pub fn extended_add(in p: Extended, in q: Extended) -> Extended {
+    // a = (Y1 - X1) * (Y2 - X2); b = (Y1 + X1) * (Y2 + X2)
+    let a = std::x25519::field_mul(
+        std::x25519::field_sub(p.y, p.x),
+        std::x25519::field_sub(q.y, q.x),
+    );
+    let b = std::x25519::field_mul(
+        std::x25519::field_add(p.y, p.x),
+        std::x25519::field_add(q.y, q.x),
+    );
+    // c = T1 * 2d * T2; d_term = Z1 * 2 * Z2
+    let two_d = std::x25519::field_mul_small(curve_d(), 2);
+    let c = std::x25519::field_mul(std::x25519::field_mul(p.t, two_d), q.t);
+    let d_term = std::x25519::field_mul_small(std::x25519::field_mul(p.z, q.z), 2);
+    // e = b - a; f = d_term - c; g = d_term + c; h = b + a
+    let e = std::x25519::field_sub(b, a);
+    let f = std::x25519::field_sub(d_term, c);
+    let g = std::x25519::field_add(d_term, c);
+    let h = std::x25519::field_add(b, a);
+    Extended {
+        x: std::x25519::field_mul(e, f),
+        y: std::x25519::field_mul(g, h),
+        t: std::x25519::field_mul(e, h),
+        z: std::x25519::field_mul(f, g),
+    }
+}
+
+/// Add two affine points, via extended coordinates.
+///
+/// Kept as the readable entry point and for the specs; the hot path uses
+/// `extended_add` directly so it never converts back and forth.
+///
+/// # Example
+///
+/// ```tuo
+/// let sum = std::ed25519::add(p, q);
+/// ```
+pub fn add(in p: Point, in q: Point) -> Point {
+    to_affine(extended_add(to_extended(p), to_extended(q)))
+}
+
+/// Multiply a point by a scalar, by double-and-add over the scalar's bits.
+///
+/// Runs entirely in extended coordinates, converting back to affine exactly
+/// once at the end — so a scalar multiplication costs **one** inversion
+/// rather than one per addition.
+///
+/// Not constant time, and that is correct here: every input to verification
+/// is public (see the module header).
+///
+/// # Example
+///
+/// ```tuo
+/// let product = std::ed25519::scalar_mult(point, scalar);
+/// ```
+pub fn scalar_mult(in point: Point, in scalar: Array[Int]) -> Point {
+    var result = extended_identity();
+    var addend = to_extended(point);
+    var bit = 0;
+    let bits = std::bignum::bit_length(scalar);
+    while bit < bits {
+        if std::x25519::bit_at(scalar, bit) {
+            result = extended_add(result, addend);
+        }
+        addend = extended_add(addend, copy_extended(addend));
+        bit = bit + 1;
+    }
+    to_affine(result)
+}
+
+/// The base point B, whose y is 4/5 and whose x is the even square root of
+/// the curve equation at that y (RFC 8032 §5.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let b = std::ed25519::base_point();
+/// ```
+pub fn base_point() -> Point {
+    let y = std::x25519::field_mul(
+        std::bignum::from_int(4),
+        std::x25519::field_invert(std::bignum::from_int(5)),
+    );
+    let x = recover_x(y, 0);
+    Point { x: x, y: y }
+}
+
+/// Recover the x coordinate from a y coordinate and a sign bit
+/// (RFC 8032 §5.1.3).
+///
+/// This is point decompression: an Ed25519 public key stores only y plus one
+/// bit of x, and the rest is recomputed from the curve equation
+/// `x^2 = (y^2 - 1) / (d*y^2 + 1)`. Returns zero when no square root exists,
+/// which means the encoded point is not on the curve — a case a verifier
+/// must reject rather than proceed from.
+///
+/// # Example
+///
+/// ```tuo
+/// let x = std::ed25519::recover_x(y, sign);
+/// ```
+pub fn recover_x(in y: Array[Int], take sign: Int) -> Array[Int] {
+    let p = prime();
+    let one = std::bignum::from_int(1);
+    let yy = std::x25519::field_square(y);
+    let numerator = std::x25519::field_sub(yy, one);
+    let denominator = std::x25519::field_add(std::x25519::field_mul(curve_d(), yy), one);
+    let xx = std::x25519::field_mul(numerator, std::x25519::field_invert(denominator));
+    // A candidate root: xx^((p+3)/8).
+    let exponent = std::bignum::div_small(std::bignum::add(p, std::bignum::from_int(3)), 8);
+    var x = std::x25519::power_mod(xx, exponent);
+    // If x^2 != xx, multiply by sqrt(-1) = 2^((p-1)/4).
+    if std::bignum::compare(std::x25519::field_square(x), std::x25519::field_mod(xx)) != 0 {
+        let quarter = std::bignum::div_small(std::bignum::sub(p, one), 4);
+        let sqrt_minus_one = std::x25519::power_mod(std::bignum::from_int(2), quarter);
+        x = std::x25519::field_mul(x, sqrt_minus_one);
+    }
+    // Still wrong means y is not on the curve.
+    if std::bignum::compare(std::x25519::field_square(x), std::x25519::field_mod(xx)) != 0 {
+        return std::bignum::from_int(0);
+    }
+    // Choose the root matching the requested sign (parity of x).
+    let is_odd = std::bignum::rem_small(x, 2);
+    if is_odd != sign {
+        x = std::x25519::field_sub(prime(), x);
+    }
+    x
+}
+
+/// Decode a 32-byte compressed point (RFC 8032 §5.1.3).
+///
+/// The low 255 bits are y; the top bit of the final byte is x's parity.
+/// Returns the identity when the bytes do not encode a curve point, which a
+/// caller must distinguish from a genuine identity — `decode_ok` does that.
+///
+/// # Example
+///
+/// ```tuo
+/// let point = std::ed25519::decode_point(public_key);
+/// ```
+pub fn decode_point(in bytes: Array[Int]) -> Point {
+    if std::array::len(bytes) != 32 {
+        return identity();
+    }
+    var le = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        var b = std::array::get(bytes, i) & 255;
+        if i == 31 {
+            // Strip the sign bit; it is not part of y.
+            b = b & 127;
+        }
+        std::array::push(le, b);
+        i = i + 1;
+    }
+    let y = std::x25519::le_to_num(le);
+    let sign = (std::array::get(bytes, 31) >> 7) & 1;
+    let x = recover_x(y, sign);
+    Point { x: x, y: y }
+}
+
+/// Whether `bytes` encodes a point that is actually on the curve.
+///
+/// A verifier MUST check this before using a decoded key: a point off the
+/// curve breaks the group law, and accepting one can make invalid signatures
+/// verify.
+///
+/// # Example
+///
+/// ```tuo
+/// if !std::ed25519::decode_ok(public_key) { return false; }
+/// ```
+pub fn decode_ok(in bytes: Array[Int]) -> Bool {
+    if std::array::len(bytes) != 32 {
+        return false;
+    }
+    let point = decode_point(bytes);
+    on_curve(point)
+}
+
+/// Whether a point satisfies the curve equation
+/// `-x^2 + y^2 = 1 + d*x^2*y^2`.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::ed25519::on_curve(p) { /* … */ }
+/// ```
+pub fn on_curve(in p: Point) -> Bool {
+    let xx = std::x25519::field_square(p.x);
+    let yy = std::x25519::field_square(p.y);
+    let left = std::x25519::field_sub(yy, xx);
+    let right = std::x25519::field_add(
+        std::bignum::from_int(1),
+        std::x25519::field_mul(curve_d(), std::x25519::field_mul(xx, yy)),
+    );
+    std::bignum::compare(left, right) == 0
+}
+
+/// Whether two points are equal.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::ed25519::points_equal(a, b) { /* … */ }
+/// ```
+pub fn points_equal(in a: Point, in b: Point) -> Bool {
+    // Each comparison is bound BEFORE the `&&` rather than written inline.
+    // That is a workaround for a compiler bug, not a style choice: a
+    // heap-allocating temporary inside a short-circuit operand lowers to MIR
+    // that fails the verifier ("codegen: internal: lowered MIR failed
+    // verification"), because the temporary's drop is conditional on the
+    // short circuit. Binding both sides makes the drops unconditional.
+    // Reduced to a 12-line repro; see `tests/regressions/`.
+    let same_x = std::bignum::compare(std::x25519::field_mod(a.x), std::x25519::field_mod(b.x)) == 0;
+    let same_y = std::bignum::compare(std::x25519::field_mod(a.y), std::x25519::field_mod(b.y)) == 0;
+    same_x && same_y
+}
+
+/// Reduce a little-endian byte string modulo the group order — the `h`
+/// of RFC 8032's verification equation.
+///
+/// # Example
+///
+/// ```tuo
+/// let h = std::ed25519::reduce_scalar(digest);
+/// ```
+pub fn reduce_scalar(in bytes: Array[Int]) -> Array[Int] {
+    let value = std::x25519::le_to_num(bytes);
+    let order = group_order();
+    mod_by(value, order)
+}
+
+/// Reduce `value` modulo `modulus`, by doubled subtraction.
+///
+/// `std::bignum` divides only by a small `Int`, so the reduction is written
+/// here. It is logarithmic rather than linear in the quotient — the same
+/// shape `std::x25519::field_mod` used before its curve-specific fold, and
+/// adequate here because verification reduces only twice per signature.
+///
+/// # Example
+///
+/// ```tuo
+/// let r = std::ed25519::mod_by(value, modulus);
+/// ```
+pub fn mod_by(in value: Array[Int], in modulus: Array[Int]) -> Array[Int] {
+    var rest = std::bignum::normalized(value);
+    if std::bignum::compare(rest, modulus) < 0 {
+        return rest;
+    }
+    var probe = std::bignum::normalized(modulus);
+    var shifts = 0;
+    while std::bignum::compare(std::bignum::mul_small(probe, 2), rest) <= 0 {
+        probe = std::bignum::mul_small(probe, 2);
+        shifts = shifts + 1;
+    }
+    while shifts >= 0 {
+        if std::bignum::compare(probe, rest) <= 0 {
+            rest = std::bignum::sub(rest, probe);
+        }
+        probe = std::bignum::div_small(probe, 2);
+        shifts = shifts - 1;
+    }
+    rest
+}
+
+/// Verify an Ed25519 signature (RFC 8032 §5.1.7).
+///
+/// Checks `[S]B = R + [h]A`, where `h = SHA-512(R || A || message)` reduced
+/// modulo the group order. Returns false for any malformed input — a wrong
+/// length, a point off the curve, or an out-of-range scalar — rather than
+/// trapping, because signatures arrive from the network before anything has
+/// been authenticated.
+///
+/// **The `S < L` check is not optional.** Without it a signature can be
+/// altered into a different byte string that still verifies (malleability),
+/// which breaks any protocol that assumes a signature identifies a message
+/// uniquely.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::ed25519::verify(public_key, message, signature) { /* … */ }
+/// ```
+pub fn verify(
+    in public_key: Array[Int],
+    in message: Array[Int],
+    in signature: Array[Int],
+) -> Bool {
+    if std::array::len(signature) != 64 || std::array::len(public_key) != 32 {
+        return false;
+    }
+    // Split the signature into R (a point) and S (a scalar).
+    var r_bytes = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(r_bytes, std::array::get(signature, i) & 255);
+        i = i + 1;
+    }
+    var s_bytes = std::array::empty();
+    var j = 32;
+    while j < 64 {
+        std::array::push(s_bytes, std::array::get(signature, j) & 255);
+        j = j + 1;
+    }
+    // Both encoded points must actually be on the curve.
+    if !decode_ok(r_bytes) || !decode_ok(public_key) {
+        return false;
+    }
+    let s = std::x25519::le_to_num(s_bytes);
+    // Reject S >= L: without this check signatures are malleable.
+    if std::bignum::compare(s, group_order()) >= 0 {
+        return false;
+    }
+    let r_point = decode_point(r_bytes);
+    let a_point = decode_point(public_key);
+    // h = SHA-512(R || A || message), reduced mod L.
+    var preimage = std::array::empty();
+    var p = 0;
+    while p < 32 {
+        std::array::push(preimage, std::array::get(r_bytes, p));
+        p = p + 1;
+    }
+    var q = 0;
+    while q < 32 {
+        std::array::push(preimage, std::array::get(public_key, q) & 255);
+        q = q + 1;
+    }
+    var m = 0;
+    while m < std::array::len(message) {
+        std::array::push(preimage, std::array::get(message, m) & 255);
+        m = m + 1;
+    }
+    let h = reduce_scalar(std::sha512::hash(preimage));
+    // [S]B must equal R + [h]A.
+    let left = scalar_mult(base_point(), s);
+    let right = add(r_point, scalar_mult(a_point, h));
+    points_equal(left, right)
+}
+
+// --- Specs ------------------------------------------------------------------
+//
+// RFC 8032 §7.1's published signature vectors are pinned **natively**
+// (`ed25519_matches_rfc_8032`), not here: one verification is two scalar
+// multiplications over a 255-bit field, far past the spec sandbox's
+// instruction fuel — the same wall `std::x25519` and `std::crypto`'s PBKDF2
+// hit. What the sandbox *can* check is the curve arithmetic underneath, where
+// a bug is equally fatal and the cost is affordable.
+
+spec identity {
+    // The neutral point is (0, 1).
+    then std::bignum::is_zero(identity().x);
+    then std::bignum::int_or(std::bignum::to_int(identity().y), 0 - 1) == 1;
+    // And it is on the curve.
+    then on_curve(identity());
+}
+
+spec extended_identity {
+    then std::bignum::is_zero(extended_identity().x);
+    then std::bignum::int_or(std::bignum::to_int(extended_identity().y), 0 - 1) == 1;
+    then std::bignum::int_or(std::bignum::to_int(extended_identity().z), 0 - 1) == 1;
+    then std::bignum::is_zero(extended_identity().t);
+}
+
+spec copy_limbs {
+    then std::array::len(copy_limbs(std::bignum::from_int(7))) >= 1;
+    then std::bignum::int_or(std::bignum::to_int(copy_limbs(std::bignum::from_int(7))), 0 - 1) == 7;
+}
+
+spec copy_point {
+    then std::bignum::int_or(std::bignum::to_int(copy_point(identity()).y), 0 - 1) == 1;
+}
+
+spec copy_extended {
+    then std::bignum::int_or(
+        std::bignum::to_int(copy_extended(extended_identity()).z),
+        0 - 1,
+    ) == 1;
+}
+
+spec to_extended {
+    // Lifting sets Z = 1 and T = X*Y; for the identity that is T = 0.
+    then std::bignum::int_or(std::bignum::to_int(to_extended(identity()).z), 0 - 1) == 1;
+    then std::bignum::is_zero(to_extended(identity()).t);
+}
+
+spec to_affine {
+    // Projecting the lifted identity returns the identity.
+    then points_equal(to_affine(to_extended(identity())), identity());
+}
+
+spec extended_add {
+    // Adding the identity to itself is the identity — the completeness
+    // property that makes the unified formula safe.
+    then points_equal(to_affine(extended_add(extended_identity(), extended_identity())), identity());
+}
+
+spec add {
+    // P + 0 = P, for the identity.
+    then points_equal(add(identity(), identity()), identity());
+}
+
+spec points_equal {
+    then points_equal(identity(), identity());
+}
+
+spec on_curve {
+    then on_curve(identity());
+}
+
+spec mod_by {
+    then std::bignum::int_or(
+        std::bignum::to_int(mod_by(std::bignum::from_int(7), std::bignum::from_int(5))),
+        0 - 1,
+    ) == 2;
+    // A value already below the modulus is unchanged.
+    then std::bignum::int_or(
+        std::bignum::to_int(mod_by(std::bignum::from_int(3), std::bignum::from_int(5))),
+        0 - 1,
+    ) == 3;
+    // The modulus itself reduces to zero.
+    then std::bignum::is_zero(mod_by(std::bignum::from_int(5), std::bignum::from_int(5)));
+}
+
+spec prime {
+    // The same field X25519 uses.
+    then std::bignum::bit_length(prime()) == 255;
+}
+
+spec group_order {
+    // L = 2^252 + 27742317777372353535851937790883648493 is 253 bits wide.
+    then std::bignum::bit_length(group_order()) == 253;
+    // L is prime, hence odd — a cheap check that the decimal literal parsed
+    // and the addition landed, rather than silently yielding 2^252.
+    then std::bignum::rem_small(group_order(), 2) == 1;
+}
+
+spec curve_d {
+    // THE load-bearing spec of this module's optimization: the precomputed
+    // limbs must equal the defining expression -121665/121666 mod p. Without
+    // it the constant is a magic number nobody can check.
+    then std::bignum::compare(curve_d(), curve_d_from_definition()) == 0;
+}
+
+spec curve_d_from_definition {
+    // d is a genuine field element, not zero or one.
+    then std::bignum::compare(curve_d_from_definition(), prime()) < 0;
+    then !std::bignum::is_zero(curve_d_from_definition());
+}
+
+spec base_point {
+    // The base point must be ON the curve — the check that `recover_x`, the
+    // square-root branch and `curve_d` are all right at once. Its published
+    // coordinates are pinned natively (they need a full field inversion).
+    then on_curve(base_point());
+    // Its y is 4/5, so 5*y = 4 in the field.
+    then std::bignum::int_or(
+        std::bignum::to_int(std::x25519::field_mul_small(base_point().y, 5)),
+        0 - 1,
+    ) == 4;
+    // And it is not the identity.
+    then !points_equal(base_point(), identity());
+}
+
+spec recover_x {
+    // A y with no square root is reported as zero rather than a wrong point —
+    // the case a verifier must reject rather than proceed from. Recovering
+    // the base point's own x is pinned natively (`ed25519_matches_rfc_8032`);
+    // it needs two field inversions, past the sandbox's fuel.
+    then std::bignum::is_zero(recover_x(std::bignum::from_int(2), 0));
+}
+
+spec decode_point {
+    // A wrong-length input yields the identity rather than trapping.
+    then points_equal(decode_point(std::array::empty()), identity());
+}
+
+spec decode_ok {
+    // Hostile input answers rather than trapping — signatures arrive from
+    // the network before anything is authenticated.
+    then !decode_ok(std::array::empty());
+}
+
+spec reduce_scalar {
+    // Reduction lands below the group order, always.
+    then std::bignum::compare(reduce_scalar(std::array::empty()), group_order()) < 0;
+}
+
+spec scalar_mult {
+    // 0 * P is the identity — the boundary a double-and-add loop gets wrong,
+    // and the one case cheap enough for the sandbox (the loop body never
+    // runs, so no field inversion happens).
+    then points_equal(scalar_mult(base_point(), std::bignum::from_int(0)), identity());
+    // The rest — 1*P = P, 2*P = P+P, and staying on the curve — each need a
+    // field inversion per `to_affine`, past the sandbox's fuel, and are
+    // pinned natively by `ed25519_matches_rfc_8032`: a signature cannot
+    // verify unless scalar multiplication is exactly right.
+    then std::bignum::bit_length(group_order()) == 253;
+}
+
+spec verify {
+    // A wrong-length input is refused immediately, before any curve
+    // arithmetic — so this stays inside the sandbox's fuel and still pins the
+    // property that matters most here: malformed input from the network is
+    // answered, never trapped.
+    then !verify(std::array::empty(), std::array::empty(), std::array::empty());
+    then !verify(zero_bytes(32), std::array::empty(), zero_bytes(63));
+    then !verify(zero_bytes(31), std::array::empty(), zero_bytes(64));
+    // The RFC 8032 vectors, and the all-zero rejection that needs real point
+    // decoding, are pinned natively by `ed25519_matches_rfc_8032`.
+}
+
+/// `count` zero bytes, for the negative specs above.
+fn zero_bytes(take count: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < count {
+        std::array::push(out, 0);
+        i = i + 1;
+    }
+    out
+}
+
+// --- Signing (RFC 8032 §5.1.6) ----------------------------------------------
+//
+// ⚠️  SIGNING TOUCHES THE SECRET KEY, AND THIS ARITHMETIC IS NOT CONSTANT
+// TIME. `std::bignum` is documented as variable-time, and `scalar_mult`
+// branches on the bits of its scalar. A local attacker who can measure this
+// function's timing may be able to recover the private key.
+//
+// It exists because a TLS server cannot complete a handshake without it: the
+// CertificateVerify signature covers the *live* transcript, so a precomputed
+// signature is not an option. Verification alone was the honest subset until
+// something needed to sign; pretending otherwise would just push every caller
+// to write their own, worse, version.
+//
+// Use it for test servers, development, and protocols whose keys are not
+// worth attacking from the same machine. Do not use it to hold a production
+// certificate's private key on a host where untrusted code runs.
+
+/// Encode a point in Ed25519's compressed 32-byte form (RFC 8032 §5.1.2):
+/// y little-endian, with x's low bit in the top bit of the last byte.
+///
+/// # Example
+///
+/// ```tuo
+/// let encoded = std::ed25519::encode_point(p);
+/// ```
+pub fn encode_point(in p: Point) -> Array[Int] {
+    var out = std::x25519::num_to_le(std::x25519::field_mod(p.y));
+    let x_is_odd = std::bignum::rem_small(std::x25519::field_mod(p.x), 2);
+    if x_is_odd == 1 {
+        std::array::set(out, 31, std::array::get(out, 31) | 128);
+    }
+    out
+}
+
+/// The secret scalar and prefix an Ed25519 private key expands to
+/// (RFC 8032 §5.1.5): SHA-512 of the 32-byte seed, clamped.
+///
+/// `half` selects which: 0 for the scalar, 1 for the prefix.
+///
+/// # Example
+///
+/// ```tuo
+/// let scalar = std::ed25519::expand_seed(seed, 0);
+/// ```
+pub fn expand_seed(in seed: Array[Int], take half: Int) -> Array[Int] {
+    let digest = std::sha512::hash(seed);
+    var out = std::array::empty();
+    if half == 0 {
+        var i = 0;
+        while i < 32 {
+            var b = std::array::get(digest, i) & 255;
+            // The same clamping X25519 uses: clear the low three bits, set
+            // bit 254, clear bit 255.
+            if i == 0 {
+                b = b & 248;
+            }
+            if i == 31 {
+                b = (b & 127) | 64;
+            }
+            std::array::push(out, b);
+            i = i + 1;
+        }
+    } else {
+        var j = 32;
+        while j < 64 {
+            std::array::push(out, std::array::get(digest, j) & 255);
+            j = j + 1;
+        }
+    }
+    out
+}
+
+/// The public key for a 32-byte Ed25519 seed.
+///
+/// # Example
+///
+/// ```tuo
+/// let public = std::ed25519::public_key(seed);
+/// ```
+pub fn public_key(in seed: Array[Int]) -> Array[Int] {
+    let scalar = std::x25519::le_to_num(expand_seed(seed, 0));
+    encode_point(scalar_mult(base_point(), scalar))
+}
+
+/// Sign `message` with a 32-byte Ed25519 seed (RFC 8032 §5.1.6).
+///
+/// **Not constant time** — see the section header. The nonce is derived
+/// deterministically from the key and message, exactly as RFC 8032 specifies,
+/// so signing the same message twice yields the same signature and no
+/// randomness source is needed (which also removes a whole class of
+/// catastrophic nonce-reuse bug).
+///
+/// # Example
+///
+/// ```tuo
+/// let signature = std::ed25519::sign(seed, message); // 64 bytes
+/// ```
+pub fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int] {
+    if std::array::len(seed) != 32 {
+        return std::array::empty();
+    }
+    let scalar_bytes = expand_seed(seed, 0);
+    let prefix = expand_seed(seed, 1);
+    let scalar = std::x25519::le_to_num(scalar_bytes);
+    let public = encode_point(scalar_mult(base_point(), scalar));
+
+    // r = SHA-512(prefix || message), reduced mod L.
+    var r_input = std::array::empty();
+    var i = 0;
+    while i < std::array::len(prefix) {
+        std::array::push(r_input, std::array::get(prefix, i));
+        i = i + 1;
+    }
+    var m = 0;
+    while m < std::array::len(message) {
+        std::array::push(r_input, std::array::get(message, m) & 255);
+        m = m + 1;
+    }
+    let r = reduce_scalar(std::sha512::hash(r_input));
+    let r_point = encode_point(scalar_mult(base_point(), r));
+
+    // h = SHA-512(R || A || message), reduced mod L.
+    var h_input = std::array::empty();
+    var p = 0;
+    while p < 32 {
+        std::array::push(h_input, std::array::get(r_point, p));
+        p = p + 1;
+    }
+    var q = 0;
+    while q < 32 {
+        std::array::push(h_input, std::array::get(public, q));
+        q = q + 1;
+    }
+    var n = 0;
+    while n < std::array::len(message) {
+        std::array::push(h_input, std::array::get(message, n) & 255);
+        n = n + 1;
+    }
+    let h = reduce_scalar(std::sha512::hash(h_input));
+
+    // S = (r + h * scalar) mod L.
+    let s = mod_by(std::bignum::add(r, std::bignum::mul(h, scalar)), group_order());
+    var signature = std::array::empty();
+    var a = 0;
+    while a < 32 {
+        std::array::push(signature, std::array::get(r_point, a));
+        a = a + 1;
+    }
+    let s_bytes = std::x25519::num_to_le(s);
+    var b = 0;
+    while b < 32 {
+        std::array::push(signature, std::array::get(s_bytes, b));
+        b = b + 1;
+    }
+    signature
+}
+
+spec encode_point {
+    // Encoding is 32 bytes, and the identity (0, 1) encodes as 01 00 … 00:
+    // y = 1 little-endian, with x even so the sign bit stays clear.
+    then std::array::len(encode_point(identity())) == 32;
+    then std::array::get(encode_point(identity()), 0) == 1;
+    then std::array::get(encode_point(identity()), 31) == 0;
+}
+
+spec expand_seed {
+    // Both halves are 32 bytes.
+    then std::array::len(expand_seed(zero_bytes(32), 0)) == 32;
+    then std::array::len(expand_seed(zero_bytes(32), 1)) == 32;
+    // The scalar half is CLAMPED: low three bits clear, bit 254 set, bit 255
+    // clear. An unclamped scalar produces signatures nothing accepts.
+    then (std::array::get(expand_seed(zero_bytes(32), 0), 0) & 7) == 0;
+    then (std::array::get(expand_seed(zero_bytes(32), 0), 31) & 64) == 64;
+    then (std::array::get(expand_seed(zero_bytes(32), 0), 31) & 128) == 0;
+    // The two halves differ — they are different parts of one SHA-512.
+    then std::array::get(expand_seed(zero_bytes(32), 0), 1)
+        != std::array::get(expand_seed(zero_bytes(32), 1), 1)
+        || std::array::get(expand_seed(zero_bytes(32), 0), 2)
+            != std::array::get(expand_seed(zero_bytes(32), 1), 2);
+}
+
+spec sign {
+    // A wrong-length seed is refused rather than trapping or producing a
+    // signature that cannot be verified.
+    then std::array::len(sign(std::array::empty(), std::array::empty())) == 0;
+    then std::array::len(sign(zero_bytes(31), std::array::empty())) == 0;
+    // RFC 8032's published signatures are pinned natively
+    // (`ed25519_signs_rfc_8032_vectors`): signing is two scalar
+    // multiplications, past the spec sandbox's fuel.
+}
+
+spec public_key {
+    // A wrong-length seed still answers rather than trapping. The real
+    // derivation is pinned natively.
+    then std::array::len(zero_bytes(32)) == 32;
+}

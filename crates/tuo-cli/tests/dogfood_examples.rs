@@ -746,6 +746,60 @@ fn start_router(binary: &Path, connections: usize) -> (std::process::Child, u16)
 /// real client sends, then reads until the peer closes. That makes it an
 /// *independent* peer — it does not share the example's own framing
 /// assumptions, which is the whole point of using it as the oracle.
+/// Connect to a router that may still be starting, retrying briefly.
+///
+/// Shared by the tests that drive a connection themselves rather than going
+/// through `http_request`, so the retry policy lives in one place.
+fn connect_router(port: u16) -> TcpStream {
+    for _ in 0..200 {
+        if let Ok(stream) = TcpStream::connect(("127.0.0.1", port)) {
+            stream
+                .set_read_timeout(Some(std::time::Duration::from_secs(10)))
+                .expect("setting a read timeout succeeds");
+            return stream;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    panic!("connecting to the served port {port}")
+}
+
+/// Read exactly one HTTP response off `stream` — the header block, then
+/// precisely the `Content-Length` bytes it declares.
+///
+/// `read_to_end` cannot be used since the router gained keep-alive: the
+/// server holds the connection open for a further request, so reading to EOF
+/// would block until the idle timeout on every single-request client. Reading
+/// the declared length is what a real client does, and it is also a stronger
+/// assertion — a `Content-Length` that disagreed with the body would hang
+/// here rather than passing.
+fn read_one_response(stream: &mut TcpStream) -> String {
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    // The header block, up to and including the terminating blank line.
+    while !buf.ends_with(b"\r\n\r\n") {
+        match stream.read(&mut byte) {
+            Ok(0) => return String::from_utf8_lossy(&buf).into_owned(),
+            Ok(_) => buf.push(byte[0]),
+            Err(e) => panic!("reading the response header failed: {e}"),
+        }
+    }
+    let head = String::from_utf8_lossy(&buf).into_owned();
+    let length: usize = head
+        .split("\r\n")
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse().ok())?
+        })
+        .expect("every response declares a Content-Length");
+    let mut body = vec![0u8; length];
+    stream
+        .read_exact(&mut body)
+        .expect("reading the declared body length succeeds");
+    buf.extend_from_slice(&body);
+    String::from_utf8_lossy(&buf).into_owned()
+}
+
 fn http_request(port: u16, method: &str, path: &str) -> String {
     // The server binds a moment after the port is reserved, so retry briefly.
     let mut stream = None;
@@ -766,11 +820,7 @@ fn http_request(port: u16, method: &str, path: &str) -> String {
     stream
         .write_all(request.as_bytes())
         .expect("writing the request succeeds");
-    let mut response = Vec::new();
-    stream
-        .read_to_end(&mut response)
-        .expect("reading the response succeeds");
-    String::from_utf8_lossy(&response).into_owned()
+    read_one_response(&mut stream)
 }
 
 /// router: the dispatch table **serving real traffic**.
@@ -831,7 +881,19 @@ fn router_serves_real_http_to_an_independent_client() {
         ("GET", "/missing", "HTTP/1.1 404 Not Found", "not found"),
         ("DELETE", "/health", "HTTP/1.1 405 Method Not Allowed", ""),
         ("PATCH", "/users", "HTTP/1.1 405 Method Not Allowed", ""),
-        ("GET", "/users/1", "HTTP/1.1 404 Not Found", "not found"),
+        // A path parameter reaches the `/users` handler, which answers with
+        // the id it was given rather than the collection.
+        ("GET", "/users/1", "HTTP/1.1 200 OK", "{\"id\":\"1\"}"),
+        // A query parameter likewise narrows the collection.
+        (
+            "GET",
+            "/users?page=2",
+            "HTTP/1.1 200 OK",
+            "{\"page\":\"2\"}",
+        ),
+        // An unknown path whose parent is also unknown is still a 404 — the
+        // parameterized fallback must not make every path match something.
+        ("GET", "/nope/1", "HTTP/1.1 404 Not Found", "not found"),
     ];
 
     let (mut server, port) = start_router(&binary, cases.len());
@@ -839,7 +901,7 @@ fn router_serves_real_http_to_an_independent_client() {
     for (method, path, status_line, body) in cases {
         let response = http_request(port, method, path);
         let expected = format!(
-            "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{status_line}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
             body.len()
         );
         assert_eq!(
@@ -891,7 +953,7 @@ fn router_serves_the_same_bytes_on_the_release_backend() {
 
     assert_eq!(
         http_request(port, "GET", "/health"),
-        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n",
         "the release backend must serve the same bytes as the debug backend"
     );
     // A route WITH a body, so the release backend's owned-`String` path
@@ -899,7 +961,7 @@ fn router_serves_the_same_bytes_on_the_release_backend() {
     // differ between backends, not the empty case.
     assert_eq!(
         http_request(port, "GET", "/"),
-        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\ntuonelang router",
+        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\ntuonelang router",
         "the release backend must serve the same body bytes"
     );
 
@@ -940,20 +1002,35 @@ fn router_answers_malformed_requests_without_hanging() {
     // (raw request line, expected status line). The version token is optional
     // to this router — it dispatches on method and path — so a two-token line
     // routes normally rather than being rejected.
-    let cases: &[(&str, &str, &str)] = &[
-        ("garbage\r\n\r\n", "HTTP/1.1 404 Not Found", "not found"),
-        ("\r\n\r\n", "HTTP/1.1 404 Not Found", "not found"),
-        ("GET /health\r\n\r\n", "HTTP/1.1 204 No Content", ""),
+    // The fourth field is the expected `Connection:` header. A malformed
+    // request line ends the connection — the byte stream is no longer
+    // trustworthy, so continuing to parse it would compound the error — while
+    // a well-formed one is kept alive like any other.
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "garbage\r\n\r\n",
+            "HTTP/1.1 404 Not Found",
+            "not found",
+            "close",
+        ),
+        ("\r\n\r\n", "HTTP/1.1 404 Not Found", "not found", "close"),
+        (
+            "GET /health\r\n\r\n",
+            "HTTP/1.1 204 No Content",
+            "",
+            "keep-alive",
+        ),
         (
             "GET /health  HTTP/1.1\r\n\r\n",
             "HTTP/1.1 204 No Content",
             "",
+            "keep-alive",
         ),
     ];
 
     let (mut server, port) = start_router(&binary, cases.len());
 
-    for (raw, status_line, body) in cases {
+    for (raw, status_line, body, connection) in cases {
         let mut stream = None;
         for _ in 0..200 {
             match TcpStream::connect(("127.0.0.1", port)) {
@@ -971,17 +1048,13 @@ fn router_answers_malformed_requests_without_hanging() {
         stream
             .write_all(raw.as_bytes())
             .expect("writing the raw request succeeds");
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .expect("reading the response succeeds");
+        let response = read_one_response(&mut stream);
         let expected = format!(
-            "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{status_line}\r\nContent-Length: {}\r\nConnection: {connection}\r\n\r\n{body}",
             body.len()
         );
         assert_eq!(
-            String::from_utf8_lossy(&response),
-            expected,
+            response, expected,
             "the router mishandled the malformed request {raw:?}"
         );
     }
@@ -1080,7 +1153,7 @@ fn router_pool_serves_requests_concurrently() {
     }
 
     let expected =
-        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: close\r\n\r\ntuonelang router";
+        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\ntuonelang router";
     for (i, stream) in clients.iter_mut().enumerate() {
         let mut response = String::new();
         stream
@@ -1104,4 +1177,334 @@ fn router_pool_serves_requests_concurrently() {
         "the pool reported {code} connections served, expected at least {WORKERS}"
     );
     let _ = std::fs::remove_file(&binary);
+}
+
+/// router: a POST **carrying a body** is answered rather than reset.
+///
+/// This is a regression test for a real bug, and the shape of the bug is why
+/// it deserves its own test rather than another row in the table above. The
+/// router drained the request's *header block* but not its *body*, so
+/// `curl -X POST -d hello=world` got `Recv failure: Connection reset by peer`
+/// while the byte-identical POST with an empty body succeeded: the unread
+/// body bytes made the kernel send RST instead of FIN, discarding a response
+/// the server had computed correctly and already written.
+///
+/// The table-driven test could not catch it, because its client sends no
+/// body — which is exactly how the bug survived. So this test sends one, and
+/// asserts the complete response, byte for byte.
+#[test]
+fn router_answers_a_post_carrying_a_body() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-body-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-body");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for a POST body)");
+
+    // Bodies of several sizes, including one larger than any plausible
+    // single-read buffer, so a body drained only a chunk at a time is caught.
+    let bodies: &[String] = &["hello=world".to_string(), "x".to_string(), "y".repeat(4096)];
+
+    let (mut server, port) = start_router(&binary, bodies.len());
+
+    for body in bodies {
+        let mut stream = connect_router(port);
+        let request = format!(
+            "POST /users HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(request.as_bytes())
+            .expect("writing the POST succeeds");
+        stream.flush().expect("flushing succeeds");
+
+        let response = read_one_response(&mut stream);
+        assert_eq!(
+            response,
+            "HTTP/1.1 201 Created\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\n{\"created\":true}",
+            "a POST with a {}-byte body must be answered, not reset",
+            body.len()
+        );
+    }
+
+    server.kill().expect("stopping the router succeeds");
+    let _ = server.wait();
+}
+
+/// router: **keep-alive** — several requests served down one connection.
+///
+/// HTTP/1.1 connections are persistent by default, so a client that sends a
+/// second request on the same socket (curl given two URLs, any browser, any
+/// pooled HTTP library) must be answered on it. Before keep-alive the server
+/// closed after the first response and the second request was silently
+/// dropped.
+///
+/// The assertion that matters is that all three responses arrive on ONE
+/// socket: a server that closed after each would fail the second read, and a
+/// server that announced `keep-alive` while closing anyway would too.
+#[test]
+fn router_serves_several_requests_on_one_connection() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-keepalive-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-keepalive");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for keep-alive)");
+
+    // One connection is one unit of the server's budget, however many
+    // requests travel down it — which is itself the point of keep-alive.
+    let (mut server, port) = start_router(&binary, 1);
+    let mut stream = connect_router(port);
+
+    let exchanges: &[(&str, &str)] = &[
+        (
+            "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\ntuonelang router",
+        ),
+        (
+            "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n",
+        ),
+        (
+            "GET /users HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 15\r\nConnection: keep-alive\r\n\r\n[\"ada\",\"grace\"]",
+        ),
+    ];
+
+    for (i, (request, expected)) in exchanges.iter().enumerate() {
+        stream
+            .write_all(request.as_bytes())
+            .expect("writing the request succeeds");
+        stream.flush().expect("flushing succeeds");
+        let response = read_one_response(&mut stream);
+        assert_eq!(
+            &response, expected,
+            "request {i} on the SAME connection was not answered correctly; \
+             a server that closed after the previous response fails here"
+        );
+    }
+
+    server.kill().expect("stopping the router succeeds");
+    let _ = server.wait();
+}
+
+/// router: **query strings and path parameters** reach the handler.
+///
+/// A request target is not a route key: `/users?page=2` and `/users/42` both
+/// name the `/users` resource, and an exact-match table 404s both. This pins
+/// the resolution order too — a literal route must beat a parameterized
+/// reading of the same path, or registering `/users/new` would become
+/// unreachable the moment `/users` existed.
+#[test]
+fn router_resolves_queries_and_path_parameters() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-target-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-target");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for request targets)");
+
+    let cases: &[(&str, &str, &str)] = &[
+        // A path parameter reaches the parent's handler, carrying its value.
+        ("/users/42", "HTTP/1.1 200 OK", "{\"id\":\"42\"}"),
+        // A query parameter is not part of the key, and reaches the handler.
+        ("/users?page=2", "HTTP/1.1 200 OK", "{\"page\":\"2\"}"),
+        // Both at once: the query is stripped before the key is matched.
+        ("/users/7?page=9", "HTTP/1.1 200 OK", "{\"id\":\"7\"}"),
+        // A literal route still wins over its parameterized reading.
+        ("/users", "HTTP/1.1 200 OK", "[\"ada\",\"grace\"]"),
+        // A query on a route that ignores it changes nothing.
+        ("/?debug=1", "HTTP/1.1 200 OK", "tuonelang router"),
+        // An unknown path whose parent is also unknown is still a 404: the
+        // parameterized fallback must not make every path match something.
+        ("/nope/42", "HTTP/1.1 404 Not Found", "not found"),
+    ];
+
+    let (mut server, port) = start_router(&binary, cases.len());
+
+    for (target, status_line, body) in cases {
+        let response = http_request(port, "GET", target);
+        let expected = format!(
+            "{status_line}\r\nContent-Length: {}\r\nConnection: keep-alive\r\n\r\n{body}",
+            body.len()
+        );
+        assert_eq!(
+            response, expected,
+            "the router mishandled the request target {target:?}"
+        );
+    }
+
+    server.kill().expect("stopping the router succeeds");
+    let _ = server.wait();
+}
+
+/// router: `serve_forever` really does serve without a connection budget.
+///
+/// The budgeted modes exist so the acceptance tests can finish; this one
+/// pins the shape a deployed server actually has. It serves well past any
+/// budget in the source (`pool_workers * per_worker_budget` is 8, and
+/// `serve_on`'s budget is whatever it was given), and is still listening
+/// afterwards — which is the whole claim.
+#[test]
+fn router_serves_forever_without_a_budget() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-forever-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-forever");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for unbounded serving)");
+
+    // A third argument selects `serve_forever`; the count is then ignored.
+    let port = free_port();
+    let mut server = Command::new(&binary)
+        .arg(port.to_string())
+        .arg("1")
+        .arg("forever")
+        .spawn()
+        .expect("the router binary starts");
+
+    // Well past every budget in the source, on fresh connections each time.
+    const REQUESTS: usize = 25;
+    for i in 0..REQUESTS {
+        let response = http_request(port, "GET", "/");
+        assert_eq!(
+            response,
+            "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\ntuonelang router",
+            "request {i} failed; an unbounded server must not stop after a budget"
+        );
+    }
+
+    // Still running: it has not exited on its own, which a budgeted server
+    // would have done long ago.
+    assert!(
+        server
+            .try_wait()
+            .expect("polling the server succeeds")
+            .is_none(),
+        "an unbounded server must still be running after {REQUESTS} requests"
+    );
+
+    server.kill().expect("stopping the router succeeds");
+    let _ = server.wait();
+}
+
+/// router: a hostile `Content-Length` cannot kill the server.
+///
+/// This is a regression test for a **remote pre-authentication process kill**,
+/// which is why it asserts the server is still alive rather than only that
+/// one response was correct. tuonelang traps on integer overflow rather than
+/// wrapping, and a trap aborts the process — so `header_int`'s unbounded
+/// `value * 10 + digit` accumulate meant one header line of twenty nines took
+/// the whole server down, every in-flight connection with it, and under
+/// `serve_pool` all four worker threads mid-`par_map`.
+///
+/// The second half covers request smuggling: a body shorter than its declared
+/// `Content-Length` used to leave the stream mid-body, so the remaining bytes
+/// were parsed as the *next* request line on a kept-alive connection. A
+/// client could therefore forge a second request inside its own body. The
+/// server must answer, then close rather than reuse a desynchronized stream.
+#[test]
+fn router_survives_hostile_content_length() {
+    let dir = example_dir("router");
+    let main = dir.join("src/main.tuo");
+    let out_dir = std::env::temp_dir().join("tuo-router-hostile-test");
+    std::fs::create_dir_all(&out_dir).expect("creating the scratch directory succeeds");
+    let binary = out_dir.join("router-hostile");
+
+    let built = tuo(&[
+        "build",
+        "-o",
+        &binary.display().to_string(),
+        &main.display().to_string(),
+    ]);
+    expect_ok(&built, "tuo build (router, for hostile input)");
+
+    // Each of these used to overflow `header_int`'s accumulator on the way to
+    // being rejected, aborting the process.
+    let attacks: &[&str] = &[
+        "POST /users HTTP/1.1\r\nHost: x\r\nContent-Length: 99999999999999999999\r\n\r\n",
+        "POST /users HTTP/1.1\r\nHost: x\r\nContent-Length: 123456789012345678901234567890\r\n\r\n",
+        "POST /users HTTP/1.1\r\nHost: x\r\nContent-Length: 99999999999999999999abc\r\n\r\n",
+        // Lowercase: header names are case-insensitive, so this reaches the
+        // same parser.
+        "POST /users HTTP/1.1\r\nHost: x\r\ncontent-length: 99999999999999999999\r\n\r\n",
+        // A body shorter than declared — the smuggling case.
+        "POST /users HTTP/1.1\r\nHost: x\r\nContent-Length: 100\r\n\r\nshort",
+    ];
+
+    // `serve_forever` so the server's survival is the property under test
+    // rather than a budget being spent.
+    let port = free_port();
+    let mut server = Command::new(&binary)
+        .arg(port.to_string())
+        .arg("1")
+        .arg("forever")
+        .spawn()
+        .expect("the router binary starts");
+
+    for (i, attack) in attacks.iter().enumerate() {
+        let mut stream = connect_router(port);
+        stream
+            .write_all(attack.as_bytes())
+            .expect("writing the hostile request succeeds");
+        stream.flush().expect("flushing succeeds");
+
+        // The server must answer rather than die. It may close the connection
+        // afterwards (a refused length leaves the body's extent unknown), so
+        // the status line is what is asserted, not the `Connection:` header.
+        let response = read_one_response(&mut stream);
+        assert!(
+            response.starts_with("HTTP/1.1 201 Created\r\n"),
+            "attack {i} was not answered correctly; got {response:?}"
+        );
+
+        // The load-bearing assertion: the process is still running.
+        assert!(
+            server
+                .try_wait()
+                .expect("polling the server succeeds")
+                .is_none(),
+            "attack {i} killed the server: a hostile Content-Length must not \
+             abort the process"
+        );
+    }
+
+    // Still serving ordinary traffic after every attack.
+    let response = http_request(port, "GET", "/");
+    assert_eq!(
+        response,
+        "HTTP/1.1 200 OK\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\ntuonelang router",
+        "the server must still serve normally after the attacks"
+    );
+
+    server.kill().expect("stopping the router succeeds");
+    let _ = server.wait();
 }

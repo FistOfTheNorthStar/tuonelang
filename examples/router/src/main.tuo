@@ -78,8 +78,9 @@ module router;
 // That is the part worth proving exhaustively, and the specs do.
 //
 // Below it sits a thin EFFECT TIER that carries the table onto a real TCP
-// connection: `serve_once` (read a request line → dispatch → respond → close)
-// and `live_once`/`live_report` (the loopback oracle). Effectful, so no specs
+// connection: `serve_exchange` (read a request line → dispatch → respond),
+// `serve_once` (the keep-alive loop over it, which closes), and
+// `live_once`/`live_report` (the loopback oracle). Effectful, so no specs
 // (`R0007` keeps the sandbox pure); pinned instead by the dogfood test, which
 // asserts the exact response bytes a real client receives.
 //
@@ -112,10 +113,50 @@ module router;
 //     value, and the kernel's accept queue distributes connections without
 //     needing a channel at all.
 //
-// What remains genuinely absent is a server that runs FOREVER. Fork-join must
-// join, so `serve_pool` takes a connection budget and returns; an unbounded
-// loop wants detached spawn, which v0 deliberately does not have. That is a
-// real boundary, and it is not faked here.
+// Since then four more of the gaps a real deployment would hit have closed,
+// and again none of them needed a language change:
+//
+//   * REQUEST BODIES ARE DRAINED. The server read the header block but not
+//     the body, so a `POST` carrying one had its response discarded: the
+//     unread bytes made the kernel send RST instead of FIN, and the client
+//     saw `Connection reset by peer` for a response the server had computed
+//     correctly and already written. `drain_request` now parses the request's
+//     own `Content-Length` and consumes the body. This was a genuine BUG, not
+//     a documented limit, and it survived because the acceptance test's POST
+//     case sent no body — the gap in the test was the reason the gap in the
+//     server lasted.
+//
+//   * REQUEST TARGETS, not just paths. `/users?page=2` and `/users/42` both
+//     name the `/users` resource, and an exact-match table 404s both. The
+//     target is now split into (path, query), the path matched literally
+//     first and only then as (parent, parameter) — literal wins, so
+//     registering `/users/new` stays reachable — and both reach the handler
+//     through the unchanged shared signature.
+//
+//   * KEEP-ALIVE. HTTP/1.1 connections are persistent by default, so a
+//     client sending a second request down the same socket used to have it
+//     silently dropped. `serve_once` is now a loop over `serve_exchange`,
+//     bounded by `max_keep_alive_requests()` and by a SHORT idle timeout —
+//     the latter is load-bearing rather than a tuning knob: a worker parked
+//     on an idle keep-alive is a worker not accepting, and with a
+//     fixed-width fork-join pool that turned a 4-second test run into a
+//     10-minute one.
+//
+//   * AN UNBOUNDED SERVER. `serve_forever` accepts and serves until the
+//     process is killed. The earlier note claiming this was absent was
+//     imprecise about WHY: an unbounded *loop* costs the language nothing,
+//     and never did. What v0 cannot express is unbounded *concurrency* —
+//     fork-join must join, so a pool cannot both serve forever and return.
+//     So `serve_forever` is honestly serial: a genuine long-running server
+//     (the shape deployed behind a load balancer), and not a concurrent one.
+//     `serve_pool` still takes a budget, and that boundary is real.
+//
+// What remains genuinely absent is TLS, and it is absent by decision rather
+// than oversight: ADR-0017 excludes it because it needs X.509 parsing, a
+// certificate store, and AEAD ciphers on top of the handshake — a dependency
+// this workspace avoids, in which even SHA-256 is hand-rolled. `std::crypto`
+// having landed SHA-256/HMAC in tuonelang weakens but does not overturn that,
+// so an HTTPS server is a future ADR, not a gap to paper over here.
 //
 // It compiles with `tuo check`, its specs run under `tuo test`, and it runs
 // natively with `tuo run` — serving its six sample requests over a real
@@ -130,6 +171,14 @@ module router;
 struct Request {
     method: Int,
     path: Str,
+    /// The raw query string (`page=2`), empty when the target had no `?`.
+    /// Handlers read it with `query_get`.
+    query: Str,
+    /// The trailing path parameter (`42` in `/users/42`), empty for a route
+    /// matched literally. A handler that ignores it behaves exactly as before,
+    /// which is why adding it did not disturb the shared handler signature's
+    /// meaning for the routes that do not take one.
+    param: Str,
 }
 
 /// Method tags. v0 has no string enum, and comparing method *names* on every
@@ -156,6 +205,140 @@ fn method_tag(in token: Str) -> Int {
         method_delete()
     } else {
         0
+    }
+}
+
+// --- Path parsing: query strings and path parameters (items 2) --------------
+//
+// A request target is not a route key. `/users?page=2` and `/users/42` both
+// name the `/users` resource, but neither matches the literal key `/users` in
+// the registry, so both used to 404. Splitting the target into (path, query)
+// and then matching a trailing segment is what turns an exact-match table into
+// a router a real client can talk to. All of it is pure, so all of it is
+// spec-checked.
+
+/// The byte offset of `?` in a request target, or -1 when there is no query.
+fn query_start(in target: Str) -> Int {
+    var i = 0;
+    var found = 0 - 1;
+    let n = std::str::len(target);
+    while i < n {
+        if std::str::byte_at(target, i) == 63 && found < 0 {
+            found = i;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+/// The path half of a request target — everything before `?`.
+///
+/// `/users?page=2` yields `/users`, which is the key the registry holds. A
+/// target with no query is returned unchanged.
+fn target_path(in target: Str) -> Str {
+    let q = query_start(target);
+    if q < 0 {
+        target
+    } else {
+        std::str::slice(target, 0, q)
+    }
+}
+
+/// The query half of a request target — everything after `?`, exclusive.
+///
+/// Returns the empty string when there is no query, so a caller never has to
+/// unwrap an `Option` to ask whether one was present; `query_start` answers
+/// that question when the distinction matters.
+fn target_query(in target: Str) -> Str {
+    let q = query_start(target);
+    if q < 0 {
+        ""
+    } else {
+        std::str::slice(target, q + 1, std::str::len(target))
+    }
+}
+
+/// Look up one parameter in a `a=1&b=2` query string.
+///
+/// Returns the empty string when the key is absent or has no value. Matching
+/// is exact on the key, and scanning stops at the first match, so a repeated
+/// key takes its first value — the behavior most frameworks pick.
+fn query_get(in query: Str, in key: Str) -> Str {
+    let n = std::str::len(query);
+    let k = std::str::len(key);
+    var i = 0;
+    var result = "";
+    var done = false;
+    while i < n && !done {
+        // The end of this `key=value` pair: the next `&`, or the end.
+        var end = i;
+        while end < n && std::str::byte_at(query, end) != 38 {
+            end = end + 1;
+        }
+        // The `=` inside it, if any.
+        var eq = i;
+        while eq < end && std::str::byte_at(query, eq) != 61 {
+            eq = eq + 1;
+        }
+        if eq - i == k {
+            var same = true;
+            var j = 0;
+            while j < k {
+                if std::str::byte_at(query, i + j) != std::str::byte_at(key, j) {
+                    same = false;
+                }
+                j = j + 1;
+            }
+            if same {
+                if eq < end {
+                    result = std::str::slice(query, eq + 1, end);
+                }
+                done = true;
+            }
+        }
+        i = end + 1;
+    }
+    result
+}
+
+/// The offset of the last `/` in a path, or -1 if there is none.
+fn last_slash(in path: Str) -> Int {
+    var i = 0;
+    var found = 0 - 1;
+    let n = std::str::len(path);
+    while i < n {
+        if std::str::byte_at(path, i) == 47 {
+            found = i;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+/// The parent of a path whose final segment is a parameter: `/users/42`
+/// yields `/users`, which IS a registry key.
+///
+/// This is how a table of literal paths serves `/users/{id}` without the
+/// registry learning a pattern language: strip the last segment, look the
+/// parent up, and hand the stripped segment to the handler as a parameter.
+/// A path with no parent segment (`/users`, `/`) yields the empty string, so
+/// the caller can tell "no parameterized form exists" from a real parent.
+fn parent_path(in path: Str) -> Str {
+    let s = last_slash(path);
+    if s <= 0 {
+        ""
+    } else {
+        std::str::slice(path, 0, s)
+    }
+}
+
+/// The final segment of a path — the parameter value in `/users/42`.
+fn last_segment(in path: Str) -> Str {
+    let s = last_slash(path);
+    if s < 0 {
+        ""
+    } else {
+        std::str::slice(path, s + 1, std::str::len(path))
     }
 }
 
@@ -255,6 +438,27 @@ fn handle_health(in request: Request) -> Response {
 /// receives the request rather than just its path.
 fn handle_users(in request: Request) -> Response {
     if request.method == method_get() {
+        // `/users/42` — a path parameter selects one user. The handler reads
+        // `param` exactly as a framework's `def get(id)` would, except the
+        // value arrived through the shared signature rather than a generated
+        // argument list.
+        if std::str::len(request.param) > 0 {
+            var body = std::string::empty();
+            std::string::append(body, "{\"id\":\"");
+            std::string::append(body, request.param);
+            std::string::append(body, "\"}");
+            return Response { status: status_ok(), body: body };
+        }
+        // `/users?page=2` — a query parameter narrows the collection. Absent,
+        // `query_get` yields the empty string and the unfiltered list stands.
+        let page = query_get(request.query, "page");
+        if std::str::len(page) > 0 {
+            var body = std::string::empty();
+            std::string::append(body, "{\"page\":\"");
+            std::string::append(body, page);
+            std::string::append(body, "\"}");
+            return Response { status: status_ok(), body: body };
+        }
         with_body(status_ok(), "[\"ada\",\"grace\"]")
     } else if request.method == method_post() {
         with_body(status_created(), "{\"created\":true}")
@@ -344,11 +548,35 @@ fn dispatch(in table: Map[Str, Int], in request: Request) -> Response {
     handler(request)
 }
 
-/// Route a raw (method, path) pair — the whole router in one call, the entry
-/// point a connection handler would use after parsing a request line.
-fn route(in method: Str, in path: Str) -> Response {
+/// Route a raw (method, target) pair — the whole router in one call, the
+/// entry point a connection handler would use after parsing a request line.
+///
+/// The target is a *request target*, not a bare path: it may carry a query
+/// (`/users?page=2`) and it may name a subresource (`/users/42`). Resolution
+/// is three steps, in the order a framework resolves them:
+///
+///   1. split the query off, since `?page=2` is never part of a route key;
+///   2. try the path as a literal key — the common case, one hash probe;
+///   3. only if that misses, try its parent with the last segment as a
+///      parameter, so `/users/42` reaches the `/users` handler with
+///      `param = "42"`.
+///
+/// Step 3 runs second on purpose: a literal route must always win over a
+/// parameterized interpretation of the same path, or registering `/users/new`
+/// would become unreachable the moment `/users` existed.
+fn route(in method: Str, in target: Str) -> Response {
     let table = routes();
-    dispatch(table, Request { method: method_tag(method), path: path })
+    let path = target_path(target);
+    let query = target_query(target);
+    let tag = method_tag(method);
+    if slot_for(table, path) != not_found_slot() {
+        return dispatch(table, Request { method: tag, path: path, query: query, param: "" });
+    }
+    let parent = parent_path(path);
+    if std::str::len(parent) > 0 && slot_for(table, parent) != not_found_slot() {
+        return dispatch(table, Request { method: tag, path: parent, query: query, param: last_segment(path) });
+    }
+    dispatch(table, Request { method: tag, path: path, query: query, param: "" })
 }
 
 /// Route a request and report only its status — the spelling every caller
@@ -476,11 +704,15 @@ fn int_to_text(take n: Int) -> String {
 /// a wrong number is worse than a missing body — it makes the client hang
 /// waiting for bytes that never come, or truncate the ones it got. Pure, so
 /// it is spec-checked.
-fn headers_for(take length: Int) -> String {
+fn headers_for(take length: Int, take keep_alive: Bool) -> String {
     var out = std::string::empty();
     std::string::append(out, "\r\nContent-Length: ");
     std::string::append(out, std::string::as_str(int_to_text(length)));
-    std::string::append(out, "\r\nConnection: close\r\n\r\n");
+    if keep_alive {
+        std::string::append(out, "\r\nConnection: keep-alive\r\n\r\n");
+    } else {
+        std::string::append(out, "\r\nConnection: close\r\n\r\n");
+    }
     out
 }
 
@@ -514,16 +746,38 @@ fn find_space(in line: Str, take from: Int) -> Int {
 ///
 /// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
 fn read_line_from(take conn: Int, mut read_ok: Bool) -> String {
+    read_line_within(conn, read_ok, io_timeout_ms())
+}
+
+/// EFFECT: `read_line_from` with an explicit per-byte bound.
+///
+/// Keep-alive needs two different bounds on the same read — the full I/O
+/// timeout for a request already in flight, a short one for an idle
+/// connection being held open speculatively — so the timeout became a
+/// parameter rather than a constant.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn read_line_within(take conn: Int, mut read_ok: Bool, take timeout_ms: Int) -> String {
     var line = std::string::empty();
     var done = false;
     read_ok = true;
     while !done {
-        let b = std::rt::read_byte_timeout(conn, io_timeout_ms());
+        let b = std::rt::read_byte_timeout(conn, timeout_ms);
         if b == 13 {
             // A CR: consume the LF of the pair too, so the close stays
             // orderly and no delimiter byte is left unread.
-            let lf = std::rt::read_byte_timeout(conn, io_timeout_ms());
+            let lf = std::rt::read_byte_timeout(conn, timeout_ms);
             if lf < 0 && lf != 0 - 1 {
+                read_ok = false;
+            }
+            // HTTP line endings are CRLF. A CR followed by anything else is
+            // malformed, and consuming that byte unconditionally used to
+            // *swallow* it: `GET / HTTP/1.1\rHost: x` lost the `H` of `Host`,
+            // and on a kept-alive connection a stray CR could eat the first
+            // byte of the next request's method, turning `GET` into `ET` and
+            // answering 405 for a well-formed request. Report it instead, so
+            // the caller closes rather than parsing a corrupted stream.
+            if lf >= 0 && lf != 10 {
                 read_ok = false;
             }
             done = true;
@@ -544,20 +798,121 @@ fn read_line_from(take conn: Int, mut read_ok: Bool) -> String {
     line
 }
 
-/// EFFECT: drain the request's remaining header block — every line up to the
-/// terminating blank line — returning how many header lines were consumed.
+/// Case-insensitive ASCII byte compare — HTTP header names are defined
+/// case-insensitively, so `content-length` and `Content-Length` must both
+/// match. Pure, so it is spec-checked.
+fn lower_byte(take b: Int) -> Int {
+    if b >= 65 && b <= 90 {
+        b + 32
+    } else {
+        b
+    }
+}
+
+/// Whether `line` begins with the header name `name`, compared
+/// case-insensitively and followed by a colon.
 ///
-/// This is correctness, not politeness. A real client (curl, a browser, any
-/// HTTP library) sends `Host:`, `User-Agent:`, `Accept:` immediately after the
-/// request line. If the server answers and closes with those bytes still
-/// unread in its receive buffer, the kernel sends **RST** instead of a
-/// graceful FIN, and an RST makes the peer discard data it had already
-/// received — including the response just written. The client reports a
-/// connection reset and never sees an answer the server computed correctly.
+/// This is deliberately not `std::str::starts_with`: that compares bytes
+/// exactly, and a client sending `content-length:` (entirely legal) would
+/// slip past it, leaving the body unread — the precise failure this whole
+/// path exists to prevent. Pure, so it is spec-checked.
+fn header_is(in line: Str, in name: Str) -> Bool {
+    let n = std::str::len(name);
+    if std::str::len(line) <= n {
+        return false;
+    }
+    if std::str::byte_at(line, n) != 58 {
+        return false;
+    }
+    var i = 0;
+    var same = true;
+    while i < n {
+        if lower_byte(std::str::byte_at(line, i)) != lower_byte(std::str::byte_at(name, i)) {
+            same = false;
+        }
+        i = i + 1;
+    }
+    same
+}
+
+/// The largest body this server will accept, and the ceiling `header_int`
+/// refuses to parse past.
 ///
-/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test's
-/// real-client round-trip.
-fn drain_headers(take conn: Int) -> Int {
+/// A limit is not a shortcoming: a server with no bound on a client-declared
+/// length will read whatever a peer claims to be sending, which is a memory
+/// exhaustion vector even when the arithmetic is safe. 8 MiB is generous for
+/// this router's routes and small enough that a hostile `Content-Length`
+/// cannot make the server sit in a read loop indefinitely.
+fn max_body_bytes() -> Int {
+    8388608
+}
+
+/// Parse the decimal value of a header line's field-value, skipping the
+/// optional whitespace HTTP allows after the colon.
+///
+/// Returns -1 for a value that is absent, non-numeric, malformed, or larger
+/// than `max_body_bytes()`, so a caller can distinguish "no valid length"
+/// from a genuine zero.
+///
+/// **The ceiling is a safety property, not a policy knob.** tuonelang traps
+/// on integer overflow rather than wrapping, and a trap aborts the *process*.
+/// Accumulating `value * 10 + digit` over an unbounded digit string therefore
+/// let any peer kill the server with one header line — `Content-Length:` and
+/// twenty nines was a pre-authentication remote process kill, taking down
+/// every in-flight connection with it (and, under `serve_pool`, all four
+/// worker threads mid-`par_map`). Stopping at the ceiling means the multiply
+/// can never overflow, because `value` is bounded by `max_body_bytes()`
+/// before it happens.
+///
+/// Scanning also stops at the first bad byte. The old loop kept going after
+/// setting its `bad` flag, so a value it was *going* to reject still had to
+/// overflow its way to that rejection — the rejection came too late to
+/// matter. Pure, so it is spec-checked.
+fn header_int(in line: Str, in name: Str) -> Int {
+    if !header_is(line, name) {
+        return 0 - 1;
+    }
+    let n = std::str::len(line);
+    var i = std::str::len(name) + 1;
+    while i < n && std::str::byte_at(line, i) == 32 {
+        i = i + 1;
+    }
+    var value = 0;
+    var digits = 0;
+    var bad = false;
+    while i < n && !bad {
+        let b = std::str::byte_at(line, i);
+        if b < 48 || b > 57 {
+            bad = true;
+        } else {
+            // Check the ceiling BEFORE multiplying, so the multiply itself
+            // can never overflow and trap.
+            if value > (max_body_bytes() - (b - 48)) / 10 {
+                bad = true;
+            } else {
+                value = value * 10 + (b - 48);
+                digits = digits + 1;
+            }
+        }
+        i = i + 1;
+    }
+    if bad || digits == 0 {
+        0 - 1
+    } else {
+        value
+    }
+}
+
+/// EFFECT: drain a header block only — every line up to the terminating
+/// blank line — returning how many lines were consumed.
+///
+/// The client half of the oracle wants this rather than `drain_request`: it is
+/// reading a *response*, whose body it then reads explicitly, so parsing a
+/// request's `Content-Length` here would consume bytes the caller is about to
+/// read itself.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn drain_header_block(take conn: Int) -> Int {
     var draining = true;
     var lines = 0;
     while draining {
@@ -576,6 +931,92 @@ fn drain_headers(take conn: Int) -> Int {
     lines
 }
 
+/// EFFECT: drain the request's remaining header block — every line up to the
+/// terminating blank line — **and then its body**, returning how many body
+/// bytes were consumed.
+///
+/// This is correctness, not politeness. A real client (curl, a browser, any
+/// HTTP library) sends `Host:`, `User-Agent:`, `Accept:` immediately after the
+/// request line, and a `POST`/`PUT` follows the blank line with a body. If the
+/// server answers and closes with any of those bytes still unread in its
+/// receive buffer, the kernel sends **RST** instead of a graceful FIN, and an
+/// RST makes the peer discard data it had already received — including the
+/// response just written. The client reports a connection reset and never
+/// sees an answer the server computed correctly.
+///
+/// Draining the headers alone is not enough, and that gap was a real bug:
+/// `curl -X POST -d hello=world` got `Recv failure: Connection reset by peer`
+/// while the identical POST with an empty body succeeded, because only the
+/// body bytes were left behind. The body's length comes from the request's
+/// own `Content-Length`, which is why `header_int` is parsed here rather
+/// than the header block being skipped blindly.
+///
+/// A body with no `Content-Length` is not drained: without a length there is
+/// nothing to read up to, and reading until timeout would stall every such
+/// request by `io_timeout_ms`. Chunked transfer encoding is therefore not
+/// supported, and is documented as absent rather than silently mishandled.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test's
+/// real-client round-trip with a body.
+fn drain_request(take conn: Int) -> Int {
+    var draining = true;
+    var length = 0;
+    var header_error = false;
+    while draining {
+        var ok = false;
+        let header = read_line_from(conn, ok);
+        if !ok {
+            // The header block never terminated — a timeout or a peer that
+            // went away mid-block. The stream is not at a request boundary,
+            // so the connection cannot be reused.
+            header_error = true;
+            draining = false;
+        } else {
+            let raw = std::string::as_str(header);
+            if std::str::len(raw) == 0 {
+                draining = false;
+            } else {
+                if header_is(raw, "Content-Length") {
+                    let declared = header_int(raw, "Content-Length");
+                    if declared < 0 {
+                        // Present but unparseable or over `max_body_bytes()`.
+                        // There is no safe length to drain to, so the body's
+                        // extent is unknown and the connection must close
+                        // rather than risk reading a body as a request.
+                        header_error = true;
+                    } else {
+                        length = declared;
+                    }
+                }
+            }
+        }
+    }
+    if header_error {
+        return 0 - 1;
+    }
+    var read = 0;
+    var short_body = false;
+    while read < length && !short_body {
+        let b = std::rt::read_byte_timeout(conn, io_timeout_ms());
+        if b < 0 {
+            // The peer promised more than it sent, or stalled past the bound.
+            // Stop rather than block — but remember that we did, because the
+            // byte stream is now mid-body and the NEXT read on this
+            // connection would treat the remaining body bytes as a request
+            // line. Returning -1 tells the caller the connection can no
+            // longer be reused, which is the difference between a short body
+            // and a forged second request.
+            short_body = true;
+        } else {
+            read = read + 1;
+        }
+    }
+    if short_body {
+        return 0 - 1;
+    }
+    read
+}
+
 /// The fallback response for a request line so malformed it has no method and
 /// path to route — the same 404 the table's fallback handler gives, built
 /// here because there is no `Request` to dispatch.
@@ -591,28 +1032,36 @@ fn route_not_found() -> Response {
 /// after a `Content-Length: 0` keeps the response well-formed for the one
 /// route in this table that must not have a body.
 ///
+/// `keep_alive` selects the `Connection:` header. It must agree with what the
+/// server then *does* — announcing `keep-alive` and closing anyway strands a
+/// client waiting for a second response on a dead socket — which is why the
+/// decision is computed once in `serve_exchange` and passed down rather than
+/// being re-derived here.
+///
 /// Effectful, so no spec (`R0007`); pinned natively by the dogfood test's
 /// exact-byte assertions.
-fn write_response(take conn: Int, take response: Response) -> Int {
+fn write_response(take conn: Int, take response: Response, take keep_alive: Bool) -> Int {
     let body = std::string::as_str(response.body);
     let length = std::str::len(body);
     std::rt::write(conn, response_line(response.status));
-    std::rt::write(conn, std::string::as_str(headers_for(length)));
+    std::rt::write(conn, std::string::as_str(headers_for(length, keep_alive)));
     if length > 0 {
         std::rt::write(conn, body);
     }
     length
 }
 
-/// EFFECT: serve exactly one request on an accepted connection, dispatching it
-/// through **the table above, unchanged**.
+/// EFFECT: serve exactly one request/response exchange on an already-accepted
+/// connection, **without closing it**, dispatching through the table above
+/// unchanged.
 ///
-/// Read the request line, split it into method and path, hand both to `route`
-/// as the borrowed `Str`s the router already speaks, drain the header block,
-/// and write a complete HTTP response back. Returns the routed status, or -1
-/// when the request line never arrived within the bound.
+/// Read the request line, split it into method and target, hand both to
+/// `route` as the borrowed `Str`s the router already speaks, drain the
+/// request, and write a complete response. Returns the routed status, or -1
+/// when no request line arrived within the bound — which on a kept-alive
+/// connection is the ordinary signal that the client is done, not an error.
 ///
-/// The line worth noticing is `route(method, path)`: the pure router is
+/// The line worth noticing is `route(method, target)`: the pure router is
 /// called here exactly as the specs call it, with no adapter and no
 /// re-encoding. `http-service` cannot do this — its `route` takes pre-tagged
 /// `Int`s, so its socket shell must convert a path into a tag before routing,
@@ -620,35 +1069,153 @@ fn write_response(take conn: Int, take response: Response) -> Int {
 /// what lets the wire layer stay this thin.
 ///
 /// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
-fn serve_once(take conn: Int) -> Int {
+fn serve_exchange(take conn: Int, take keep_alive: Bool, take first_on_conn: Bool) -> Int {
     var read_ok = false;
-    let line = read_line_from(conn, read_ok);
+    // The FIRST request on a connection gets the full I/O bound: the client
+    // has just connected and is expected to be mid-write. A SUBSEQUENT one
+    // gets the short idle bound, because the connection is being held open
+    // speculatively and no request may be coming at all.
+    var wait = keep_alive_idle_ms();
+    if first_on_conn {
+        wait = io_timeout_ms();
+    }
+    let line = read_line_within(conn, read_ok, wait);
     if !read_ok {
-        std::rt::close(conn);
         return 0 - 1;
     }
     let raw = std::string::as_str(line);
+    if std::str::len(raw) == 0 && !first_on_conn {
+        // A blank line AFTER a request is the CRLF some clients leave
+        // trailing: nothing to route, and answering it would be a spurious
+        // 404. A blank line as the *first* thing on a connection is different
+        // — it is a real (if empty) request the client is waiting on, and
+        // dropping it silently resets the connection instead of answering.
+        // That distinction was a genuine bug: treating both as end-of-input
+        // turned `\r\n\r\n` from a 404 into a connection reset.
+        return 0 - 1;
+    }
     let first = find_space(raw, 0);
     if first < 0 {
-        // No method/path split: malformed, and a router answers garbage with
-        // 404 rather than failing — a real server's behavior.
-        drain_headers(conn);
-        write_response(conn, route_not_found());
-        std::rt::close(conn);
-        return status_not_found();
+        // No method/target split: malformed, and a router answers garbage
+        // with 404 rather than failing — a real server's behavior. A
+        // malformed request also ends the connection: the byte stream is no
+        // longer trustworthy, so continuing to parse it would compound the
+        // error rather than recover from it.
+        drain_request(conn);
+        write_response(conn, route_not_found(), false);
+        // The response was written with `Connection: close`, so the loop must
+        // actually close. Returning the 404 status here would look like an
+        // ordinary served request and keep the connection open, contradicting
+        // the header just sent and leaving the client reading a socket the
+        // server has stopped answering.
+        return 0 - 2;
     }
     let method = std::str::slice(raw, 0, first);
     let second = find_space(raw, first + 1);
-    var path = std::str::slice(raw, first + 1, std::str::len(raw));
+    var target = std::str::slice(raw, first + 1, std::str::len(raw));
     if second > 0 {
-        path = std::str::slice(raw, first + 1, second);
+        target = std::str::slice(raw, first + 1, second);
     }
-    let response = route(method, path);
+    let response = route(method, target);
     let status = response.status;
-    drain_headers(conn);
-    write_response(conn, response);
-    std::rt::close(conn);
+    // `drain_request` reports -1 when it could not leave the stream at a
+    // request boundary — a short or stalled body, an unterminated header
+    // block, or a `Content-Length` it refused to trust. The response is still
+    // correct and is still sent, but the connection must NOT be reused: the
+    // unread bytes would be parsed as the next request line, so a client
+    // could smuggle a forged request into its own body. `write_response`'s
+    // contract is that `keep_alive` says what the server will actually do,
+    // and this is the call site that has to honor it.
+    let in_sync = drain_request(conn) >= 0;
+    write_response(conn, response, keep_alive && in_sync);
+    if !in_sync {
+        // Answered, but the connection must now close.
+        return 0 - 2;
+    }
     status
+}
+
+/// How long a kept-alive connection waits for the client's **next** request
+/// before closing.
+///
+/// Deliberately much shorter than `io_timeout_ms`, and for a different
+/// reason. That bound protects an *in-progress* request from a peer that
+/// stalls mid-write, where waiting is correct. This one bounds an *idle*
+/// connection, where waiting costs a worker: with a fixed-width fork-join
+/// pool, a worker parked on an idle keep-alive is a worker not accepting, and
+/// the pool cannot join until every one of them is done. Holding a connection
+/// open for the full I/O timeout made the pool take ten minutes to exit.
+///
+/// This is the keep-alive trade-off made explicit: a longer value saves more
+/// handshakes, a shorter one frees workers sooner.
+fn keep_alive_idle_ms() -> Int {
+    250
+}
+
+/// How many requests one kept-alive connection may serve before the server
+/// closes it.
+///
+/// A limit is not a shortcoming here, it is the standard defence: an
+/// unbounded keep-alive lets one peer hold a worker forever, which with a
+/// fork-join pool of fixed width is a denial of service rather than a
+/// slow client. Real servers cap it the same way (nginx's
+/// `keepalive_requests` defaults to 1000).
+fn max_keep_alive_requests() -> Int {
+    64
+}
+
+/// EFFECT: serve a whole connection — **HTTP/1.1 keep-alive**: successive
+/// requests on the same socket until the client stops sending, the request
+/// budget is spent, or a request is malformed — then close.
+///
+/// This is item 3, and it is what makes the server ordinary rather than a
+/// demo: HTTP/1.1 connections are persistent by default, so a client that
+/// sends two requests down one socket (curl given two URLs, any browser, any
+/// pooled HTTP library) previously had its second request silently dropped
+/// when the server closed after the first.
+///
+/// The last response is deliberately sent with `Connection: close` rather
+/// than the connection simply being closed after a `keep-alive` header: a
+/// client must be *told* the exchange is over, or it will hold the socket
+/// open waiting for a response that is never coming, and pay a timeout for
+/// it. Announcing the close is the difference between a clean end and a
+/// client-visible stall.
+///
+/// Returns the status of the first request served, so every existing caller
+/// and test that read a single status from a single connection still does.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by the dogfood test.
+fn serve_once(take conn: Int) -> Int {
+    var first_status = 0 - 1;
+    var served = 0;
+    var serving = true;
+    while serving {
+        // The final permitted request is answered with `close`, so the client
+        // learns the connection is ending from the response it already
+        // expects rather than from a socket that stops answering.
+        let last = served + 1 >= max_keep_alive_requests();
+        let status = serve_exchange(conn, !last, served == 0);
+        if status < 0 {
+            // -2 means a response WAS written and the connection must now
+            // close; -1 means no request arrived at all. Both end the loop,
+            // but only the former counts as having answered, which is what
+            // the caller's status reports.
+            if status == 0 - 2 && served == 0 {
+                first_status = status_not_found();
+            }
+            serving = false;
+        } else {
+            if served == 0 {
+                first_status = status;
+            }
+            served = served + 1;
+            if last {
+                serving = false;
+            }
+        }
+    }
+    std::rt::close(conn);
+    first_status
 }
 
 /// EFFECT: serve one request to ourselves over a real loopback socket and read
@@ -693,7 +1260,7 @@ fn live_once(in method: Str, in path: Str) -> Int {
     let served = serve_once(conn);
     var reply_ok = false;
     let reply = read_line_from(client, reply_ok);
-    let headers = drain_headers(client);
+    let headers = drain_header_block(client);
     // Read whatever body follows the header block, so the oracle checks the
     // bytes a client would actually receive rather than stopping at the
     // framing. `read_line_from` stops at end of input, and the server has
@@ -781,13 +1348,82 @@ fn serve_on(take port: Int, take n: Int) -> Int {
             let status = serve_once(conn);
             if status > 0 {
                 served = served + 1;
+                remaining = remaining - 1;
             }
-            remaining = remaining - 1;
+            // A connection that never sent a request — a port scanner, a
+            // health-check TCP probe, a browser preconnect — does not consume
+            // the promised budget. It used to, so an unrelated probe could
+            // make the server exit before answering the requests it was
+            // actually given.
         }
     }
     std::rt::close(listener);
     served
 }
+
+/// Whether a socket result is the ADR-0017 **timeout** sentinel (-3) rather
+/// than a host error (-2).
+///
+/// The distinction is the whole point of that sentinel: a timeout means "not
+/// yet", a host error means "not ever", and a server that conflates them
+/// either exits on its first quiet second or spins forever on a broken
+/// listener. Pure, so it is spec-checked.
+fn is_timeout(take result: Int) -> Bool {
+    result == 0 - 3
+}
+
+/// EFFECT: serve **without a connection budget** — an accept loop that runs
+/// until the process is killed, which is the shape every deployed server has.
+///
+/// This is item 5, and it is worth being precise about what did and did not
+/// change, because the example previously documented an unbounded server as
+/// absent.
+///
+/// What was actually absent was never the unbounded *loop* — `while true`
+/// costs the language nothing. It was unbounded **concurrency**: v0's only
+/// concurrency primitive is `std::rt::par_map`, structured fork-join, and
+/// fork-join must join, so a pool cannot both serve forever and return. That
+/// limit is real and stands; see `serve_pool`, which still takes a budget.
+///
+/// So this loop is honest about its shape: it is **serial** and unbounded —
+/// one connection served to completion before the next is accepted, forever.
+/// That is a genuine long-running server (it is how a single-threaded event
+/// loop is deployed behind a load balancer), and it is not a concurrent one.
+/// A slow client blocks the next, which `io_timeout_ms` bounds but does not
+/// eliminate.
+///
+/// Unlike `serve_on` there is no idle-strike limit: a quiet interval means no
+/// client has arrived *yet*, and a server with no budget has no reason to
+/// conclude that none ever will. An accept error that is not a timeout does
+/// end the loop, since a broken listener will not fix itself.
+///
+/// Never returns under normal operation, so its `Int` result exists only for
+/// the listener-error path. Effectful, so no spec (`R0007`); pinned natively
+/// by the dogfood test, which runs it and kills it.
+fn serve_forever(take port: Int) -> Int {
+    let listener = std::rt::listen(port);
+    if listener < 0 {
+        return 0 - 1;
+    }
+    var running = true;
+    var served = 0;
+    while running {
+        let conn = std::rt::accept_timeout(listener, io_timeout_ms());
+        if conn < 0 {
+            // -3 is a timeout: no client yet, which is not a reason to stop.
+            // Anything else means the listener itself is broken.
+            if !is_timeout(conn) {
+                running = false;
+            }
+        } else {
+            serve_once(conn);
+            served = served + 1;
+        }
+    }
+    std::rt::close(listener);
+    served
+}
+
 
 /// Exit with the router's report: 74 — but only after the table has proved
 /// itself on a real socket.
@@ -830,6 +1466,17 @@ fn pool_workers() -> Int {
     4
 }
 
+/// How many consecutive idle intervals a pool worker tolerates before
+/// retiring.
+///
+/// Small on purpose: fork-join cannot return until every worker joins, so an
+/// idle worker delays the whole pool's exit. Three strikes at
+/// `pool_idle_ms()` tolerates an ordinary gap between bursts without letting
+/// a worker linger.
+fn pool_idle_strike_limit() -> Int {
+    3
+}
+
 /// EFFECT: one pool worker — accept and serve `per_worker_budget()`
 /// connections off the **shared** listener, returning how many it served.
 ///
@@ -857,11 +1504,32 @@ fn pool_idle_ms() -> Int {
 fn pool_worker(take listener: Int) -> Int {
     var served = 0;
     var remaining = per_worker_budget();
+    var idle_strikes = 0;
     while remaining > 0 {
         let conn = std::rt::accept_timeout(listener, pool_idle_ms());
         if conn < 0 {
-            remaining = 0;
+            // A timeout means no client has arrived *yet*; a host error means
+            // the listener is broken. Retiring on the first quiet interval
+            // conflated the two, so one 1-second gap between bursts could
+            // retire a worker — and with four workers racing the same accept
+            // queue, a bursty client could retire the whole pool before its
+            // budget was spent, leaving later connections unanswered.
+            //
+            // `serve_on` already had this distinction (`idle_strike_limit`)
+            // and `serve_forever` uses `is_timeout`; the pool is now
+            // consistent with both, while still joining promptly — the strike
+            // limit is small precisely because an idle worker delays the
+            // fork-join's return.
+            if !is_timeout(conn) {
+                remaining = 0;
+            } else {
+                idle_strikes = idle_strikes + 1;
+                if idle_strikes >= pool_idle_strike_limit() {
+                    remaining = 0;
+                }
+            }
         } else {
+            idle_strikes = 0;
             let status = serve_once(conn);
             if status > 0 {
                 served = served + 1;
@@ -974,6 +1642,14 @@ fn main() -> Int {
         if count == 0 {
             return serve_pool(port);
         }
+        // `router <port> 1` with a third argument selects the unbounded
+        // serial server, which never returns. The budgeted form stays the
+        // default because every test drives it: a run that cannot finish is
+        // useless as an acceptance oracle, so `serve_forever` has to be
+        // opted into explicitly.
+        if std::rt::arg_count() > 3 {
+            return serve_forever(port);
+        }
         return serve_on(port, count);
     }
     let pure_report = report();
@@ -1061,10 +1737,10 @@ spec "a known path refuses a method it does not allow" {
 
 spec handle_not_found {
     // The fallback is total: every method reaches the same answer.
-    then handle_not_found(Request { method: method_get(), path: "/x" }).status == status_not_found();
-    then handle_not_found(Request { method: 0, path: "" }).status == status_not_found();
+    then handle_not_found(Request { method: method_get(), path: "/x", query: "", param: "" }).status == status_not_found();
+    then handle_not_found(Request { method: 0, path: "", query: "", param: "" }).status == status_not_found();
     // …and it answers with a body, so a client learns why, not just that.
-    then std::str::len(std::string::as_str(handle_not_found(Request { method: 0, path: "" }).body)) > 0;
+    then std::str::len(std::string::as_str(handle_not_found(Request { method: 0, path: "", query: "", param: "" }).body)) > 0;
 }
 
 spec int_to_text {
@@ -1083,10 +1759,10 @@ spec headers_for {
     // The measured length reaches the wire. A wrong Content-Length is worse
     // than a missing body: the client hangs waiting for bytes that never
     // come, or truncates the ones it got.
-    then std::string::as_str(headers_for(0)) == "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-    then std::string::as_str(headers_for(16)) == "\r\nContent-Length: 16\r\nConnection: close\r\n\r\n";
+    then std::string::as_str(headers_for(0, false)) == "\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    then std::string::as_str(headers_for(16, false)) == "\r\nContent-Length: 16\r\nConnection: close\r\n\r\n";
     // Whatever the length, the block still terminates with a blank line.
-    then std::str::slice(std::string::as_str(headers_for(5)), std::str::len(std::string::as_str(headers_for(5))) - 4, std::str::len(std::string::as_str(headers_for(5)))) == "\r\n\r\n";
+    then std::str::slice(std::string::as_str(headers_for(5, false)), std::str::len(std::string::as_str(headers_for(5, false))) - 4, std::str::len(std::string::as_str(headers_for(5, false)))) == "\r\n\r\n";
 }
 
 spec "handlers answer with bodies, and 204 answers without one" {
@@ -1141,4 +1817,113 @@ spec report {
     // exactly — no truncation for a reader to account for.
     then report() < 256;
     then report() > 0;
+}
+
+spec "query and path splitting" {
+    // A target with no query is a path, unchanged.
+    then target_path("/users") == "/users";
+    then target_query("/users") == "";
+    then query_start("/users") == 0 - 1;
+    // A query splits off at the first `?` and is never part of the key.
+    then target_path("/users?page=2") == "/users";
+    then target_query("/users?page=2") == "page=2";
+    // A bare `?` yields an empty query, not a missing one.
+    then target_path("/users?") == "/users";
+    then target_query("/users?") == "";
+}
+
+spec query_get {
+    then query_get("page=2", "page") == "2";
+    then query_get("a=1&page=2&b=3", "page") == "2";
+    then query_get("a=1&page=2", "a") == "1";
+    // An absent key, and a key that is a prefix of a present one, both miss.
+    then query_get("a=1&page=2", "missing") == "";
+    then query_get("pages=9", "page") == "";
+    // A key with no value is present but empty.
+    then query_get("page=", "page") == "";
+    then query_get("", "page") == "";
+    // The first of a repeated key wins.
+    then query_get("page=1&page=2", "page") == "1";
+}
+
+spec "path parameters" {
+    then parent_path("/users/42") == "/users";
+    then last_segment("/users/42") == "42";
+    // A top-level path has no parent segment to strip.
+    then parent_path("/users") == "";
+    then parent_path("/") == "";
+    then last_segment("/users") == "users";
+}
+
+spec "parameterized routes reach their parent handler" {
+    // `/users/42` must reach the `/users` handler rather than 404 — the
+    // routing behavior item 2 adds, stated as the property rather than the
+    // mechanism.
+    then status_for("GET", "/users/42") == status_ok();
+    then status_for("GET", "/users?page=2") == status_ok();
+    // A literal route still wins, and an unknown parent still 404s.
+    then status_for("GET", "/users") == status_ok();
+    then status_for("GET", "/nope/42") == status_not_found();
+    // The parameter and the query actually reach the handler: each answers
+    // with a body distinct from the unfiltered list.
+    then body_len_for("GET", "/users/42") != body_len_for("GET", "/users");
+    then body_len_for("GET", "/users?page=2") != body_len_for("GET", "/users");
+    // A method the route refuses is still refused with a parameter present.
+    then status_for("PATCH", "/users/42") == status_method_not_allowed();
+}
+
+spec "header parsing" {
+    // Header names are case-insensitive, which is the property that keeps a
+    // real client's `content-length:` from being missed.
+    then header_is("Content-Length: 11", "Content-Length");
+    then header_is("content-length: 11", "Content-Length");
+    then header_is("CONTENT-LENGTH: 11", "Content-Length");
+    then !header_is("Content-Type: text/plain", "Content-Length");
+    // A name must be followed by a colon, not merely be a prefix.
+    then !header_is("Content-Lengths: 11", "Content-Length");
+    then !header_is("Content-Length", "Content-Length");
+}
+
+spec header_int {
+    then header_int("Content-Length: 11", "Content-Length") == 11;
+    then header_int("content-length:11", "Content-Length") == 11;
+    then header_int("Content-Length:   0", "Content-Length") == 0;
+    // A non-numeric or absent value is -1, distinct from a genuine zero.
+    then header_int("Content-Length: abc", "Content-Length") == 0 - 1;
+    then header_int("Content-Length: ", "Content-Length") == 0 - 1;
+    then header_int("Content-Type: text/plain", "Content-Length") == 0 - 1;
+}
+
+spec "keep alive headers" {
+    // The `Connection:` header must say what the server will actually do.
+    then std::string::as_str(headers_for(16, true)) == "\r\nContent-Length: 16\r\nConnection: keep-alive\r\n\r\n";
+    then std::string::as_str(headers_for(16, false)) == "\r\nContent-Length: 16\r\nConnection: close\r\n\r\n";
+}
+
+spec is_timeout {
+    // -3 is "not yet", -2 is "not ever": a server that conflates them either
+    // exits on a quiet second or spins on a broken listener.
+    then is_timeout(0 - 3);
+    then !is_timeout(0 - 2);
+    then !is_timeout(0 - 1);
+    then !is_timeout(0);
+}
+
+spec "a hostile Content-Length cannot trap the parser" {
+    // The regression that matters most: tuonelang traps on integer overflow
+    // and a trap aborts the PROCESS, so an unbounded accumulate let any peer
+    // kill the server with one header line. Each of these used to overflow on
+    // its way to being rejected; all must now return -1 without trapping.
+    then header_int("Content-Length: 99999999999999999999", "Content-Length") == 0 - 1;
+    then header_int("Content-Length: 123456789012345678901234567890", "Content-Length") == 0 - 1;
+    // Bad bytes after a huge run of digits: the old loop kept scanning past
+    // its own `bad` flag, so the rejection came too late to prevent the trap.
+    then header_int("Content-Length: 99999999999999999999abc", "Content-Length") == 0 - 1;
+    // A value just over the ceiling is refused; the ceiling itself is fine.
+    then header_int("Content-Length: 8388609", "Content-Length") == 0 - 1;
+    then header_int("Content-Length: 8388608", "Content-Length") == max_body_bytes();
+    // Ordinary values are unaffected by the ceiling check.
+    then header_int("Content-Length: 0", "Content-Length") == 0;
+    then header_int("Content-Length: 11", "Content-Length") == 11;
+    then header_int("Content-Length: 1048576", "Content-Length") == 1048576;
 }

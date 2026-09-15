@@ -273,6 +273,219 @@ std::bignum
   fn num_or_zero(take value: Option[Array[Int]]) -> Array[Int]
   fn byte_pair(take a: Int, take b: Int) -> Array[Int]
 
+std::chacha
+  fn state_words() -> Int
+  fn block_bytes() -> Int
+  fn constant(take index: Int) -> Int
+  fn quarter_round(take a: Int, take b: Int, take c: Int, take d: Int, take which: Int) -> Int
+  fn quarter_round_at(mut state: Array[Int], take ai: Int, take bi: Int, take ci: Int, take di: Int) -> Int
+  fn initial_state(in key: Array[Int], take counter: Int, in nonce: Array[Int]) -> Array[Int]
+  fn le32_at(in bytes: Array[Int], take offset: Int) -> Int
+  fn byte_or_zero(in bytes: Array[Int], take index: Int) -> Int
+  fn block(in key: Array[Int], take counter: Int, in nonce: Array[Int]) -> Array[Int]
+  fn apply(in key: Array[Int], take counter: Int, in nonce: Array[Int], in data: Array[Int]) -> Array[Int]
+  fn poly_prime() -> Array[Int]
+  fn poly_clamp_r(in key: Array[Int]) -> Array[Int]
+  fn le_bytes_to_num(in bytes: Array[Int]) -> Array[Int]
+  fn num_to_le_bytes(in value: Array[Int], take count: Int) -> Array[Int]
+  fn poly1305(in key: Array[Int], in message: Array[Int]) -> Array[Int]
+  fn poly_mod(in value: Array[Int], in prime: Array[Int]) -> Array[Int]
+  fn poly_key_gen(in key: Array[Int], in nonce: Array[Int]) -> Array[Int]
+  fn push_le64(mut out: Array[Int], take value: Int) -> Int
+  fn pad16(mut out: Array[Int]) -> Int
+  fn aead_mac_data(in aad: Array[Int], in ciphertext: Array[Int]) -> Array[Int]
+  fn aead_seal(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in plaintext: Array[Int]) -> Array[Int]
+  fn aead_tag(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in ciphertext: Array[Int]) -> Array[Int]
+  fn aead_open(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in sealed: Array[Int]) -> Option[Array[Int]]
+
+std::x25519
+  fn prime() -> Array[Int]
+  fn a24() -> Int
+  fn field_mod(in value: Array[Int]) -> Array[Int]
+  fn low_255(in value: Array[Int]) -> Array[Int]
+  fn field_add(in a: Array[Int], in b: Array[Int]) -> Array[Int]
+  fn field_sub(in a: Array[Int], in b: Array[Int]) -> Array[Int]
+  fn field_mul(in a: Array[Int], in b: Array[Int]) -> Array[Int]
+  fn field_mul_small(in a: Array[Int], take n: Int) -> Array[Int]
+  fn field_square(in a: Array[Int]) -> Array[Int]
+  fn bit_at(in value: Array[Int], take index: Int) -> Bool
+  fn field_invert(in a: Array[Int]) -> Array[Int]
+  fn power_mod(in a: Array[Int], in exponent: Array[Int]) -> Array[Int]
+  fn decode_u(in bytes: Array[Int]) -> Array[Int]
+  fn decode_scalar(in bytes: Array[Int]) -> Array[Int]
+  fn le_to_num(in bytes: Array[Int]) -> Array[Int]
+  fn num_to_le(in value: Array[Int]) -> Array[Int]
+  fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder
+  fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Ladder
+  fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int]
+  fn base_point() -> Array[Int]
+  fn public_key(in private_key: Array[Int]) -> Array[Int]
+
+std::hkdf
+  fn hash_len() -> Int
+  fn extract(in salt: Array[Int], in ikm: Array[Int]) -> Array[Int]
+  fn expand(in prk: Array[Int], in info: Array[Int], take length: Int) -> Array[Int]
+  fn push_be16(mut out: Array[Int], take value: Int) -> Int
+  fn push_u8_vector(mut out: Array[Int], in bytes: Array[Int]) -> Int
+  fn label_info(in label: Str, in context: Array[Int], take length: Int) -> Array[Int]
+  fn expand_label(in secret: Array[Int], in label: Str, in context: Array[Int], take length: Int) -> Array[Int]
+  fn derive_secret(in secret: Array[Int], in label: Str, in transcript_hash: Array[Int]) -> Array[Int]
+  fn zeros(take length: Int) -> Array[Int]
+  fn early_secret() -> Array[Int]
+  fn handshake_secret(in shared: Array[Int]) -> Array[Int]
+  fn master_secret(in handshake: Array[Int]) -> Array[Int]
+  fn empty_hash() -> Array[Int]
+  fn traffic_key(in traffic_secret: Array[Int]) -> Array[Int]
+  fn traffic_iv(in traffic_secret: Array[Int]) -> Array[Int]
+  fn record_nonce(in iv: Array[Int], take sequence: Int) -> Array[Int]
+
+std::der
+  fn tag_sequence() -> Int
+  fn tag_integer() -> Int
+  fn tag_bit_string() -> Int
+  fn tag_octet_string() -> Int
+  fn tag_oid() -> Int
+  fn max_length() -> Int
+  fn byte_at(in bytes: Array[Int], take index: Int) -> Int
+  fn bad_header() -> Header
+  fn header_ok(in header: Header) -> Bool
+  fn read_header(in bytes: Array[Int], take offset: Int) -> Header
+  fn fits(in bytes: Array[Int], take start: Int, take length: Int) -> Bool
+  fn end_of(in header: Header) -> Int
+  fn value_of(in bytes: Array[Int], in header: Header) -> Array[Int]
+  fn child_at(in bytes: Array[Int], in parent: Header, take index: Int) -> Header
+  fn child_count(in bytes: Array[Int], in parent: Header) -> Int
+  fn bit_string_bytes(in bytes: Array[Int], in header: Header) -> Array[Int]
+  fn value_equals(in bytes: Array[Int], in header: Header, in expected: Array[Int]) -> Bool
+  fn oid_ed25519() -> Array[Int]
+  fn spki_index(in bytes: Array[Int], in tbs: Header) -> Int
+  fn certificate_spki(in bytes: Array[Int]) -> Header
+  fn certificate_is_ed25519(in bytes: Array[Int]) -> Bool
+  fn certificate_public_key(in bytes: Array[Int]) -> Array[Int]
+  fn certificate_tbs(in bytes: Array[Int]) -> Array[Int]
+  fn tbs_start(in bytes: Array[Int], in certificate: Header) -> Int
+  fn certificate_signature(in bytes: Array[Int]) -> Array[Int]
+
+std::sha512
+  fn mask32() -> Int
+  fn add64(take a: Int, take b: Int) -> Int
+  fn shr64(take value: Int, take n: Int) -> Int
+  fn rotr64(take value: Int, take n: Int) -> Int
+  fn ch(take x: Int, take y: Int, take z: Int) -> Int
+  fn maj(take x: Int, take y: Int, take z: Int) -> Int
+  fn big_sigma0(take x: Int) -> Int
+  fn big_sigma1(take x: Int) -> Int
+  fn small_sigma0(take x: Int) -> Int
+  fn small_sigma1(take x: Int) -> Int
+  fn round_constant(take index: Int) -> Int
+  fn round_constant_hi(take index: Int) -> Int
+  fn round_constant_lo(take index: Int) -> Int
+  fn initial_hash(take index: Int) -> Int
+  fn initial_hash_hi(take index: Int) -> Int
+  fn initial_hash_lo(take index: Int) -> Int
+  fn pad(in message: Array[Int]) -> Array[Int]
+  fn word_at(in bytes: Array[Int], take offset: Int) -> Int
+  fn hash(in message: Array[Int]) -> Array[Int]
+  fn push_word(mut out: Array[Int], take value: Int) -> Int
+
+std::ed25519
+  fn prime() -> Array[Int]
+  fn group_order() -> Array[Int]
+  fn curve_d() -> Array[Int]
+  fn curve_d_from_definition() -> Array[Int]
+  fn identity() -> Point
+  fn copy_limbs(in value: Array[Int]) -> Array[Int]
+  fn copy_point(in p: Point) -> Point
+  fn extended_identity() -> Extended
+  fn to_extended(in p: Point) -> Extended
+  fn to_affine(in e: Extended) -> Point
+  fn copy_extended(in e: Extended) -> Extended
+  fn extended_add(in p: Extended, in q: Extended) -> Extended
+  fn add(in p: Point, in q: Point) -> Point
+  fn scalar_mult(in point: Point, in scalar: Array[Int]) -> Point
+  fn base_point() -> Point
+  fn recover_x(in y: Array[Int], take sign: Int) -> Array[Int]
+  fn decode_point(in bytes: Array[Int]) -> Point
+  fn decode_ok(in bytes: Array[Int]) -> Bool
+  fn on_curve(in p: Point) -> Bool
+  fn points_equal(in a: Point, in b: Point) -> Bool
+  fn reduce_scalar(in bytes: Array[Int]) -> Array[Int]
+  fn mod_by(in value: Array[Int], in modulus: Array[Int]) -> Array[Int]
+  fn verify(in public_key: Array[Int], in message: Array[Int], in signature: Array[Int]) -> Bool
+  fn encode_point(in p: Point) -> Array[Int]
+  fn expand_seed(in seed: Array[Int], take half: Int) -> Array[Int]
+  fn public_key(in seed: Array[Int]) -> Array[Int]
+  fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int]
+
+std::tls
+  fn content_handshake() -> Int
+  fn content_application_data() -> Int
+  fn content_alert() -> Int
+  fn content_change_cipher_spec() -> Int
+  fn max_plaintext() -> Int
+  fn max_ciphertext() -> Int
+  fn byte_at(in bytes: Array[Int], take index: Int) -> Int
+  fn u16_at(in bytes: Array[Int], take offset: Int) -> Int
+  fn u24_at(in bytes: Array[Int], take offset: Int) -> Int
+  fn push_u16(mut out: Array[Int], take value: Int) -> Int
+  fn push_u24(mut out: Array[Int], take value: Int) -> Int
+  fn push_bytes(mut out: Array[Int], in bytes: Array[Int]) -> Int
+  fn slice(in bytes: Array[Int], take offset: Int, take length: Int) -> Array[Int]
+  fn bad_record() -> Record
+  fn record_ok(in record: Record) -> Bool
+  fn read_record(in bytes: Array[Int], take offset: Int) -> Record
+  fn frame_record(take content_type: Int, in body: Array[Int]) -> Array[Int]
+  fn handshake_client_hello() -> Int
+  fn handshake_server_hello() -> Int
+  fn handshake_encrypted_extensions() -> Int
+  fn handshake_certificate() -> Int
+  fn handshake_certificate_verify() -> Int
+  fn handshake_finished() -> Int
+  fn cipher_suite() -> Int
+  fn extension_supported_versions() -> Int
+  fn extension_key_share() -> Int
+  fn extension_server_name() -> Int
+  fn group_x25519() -> Int
+  fn signature_ed25519() -> Int
+  fn version_tls13() -> Int
+  fn hello_extensions_start(in body: Array[Int]) -> Int
+  fn hello_extensions_length(in body: Array[Int]) -> Int
+  fn hello_extension(in body: Array[Int], take wanted: Int) -> Array[Int]
+  fn hello_offers_suite(in body: Array[Int]) -> Bool
+  fn hello_offers_tls13(in body: Array[Int]) -> Bool
+  fn hello_key_share(in body: Array[Int]) -> Array[Int]
+  fn hello_random(in body: Array[Int]) -> Array[Int]
+  fn hello_session_id(in body: Array[Int]) -> Array[Int]
+  fn hello_acceptable(in body: Array[Int]) -> Bool
+  fn server_hello(in client_hello: Array[Int], in server_share: Array[Int], in server_random: Array[Int]) -> Array[Int]
+  fn wrap_handshake(take message_type: Int, in body: Array[Int]) -> Array[Int]
+  fn encrypted_extensions() -> Array[Int]
+  fn certificate_message(in der: Array[Int]) -> Array[Int]
+  fn certificate_verify_content(in transcript_hash: Array[Int]) -> Array[Int]
+  fn certificate_verify_message(in signature: Array[Int]) -> Array[Int]
+  fn finished_data(in traffic_secret: Array[Int], in transcript_hash: Array[Int]) -> Array[Int]
+  fn finished_message(in traffic_secret: Array[Int], in transcript_hash: Array[Int]) -> Array[Int]
+  fn seal_record(in key: Array[Int], in iv: Array[Int], take sequence: Int, take content_type: Int, in plaintext: Array[Int]) -> Array[Int]
+  fn open_record(in key: Array[Int], in iv: Array[Int], take sequence: Int, in header: Array[Int], in body: Array[Int]) -> Option[Array[Int]]
+  fn inner_content_type(in plaintext: Array[Int]) -> Int
+  fn inner_payload(in plaintext: Array[Int]) -> Array[Int]
+  fn transcript_hash(in messages: Array[Int]) -> Array[Int]
+  fn client_handshake_secret(in shared: Array[Int], in hello_hash: Array[Int]) -> Array[Int]
+  fn server_handshake_secret(in shared: Array[Int], in hello_hash: Array[Int]) -> Array[Int]
+  fn client_application_secret(in shared: Array[Int], in finished_hash: Array[Int]) -> Array[Int]
+  fn server_application_secret(in shared: Array[Int], in finished_hash: Array[Int]) -> Array[Int]
+  fn failed_handshake() -> Handshake
+  fn server_handshake(in client_hello: Array[Int], in server_private: Array[Int], in certificate: Array[Int], in signature: Array[Int], in server_random: Array[Int]) -> Handshake
+  fn signing_content(in client_hello: Array[Int], in server_share: Array[Int], in server_random: Array[Int], in certificate: Array[Int]) -> Array[Int]
+  fn connect(take socket: Int, in handshake: Handshake) -> Connection
+  fn copy_bytes(in bytes: Array[Int]) -> Array[Int]
+  fn opened_or_empty(in key: Array[Int], in iv: Array[Int], take sequence: Int, in header: Array[Int], in body: Array[Int]) -> Array[Int]
+  fn fill(mut connection: Connection, take timeout_ms: Int) -> Int
+  fn read_byte(mut connection: Connection, take timeout_ms: Int) -> Int
+  fn write_record(mut connection: Connection, in plaintext: Array[Int]) -> Int
+  fn write_all(mut connection: Connection, in text: Str) -> Int
+  fn close_notify(mut connection: Connection) -> Int
+
 std::ct
   fn mask(take bit: Int) -> Int
   fn select(take c: Int, take a: Int, take b: Int) -> Int
