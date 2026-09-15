@@ -268,14 +268,17 @@ the trait system will own.
 | `T0020` | A `#[constant_time]` function calls a function that is not marked (§3.10), so the callee carries no checked guarantee. |
 | `T0021` | Unknown attribute (§3.10). v0 defines exactly one, `#[constant_time]`; an unrecognized name is an error, never a silently-ignored annotation. |
 | `T0022` | **Warning, not an error** — the runnable-core advisory. A heap-wrapper (`Box`/`Shared`/`Weak`) **value** in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
+| `T0023` | **Warning, not an error** — the generic-declaration advisory (ADR-0027 Stage A). A generic `fn` is accepted here and executes on the reference interpreter, but `Ty::Param` has no layout until monomorphized, so no native backend lowers it and `tuo build`/`tuo run` refuse it. Reported once per **declaration**, at the span of the generic parameter list, never per call site. |
 
-`T0022` is the table's only warning: it reports a program the static
-semantics **accepts**. It exists because `tuo check` deliberately accepts a
-larger language than the native backends lower, and that gap should be
-visible at the offending type rather than surfacing later as a spanless
-build failure. Because it is a warning it never changes whether a program is
-accepted, and the set of programs this document defines as well-typed is
-exactly what it was before the advisory existed.
+`T0022` and `T0023` are the table's only warnings: each reports a program the
+static semantics **accepts**. They exist because `tuo check` deliberately
+accepts a larger language than the native backends lower, and that gap should
+be visible at the offending construct rather than surfacing later as a
+spanless build failure. They report the two constructs that cause it — a
+heap-wrapper value, and a generic declaration. Because they are warnings they
+never change whether a program is accepted, and the set of programs this
+document defines as well-typed is exactly what it was before either advisory
+existed.
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`

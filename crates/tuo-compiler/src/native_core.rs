@@ -33,13 +33,47 @@
 //! described — need no advisory: the grammar has no closure syntax, so a
 //! program cannot express one. The non-first-class function cases are
 //! already hard errors (`T0015`) in the type checker.
+//!
+//! # The generic advisory (`T0023`)
+//!
+//! Generic functions are the *second* instance of the same gap, and until
+//! ADR-0027 they were the undocumented one. A generic `fn` parses, resolves,
+//! type-checks, ownership-checks, and **executes on the reference
+//! interpreter** — `spec ident { then ident(7) == 7; then ident(true) ==
+//! true; }` passes at two distinct instantiations — while both backends
+//! refuse it, because `Ty::Param` has no layout until monomorphized
+//! (`tuo_runtime::abi::layout_of`). That refusal arrives from
+//! `classify_storage` as a whole-program message naming a function and
+//! carrying no span, which is exactly what this module exists to prevent.
+//!
+//! So a generic declaration is warned about at the span of its parameter
+//! list, on the same terms as the wrapper advisory: a warning, never an
+//! error, because the program is legal tuonelang that the interpreter runs.
+//! The advisory is deliberately independent of whether monomorphization is
+//! ever scheduled — it is a strict improvement over a spanless backend
+//! refusal either way.
+//!
+//! Only the **declaration** is reported, not each call site: the
+//! instantiation is not what the backend refuses, the body is, and one
+//! warning per generic function keeps the count proportional to the source
+//! rather than to its use. Generic `struct`/`enum` declarations are *not*
+//! reported — `require_monomorphic` refuses them at layout time, but they
+//! are only reachable through a generic function or an annotation this same
+//! pass already sees, and ADR-0027 leaves generic aggregates to a successor
+//! (its Q7). `impl` needs no advisory either: the parser refuses it outright
+//! (`P0002`), so no generic method can be written.
 
-use tuo_ast::{Ast, Block, Item, Statement, TypeRef};
+use tuo_ast::{Ast, Block, GenericParam, Item, Statement, TypeRef};
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
 
 /// The runnable-core advisory code: `T0022`.
 fn code() -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, 22)
+}
+
+/// The generic-declaration advisory code: `T0023` (ADR-0027 Stage A).
+fn generic_code() -> DiagnosticCode {
+    DiagnosticCode::new(Namespace::Type, 23)
 }
 
 /// Warn about every construct `asts` uses that the native backends do not
@@ -59,6 +93,7 @@ pub(crate) fn advisories(asts: &[Ast<'_>]) -> Vec<Diagnostic> {
             // Field and variant-payload declarations are deliberately left
             // alone — see the module docs.
             let Item::Fn(decl) = item else { continue };
+            report_generics(decl, &mut out);
             for param in decl.params() {
                 if let Some(ty) = param.ty() {
                     report_type(ty, "parameter", &mut out);
@@ -79,6 +114,54 @@ pub(crate) fn advisories(asts: &[Ast<'_>]) -> Vec<Diagnostic> {
         )
     });
     out
+}
+
+/// Report `decl` if it declares generic parameters (`T0023`).
+///
+/// The span is the parameter list itself rather than the function name,
+/// because the list is what makes the body unlowerable and what a reader
+/// would delete to fix it.
+///
+/// The "no named parameters" guard is defensive rather than reachable: an
+/// empty list (`fn f[]`) is a `P0002` parse error, so the only way to reach
+/// it is a recovery node whose parameters have no names. Staying silent
+/// there is right — the parse error is the real diagnostic, and a layout
+/// advisory about a function the parser could not read would be noise.
+fn report_generics(decl: tuo_ast::FnDecl<'_>, out: &mut Vec<Diagnostic>) {
+    let Some(generics) = decl.generics() else {
+        return;
+    };
+    let mut names = generics.params().filter_map(GenericParam::name).peekable();
+    if names.peek().is_none() {
+        return;
+    }
+    let listed = names.collect::<Vec<_>>();
+    let verb = if listed.len() == 1 { "has" } else { "have" };
+    let listed = listed.join("`, `");
+    let Some(span) = generics.span() else { return };
+    let text = generics.text();
+    let name = decl.name().unwrap_or("this function");
+    out.push(
+        Diagnostic::warning(
+            generic_code(),
+            format!(
+                "generic function `{name}` is outside the native runnable core: it \
+                 type-checks and runs under `tuo spec`/`tuo verify`, but \
+                 `tuo build`/`tuo run` cannot lower it"
+            ),
+            span,
+        )
+        .with_primary_label(format!(
+            "`{listed}` {verb} no layout until monomorphized, so no native backend \
+             can lower this body"
+        ))
+        .with_help(
+            "monomorphization is deferred (ADR-0027); the reference interpreter \
+             executes this program today. To build natively, write one concrete \
+             function per type instead of a generic one",
+        )
+        .with_actual(StructuredValue::Name(text.to_owned())),
+    );
 }
 
 /// Report the wrapper-typed `let`/`var` annotations in `block`.

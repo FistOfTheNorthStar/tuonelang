@@ -75,6 +75,7 @@ the replacement, preserving the decision history.
 | [ADR-0024](ADR-0024-capturing-closures.md) | Capturing closures — the four decisions Tier 2 actually requires | proposed |
 | [ADR-0025](ADR-0025-no-exceptions.md) | No exceptions — `Result[T, E]` and the trap are the two failure modes | accepted |
 | [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
+| [ADR-0027](ADR-0027-monomorphization.md) | Monomorphization — making the generics the front end already accepts run natively | proposed |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
@@ -244,3 +245,22 @@ why shipping `std::bignum` does **not** close the gap with Python: the gap is
 that Python's unboundedness is *implicit*, and closing it would mean implicit
 promotion — which would make `+` allocate, make every containing type
 dynamically sized, and destroy the trap's meaning.
+
+**ADR-0027** (monomorphization) was opened (2026-09-15) by probing the compiler
+rather than reading it: a generic `fn` parses, type-checks, and **executes on
+the reference interpreter**, while both backends refuse it because
+`Ty::Param` has no layout. Generics are therefore half-implemented, and no
+document recorded it. The ADR keeps the strategy to monomorphization rather
+than a uniform boxed representation (one layout rule, one calling convention,
+`abi::layout_of` unchanged), scopes itself to generic `fn` — `impl` stays a
+parse refusal pending the trait system — and stages the work so the honesty
+gap closes first: a `T0023` `check`-time advisory on the `T0022` model is
+independently landable and worth landing regardless. Its payoff stage is
+concrete: `std::collections` currently ships `fold`/`map_into`/`filter_into`
+*twice*, once per element type, and collapsing that duplication is an oracle
+with existing specs and a documented exit byte. It also records the measured
+correction to **ADR-0024**'s priority argument — comprehensions and `lambda`
+appear in 4.2% and 0.8% of CPython standard-library functions, against 86.6%
+for method calls — and leaves six questions (instance identity in MIR, pass
+placement, incrementality, recursive instantiation, function values, and
+whether generic aggregates land here) explicitly gating implementation.

@@ -70,6 +70,12 @@ use crate::ty::{
 ///   **declarations** (a struct field, an enum payload) are deliberately not
 ///   reported: they lower fine, and `T0016` recommends exactly that
 ///   indirection to break a recursive type.
+/// - `T0023` — **warning**, not an error: the generic-declaration advisory
+///   (ADR-0027 Stage A). A generic `fn` type-checks, ownership-checks, and
+///   runs on the reference interpreter, but `Ty::Param` has no layout until
+///   monomorphized (`tuo_runtime::abi::layout_of`), so no native backend
+///   lowers it. Emitted from the same `native_core` seam as `T0022`, once
+///   per declaration at the span of the generic parameter list.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
