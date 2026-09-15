@@ -143,3 +143,87 @@ fn a_heavy_allocate_free_loop_completes_in_bounded_memory_on_both_backends() {
         );
     }
 }
+
+/// A heap-allocating temporary inside a **short-circuit operand** must lower
+/// to verifiable MIR.
+///
+/// This is a regression test for a real compiler bug, found while writing
+/// `std::ed25519`. `&&` and `||` evaluate their right operand only
+/// conditionally, so a temporary allocated there must be dropped on one path
+/// and not the other — and the lowering got that wrong, producing MIR that
+/// failed the mandatory verifier:
+///
+/// ```text
+/// error: codegen: internal: lowered MIR failed verification
+/// ```
+///
+/// The shape matters more than the specific expression. `tuo check` accepted
+/// the program — the front end, types and ownership are all fine — so the
+/// failure appeared only at `build`/`run` time, which is exactly the class of
+/// bug that reaches a user after their code has passed every check the editor
+/// shows them.
+///
+/// Both backends, since MIR is lowered once and consumed by both.
+#[test]
+fn heap_temporaries_in_short_circuit_operands_lower_correctly() {
+    let dir = workspace("short_circuit_heap");
+    let source = "\
+module caller;
+
+/// Returns a freshly allocated array — a temporary whose drop is what the
+/// short-circuit makes conditional.
+fn allocates(take n: Int) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, n);
+    out
+}
+
+/// The failing shape: a heap temporary on the right of `&&`.
+fn conjunction(take a: Int, take b: Int) -> Bool {
+    std::array::len(allocates(a)) == 1 && std::array::len(allocates(b)) == 1
+}
+
+/// The same for `||`, whose right operand is likewise conditional.
+fn disjunction(take a: Int, take b: Int) -> Bool {
+    std::array::len(allocates(a)) == 2 || std::array::len(allocates(b)) == 1
+}
+
+/// Binding both sides first — the workaround, which must keep working too.
+fn bound_first(take a: Int, take b: Int) -> Bool {
+    let left = std::array::len(allocates(a)) == 1;
+    let right = std::array::len(allocates(b)) == 1;
+    left && right
+}
+
+fn main() -> Int {
+    var bad = 0;
+    if !conjunction(1, 2) {
+        bad = bad + 1;
+    }
+    if !disjunction(1, 2) {
+        bad = bad + 2;
+    }
+    if !bound_first(1, 2) {
+        bad = bad + 4;
+    }
+    bad
+}
+";
+    for release in [false, true] {
+        let output = run_program(&dir, "short_circuit_heap", source, release);
+        let which = backend_name(release);
+        assert!(
+            output.status.success(),
+            "{which}: a heap-allocating temporary in a short-circuit operand \
+             must lower to verifiable MIR; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: every short-circuit form must also evaluate correctly; \
+             the exit status is a bitmask of which failed. stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}

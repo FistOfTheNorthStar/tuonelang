@@ -1,0 +1,3517 @@
+// std::tls — the TLS 1.3 handshake and record layer (RFC 8446).
+//
+// This is the module that turns the verified primitives into a protocol.
+// `std::chacha`, `std::x25519`, `std::hkdf`, `std::sha512`, `std::ed25519`
+// and `std::der` each match their RFC's published vectors; none of that
+// matters on the wire unless the bytes around them are framed exactly as
+// RFC 8446 says. This module is those bytes.
+//
+// THE PARSING HALF RUNS ON HOSTILE INPUT. A ClientHello arrives before any
+// authentication has happened, from anyone who can open a socket. tuonelang
+// traps on integer overflow and on out-of-bounds indexing, and a trap aborts
+// the *process* — so every reader here is **total**, returning a failure
+// value rather than trapping, exactly as `std::der` is. This is not a
+// theoretical concern: a one-line unchecked length in this repository's HTTP
+// router was a remote pre-authentication process kill.
+//
+// WHAT IS IMPLEMENTED. The server side of a full (non-resumption) handshake
+// with X25519 key exchange, ChaCha20-Poly1305 records, and Ed25519
+// certificates — the exact combination the primitives support:
+//
+//   * record framing (`TLSPlaintext` / `TLSCiphertext`) and its length limits
+//   * ClientHello parsing: cipher suites, and the `key_share` /
+//     `supported_versions` extensions
+//   * ServerHello construction with the server's key share
+//   * `EncryptedExtensions`, `Certificate`, `CertificateVerify`, `Finished`
+//   * the transcript hash, and the `CertificateVerify` signature content
+//   * record protection: per-record nonces, the inner content type, and the
+//     AEAD seal/open
+//
+// WHAT IS DELIBERATELY NOT. No session resumption or PSK, no 0-RTT, no client
+// certificates, no HelloRetryRequest, no key update, no RSA or P-256, and no
+// X.509 chain validation (`std::der` decodes; it does not validate). Each is
+// absent rather than stubbed, so nothing here claims a capability the code
+// does not have.
+
+module std::tls;
+
+// --- Record layer (RFC 8446 §5) ---------------------------------------------
+
+/// The `handshake` record content type (22).
+///
+/// # Example
+///
+/// ```tuo
+/// let t = std::tls::content_handshake(); // 22
+/// ```
+pub fn content_handshake() -> Int {
+    22
+}
+
+/// The `application_data` record content type (23) — also the outer type of
+/// every encrypted record, whatever it actually contains.
+pub fn content_application_data() -> Int {
+    23
+}
+
+/// The `alert` record content type (21).
+pub fn content_alert() -> Int {
+    21
+}
+
+/// The `change_cipher_spec` content type (20), which TLS 1.3 does not use but
+/// must tolerate: clients send it purely to look like TLS 1.2 to middleboxes.
+pub fn content_change_cipher_spec() -> Int {
+    20
+}
+
+/// The largest plaintext a single record may carry (RFC 8446 §5.1): 2^14.
+///
+/// A bound, not a preference. A record header declares its own length, so a
+/// peer can claim any size it likes; reading that many bytes on trust is how
+/// a parser becomes a memory-exhaustion vector.
+pub fn max_plaintext() -> Int {
+    16384
+}
+
+/// The largest ciphertext record body: the plaintext limit plus room for the
+/// content type and the AEAD tag (RFC 8446 §5.2).
+pub fn max_ciphertext() -> Int {
+    16640
+}
+
+/// The byte at `index`, or -1 when the index is outside `bytes`.
+///
+/// Every read in this module goes through here, for the reason the module
+/// header gives: indexing out of bounds traps, and this code parses
+/// unauthenticated network input.
+///
+/// # Example
+///
+/// ```tuo
+/// let b = std::tls::byte_at(record, 0); // 22 for a handshake record
+/// ```
+pub fn byte_at(in bytes: Array[Int], take index: Int) -> Int {
+    if index < 0 || index >= std::array::len(bytes) {
+        0 - 1
+    } else {
+        std::array::get(bytes, index) & 255
+    }
+}
+
+/// A 16-bit big-endian value at `offset`, or -1 when it does not fit.
+///
+/// # Example
+///
+/// ```tuo
+/// let length = std::tls::u16_at(record, 3);
+/// ```
+pub fn u16_at(in bytes: Array[Int], take offset: Int) -> Int {
+    let high = byte_at(bytes, offset);
+    let low = byte_at(bytes, offset + 1);
+    if high < 0 || low < 0 {
+        return 0 - 1;
+    }
+    (high << 8) | low
+}
+
+/// A 24-bit big-endian value at `offset` — the handshake message length
+/// field's width — or -1 when it does not fit.
+///
+/// # Example
+///
+/// ```tuo
+/// let length = std::tls::u24_at(message, 1);
+/// ```
+pub fn u24_at(in bytes: Array[Int], take offset: Int) -> Int {
+    let a = byte_at(bytes, offset);
+    let b = byte_at(bytes, offset + 1);
+    let c = byte_at(bytes, offset + 2);
+    if a < 0 || b < 0 || c < 0 {
+        return 0 - 1;
+    }
+    (a << 16) | (b << 8) | c
+}
+
+/// Append a 16-bit big-endian value.
+///
+/// # Example
+///
+/// ```tuo
+/// std::tls::push_u16(out, 771);
+/// ```
+pub fn push_u16(mut out: Array[Int], take value: Int) -> Int {
+    std::array::push(out, (value >> 8) & 255);
+    std::array::push(out, value & 255);
+    0
+}
+
+/// Append a 24-bit big-endian value.
+///
+/// # Example
+///
+/// ```tuo
+/// std::tls::push_u24(out, 128);
+/// ```
+pub fn push_u24(mut out: Array[Int], take value: Int) -> Int {
+    std::array::push(out, (value >> 16) & 255);
+    std::array::push(out, (value >> 8) & 255);
+    std::array::push(out, value & 255);
+    0
+}
+
+/// Append every byte of `bytes`.
+///
+/// # Example
+///
+/// ```tuo
+/// std::tls::push_bytes(out, payload);
+/// ```
+pub fn push_bytes(mut out: Array[Int], in bytes: Array[Int]) -> Int {
+    var i = 0;
+    while i < std::array::len(bytes) {
+        std::array::push(out, std::array::get(bytes, i) & 255);
+        i = i + 1;
+    }
+    0
+}
+
+/// Copy `length` bytes from `offset`, or an empty array when the range is not
+/// entirely present.
+///
+/// Returning empty for a bad range rather than a short read is deliberate: a
+/// truncated field that silently becomes a shorter one is how a parser ends
+/// up authenticating something other than what arrived.
+///
+/// # Example
+///
+/// ```tuo
+/// let random = std::tls::slice(hello, 6, 32);
+/// ```
+pub fn slice(in bytes: Array[Int], take offset: Int, take length: Int) -> Array[Int] {
+    var out = std::array::empty();
+    if offset < 0 || length < 0 {
+        return out;
+    }
+    if length > std::array::len(bytes) - offset {
+        return out;
+    }
+    var i = 0;
+    while i < length {
+        let b = byte_at(bytes, offset + i);
+        if b < 0 {
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// A parsed record header: its content type, body length, and where the body
+/// begins. `body_start` is -1 when the header is malformed or the body is not
+/// fully present.
+struct Record {
+    content_type: Int,
+    body_start: Int,
+    length: Int,
+}
+
+/// A record header that failed to parse.
+///
+/// # Example
+///
+/// ```tuo
+/// let bad = std::tls::bad_record();
+/// ```
+pub fn bad_record() -> Record {
+    Record { content_type: 0 - 1, body_start: 0 - 1, length: 0 - 1 }
+}
+
+/// Whether a record header parsed.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::tls::record_ok(r) { /* … */ }
+/// ```
+pub fn record_ok(in record: Record) -> Bool {
+    record.body_start >= 0
+}
+
+/// Parse the five-byte record header at `offset` (RFC 8446 §5.1).
+///
+/// Refuses a length above `max_ciphertext()` and a body that is not entirely
+/// present — the two checks that keep a lying length field from becoming
+/// either a huge allocation or a read past the buffer.
+///
+/// # Example
+///
+/// ```tuo
+/// let r = std::tls::read_record(buffer, 0);
+/// ```
+pub fn read_record(in bytes: Array[Int], take offset: Int) -> Record {
+    let content_type = byte_at(bytes, offset);
+    if content_type < 0 {
+        return bad_record();
+    }
+    // The legacy version field is not checked: RFC 8446 requires it be
+    // ignored, and middleboxes put various values there.
+    let length = u16_at(bytes, offset + 3);
+    if length < 0 || length > max_ciphertext() {
+        return bad_record();
+    }
+    let start = offset + 5;
+    if length > std::array::len(bytes) - start {
+        return bad_record();
+    }
+    Record { content_type: content_type, body_start: start, length: length }
+}
+
+/// Frame `body` as a record of `content_type` (RFC 8446 §5.1).
+///
+/// The version field is always 0x0303 ("TLS 1.2") on the wire — TLS 1.3
+/// negotiates its real version in an extension, because middleboxes drop
+/// records that say anything newer.
+///
+/// # Example
+///
+/// ```tuo
+/// let record = std::tls::frame_record(std::tls::content_handshake(), hello);
+/// ```
+pub fn frame_record(take content_type: Int, in body: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, content_type & 255);
+    std::array::push(out, 3);
+    std::array::push(out, 3);
+    push_u16(out, std::array::len(body));
+    push_bytes(out, body);
+    out
+}
+
+// --- Handshake messages (RFC 8446 §4) ---------------------------------------
+
+/// The `client_hello` handshake type (1).
+pub fn handshake_client_hello() -> Int {
+    1
+}
+
+/// The `server_hello` handshake type (2).
+pub fn handshake_server_hello() -> Int {
+    2
+}
+
+/// The `encrypted_extensions` handshake type (8).
+pub fn handshake_encrypted_extensions() -> Int {
+    8
+}
+
+/// The `certificate` handshake type (11).
+pub fn handshake_certificate() -> Int {
+    11
+}
+
+/// The `certificate_verify` handshake type (15).
+pub fn handshake_certificate_verify() -> Int {
+    15
+}
+
+/// The `finished` handshake type (20).
+pub fn handshake_finished() -> Int {
+    20
+}
+
+/// The `TLS_CHACHA20_POLY1305_SHA256` cipher suite (0x1303) — the only suite
+/// this module supports, and the one its primitives implement.
+///
+/// # Example
+///
+/// ```tuo
+/// let suite = std::tls::cipher_suite(); // 4867
+/// ```
+pub fn cipher_suite() -> Int {
+    4867
+}
+
+/// The `supported_versions` extension type (43).
+pub fn extension_supported_versions() -> Int {
+    43
+}
+
+/// The `key_share` extension type (51).
+pub fn extension_key_share() -> Int {
+    51
+}
+
+/// The `server_name` extension type (0).
+pub fn extension_server_name() -> Int {
+    0
+}
+
+/// The X25519 named group (0x001d).
+///
+/// # Example
+///
+/// ```tuo
+/// let group = std::tls::group_x25519(); // 29
+/// ```
+pub fn group_x25519() -> Int {
+    29
+}
+
+/// The `ed25519` signature scheme (0x0807).
+pub fn signature_ed25519() -> Int {
+    2055
+}
+
+/// The TLS 1.3 version value (0x0304), carried in `supported_versions`.
+pub fn version_tls13() -> Int {
+    772
+}
+
+/// Where a ClientHello's extension block begins, or -1 when the message is
+/// malformed.
+///
+/// Walking to it means stepping over five variable-length fields, each of
+/// which a hostile client controls. Every step is bounds-checked, and any
+/// failure returns -1 rather than an offset that happens to land somewhere.
+///
+/// # Example
+///
+/// ```tuo
+/// let start = std::tls::hello_extensions_start(body);
+/// ```
+pub fn hello_extensions_start(in body: Array[Int]) -> Int {
+    // handshake header (4) + legacy_version (2) + random (32)
+    var p = 38;
+    let session_len = byte_at(body, p);
+    if session_len < 0 {
+        return 0 - 1;
+    }
+    p = p + 1 + session_len;
+    let suites_len = u16_at(body, p);
+    if suites_len < 0 {
+        return 0 - 1;
+    }
+    p = p + 2 + suites_len;
+    let compression_len = byte_at(body, p);
+    if compression_len < 0 {
+        return 0 - 1;
+    }
+    p = p + 1 + compression_len;
+    let extensions_len = u16_at(body, p);
+    if extensions_len < 0 {
+        return 0 - 1;
+    }
+    // The extension block must be entirely present.
+    if extensions_len > std::array::len(body) - (p + 2) {
+        return 0 - 1;
+    }
+    p + 2
+}
+
+/// The total length of a ClientHello's extension block, or -1.
+///
+/// # Example
+///
+/// ```tuo
+/// let length = std::tls::hello_extensions_length(body);
+/// ```
+pub fn hello_extensions_length(in body: Array[Int]) -> Int {
+    let start = hello_extensions_start(body);
+    if start < 0 {
+        return 0 - 1;
+    }
+    u16_at(body, start - 2)
+}
+
+/// The body of extension `wanted` in a ClientHello, or an empty array when it
+/// is absent or the message is malformed.
+///
+/// # Example
+///
+/// ```tuo
+/// let share = std::tls::hello_extension(body, std::tls::extension_key_share());
+/// ```
+pub fn hello_extension(in body: Array[Int], take wanted: Int) -> Array[Int] {
+    let start = hello_extensions_start(body);
+    if start < 0 {
+        return std::array::empty();
+    }
+    let total = hello_extensions_length(body);
+    if total < 0 {
+        return std::array::empty();
+    }
+    let limit = start + total;
+    var p = start;
+    while p < limit {
+        let kind = u16_at(body, p);
+        let length = u16_at(body, p + 2);
+        if kind < 0 || length < 0 {
+            return std::array::empty();
+        }
+        // The declared extension must fit inside the block.
+        if length > limit - (p + 4) {
+            return std::array::empty();
+        }
+        if kind == wanted {
+            return slice(body, p + 4, length);
+        }
+        let next = p + 4 + length;
+        if next <= p {
+            // A zero-width step would loop forever on hostile input.
+            return std::array::empty();
+        }
+        p = next;
+    }
+    std::array::empty()
+}
+
+/// Whether a ClientHello offers the one cipher suite this module supports.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::tls::hello_offers_suite(body) { /* … */ }
+/// ```
+pub fn hello_offers_suite(in body: Array[Int]) -> Bool {
+    var p = 38;
+    let session_len = byte_at(body, p);
+    if session_len < 0 {
+        return false;
+    }
+    p = p + 1 + session_len;
+    let suites_len = u16_at(body, p);
+    if suites_len < 0 || suites_len % 2 != 0 {
+        return false;
+    }
+    if suites_len > std::array::len(body) - (p + 2) {
+        return false;
+    }
+    var i = 0;
+    var found = false;
+    while i < suites_len {
+        if u16_at(body, p + 2 + i) == cipher_suite() {
+            found = true;
+        }
+        i = i + 2;
+    }
+    found
+}
+
+/// Whether a ClientHello's `supported_versions` offers TLS 1.3.
+///
+/// This is how TLS 1.3 is really negotiated — the record and message version
+/// fields both say "TLS 1.2" for middlebox compatibility, so a server that
+/// trusted them would never speak 1.3 at all.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::tls::hello_offers_tls13(body) { /* … */ }
+/// ```
+pub fn hello_offers_tls13(in body: Array[Int]) -> Bool {
+    let extension = hello_extension(body, extension_supported_versions());
+    let count = byte_at(extension, 0);
+    if count < 0 || count % 2 != 0 {
+        return false;
+    }
+    var i = 0;
+    var found = false;
+    while i < count {
+        if u16_at(extension, 1 + i) == version_tls13() {
+            found = true;
+        }
+        i = i + 2;
+    }
+    found
+}
+
+/// The client's X25519 public key from its `key_share` extension, or an empty
+/// array when absent.
+///
+/// A client may offer several groups; this returns the X25519 one, since that
+/// is the only group these primitives implement. Returning empty for "no
+/// X25519 share" lets the caller send a HelloRetryRequest or alert rather than
+/// proceeding with a key it does not have.
+///
+/// # Example
+///
+/// ```tuo
+/// let peer = std::tls::hello_key_share(body); // 32 bytes
+/// ```
+pub fn hello_key_share(in body: Array[Int]) -> Array[Int] {
+    let extension = hello_extension(body, extension_key_share());
+    let total = u16_at(extension, 0);
+    if total < 0 {
+        return std::array::empty();
+    }
+    if total > std::array::len(extension) - 2 {
+        return std::array::empty();
+    }
+    let limit = 2 + total;
+    var p = 2;
+    while p < limit {
+        let group = u16_at(extension, p);
+        let length = u16_at(extension, p + 2);
+        if group < 0 || length < 0 {
+            return std::array::empty();
+        }
+        if length > limit - (p + 4) {
+            return std::array::empty();
+        }
+        if group == group_x25519() && length == 32 {
+            return slice(extension, p + 4, 32);
+        }
+        let next = p + 4 + length;
+        if next <= p {
+            return std::array::empty();
+        }
+        p = next;
+    }
+    std::array::empty()
+}
+
+/// The 32-byte `random` field of a ClientHello.
+///
+/// # Example
+///
+/// ```tuo
+/// let random = std::tls::hello_random(body);
+/// ```
+pub fn hello_random(in body: Array[Int]) -> Array[Int] {
+    slice(body, 6, 32)
+}
+
+/// The legacy `session_id`, which a TLS 1.3 server must echo verbatim in its
+/// ServerHello (RFC 8446 §4.1.3) for middlebox compatibility.
+///
+/// # Example
+///
+/// ```tuo
+/// let id = std::tls::hello_session_id(body);
+/// ```
+pub fn hello_session_id(in body: Array[Int]) -> Array[Int] {
+    let length = byte_at(body, 38);
+    if length < 0 || length > 32 {
+        return std::array::empty();
+    }
+    slice(body, 39, length)
+}
+
+/// Whether a handshake message is a well-formed ClientHello this module can
+/// answer: right type, right length, offering TLS 1.3, the supported suite,
+/// and an X25519 key share.
+///
+/// # Example
+///
+/// ```tuo
+/// if std::tls::hello_acceptable(body) { /* … */ }
+/// ```
+pub fn hello_acceptable(in body: Array[Int]) -> Bool {
+    if byte_at(body, 0) != handshake_client_hello() {
+        return false;
+    }
+    let declared = u24_at(body, 1);
+    if declared < 0 || declared != std::array::len(body) - 4 {
+        return false;
+    }
+    // Bound each check to a local first: a heap temporary inside a
+    // short-circuit operand is a shape this compiler only recently lowered
+    // correctly, and sequencing is clearer regardless.
+    let versions = hello_offers_tls13(body);
+    let suites = hello_offers_suite(body);
+    let share = std::array::len(hello_key_share(body)) == 32;
+    versions && suites && share
+}
+
+// --- ServerHello and the server's flight (RFC 8446 §4.1.3, §4.4) ------------
+
+/// Build a ServerHello answering `client_hello`, carrying `server_share` as
+/// the server's X25519 public key (RFC 8446 §4.1.3).
+///
+/// The `legacy_session_id_echo` is copied from the client verbatim, and the
+/// version field says "TLS 1.2" while `supported_versions` says 1.3 — both
+/// are middlebox compatibility requirements, not choices. A server that
+/// omits the echo or advertises 1.3 in the legacy field gets its records
+/// dropped by network equipment that has not been updated since 2018.
+///
+/// # Example
+///
+/// ```tuo
+/// let hello = std::tls::server_hello(client_body, server_public, server_random);
+/// ```
+pub fn server_hello(
+    in client_hello: Array[Int],
+    in server_share: Array[Int],
+    in server_random: Array[Int],
+) -> Array[Int] {
+    var body = std::array::empty();
+    // legacy_version: 0x0303.
+    push_u16(body, 771);
+    push_bytes(body, server_random);
+    let session_id = hello_session_id(client_hello);
+    std::array::push(body, std::array::len(session_id));
+    push_bytes(body, session_id);
+    push_u16(body, cipher_suite());
+    // legacy_compression_method: null.
+    std::array::push(body, 0);
+
+    // Extensions: supported_versions, then key_share.
+    var extensions = std::array::empty();
+    push_u16(extensions, extension_supported_versions());
+    push_u16(extensions, 2);
+    push_u16(extensions, version_tls13());
+    push_u16(extensions, extension_key_share());
+    push_u16(extensions, 4 + std::array::len(server_share));
+    push_u16(extensions, group_x25519());
+    push_u16(extensions, std::array::len(server_share));
+    push_bytes(extensions, server_share);
+
+    push_u16(body, std::array::len(extensions));
+    push_bytes(body, extensions);
+    wrap_handshake(handshake_server_hello(), body)
+}
+
+/// Wrap a message body in its four-byte handshake header.
+///
+/// # Example
+///
+/// ```tuo
+/// let message = std::tls::wrap_handshake(std::tls::handshake_finished(), mac);
+/// ```
+pub fn wrap_handshake(take message_type: Int, in body: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    std::array::push(out, message_type & 255);
+    push_u24(out, std::array::len(body));
+    push_bytes(out, body);
+    out
+}
+
+/// An empty `EncryptedExtensions` message — the first encrypted message of
+/// the server's flight (RFC 8446 §4.3.1).
+///
+/// It is empty because this module negotiates nothing that belongs there. The
+/// message is still mandatory: a client that does not receive it aborts.
+///
+/// # Example
+///
+/// ```tuo
+/// let message = std::tls::encrypted_extensions();
+/// ```
+pub fn encrypted_extensions() -> Array[Int] {
+    var body = std::array::empty();
+    push_u16(body, 0);
+    wrap_handshake(handshake_encrypted_extensions(), body)
+}
+
+/// A `Certificate` message carrying one DER certificate (RFC 8446 §4.4.2).
+///
+/// # Example
+///
+/// ```tuo
+/// let message = std::tls::certificate_message(der);
+/// ```
+pub fn certificate_message(in der: Array[Int]) -> Array[Int] {
+    var body = std::array::empty();
+    // certificate_request_context: empty for a server certificate.
+    std::array::push(body, 0);
+    var list = std::array::empty();
+    push_u24(list, std::array::len(der));
+    push_bytes(list, der);
+    // No certificate extensions.
+    push_u16(list, 0);
+    push_u24(body, std::array::len(list));
+    push_bytes(body, list);
+    wrap_handshake(handshake_certificate(), body)
+}
+
+/// The exact bytes a `CertificateVerify` signature is computed over
+/// (RFC 8446 §4.4.3): 64 spaces, a context string, a zero byte, then the
+/// transcript hash.
+///
+/// The 64 spaces and the context string are not decoration. They ensure a
+/// signature made for TLS can never be mistaken for a signature over some
+/// other protocol's data — and, because the client and server context strings
+/// differ, that a server's signature cannot be replayed as a client's.
+///
+/// # Example
+///
+/// ```tuo
+/// let content = std::tls::certificate_verify_content(transcript_hash);
+/// ```
+pub fn certificate_verify_content(in transcript_hash: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        std::array::push(out, 32);
+        i = i + 1;
+    }
+    let context = "TLS 1.3, server CertificateVerify";
+    var c = 0;
+    while c < std::str::len(context) {
+        std::array::push(out, std::str::byte_at(context, c));
+        c = c + 1;
+    }
+    std::array::push(out, 0);
+    push_bytes(out, transcript_hash);
+    out
+}
+
+/// A `CertificateVerify` message carrying an Ed25519 signature
+/// (RFC 8446 §4.4.3).
+///
+/// # Example
+///
+/// ```tuo
+/// let message = std::tls::certificate_verify_message(signature);
+/// ```
+pub fn certificate_verify_message(in signature: Array[Int]) -> Array[Int] {
+    var body = std::array::empty();
+    push_u16(body, signature_ed25519());
+    push_u16(body, std::array::len(signature));
+    push_bytes(body, signature);
+    wrap_handshake(handshake_certificate_verify(), body)
+}
+
+/// The `Finished` message's verify data: HMAC over the transcript hash under
+/// a key derived from the traffic secret (RFC 8446 §4.4.4).
+///
+/// This is what proves both sides derived the *same* keys. Without it a
+/// handshake can complete with mismatched keys and fail mysteriously on the
+/// first application record instead.
+///
+/// # Example
+///
+/// ```tuo
+/// let mac = std::tls::finished_data(traffic_secret, transcript_hash);
+/// ```
+pub fn finished_data(in traffic_secret: Array[Int], in transcript_hash: Array[Int]) -> Array[Int] {
+    let key = std::hkdf::expand_label(
+        traffic_secret,
+        "finished",
+        std::array::empty(),
+        std::hkdf::hash_len(),
+    );
+    std::crypto::hmac_sha256(key, transcript_hash)
+}
+
+/// A `Finished` message (RFC 8446 §4.4.4).
+///
+/// # Example
+///
+/// ```tuo
+/// let message = std::tls::finished_message(traffic_secret, transcript_hash);
+/// ```
+pub fn finished_message(
+    in traffic_secret: Array[Int],
+    in transcript_hash: Array[Int],
+) -> Array[Int] {
+    wrap_handshake(
+        handshake_finished(),
+        finished_data(traffic_secret, transcript_hash),
+    )
+}
+
+// --- Record protection (RFC 8446 §5.2) --------------------------------------
+
+/// Encrypt a record: append the real content type to the plaintext, seal it
+/// with ChaCha20-Poly1305, and frame the result as `application_data`.
+///
+/// The inner content type is the reason a TLS 1.3 record's outer type is
+/// always 23: the real type travels *inside* the encryption, so an observer
+/// cannot tell a handshake record from application data.
+///
+/// The additional data is the record header itself, which binds the declared
+/// length to the ciphertext — without it a peer could truncate a record and
+/// the tag would still check out.
+///
+/// # Example
+///
+/// ```tuo
+/// let record = std::tls::seal_record(key, iv, 0, content_type, plaintext);
+/// ```
+pub fn seal_record(
+    in key: Array[Int],
+    in iv: Array[Int],
+    take sequence: Int,
+    take content_type: Int,
+    in plaintext: Array[Int],
+) -> Array[Int] {
+    var inner = std::array::empty();
+    push_bytes(inner, plaintext);
+    std::array::push(inner, content_type & 255);
+
+    // The header must be built before sealing, since it is the AEAD's
+    // additional data: 5 bytes of header, the body, and the 16-byte tag.
+    var header = std::array::empty();
+    std::array::push(header, content_application_data());
+    std::array::push(header, 3);
+    std::array::push(header, 3);
+    push_u16(header, std::array::len(inner) + 16);
+
+    let nonce = std::hkdf::record_nonce(iv, sequence);
+    let sealed = std::chacha::aead_seal(key, nonce, header, inner);
+
+    var out = std::array::empty();
+    push_bytes(out, header);
+    push_bytes(out, sealed);
+    out
+}
+
+/// Decrypt a record body, returning the plaintext **with its inner content
+/// type still appended**, or `None` when the tag does not verify.
+///
+/// `None` must be treated as fatal: in TLS 1.3 a failed record is not a
+/// recoverable error, it means the stream is forged or corrupt, and the
+/// connection must be torn down rather than resynchronized.
+///
+/// # Example
+///
+/// ```tuo
+/// match std::tls::open_record(key, iv, 0, header, body) { /* … */ }
+/// ```
+pub fn open_record(
+    in key: Array[Int],
+    in iv: Array[Int],
+    take sequence: Int,
+    in header: Array[Int],
+    in body: Array[Int],
+) -> Option[Array[Int]] {
+    let nonce = std::hkdf::record_nonce(iv, sequence);
+    std::chacha::aead_open(key, nonce, header, body)
+}
+
+/// The real content type of a decrypted record — its last non-zero byte
+/// (RFC 8446 §5.4 allows trailing zero padding).
+///
+/// # Example
+///
+/// ```tuo
+/// let kind = std::tls::inner_content_type(plaintext);
+/// ```
+pub fn inner_content_type(in plaintext: Array[Int]) -> Int {
+    var i = std::array::len(plaintext) - 1;
+    while i >= 0 {
+        let b = std::array::get(plaintext, i) & 255;
+        if b != 0 {
+            return b;
+        }
+        i = i - 1;
+    }
+    0 - 1
+}
+
+/// A decrypted record's payload, with the inner content type and any padding
+/// removed.
+///
+/// # Example
+///
+/// ```tuo
+/// let payload = std::tls::inner_payload(plaintext);
+/// ```
+pub fn inner_payload(in plaintext: Array[Int]) -> Array[Int] {
+    var i = std::array::len(plaintext) - 1;
+    while i >= 0 {
+        if (std::array::get(plaintext, i) & 255) != 0 {
+            return slice(plaintext, 0, i);
+        }
+        i = i - 1;
+    }
+    std::array::empty()
+}
+
+// --- The handshake key schedule (RFC 8446 §7.1) -----------------------------
+//
+// TLS 1.3 derives keys from a chain of secrets, each bound to the transcript
+// *at the point it is derived*. That binding is what makes the handshake
+// tamper-evident: change any earlier byte and every later key changes, so a
+// modified ClientHello produces a Finished the peer cannot reproduce.
+
+/// The SHA-256 hash of a transcript.
+///
+/// # Example
+///
+/// ```tuo
+/// let hash = std::tls::transcript_hash(messages);
+/// ```
+pub fn transcript_hash(in messages: Array[Int]) -> Array[Int] {
+    // `std::crypto`'s hashes take a `Str`, so the byte array crosses through
+    // `str_of_bytes`. That is a lossless round trip — the conversion is
+    // byte-for-byte, not a text decoding — but it is the one place this
+    // module depends on that being true.
+    std::crypto::sha256_bytes(std::string::as_str(std::crypto::str_of_bytes(messages)))
+}
+
+/// The client's handshake traffic secret (RFC 8446 §7.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let secret = std::tls::client_handshake_secret(shared, hello_hash);
+/// ```
+pub fn client_handshake_secret(
+    in shared: Array[Int],
+    in hello_hash: Array[Int],
+) -> Array[Int] {
+    std::hkdf::derive_secret(
+        std::hkdf::handshake_secret(shared),
+        "c hs traffic",
+        hello_hash,
+    )
+}
+
+/// The server's handshake traffic secret (RFC 8446 §7.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let secret = std::tls::server_handshake_secret(shared, hello_hash);
+/// ```
+pub fn server_handshake_secret(
+    in shared: Array[Int],
+    in hello_hash: Array[Int],
+) -> Array[Int] {
+    std::hkdf::derive_secret(
+        std::hkdf::handshake_secret(shared),
+        "s hs traffic",
+        hello_hash,
+    )
+}
+
+/// The client's application traffic secret (RFC 8446 §7.1).
+///
+/// Derived from the master secret over the transcript through the server's
+/// Finished — so application keys depend on the whole handshake having been
+/// agreed, not merely on the key exchange.
+///
+/// # Example
+///
+/// ```tuo
+/// let secret = std::tls::client_application_secret(shared, finished_hash);
+/// ```
+pub fn client_application_secret(
+    in shared: Array[Int],
+    in finished_hash: Array[Int],
+) -> Array[Int] {
+    std::hkdf::derive_secret(
+        std::hkdf::master_secret(std::hkdf::handshake_secret(shared)),
+        "c ap traffic",
+        finished_hash,
+    )
+}
+
+/// The server's application traffic secret (RFC 8446 §7.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let secret = std::tls::server_application_secret(shared, finished_hash);
+/// ```
+pub fn server_application_secret(
+    in shared: Array[Int],
+    in finished_hash: Array[Int],
+) -> Array[Int] {
+    std::hkdf::derive_secret(
+        std::hkdf::master_secret(std::hkdf::handshake_secret(shared)),
+        "s ap traffic",
+        finished_hash,
+    )
+}
+
+// --- The server handshake (RFC 8446 §4) -------------------------------------
+//
+// The pieces above are data; this is the sequence. A server's flight is:
+//
+//   ServerHello                    (plaintext)
+//   [EncryptedExtensions]          (under the handshake keys)
+//   [Certificate]
+//   [CertificateVerify]            signs the transcript so far
+//   [Finished]                     MACs the transcript so far
+//
+// Each message is appended to the transcript *before* the next one's keys or
+// signature are computed, which is what binds the whole exchange together.
+
+/// Everything a completed server handshake produces: the flight to send, and
+/// the four application-traffic values the connection then uses.
+///
+/// `ok` is false when the ClientHello was unacceptable — the caller must
+/// check it and send an alert rather than transmitting the (empty) flight.
+struct Handshake {
+    ok: Bool,
+    flight: Array[Int],
+    client_key: Array[Int],
+    client_iv: Array[Int],
+    server_key: Array[Int],
+    server_iv: Array[Int],
+    /// The client's **handshake** traffic key. The client's Finished arrives
+    /// under this, not under the application key — TLS 1.3 changes keys
+    /// mid-flight, and each epoch restarts its record sequence at zero. A
+    /// server that reads the client's first record with application keys
+    /// fails to authenticate a perfectly valid Finished.
+    client_handshake_key: Array[Int],
+    /// The client's handshake traffic IV, paired with the key above.
+    client_handshake_iv: Array[Int],
+}
+
+/// A handshake that could not be completed.
+///
+/// # Example
+///
+/// ```tuo
+/// let failed = std::tls::failed_handshake();
+/// ```
+pub fn failed_handshake() -> Handshake {
+    Handshake {
+        ok: false,
+        flight: std::array::empty(),
+        client_key: std::array::empty(),
+        client_iv: std::array::empty(),
+        server_key: std::array::empty(),
+        server_iv: std::array::empty(),
+        client_handshake_key: std::array::empty(),
+        client_handshake_iv: std::array::empty(),
+    }
+}
+
+/// Run the server side of a full TLS 1.3 handshake.
+///
+/// Takes the client's ClientHello body, the server's X25519 private key, its
+/// certificate, a signature callback's output over the CertificateVerify
+/// content, and randomness for the ServerHello. Returns the complete flight
+/// to write and the application keys to use afterwards.
+///
+/// The signature is passed *in* rather than computed here: signing needs the
+/// certificate's private key, and `std::ed25519` deliberately ships no
+/// `sign` (its arithmetic is variable-time, so signing would leak the key).
+/// A server that has a safe signer supplies the signature; one that does not
+/// cannot complete a handshake, which is the honest outcome.
+///
+/// # Example
+///
+/// ```tuo
+/// let result = std::tls::server_handshake(hello, private, cert, signature, random);
+/// ```
+pub fn server_handshake(
+    in client_hello: Array[Int],
+    in server_private: Array[Int],
+    in certificate: Array[Int],
+    in signature: Array[Int],
+    in server_random: Array[Int],
+) -> Handshake {
+    if !hello_acceptable(client_hello) {
+        return failed_handshake();
+    }
+    let peer_share = hello_key_share(client_hello);
+    if std::array::len(peer_share) != 32 {
+        return failed_handshake();
+    }
+    let shared = std::x25519::scalar_mult(server_private, peer_share);
+    let server_share = std::x25519::public_key(server_private);
+    let hello = server_hello(client_hello, server_share, server_random);
+
+    // Transcript: ClientHello, then ServerHello.
+    var transcript = std::array::empty();
+    push_bytes(transcript, client_hello);
+    push_bytes(transcript, hello);
+    let hello_hash = transcript_hash(transcript);
+
+    let server_secret = server_handshake_secret(shared, hello_hash);
+    let client_secret = client_handshake_secret(shared, hello_hash);
+    let hs_key = std::hkdf::traffic_key(server_secret);
+    let hs_iv = std::hkdf::traffic_iv(server_secret);
+
+    // The encrypted flight, each message appended to the transcript as it is
+    // produced.
+    let extensions = encrypted_extensions();
+    push_bytes(transcript, extensions);
+    let cert_message = certificate_message(certificate);
+    push_bytes(transcript, cert_message);
+    let verify_message = certificate_verify_message(signature);
+    push_bytes(transcript, verify_message);
+    let verify_hash = transcript_hash(transcript);
+    let finished = finished_message(server_secret, verify_hash);
+    push_bytes(transcript, finished);
+    let finished_hash = transcript_hash(transcript);
+
+    // Everything after ServerHello travels encrypted, as one record.
+    var inner = std::array::empty();
+    push_bytes(inner, extensions);
+    push_bytes(inner, cert_message);
+    push_bytes(inner, verify_message);
+    push_bytes(inner, finished);
+    let protected = seal_record(hs_key, hs_iv, 0, content_handshake(), inner);
+
+    var flight = std::array::empty();
+    push_bytes(flight, frame_record(content_handshake(), hello));
+    push_bytes(flight, protected);
+
+    let client_app = client_application_secret(shared, finished_hash);
+    let server_app = server_application_secret(shared, finished_hash);
+    Handshake {
+        ok: true,
+        flight: flight,
+        client_key: std::hkdf::traffic_key(client_app),
+        client_iv: std::hkdf::traffic_iv(client_app),
+        server_key: std::hkdf::traffic_key(server_app),
+        server_iv: std::hkdf::traffic_iv(server_app),
+        client_handshake_key: std::hkdf::traffic_key(client_secret),
+        client_handshake_iv: std::hkdf::traffic_iv(client_secret),
+    }
+}
+
+/// The transcript hash a server must sign, given a ClientHello and the
+/// ServerHello it will answer with.
+///
+/// Exposed separately because the signature has to exist *before*
+/// `server_handshake` runs, and it covers exactly this transcript: the two
+/// hellos plus EncryptedExtensions and Certificate.
+///
+/// # Example
+///
+/// ```tuo
+/// let content = std::tls::signing_content(hello, server_share, random, cert);
+/// ```
+pub fn signing_content(
+    in client_hello: Array[Int],
+    in server_share: Array[Int],
+    in server_random: Array[Int],
+    in certificate: Array[Int],
+) -> Array[Int] {
+    var transcript = std::array::empty();
+    push_bytes(transcript, client_hello);
+    push_bytes(transcript, server_hello(client_hello, server_share, server_random));
+    push_bytes(transcript, encrypted_extensions());
+    push_bytes(transcript, certificate_message(certificate));
+    certificate_verify_content(transcript_hash(transcript))
+}
+
+// --- Specs ------------------------------------------------------------------
+//
+// The ClientHello below is a **real** one, captured from OpenSSL's client —
+// not bytes this module invented. A parser checked only against its own
+// encoder's output encodes its misunderstandings into the test and rejects
+// every real client while passing.
+//
+// The full server flight is pinned by a live OpenSSL client
+// (`tls_server_completes_handshake_with_openssl`), and the key schedule
+// against RFC 8448's published secrets
+// (`tls_key_schedule_matches_rfc_8448`); both need more fuel than the spec
+// sandbox has.
+
+/// A real TLS 1.3 ClientHello body, captured from OpenSSL.
+fn sample_hello() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 5);
+    std::array::push(a, 160);
+    std::array::push(a, 3);
+    std::array::push(a, 3);
+    std::array::push(a, 68);
+    std::array::push(a, 191);
+    std::array::push(a, 109);
+    std::array::push(a, 79);
+    std::array::push(a, 199);
+    std::array::push(a, 146);
+    std::array::push(a, 52);
+    std::array::push(a, 161);
+    std::array::push(a, 227);
+    std::array::push(a, 147);
+    std::array::push(a, 227);
+    std::array::push(a, 93);
+    std::array::push(a, 35);
+    std::array::push(a, 212);
+    std::array::push(a, 211);
+    std::array::push(a, 60);
+    std::array::push(a, 52);
+    std::array::push(a, 184);
+    std::array::push(a, 46);
+    std::array::push(a, 39);
+    std::array::push(a, 8);
+    std::array::push(a, 121);
+    std::array::push(a, 35);
+    std::array::push(a, 3);
+    std::array::push(a, 138);
+    std::array::push(a, 138);
+    std::array::push(a, 230);
+    std::array::push(a, 129);
+    std::array::push(a, 51);
+    std::array::push(a, 237);
+    std::array::push(a, 63);
+    std::array::push(a, 30);
+    std::array::push(a, 32);
+    std::array::push(a, 249);
+    std::array::push(a, 78);
+    std::array::push(a, 130);
+    std::array::push(a, 49);
+    std::array::push(a, 31);
+    std::array::push(a, 105);
+    std::array::push(a, 34);
+    std::array::push(a, 111);
+    std::array::push(a, 104);
+    std::array::push(a, 50);
+    std::array::push(a, 157);
+    std::array::push(a, 119);
+    std::array::push(a, 230);
+    std::array::push(a, 138);
+    std::array::push(a, 91);
+    std::array::push(a, 227);
+    std::array::push(a, 215);
+    std::array::push(a, 200);
+    std::array::push(a, 164);
+    std::array::push(a, 220);
+    std::array::push(a, 32);
+    std::array::push(a, 40);
+    std::array::push(a, 49);
+    std::array::push(a, 249);
+    std::array::push(a, 29);
+    std::array::push(a, 96);
+    std::array::push(a, 223);
+    std::array::push(a, 235);
+    std::array::push(a, 127);
+    std::array::push(a, 57);
+    std::array::push(a, 251);
+    std::array::push(a, 78);
+    std::array::push(a, 0);
+    std::array::push(a, 6);
+    std::array::push(a, 19);
+    std::array::push(a, 2);
+    std::array::push(a, 19);
+    std::array::push(a, 3);
+    std::array::push(a, 19);
+    std::array::push(a, 1);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 5);
+    std::array::push(a, 81);
+    std::array::push(a, 0);
+    std::array::push(a, 11);
+    std::array::push(a, 0);
+    std::array::push(a, 2);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 10);
+    std::array::push(a, 0);
+    std::array::push(a, 18);
+    std::array::push(a, 0);
+    std::array::push(a, 16);
+    std::array::push(a, 17);
+    std::array::push(a, 236);
+    std::array::push(a, 0);
+    std::array::push(a, 29);
+    std::array::push(a, 0);
+    std::array::push(a, 23);
+    std::array::push(a, 0);
+    std::array::push(a, 30);
+    std::array::push(a, 0);
+    std::array::push(a, 24);
+    std::array::push(a, 0);
+    std::array::push(a, 25);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 1);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 35);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 22);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 23);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 13);
+    std::array::push(a, 0);
+    std::array::push(a, 42);
+    std::array::push(a, 0);
+    std::array::push(a, 40);
+    std::array::push(a, 9);
+    std::array::push(a, 5);
+    std::array::push(a, 9);
+    std::array::push(a, 6);
+    std::array::push(a, 9);
+    std::array::push(a, 4);
+    std::array::push(a, 4);
+    std::array::push(a, 3);
+    std::array::push(a, 5);
+    std::array::push(a, 3);
+    std::array::push(a, 6);
+    std::array::push(a, 3);
+    std::array::push(a, 8);
+    std::array::push(a, 7);
+    std::array::push(a, 8);
+    std::array::push(a, 8);
+    std::array::push(a, 8);
+    std::array::push(a, 26);
+    std::array::push(a, 8);
+    std::array::push(a, 27);
+    std::array::push(a, 8);
+    std::array::push(a, 28);
+    std::array::push(a, 8);
+    std::array::push(a, 9);
+    std::array::push(a, 8);
+    std::array::push(a, 10);
+    std::array::push(a, 8);
+    std::array::push(a, 11);
+    std::array::push(a, 8);
+    std::array::push(a, 4);
+    std::array::push(a, 8);
+    std::array::push(a, 5);
+    std::array::push(a, 8);
+    std::array::push(a, 6);
+    std::array::push(a, 4);
+    std::array::push(a, 1);
+    std::array::push(a, 5);
+    std::array::push(a, 1);
+    std::array::push(a, 6);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 43);
+    std::array::push(a, 0);
+    std::array::push(a, 3);
+    std::array::push(a, 2);
+    std::array::push(a, 3);
+    std::array::push(a, 4);
+    std::array::push(a, 0);
+    std::array::push(a, 45);
+    std::array::push(a, 0);
+    std::array::push(a, 2);
+    std::array::push(a, 1);
+    std::array::push(a, 1);
+    std::array::push(a, 0);
+    std::array::push(a, 51);
+    std::array::push(a, 4);
+    std::array::push(a, 234);
+    std::array::push(a, 4);
+    std::array::push(a, 232);
+    std::array::push(a, 17);
+    std::array::push(a, 236);
+    std::array::push(a, 4);
+    std::array::push(a, 192);
+    std::array::push(a, 116);
+    std::array::push(a, 145);
+    std::array::push(a, 175);
+    std::array::push(a, 147);
+    std::array::push(a, 33);
+    std::array::push(a, 109);
+    std::array::push(a, 218);
+    std::array::push(a, 8);
+    std::array::push(a, 2);
+    std::array::push(a, 149);
+    std::array::push(a, 171);
+    std::array::push(a, 11);
+    std::array::push(a, 194);
+    std::array::push(a, 244);
+    std::array::push(a, 111);
+    std::array::push(a, 14);
+    std::array::push(a, 117);
+    std::array::push(a, 87);
+    std::array::push(a, 170);
+    std::array::push(a, 118);
+    std::array::push(a, 94);
+    std::array::push(a, 125);
+    std::array::push(a, 81);
+    std::array::push(a, 69);
+    std::array::push(a, 177);
+    std::array::push(a, 48);
+    std::array::push(a, 185);
+    std::array::push(a, 138);
+    std::array::push(a, 16);
+    std::array::push(a, 126);
+    std::array::push(a, 249);
+    std::array::push(a, 245);
+    std::array::push(a, 72);
+    std::array::push(a, 253);
+    std::array::push(a, 153);
+    std::array::push(a, 182);
+    std::array::push(a, 200);
+    std::array::push(a, 227);
+    std::array::push(a, 2);
+    std::array::push(a, 241);
+    std::array::push(a, 233);
+    std::array::push(a, 90);
+    std::array::push(a, 7);
+    std::array::push(a, 212);
+    std::array::push(a, 7);
+    std::array::push(a, 147);
+    std::array::push(a, 168);
+    std::array::push(a, 202);
+    std::array::push(a, 227);
+    std::array::push(a, 241);
+    std::array::push(a, 130);
+    std::array::push(a, 168);
+    std::array::push(a, 219);
+    std::array::push(a, 38);
+    std::array::push(a, 1);
+    std::array::push(a, 114);
+    std::array::push(a, 62);
+    std::array::push(a, 75);
+    std::array::push(a, 192);
+    std::array::push(a, 180);
+    std::array::push(a, 239);
+    std::array::push(a, 2);
+    std::array::push(a, 112);
+    std::array::push(a, 146);
+    std::array::push(a, 213);
+    std::array::push(a, 15);
+    std::array::push(a, 25);
+    std::array::push(a, 231);
+    std::array::push(a, 117);
+    std::array::push(a, 47);
+    std::array::push(a, 101);
+    std::array::push(a, 162);
+    std::array::push(a, 174);
+    std::array::push(a, 120);
+    std::array::push(a, 145);
+    std::array::push(a, 13);
+    std::array::push(a, 87);
+    std::array::push(a, 23);
+    std::array::push(a, 5);
+    std::array::push(a, 67);
+    std::array::push(a, 12);
+    std::array::push(a, 178);
+    std::array::push(a, 186);
+    std::array::push(a, 63);
+    std::array::push(a, 162);
+    std::array::push(a, 187);
+    std::array::push(a, 179);
+    std::array::push(a, 25);
+    std::array::push(a, 195);
+    std::array::push(a, 175);
+    std::array::push(a, 130);
+    std::array::push(a, 214);
+    std::array::push(a, 203);
+    std::array::push(a, 153);
+    std::array::push(a, 133);
+    std::array::push(a, 61);
+    std::array::push(a, 4);
+    std::array::push(a, 186);
+    std::array::push(a, 200);
+    std::array::push(a, 54);
+    std::array::push(a, 151);
+    std::array::push(a, 90);
+    std::array::push(a, 84);
+    std::array::push(a, 156);
+    std::array::push(a, 124);
+    std::array::push(a, 140);
+    std::array::push(a, 160);
+    std::array::push(a, 62);
+    std::array::push(a, 247);
+    std::array::push(a, 139);
+    std::array::push(a, 67);
+    std::array::push(a, 124);
+    std::array::push(a, 228);
+    std::array::push(a, 64);
+    std::array::push(a, 173);
+    std::array::push(a, 134);
+    std::array::push(a, 205);
+    std::array::push(a, 213);
+    std::array::push(a, 198);
+    std::array::push(a, 136);
+    std::array::push(a, 186);
+    std::array::push(a, 187);
+    std::array::push(a, 165);
+    std::array::push(a, 22);
+    std::array::push(a, 3);
+    std::array::push(a, 62);
+    std::array::push(a, 221);
+    std::array::push(a, 26);
+    std::array::push(a, 67);
+    std::array::push(a, 51);
+    std::array::push(a, 204);
+    std::array::push(a, 205);
+    std::array::push(a, 239);
+    std::array::push(a, 211);
+    std::array::push(a, 33);
+    std::array::push(a, 1);
+    std::array::push(a, 39);
+    std::array::push(a, 42);
+    std::array::push(a, 230);
+    std::array::push(a, 209);
+    std::array::push(a, 101);
+    std::array::push(a, 124);
+    std::array::push(a, 103);
+    std::array::push(a, 171);
+    std::array::push(a, 10);
+    std::array::push(a, 10);
+    std::array::push(a, 3);
+    std::array::push(a, 220);
+    std::array::push(a, 39);
+    std::array::push(a, 200);
+    std::array::push(a, 216);
+    std::array::push(a, 204);
+    std::array::push(a, 155);
+    std::array::push(a, 249);
+    std::array::push(a, 108);
+    std::array::push(a, 104);
+    std::array::push(a, 162);
+    std::array::push(a, 122);
+    std::array::push(a, 57);
+    std::array::push(a, 232);
+    std::array::push(a, 176);
+    std::array::push(a, 197);
+    std::array::push(a, 131);
+    std::array::push(a, 229);
+    std::array::push(a, 194);
+    std::array::push(a, 154);
+    std::array::push(a, 51);
+    std::array::push(a, 169);
+    std::array::push(a, 69);
+    std::array::push(a, 18);
+    std::array::push(a, 43);
+    std::array::push(a, 6);
+    std::array::push(a, 243);
+    std::array::push(a, 59);
+    std::array::push(a, 34);
+    std::array::push(a, 209);
+    std::array::push(a, 43);
+    std::array::push(a, 217);
+    std::array::push(a, 170);
+    std::array::push(a, 152);
+    std::array::push(a, 242);
+    std::array::push(a, 224);
+    std::array::push(a, 4);
+    std::array::push(a, 175);
+    std::array::push(a, 86);
+    std::array::push(a, 154);
+    std::array::push(a, 180);
+    std::array::push(a, 71);
+    std::array::push(a, 22);
+    std::array::push(a, 216);
+    std::array::push(a, 26);
+    std::array::push(a, 153);
+    std::array::push(a, 241);
+    std::array::push(a, 58);
+    std::array::push(a, 119);
+    std::array::push(a, 178);
+    std::array::push(a, 193);
+    std::array::push(a, 71);
+    std::array::push(a, 74);
+    std::array::push(a, 81);
+    std::array::push(a, 148);
+    std::array::push(a, 253);
+    std::array::push(a, 10);
+    std::array::push(a, 150);
+    std::array::push(a, 51);
+    std::array::push(a, 70);
+    std::array::push(a, 174);
+    std::array::push(a, 58);
+    std::array::push(a, 130);
+    std::array::push(a, 110);
+    std::array::push(a, 177);
+    std::array::push(a, 203);
+    std::array::push(a, 199);
+    std::array::push(a, 28);
+    std::array::push(a, 139);
+    std::array::push(a, 48);
+    std::array::push(a, 138);
+    std::array::push(a, 9);
+    std::array::push(a, 128);
+    std::array::push(a, 237);
+    std::array::push(a, 188);
+    std::array::push(a, 157);
+    std::array::push(a, 118);
+    std::array::push(a, 70);
+    std::array::push(a, 147);
+    std::array::push(a, 94);
+    std::array::push(a, 25);
+    std::array::push(a, 49);
+    std::array::push(a, 99);
+    std::array::push(a, 208);
+    std::array::push(a, 162);
+    std::array::push(a, 87);
+    std::array::push(a, 54);
+    std::array::push(a, 1);
+    std::array::push(a, 181);
+    std::array::push(a, 26);
+    std::array::push(a, 14);
+    std::array::push(a, 231);
+    std::array::push(a, 133);
+    std::array::push(a, 87);
+    std::array::push(a, 206);
+    std::array::push(a, 167);
+    std::array::push(a, 40);
+    std::array::push(a, 208);
+    std::array::push(a, 153);
+    std::array::push(a, 31);
+    std::array::push(a, 60);
+    std::array::push(a, 34);
+    std::array::push(a, 0);
+    std::array::push(a, 82);
+    std::array::push(a, 102);
+    std::array::push(a, 36);
+    std::array::push(a, 156);
+    std::array::push(a, 252);
+    std::array::push(a, 106);
+    std::array::push(a, 130);
+    std::array::push(a, 170);
+    std::array::push(a, 3);
+    std::array::push(a, 105);
+    std::array::push(a, 84);
+    std::array::push(a, 172);
+    std::array::push(a, 60);
+    std::array::push(a, 184);
+    std::array::push(a, 50);
+    std::array::push(a, 252);
+    std::array::push(a, 16);
+    std::array::push(a, 202);
+    std::array::push(a, 148);
+    std::array::push(a, 34);
+    std::array::push(a, 22);
+    std::array::push(a, 183);
+    std::array::push(a, 232);
+    std::array::push(a, 112);
+    std::array::push(a, 62);
+    std::array::push(a, 248);
+    std::array::push(a, 26);
+    std::array::push(a, 41);
+    std::array::push(a, 37);
+    std::array::push(a, 181);
+    std::array::push(a, 75);
+    std::array::push(a, 192);
+    std::array::push(a, 189);
+    std::array::push(a, 90);
+    std::array::push(a, 202);
+    std::array::push(a, 48);
+    std::array::push(a, 106);
+    std::array::push(a, 10);
+    std::array::push(a, 169);
+    std::array::push(a, 181);
+    std::array::push(a, 43);
+    std::array::push(a, 25);
+    std::array::push(a, 237);
+    std::array::push(a, 122);
+    std::array::push(a, 137);
+    std::array::push(a, 115);
+    std::array::push(a, 241);
+    std::array::push(a, 12);
+    std::array::push(a, 168);
+    std::array::push(a, 124);
+    std::array::push(a, 206);
+    std::array::push(a, 207);
+    std::array::push(a, 131);
+    std::array::push(a, 175);
+    std::array::push(a, 210);
+    std::array::push(a, 130);
+    std::array::push(a, 110);
+    std::array::push(a, 22);
+    std::array::push(a, 185);
+    std::array::push(a, 136);
+    std::array::push(a, 203);
+    std::array::push(a, 104);
+    std::array::push(a, 157);
+    std::array::push(a, 137);
+    std::array::push(a, 37);
+    std::array::push(a, 45);
+    std::array::push(a, 225);
+    std::array::push(a, 26);
+    std::array::push(a, 110);
+    std::array::push(a, 123);
+    std::array::push(a, 128);
+    std::array::push(a, 129);
+    std::array::push(a, 135);
+    std::array::push(a, 248);
+    std::array::push(a, 22);
+    std::array::push(a, 182);
+    std::array::push(a, 83);
+    std::array::push(a, 106);
+    std::array::push(a, 192);
+    std::array::push(a, 74);
+    std::array::push(a, 78);
+    std::array::push(a, 2);
+    std::array::push(a, 52);
+    std::array::push(a, 52);
+    std::array::push(a, 12);
+    std::array::push(a, 122);
+    std::array::push(a, 170);
+    std::array::push(a, 237);
+    std::array::push(a, 224);
+    std::array::push(a, 136);
+    std::array::push(a, 252);
+    std::array::push(a, 72);
+    std::array::push(a, 62);
+    std::array::push(a, 239);
+    std::array::push(a, 154);
+    std::array::push(a, 94);
+    std::array::push(a, 243);
+    std::array::push(a, 4);
+    std::array::push(a, 58);
+    std::array::push(a, 24);
+    std::array::push(a, 7);
+    std::array::push(a, 208);
+    std::array::push(a, 23);
+    std::array::push(a, 242);
+    std::array::push(a, 34);
+    std::array::push(a, 138);
+    std::array::push(a, 32);
+    std::array::push(a, 29);
+    std::array::push(a, 78);
+    std::array::push(a, 38);
+    std::array::push(a, 196);
+    std::array::push(a, 10);
+    std::array::push(a, 140);
+    std::array::push(a, 99);
+    std::array::push(a, 122);
+    std::array::push(a, 12);
+    std::array::push(a, 171);
+    std::array::push(a, 150);
+    std::array::push(a, 133);
+    std::array::push(a, 32);
+    std::array::push(a, 12);
+    std::array::push(a, 244);
+    std::array::push(a, 0);
+    std::array::push(a, 30);
+    std::array::push(a, 179);
+    std::array::push(a, 104);
+    std::array::push(a, 69);
+    std::array::push(a, 154);
+    std::array::push(a, 151);
+    std::array::push(a, 226);
+    std::array::push(a, 100);
+    std::array::push(a, 93);
+    std::array::push(a, 171);
+    std::array::push(a, 236);
+    std::array::push(a, 149);
+    std::array::push(a, 79);
+    std::array::push(a, 134);
+    std::array::push(a, 148);
+    std::array::push(a, 34);
+    std::array::push(a, 73);
+    std::array::push(a, 135);
+    std::array::push(a, 73);
+    std::array::push(a, 217);
+    std::array::push(a, 85);
+    std::array::push(a, 232);
+    std::array::push(a, 122);
+    std::array::push(a, 97);
+    std::array::push(a, 216);
+    std::array::push(a, 148);
+    std::array::push(a, 186);
+    std::array::push(a, 238);
+    std::array::push(a, 169);
+    std::array::push(a, 179);
+    std::array::push(a, 244);
+    std::array::push(a, 23);
+    std::array::push(a, 52);
+    std::array::push(a, 201);
+    std::array::push(a, 180);
+    std::array::push(a, 8);
+    std::array::push(a, 130);
+    std::array::push(a, 113);
+    std::array::push(a, 188);
+    std::array::push(a, 143);
+    std::array::push(a, 101);
+    std::array::push(a, 183);
+    std::array::push(a, 113);
+    std::array::push(a, 153);
+    std::array::push(a, 138);
+    std::array::push(a, 149);
+    std::array::push(a, 153);
+    std::array::push(a, 37);
+    std::array::push(a, 74);
+    std::array::push(a, 219);
+    std::array::push(a, 156);
+    std::array::push(a, 203);
+    std::array::push(a, 101);
+    std::array::push(a, 17);
+    std::array::push(a, 20);
+    std::array::push(a, 187);
+    std::array::push(a, 144);
+    std::array::push(a, 194);
+    std::array::push(a, 51);
+    std::array::push(a, 46);
+    std::array::push(a, 112);
+    std::array::push(a, 116);
+    std::array::push(a, 41);
+    std::array::push(a, 203);
+    std::array::push(a, 114);
+    std::array::push(a, 201);
+    std::array::push(a, 94);
+    std::array::push(a, 210);
+    std::array::push(a, 195);
+    std::array::push(a, 23);
+    std::array::push(a, 5);
+    std::array::push(a, 61);
+    std::array::push(a, 110);
+    std::array::push(a, 148);
+    std::array::push(a, 165);
+    std::array::push(a, 32);
+    std::array::push(a, 65);
+    std::array::push(a, 28);
+    std::array::push(a, 120);
+    std::array::push(a, 43);
+    std::array::push(a, 186);
+    std::array::push(a, 218);
+    std::array::push(a, 25);
+    std::array::push(a, 91);
+    std::array::push(a, 203);
+    std::array::push(a, 199);
+    std::array::push(a, 49);
+    std::array::push(a, 9);
+    std::array::push(a, 211);
+    std::array::push(a, 107);
+    std::array::push(a, 133);
+    std::array::push(a, 48);
+    std::array::push(a, 113);
+    std::array::push(a, 248);
+    std::array::push(a, 196);
+    std::array::push(a, 145);
+    std::array::push(a, 150);
+    std::array::push(a, 208);
+    std::array::push(a, 57);
+    std::array::push(a, 133);
+    std::array::push(a, 154);
+    std::array::push(a, 171);
+    std::array::push(a, 219);
+    std::array::push(a, 64);
+    std::array::push(a, 141);
+    std::array::push(a, 11);
+    std::array::push(a, 2);
+    std::array::push(a, 149);
+    std::array::push(a, 129);
+    std::array::push(a, 226);
+    std::array::push(a, 131);
+    std::array::push(a, 198);
+    std::array::push(a, 83);
+    std::array::push(a, 33);
+    std::array::push(a, 157);
+    std::array::push(a, 102);
+    std::array::push(a, 36);
+    std::array::push(a, 158);
+    std::array::push(a, 145);
+    std::array::push(a, 132);
+    std::array::push(a, 145);
+    std::array::push(a, 0);
+    std::array::push(a, 96);
+    std::array::push(a, 107);
+    std::array::push(a, 180);
+    std::array::push(a, 41);
+    std::array::push(a, 189);
+    std::array::push(a, 4);
+    std::array::push(a, 152);
+    std::array::push(a, 7);
+    std::array::push(a, 16);
+    std::array::push(a, 88);
+    std::array::push(a, 236);
+    std::array::push(a, 9);
+    std::array::push(a, 177);
+    std::array::push(a, 8);
+    std::array::push(a, 194);
+    std::array::push(a, 82);
+    std::array::push(a, 242);
+    std::array::push(a, 245);
+    std::array::push(a, 114);
+    std::array::push(a, 251);
+    std::array::push(a, 122);
+    std::array::push(a, 68);
+    std::array::push(a, 32);
+    std::array::push(a, 91);
+    std::array::push(a, 202);
+    std::array::push(a, 5);
+    std::array::push(a, 151);
+    std::array::push(a, 191);
+    std::array::push(a, 120);
+    std::array::push(a, 234);
+    std::array::push(a, 132);
+    std::array::push(a, 178);
+    std::array::push(a, 73);
+    std::array::push(a, 199);
+    std::array::push(a, 55);
+    std::array::push(a, 178);
+    std::array::push(a, 70);
+    std::array::push(a, 26);
+    std::array::push(a, 183);
+    std::array::push(a, 77);
+    std::array::push(a, 124);
+    std::array::push(a, 74);
+    std::array::push(a, 88);
+    std::array::push(a, 194);
+    std::array::push(a, 44);
+    std::array::push(a, 40);
+    std::array::push(a, 5);
+    std::array::push(a, 114);
+    std::array::push(a, 169);
+    std::array::push(a, 233);
+    std::array::push(a, 86);
+    std::array::push(a, 15);
+    std::array::push(a, 21);
+    std::array::push(a, 37);
+    std::array::push(a, 194);
+    std::array::push(a, 86);
+    std::array::push(a, 136);
+    std::array::push(a, 123);
+    std::array::push(a, 13);
+    std::array::push(a, 25);
+    std::array::push(a, 46);
+    std::array::push(a, 41);
+    std::array::push(a, 124);
+    std::array::push(a, 29);
+    std::array::push(a, 93);
+    std::array::push(a, 246);
+    std::array::push(a, 117);
+    std::array::push(a, 65);
+    std::array::push(a, 0);
+    std::array::push(a, 50);
+    std::array::push(a, 153);
+    std::array::push(a, 49);
+    std::array::push(a, 137);
+    std::array::push(a, 212);
+    std::array::push(a, 67);
+    std::array::push(a, 46);
+    std::array::push(a, 142);
+    std::array::push(a, 44);
+    std::array::push(a, 43);
+    std::array::push(a, 1);
+    std::array::push(a, 54);
+    std::array::push(a, 31);
+    std::array::push(a, 54);
+    std::array::push(a, 132);
+    std::array::push(a, 9);
+    std::array::push(a, 248);
+    std::array::push(a, 26);
+    std::array::push(a, 48);
+    std::array::push(a, 150);
+    std::array::push(a, 54);
+    std::array::push(a, 204);
+    std::array::push(a, 213);
+    std::array::push(a, 32);
+    std::array::push(a, 204);
+    std::array::push(a, 7);
+    std::array::push(a, 202);
+    std::array::push(a, 50);
+    std::array::push(a, 190);
+    std::array::push(a, 251);
+    std::array::push(a, 78);
+    std::array::push(a, 174);
+    std::array::push(a, 16);
+    std::array::push(a, 32);
+    std::array::push(a, 187);
+    std::array::push(a, 202);
+    std::array::push(a, 69);
+    std::array::push(a, 15);
+    std::array::push(a, 179);
+    std::array::push(a, 203);
+    std::array::push(a, 99);
+    std::array::push(a, 44);
+    std::array::push(a, 70);
+    std::array::push(a, 44);
+    std::array::push(a, 60);
+    std::array::push(a, 8);
+    std::array::push(a, 130);
+    std::array::push(a, 55);
+    std::array::push(a, 88);
+    std::array::push(a, 216);
+    std::array::push(a, 123);
+    std::array::push(a, 132);
+    std::array::push(a, 226);
+    std::array::push(a, 135);
+    std::array::push(a, 57);
+    std::array::push(a, 154);
+    std::array::push(a, 150);
+    std::array::push(a, 38);
+    std::array::push(a, 43);
+    std::array::push(a, 101);
+    std::array::push(a, 74);
+    std::array::push(a, 85);
+    std::array::push(a, 101);
+    std::array::push(a, 202);
+    std::array::push(a, 238);
+    std::array::push(a, 198);
+    std::array::push(a, 10);
+    std::array::push(a, 177);
+    std::array::push(a, 225);
+    std::array::push(a, 159);
+    std::array::push(a, 121);
+    std::array::push(a, 251);
+    std::array::push(a, 31);
+    std::array::push(a, 37);
+    std::array::push(a, 66);
+    std::array::push(a, 161);
+    std::array::push(a, 68);
+    std::array::push(a, 83);
+    std::array::push(a, 27);
+    std::array::push(a, 130);
+    std::array::push(a, 9);
+    std::array::push(a, 208);
+    std::array::push(a, 82);
+    std::array::push(a, 192);
+    std::array::push(a, 63);
+    std::array::push(a, 127);
+    std::array::push(a, 104);
+    std::array::push(a, 61);
+    std::array::push(a, 254);
+    std::array::push(a, 209);
+    std::array::push(a, 36);
+    std::array::push(a, 28);
+    std::array::push(a, 168);
+    std::array::push(a, 129);
+    std::array::push(a, 11);
+    std::array::push(a, 112);
+    std::array::push(a, 25);
+    std::array::push(a, 122);
+    std::array::push(a, 26);
+    std::array::push(a, 34);
+    std::array::push(a, 65);
+    std::array::push(a, 90);
+    std::array::push(a, 199);
+    std::array::push(a, 124);
+    std::array::push(a, 219);
+    std::array::push(a, 114);
+    std::array::push(a, 195);
+    std::array::push(a, 53);
+    std::array::push(a, 136);
+    std::array::push(a, 96);
+    std::array::push(a, 232);
+    std::array::push(a, 192);
+    std::array::push(a, 123);
+    std::array::push(a, 229);
+    std::array::push(a, 85);
+    std::array::push(a, 74);
+    std::array::push(a, 20);
+    std::array::push(a, 34);
+    std::array::push(a, 140);
+    std::array::push(a, 98);
+    std::array::push(a, 110);
+    std::array::push(a, 47);
+    std::array::push(a, 4);
+    std::array::push(a, 120);
+    std::array::push(a, 49);
+    std::array::push(a, 138);
+    std::array::push(a, 135);
+    std::array::push(a, 135);
+    std::array::push(a, 243);
+    std::array::push(a, 7);
+    std::array::push(a, 105);
+    std::array::push(a, 133);
+    std::array::push(a, 30);
+    std::array::push(a, 248);
+    std::array::push(a, 240);
+    std::array::push(a, 189);
+    std::array::push(a, 90);
+    std::array::push(a, 248);
+    std::array::push(a, 3);
+    std::array::push(a, 54);
+    std::array::push(a, 9);
+    std::array::push(a, 149);
+    std::array::push(a, 66);
+    std::array::push(a, 118);
+    std::array::push(a, 174);
+    std::array::push(a, 24);
+    std::array::push(a, 120);
+    std::array::push(a, 106);
+    std::array::push(a, 155);
+    std::array::push(a, 134);
+    std::array::push(a, 44);
+    std::array::push(a, 178);
+    std::array::push(a, 116);
+    std::array::push(a, 102);
+    std::array::push(a, 245);
+    std::array::push(a, 2);
+    std::array::push(a, 154);
+    std::array::push(a, 239);
+    std::array::push(a, 163);
+    std::array::push(a, 97);
+    std::array::push(a, 124);
+    std::array::push(a, 233);
+    std::array::push(a, 141);
+    std::array::push(a, 194);
+    std::array::push(a, 28);
+    std::array::push(a, 16);
+    std::array::push(a, 75);
+    std::array::push(a, 231);
+    std::array::push(a, 167);
+    std::array::push(a, 20);
+    std::array::push(a, 10);
+    std::array::push(a, 96);
+    std::array::push(a, 173);
+    std::array::push(a, 161);
+    std::array::push(a, 17);
+    std::array::push(a, 0);
+    std::array::push(a, 221);
+    std::array::push(a, 138);
+    std::array::push(a, 127);
+    std::array::push(a, 120);
+    std::array::push(a, 11);
+    std::array::push(a, 54);
+    std::array::push(a, 27);
+    std::array::push(a, 142);
+    std::array::push(a, 37);
+    std::array::push(a, 165);
+    std::array::push(a, 152);
+    std::array::push(a, 165);
+    std::array::push(a, 160);
+    std::array::push(a, 24);
+    std::array::push(a, 218);
+    std::array::push(a, 58);
+    std::array::push(a, 121);
+    std::array::push(a, 213);
+    std::array::push(a, 56);
+    std::array::push(a, 176);
+    std::array::push(a, 126);
+    std::array::push(a, 228);
+    std::array::push(a, 194);
+    std::array::push(a, 98);
+    std::array::push(a, 248);
+    std::array::push(a, 53);
+    std::array::push(a, 153);
+    std::array::push(a, 56);
+    std::array::push(a, 177);
+    std::array::push(a, 152);
+    std::array::push(a, 1);
+    std::array::push(a, 129);
+    std::array::push(a, 18);
+    std::array::push(a, 104);
+    std::array::push(a, 149);
+    std::array::push(a, 174);
+    std::array::push(a, 33);
+    std::array::push(a, 56);
+    std::array::push(a, 53);
+    std::array::push(a, 220);
+    std::array::push(a, 201);
+    std::array::push(a, 42);
+    std::array::push(a, 182);
+    std::array::push(a, 46);
+    std::array::push(a, 53);
+    std::array::push(a, 40);
+    std::array::push(a, 141);
+    std::array::push(a, 176);
+    std::array::push(a, 196);
+    std::array::push(a, 58);
+    std::array::push(a, 175);
+    std::array::push(a, 248);
+    std::array::push(a, 90);
+    std::array::push(a, 29);
+    std::array::push(a, 120);
+    std::array::push(a, 76);
+    std::array::push(a, 192);
+    std::array::push(a, 64);
+    std::array::push(a, 142);
+    std::array::push(a, 32);
+    std::array::push(a, 144);
+    std::array::push(a, 15);
+    std::array::push(a, 59);
+    std::array::push(a, 27);
+    std::array::push(a, 126);
+    std::array::push(a, 134);
+    std::array::push(a, 178);
+    std::array::push(a, 178);
+    std::array::push(a, 222);
+    std::array::push(a, 44);
+    std::array::push(a, 200);
+    std::array::push(a, 70);
+    std::array::push(a, 186);
+    std::array::push(a, 61);
+    std::array::push(a, 17);
+    std::array::push(a, 248);
+    std::array::push(a, 10);
+    std::array::push(a, 81);
+    std::array::push(a, 105);
+    std::array::push(a, 178);
+    std::array::push(a, 65);
+    std::array::push(a, 165);
+    std::array::push(a, 87);
+    std::array::push(a, 139);
+    std::array::push(a, 250);
+    std::array::push(a, 156);
+    std::array::push(a, 227);
+    std::array::push(a, 38);
+    std::array::push(a, 64);
+    std::array::push(a, 7);
+    std::array::push(a, 58);
+    std::array::push(a, 136);
+    std::array::push(a, 203);
+    std::array::push(a, 201);
+    std::array::push(a, 29);
+    std::array::push(a, 128);
+    std::array::push(a, 136);
+    std::array::push(a, 166);
+    std::array::push(a, 93);
+    std::array::push(a, 165);
+    std::array::push(a, 43);
+    std::array::push(a, 254);
+    std::array::push(a, 17);
+    std::array::push(a, 88);
+    std::array::push(a, 122);
+    std::array::push(a, 242);
+    std::array::push(a, 55);
+    std::array::push(a, 51);
+    std::array::push(a, 18);
+    std::array::push(a, 115);
+    std::array::push(a, 233);
+    std::array::push(a, 198);
+    std::array::push(a, 45);
+    std::array::push(a, 185);
+    std::array::push(a, 19);
+    std::array::push(a, 88);
+    std::array::push(a, 158);
+    std::array::push(a, 84);
+    std::array::push(a, 151);
+    std::array::push(a, 232);
+    std::array::push(a, 80);
+    std::array::push(a, 157);
+    std::array::push(a, 246);
+    std::array::push(a, 1);
+    std::array::push(a, 119);
+    std::array::push(a, 113);
+    std::array::push(a, 66);
+    std::array::push(a, 48);
+    std::array::push(a, 168);
+    std::array::push(a, 86);
+    std::array::push(a, 122);
+    std::array::push(a, 95);
+    std::array::push(a, 156);
+    std::array::push(a, 7);
+    std::array::push(a, 255);
+    std::array::push(a, 3);
+    std::array::push(a, 95);
+    std::array::push(a, 192);
+    std::array::push(a, 138);
+    std::array::push(a, 148);
+    std::array::push(a, 107);
+    std::array::push(a, 12);
+    std::array::push(a, 51);
+    std::array::push(a, 16);
+    std::array::push(a, 12);
+    std::array::push(a, 53);
+    std::array::push(a, 121);
+    std::array::push(a, 241);
+    std::array::push(a, 200);
+    std::array::push(a, 84);
+    std::array::push(a, 186);
+    std::array::push(a, 123);
+    std::array::push(a, 179);
+    std::array::push(a, 104);
+    std::array::push(a, 55);
+    std::array::push(a, 109);
+    std::array::push(a, 57);
+    std::array::push(a, 89);
+    std::array::push(a, 117);
+    std::array::push(a, 20);
+    std::array::push(a, 204);
+    std::array::push(a, 236);
+    std::array::push(a, 210);
+    std::array::push(a, 57);
+    std::array::push(a, 80);
+    std::array::push(a, 220);
+    std::array::push(a, 128);
+    std::array::push(a, 187);
+    std::array::push(a, 28);
+    std::array::push(a, 159);
+    std::array::push(a, 150);
+    std::array::push(a, 33);
+    std::array::push(a, 175);
+    std::array::push(a, 209);
+    std::array::push(a, 153);
+    std::array::push(a, 154);
+    std::array::push(a, 5);
+    std::array::push(a, 11);
+    std::array::push(a, 30);
+    std::array::push(a, 50);
+    std::array::push(a, 166);
+    std::array::push(a, 73);
+    std::array::push(a, 114);
+    std::array::push(a, 98);
+    std::array::push(a, 1);
+    std::array::push(a, 121);
+    std::array::push(a, 167);
+    std::array::push(a, 126);
+    std::array::push(a, 194);
+    std::array::push(a, 113);
+    std::array::push(a, 170);
+    std::array::push(a, 222);
+    std::array::push(a, 140);
+    std::array::push(a, 24);
+    std::array::push(a, 200);
+    std::array::push(a, 90);
+    std::array::push(a, 151);
+    std::array::push(a, 253);
+    std::array::push(a, 19);
+    std::array::push(a, 179);
+    std::array::push(a, 37);
+    std::array::push(a, 39);
+    std::array::push(a, 37);
+    std::array::push(a, 178);
+    std::array::push(a, 71);
+    std::array::push(a, 133);
+    std::array::push(a, 121);
+    std::array::push(a, 90);
+    std::array::push(a, 66);
+    std::array::push(a, 82);
+    std::array::push(a, 209);
+    std::array::push(a, 203);
+    std::array::push(a, 196);
+    std::array::push(a, 23);
+    std::array::push(a, 180);
+    std::array::push(a, 153);
+    std::array::push(a, 171);
+    std::array::push(a, 169);
+    std::array::push(a, 161);
+    std::array::push(a, 227);
+    std::array::push(a, 139);
+    std::array::push(a, 255);
+    std::array::push(a, 88);
+    std::array::push(a, 128);
+    std::array::push(a, 55);
+    std::array::push(a, 6);
+    std::array::push(a, 17);
+    std::array::push(a, 128);
+    std::array::push(a, 252);
+    std::array::push(a, 133);
+    std::array::push(a, 133);
+    std::array::push(a, 75);
+    std::array::push(a, 89);
+    std::array::push(a, 189);
+    std::array::push(a, 26);
+    std::array::push(a, 181);
+    std::array::push(a, 134);
+    std::array::push(a, 49);
+    std::array::push(a, 194);
+    std::array::push(a, 16);
+    std::array::push(a, 208);
+    std::array::push(a, 142);
+    std::array::push(a, 141);
+    std::array::push(a, 167);
+    std::array::push(a, 2);
+    std::array::push(a, 167);
+    std::array::push(a, 40);
+    std::array::push(a, 183);
+    std::array::push(a, 81);
+    std::array::push(a, 89);
+    std::array::push(a, 31);
+    std::array::push(a, 237);
+    std::array::push(a, 38);
+    std::array::push(a, 58);
+    std::array::push(a, 100);
+    std::array::push(a, 26);
+    std::array::push(a, 70);
+    std::array::push(a, 19);
+    std::array::push(a, 65);
+    std::array::push(a, 140);
+    std::array::push(a, 212);
+    std::array::push(a, 96);
+    std::array::push(a, 64);
+    std::array::push(a, 44);
+    std::array::push(a, 184);
+    std::array::push(a, 86);
+    std::array::push(a, 84);
+    std::array::push(a, 59);
+    std::array::push(a, 207);
+    std::array::push(a, 65);
+    std::array::push(a, 240);
+    std::array::push(a, 88);
+    std::array::push(a, 26);
+    std::array::push(a, 229);
+    std::array::push(a, 133);
+    std::array::push(a, 22);
+    std::array::push(a, 83);
+    std::array::push(a, 190);
+    std::array::push(a, 175);
+    std::array::push(a, 192);
+    std::array::push(a, 102);
+    std::array::push(a, 63);
+    std::array::push(a, 9);
+    std::array::push(a, 184);
+    std::array::push(a, 125);
+    std::array::push(a, 11);
+    std::array::push(a, 72);
+    std::array::push(a, 47);
+    std::array::push(a, 196);
+    std::array::push(a, 118);
+    std::array::push(a, 141);
+    std::array::push(a, 18);
+    std::array::push(a, 155);
+    std::array::push(a, 83);
+    std::array::push(a, 68);
+    std::array::push(a, 195);
+    std::array::push(a, 71);
+    std::array::push(a, 64);
+    std::array::push(a, 34);
+    std::array::push(a, 252);
+    std::array::push(a, 180);
+    std::array::push(a, 10);
+    std::array::push(a, 186);
+    std::array::push(a, 80);
+    std::array::push(a, 111);
+    std::array::push(a, 83);
+    std::array::push(a, 140);
+    std::array::push(a, 34);
+    std::array::push(a, 94);
+    std::array::push(a, 60);
+    std::array::push(a, 0);
+    std::array::push(a, 147);
+    std::array::push(a, 245);
+    std::array::push(a, 199);
+    std::array::push(a, 216);
+    std::array::push(a, 208);
+    std::array::push(a, 180);
+    std::array::push(a, 15);
+    std::array::push(a, 51);
+    std::array::push(a, 25);
+    std::array::push(a, 43);
+    std::array::push(a, 88);
+    std::array::push(a, 68);
+    std::array::push(a, 238);
+    std::array::push(a, 201);
+    std::array::push(a, 178);
+    std::array::push(a, 200);
+    std::array::push(a, 37);
+    std::array::push(a, 200);
+    std::array::push(a, 42);
+    std::array::push(a, 226);
+    std::array::push(a, 66);
+    std::array::push(a, 107);
+    std::array::push(a, 145);
+    std::array::push(a, 133);
+    std::array::push(a, 78);
+    std::array::push(a, 170);
+    std::array::push(a, 136);
+    std::array::push(a, 164);
+    std::array::push(a, 211);
+    std::array::push(a, 54);
+    std::array::push(a, 250);
+    std::array::push(a, 80);
+    std::array::push(a, 15);
+    std::array::push(a, 241);
+    std::array::push(a, 202);
+    std::array::push(a, 138);
+    std::array::push(a, 65);
+    std::array::push(a, 28);
+    std::array::push(a, 61);
+    std::array::push(a, 46);
+    std::array::push(a, 28);
+    std::array::push(a, 77);
+    std::array::push(a, 30);
+    std::array::push(a, 57);
+    std::array::push(a, 158);
+    std::array::push(a, 207);
+    std::array::push(a, 140);
+    std::array::push(a, 197);
+    std::array::push(a, 215);
+    std::array::push(a, 161);
+    std::array::push(a, 199);
+    std::array::push(a, 196);
+    std::array::push(a, 251);
+    std::array::push(a, 58);
+    std::array::push(a, 239);
+    std::array::push(a, 11);
+    std::array::push(a, 27);
+    std::array::push(a, 0);
+    std::array::push(a, 68);
+    std::array::push(a, 122);
+    std::array::push(a, 184);
+    std::array::push(a, 146);
+    std::array::push(a, 58);
+    std::array::push(a, 96);
+    std::array::push(a, 160);
+    std::array::push(a, 91);
+    std::array::push(a, 72);
+    std::array::push(a, 128);
+    std::array::push(a, 107);
+    std::array::push(a, 140);
+    std::array::push(a, 69);
+    std::array::push(a, 144);
+    std::array::push(a, 169);
+    std::array::push(a, 40);
+    std::array::push(a, 46);
+    std::array::push(a, 182);
+    std::array::push(a, 25);
+    std::array::push(a, 195);
+    std::array::push(a, 216);
+    std::array::push(a, 108);
+    std::array::push(a, 98);
+    std::array::push(a, 91);
+    std::array::push(a, 212);
+    std::array::push(a, 145);
+    std::array::push(a, 247);
+    std::array::push(a, 168);
+    std::array::push(a, 173);
+    std::array::push(a, 43);
+    std::array::push(a, 171);
+    std::array::push(a, 113);
+    std::array::push(a, 146);
+    std::array::push(a, 49);
+    std::array::push(a, 138);
+    std::array::push(a, 238);
+    std::array::push(a, 192);
+    std::array::push(a, 125);
+    std::array::push(a, 159);
+    std::array::push(a, 21);
+    std::array::push(a, 195);
+    std::array::push(a, 228);
+    std::array::push(a, 225);
+    std::array::push(a, 54);
+    std::array::push(a, 219);
+    std::array::push(a, 139);
+    std::array::push(a, 60);
+    std::array::push(a, 108);
+    std::array::push(a, 75);
+    std::array::push(a, 76);
+    std::array::push(a, 27);
+    std::array::push(a, 86);
+    std::array::push(a, 62);
+    std::array::push(a, 120);
+    std::array::push(a, 142);
+    std::array::push(a, 39);
+    std::array::push(a, 160);
+    std::array::push(a, 192);
+    std::array::push(a, 7);
+    std::array::push(a, 251);
+    std::array::push(a, 17);
+    std::array::push(a, 172);
+    std::array::push(a, 19);
+    std::array::push(a, 83);
+    std::array::push(a, 210);
+    std::array::push(a, 195);
+    std::array::push(a, 251);
+    std::array::push(a, 56);
+    std::array::push(a, 21);
+    std::array::push(a, 219);
+    std::array::push(a, 152);
+    std::array::push(a, 89);
+    std::array::push(a, 150);
+    std::array::push(a, 9);
+    std::array::push(a, 164);
+    std::array::push(a, 197);
+    std::array::push(a, 208);
+    std::array::push(a, 190);
+    std::array::push(a, 142);
+    std::array::push(a, 136);
+    std::array::push(a, 115);
+    std::array::push(a, 18);
+    std::array::push(a, 123);
+    std::array::push(a, 94);
+    std::array::push(a, 1);
+    std::array::push(a, 185);
+    std::array::push(a, 157);
+    std::array::push(a, 39);
+    std::array::push(a, 102);
+    std::array::push(a, 92);
+    std::array::push(a, 246);
+    std::array::push(a, 155);
+    std::array::push(a, 185);
+    std::array::push(a, 229);
+    std::array::push(a, 80);
+    std::array::push(a, 147);
+    std::array::push(a, 33);
+    std::array::push(a, 175);
+    std::array::push(a, 128);
+    std::array::push(a, 153);
+    std::array::push(a, 21);
+    std::array::push(a, 188);
+    std::array::push(a, 22);
+    std::array::push(a, 145);
+    std::array::push(a, 69);
+    std::array::push(a, 106);
+    std::array::push(a, 251);
+    std::array::push(a, 21);
+    std::array::push(a, 0);
+    std::array::push(a, 29);
+    std::array::push(a, 0);
+    std::array::push(a, 32);
+    std::array::push(a, 251);
+    std::array::push(a, 134);
+    std::array::push(a, 54);
+    std::array::push(a, 161);
+    std::array::push(a, 96);
+    std::array::push(a, 36);
+    std::array::push(a, 52);
+    std::array::push(a, 229);
+    std::array::push(a, 87);
+    std::array::push(a, 99);
+    std::array::push(a, 233);
+    std::array::push(a, 100);
+    std::array::push(a, 199);
+    std::array::push(a, 103);
+    std::array::push(a, 65);
+    std::array::push(a, 234);
+    std::array::push(a, 42);
+    std::array::push(a, 248);
+    std::array::push(a, 55);
+    std::array::push(a, 179);
+    std::array::push(a, 22);
+    std::array::push(a, 88);
+    std::array::push(a, 178);
+    std::array::push(a, 247);
+    std::array::push(a, 247);
+    std::array::push(a, 108);
+    std::array::push(a, 186);
+    std::array::push(a, 117);
+    std::array::push(a, 107);
+    std::array::push(a, 136);
+    std::array::push(a, 56);
+    std::array::push(a, 76);
+    a
+}
+
+/// The sample ClientHello truncated to `n` bytes — hostile input.
+fn truncated_hello(take n: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < n {
+        std::array::push(out, std::array::get(sample_hello(), i));
+        i = i + 1;
+    }
+    out
+}
+
+spec byte_at {
+    then byte_at(sample_hello(), 0) == handshake_client_hello();
+    // Out of bounds answers -1, never a trap.
+    then byte_at(sample_hello(), 0 - 1) == 0 - 1;
+    then byte_at(sample_hello(), 99999) == 0 - 1;
+    then byte_at(std::array::empty(), 0) == 0 - 1;
+}
+
+spec u16_at {
+    // The legacy_version field is 0x0303.
+    then u16_at(sample_hello(), 4) == 771;
+    then u16_at(sample_hello(), 99999) == 0 - 1;
+    then u16_at(std::array::empty(), 0) == 0 - 1;
+}
+
+spec u24_at {
+    // The handshake length field equals the body length minus its header.
+    then u24_at(sample_hello(), 1) == std::array::len(sample_hello()) - 4;
+    then u24_at(std::array::empty(), 0) == 0 - 1;
+}
+
+spec push_u16 {
+    then std::array::len(frame_record(content_handshake(), std::array::empty())) == 5;
+}
+
+spec push_u24 {
+    then std::array::len(wrap_handshake(handshake_finished(), std::array::empty())) == 4;
+}
+
+spec push_bytes {
+    then std::array::len(frame_record(content_handshake(), sample_hello()))
+        == std::array::len(sample_hello()) + 5;
+}
+
+spec slice {
+    then std::array::len(slice(sample_hello(), 0, 10)) == 10;
+    // A range that runs past the end yields EMPTY rather than a short read —
+    // a truncated field that silently becomes a shorter one is how a parser
+    // authenticates something other than what arrived.
+    then std::array::len(slice(sample_hello(), 0, 999999)) == 0;
+    then std::array::len(slice(sample_hello(), 0 - 1, 4)) == 0;
+    then std::array::len(slice(sample_hello(), 0, 0 - 1)) == 0;
+}
+
+spec bad_record {
+    then !record_ok(bad_record());
+}
+
+spec record_ok {
+    then !record_ok(bad_record());
+}
+
+spec read_record {
+    // A handshake record framing the sample hello parses back.
+    then record_ok(read_record(frame_record(content_handshake(), sample_hello()), 0));
+    then read_record(frame_record(content_handshake(), sample_hello()), 0).content_type
+        == content_handshake();
+    then read_record(frame_record(content_handshake(), sample_hello()), 0).length
+        == std::array::len(sample_hello());
+    // Hostile input: empty, truncated, and a length past the data.
+    then !record_ok(read_record(std::array::empty(), 0));
+    then !record_ok(read_record(sample_hello(), 99999));
+}
+
+spec frame_record {
+    // The wire version is always 0x0303, whatever version is negotiated.
+    then std::array::get(frame_record(content_handshake(), std::array::empty()), 1) == 3;
+    then std::array::get(frame_record(content_handshake(), std::array::empty()), 2) == 3;
+    then std::array::get(frame_record(content_handshake(), std::array::empty()), 0)
+        == content_handshake();
+}
+
+spec wrap_handshake {
+    then std::array::get(wrap_handshake(handshake_finished(), std::array::empty()), 0)
+        == handshake_finished();
+    then std::array::len(wrap_handshake(handshake_finished(), sample_hello()))
+        == std::array::len(sample_hello()) + 4;
+}
+
+spec hello_extensions_start {
+    then hello_extensions_start(sample_hello()) == 83;
+    // Hostile input answers rather than trapping.
+    then hello_extensions_start(std::array::empty()) == 0 - 1;
+    then hello_extensions_start(truncated_hello(40)) == 0 - 1;
+}
+
+spec hello_extensions_length {
+    then hello_extensions_length(sample_hello()) > 0;
+    then hello_extensions_length(std::array::empty()) == 0 - 1;
+}
+
+spec hello_extension {
+    // The real hello carries key_share and supported_versions.
+    then std::array::len(hello_extension(sample_hello(), extension_key_share())) > 0;
+    then std::array::len(hello_extension(sample_hello(), extension_supported_versions())) > 0;
+    // An extension it does not carry yields empty rather than garbage.
+    then std::array::len(hello_extension(sample_hello(), 60000)) == 0;
+    then std::array::len(hello_extension(std::array::empty(), extension_key_share())) == 0;
+}
+
+spec hello_offers_suite {
+    then hello_offers_suite(sample_hello());
+    then !hello_offers_suite(std::array::empty());
+    then !hello_offers_suite(truncated_hello(60));
+}
+
+spec hello_offers_tls13 {
+    // TLS 1.3 is negotiated ONLY through this extension — the version fields
+    // both say "TLS 1.2", so a server trusting them never speaks 1.3.
+    then hello_offers_tls13(sample_hello());
+    then !hello_offers_tls13(std::array::empty());
+}
+
+spec hello_key_share {
+    then std::array::len(hello_key_share(sample_hello())) == 32;
+    then std::array::len(hello_key_share(std::array::empty())) == 0;
+    then std::array::len(hello_key_share(truncated_hello(100))) == 0;
+}
+
+spec hello_random {
+    then std::array::len(hello_random(sample_hello())) == 32;
+    then std::array::len(hello_random(std::array::empty())) == 0;
+}
+
+spec hello_session_id {
+    // OpenSSL sends a 32-byte legacy session id, which the server must echo.
+    then std::array::len(hello_session_id(sample_hello())) == 32;
+    then std::array::len(hello_session_id(std::array::empty())) == 0;
+}
+
+spec hello_acceptable {
+    then hello_acceptable(sample_hello());
+    // Every truncation is refused rather than trapping.
+    then !hello_acceptable(std::array::empty());
+    then !hello_acceptable(truncated_hello(1));
+    then !hello_acceptable(truncated_hello(50));
+    then !hello_acceptable(truncated_hello(200));
+}
+
+spec server_hello {
+    // The reply echoes the client's session id — a middlebox-compatibility
+    // requirement, not a choice.
+    then std::array::get(server_hello(sample_hello(), zeros32(), zeros32()), 0)
+        == handshake_server_hello();
+    then std::array::len(server_hello(sample_hello(), zeros32(), zeros32())) > 40;
+}
+
+spec encrypted_extensions {
+    // Empty, but present: a client that does not receive it aborts.
+    then std::array::get(encrypted_extensions(), 0) == handshake_encrypted_extensions();
+    then std::array::len(encrypted_extensions()) == 6;
+}
+
+spec certificate_message {
+    then std::array::get(certificate_message(zeros32()), 0) == handshake_certificate();
+    then std::array::len(certificate_message(zeros32())) > 32;
+}
+
+spec certificate_verify_content {
+    // 64 spaces, a 33-byte context string, a zero byte, then the hash.
+    then std::array::len(certificate_verify_content(zeros32())) == 64 + 33 + 1 + 32;
+    then std::array::get(certificate_verify_content(zeros32()), 0) == 32;
+    then std::array::get(certificate_verify_content(zeros32()), 63) == 32;
+    // 'T' of "TLS 1.3, server CertificateVerify".
+    then std::array::get(certificate_verify_content(zeros32()), 64) == 84;
+    // The zero separator.
+    then std::array::get(certificate_verify_content(zeros32()), 97) == 0;
+}
+
+spec certificate_verify_message {
+    then std::array::get(certificate_verify_message(zeros32()), 0)
+        == handshake_certificate_verify();
+    // The signature algorithm is ed25519 (0x0807).
+    then u16_at(certificate_verify_message(zeros32()), 4) == signature_ed25519();
+}
+
+spec finished_data {
+    then std::array::len(finished_data(zeros32(), zeros32())) == 32;
+}
+
+spec finished_message {
+    then std::array::get(finished_message(zeros32(), zeros32()), 0) == handshake_finished();
+    then std::array::len(finished_message(zeros32(), zeros32())) == 36;
+}
+
+spec inner_content_type {
+    // The real type is the last NON-ZERO byte: trailing zeros are padding.
+    then inner_content_type(one_then(content_handshake())) == content_handshake();
+    then inner_content_type(std::array::empty()) == 0 - 1;
+}
+
+spec inner_payload {
+    then std::array::len(inner_payload(one_then(content_handshake()))) == 1;
+    then std::array::len(inner_payload(std::array::empty())) == 0;
+}
+
+spec transcript_hash {
+    then std::array::len(transcript_hash(sample_hello())) == 32;
+    then std::array::len(transcript_hash(std::array::empty())) == 32;
+}
+
+spec content_handshake {
+    then content_handshake() == 22;
+}
+
+spec content_application_data {
+    // Every encrypted record's OUTER type is 23, whatever it contains.
+    then content_application_data() == 23;
+}
+
+spec content_alert {
+    then content_alert() == 21;
+}
+
+spec content_change_cipher_spec {
+    then content_change_cipher_spec() == 20;
+}
+
+spec max_plaintext {
+    then max_plaintext() == 16384;
+}
+
+spec max_ciphertext {
+    then max_ciphertext() == 16640;
+    then max_ciphertext() > max_plaintext();
+}
+
+spec cipher_suite {
+    then cipher_suite() == 4867;
+}
+
+spec group_x25519 {
+    then group_x25519() == 29;
+}
+
+spec signature_ed25519 {
+    then signature_ed25519() == 2055;
+}
+
+spec version_tls13 {
+    then version_tls13() == 772;
+}
+
+spec extension_supported_versions {
+    then extension_supported_versions() == 43;
+}
+
+spec extension_key_share {
+    then extension_key_share() == 51;
+}
+
+spec extension_server_name {
+    then extension_server_name() == 0;
+}
+
+spec handshake_client_hello {
+    then handshake_client_hello() == 1;
+}
+
+spec handshake_server_hello {
+    then handshake_server_hello() == 2;
+}
+
+spec handshake_encrypted_extensions {
+    then handshake_encrypted_extensions() == 8;
+}
+
+spec handshake_certificate {
+    then handshake_certificate() == 11;
+}
+
+spec handshake_certificate_verify {
+    then handshake_certificate_verify() == 15;
+}
+
+spec handshake_finished {
+    then handshake_finished() == 20;
+}
+
+spec failed_handshake {
+    then !failed_handshake().ok;
+    then std::array::len(failed_handshake().flight) == 0;
+}
+
+/// 32 zero bytes, for the specs above.
+fn zeros32() -> Array[Int] {
+    var a = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(a, 0);
+        i = i + 1;
+    }
+    a
+}
+
+/// A one-byte payload followed by `kind` — a decrypted record's inner shape.
+fn one_then(take kind: Int) -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 65);
+    std::array::push(a, kind);
+    a
+}
+
+/// Whether a sealed record opens back to its own plaintext — the round trip
+/// `spec seal_record` and `spec open_record` both assert.
+fn record_round_trips() -> Bool {
+    let key = zeros32();
+    var iv = std::array::empty();
+    var i = 0;
+    while i < 12 {
+        std::array::push(iv, 0);
+        i = i + 1;
+    }
+    var payload = std::array::empty();
+    std::array::push(payload, 65);
+    std::array::push(payload, 66);
+    let record = seal_record(key, iv, 0, content_handshake(), payload);
+    let header = slice(record, 0, 5);
+    let body = slice(record, 5, std::array::len(record) - 5);
+    match open_record(key, iv, 0, header, body) {
+        Some { value } => inner_content_type(value) == content_handshake(),
+        None => false,
+    }
+}
+
+/// Whether a record sealed at sequence 0 fails to open at sequence 1 — the
+/// property that makes per-record nonces meaningful.
+fn record_rejects_wrong_sequence() -> Bool {
+    let key = zeros32();
+    var iv = std::array::empty();
+    var i = 0;
+    while i < 12 {
+        std::array::push(iv, 0);
+        i = i + 1;
+    }
+    var payload = std::array::empty();
+    std::array::push(payload, 65);
+    let record = seal_record(key, iv, 0, content_handshake(), payload);
+    let header = slice(record, 0, 5);
+    let body = slice(record, 5, std::array::len(record) - 5);
+    match open_record(key, iv, 1, header, body) {
+        Some { value } => false,
+        None => true,
+    }
+}
+
+spec seal_record {
+    // The outer type is always application_data, hiding the real type.
+    then std::array::get(seal_record(zeros32(), zeros12(), 0, content_handshake(), zeros32()), 0)
+        == content_application_data();
+    // Header (5) + plaintext (32) + inner type (1) + tag (16).
+    then std::array::len(seal_record(zeros32(), zeros12(), 0, content_handshake(), zeros32()))
+        == 5 + 32 + 1 + 16;
+    then record_round_trips();
+}
+
+spec open_record {
+    // A record opens back to what was sealed…
+    then record_round_trips();
+    // …and NOT under a different sequence number, which is what makes the
+    // per-record nonce construction load-bearing rather than decorative.
+    then record_rejects_wrong_sequence();
+}
+
+/// 12 zero bytes — an all-zero IV, for the specs above.
+fn zeros12() -> Array[Int] {
+    var a = std::array::empty();
+    var i = 0;
+    while i < 12 {
+        std::array::push(a, 0);
+        i = i + 1;
+    }
+    a
+}
+
+spec client_handshake_secret {
+    // RFC 8448's published secrets are pinned natively
+    // (`tls_key_schedule_matches_rfc_8448`) — the derivation chain is several
+    // HMAC passes, past the spec sandbox's fuel for a full check. What the
+    // sandbox pins is the shape and, crucially, that the client and server
+    // secrets DIFFER: deriving the same secret for both directions would let
+    // an attacker replay a server record back at the server.
+    then std::array::len(client_handshake_secret(zeros32(), zeros32())) == 32;
+    then secrets_differ();
+}
+
+spec server_handshake_secret {
+    then std::array::len(server_handshake_secret(zeros32(), zeros32())) == 32;
+    then secrets_differ();
+}
+
+spec client_application_secret {
+    then std::array::len(client_application_secret(zeros32(), zeros32())) == 32;
+    // Handshake and application secrets must differ, or a handshake key
+    // would also decrypt application data.
+    then application_differs_from_handshake();
+}
+
+spec server_application_secret {
+    then std::array::len(server_application_secret(zeros32(), zeros32())) == 32;
+    then application_differs_from_handshake();
+}
+
+/// Whether the client and server handshake secrets differ.
+fn secrets_differ() -> Bool {
+    let c = client_handshake_secret(zeros32(), zeros32());
+    let s = server_handshake_secret(zeros32(), zeros32());
+    var i = 0;
+    var found = false;
+    while i < 32 {
+        if std::array::get(c, i) != std::array::get(s, i) {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+/// Whether the application secret differs from the handshake secret.
+fn application_differs_from_handshake() -> Bool {
+    let h = client_handshake_secret(zeros32(), zeros32());
+    let a = client_application_secret(zeros32(), zeros32());
+    var i = 0;
+    var found = false;
+    while i < 32 {
+        if std::array::get(h, i) != std::array::get(a, i) {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+spec server_handshake {
+    // A malformed or unacceptable ClientHello must be REFUSED, not answered
+    // with a flight built from garbage.
+    then !server_handshake(
+        std::array::empty(),
+        zeros32(),
+        zeros32(),
+        zeros32(),
+        zeros32(),
+    ).ok;
+    then !server_handshake(
+        truncated_hello(100),
+        zeros32(),
+        zeros32(),
+        zeros32(),
+        zeros32(),
+    ).ok;
+    // The full handshake against a live OpenSSL client is pinned by
+    // `tls_server_completes_handshake_with_openssl`.
+}
+
+spec signing_content {
+    // The signed content always carries the 64-space prefix and the context
+    // string, whatever the transcript.
+    then std::array::get(signing_content(sample_hello(), zeros32(), zeros32(), zeros32()), 0) == 32;
+    then std::array::get(signing_content(sample_hello(), zeros32(), zeros32(), zeros32()), 64) == 84;
+    then std::array::len(signing_content(sample_hello(), zeros32(), zeros32(), zeros32()))
+        == 64 + 33 + 1 + 32;
+}
+
+// --- A TLS connection: byte-oriented I/O over record-oriented crypto --------
+//
+// The record layer above deals in whole records; every protocol built on TLS
+// wants a byte stream. Bridging those is the job of the buffer below, and it
+// is where a naive integration goes wrong: HTTP reads a byte at a time, but a
+// TLS record only exists once *all* of it has arrived and its tag has
+// verified. Reading a byte therefore means "decrypt the next record if the
+// buffer is empty, then hand back one byte of it".
+//
+// `Connection` carries the sequence numbers because TLS 1.3 nonces are
+// derived from them (RFC 8446 §5.3): every record must use the next number in
+// order, and a repeat would reuse a nonce — catastrophic for both
+// confidentiality and the authenticator. Keeping them inside the connection
+// makes reuse something a caller cannot express by accident.
+
+/// An established TLS connection: the descriptor, the four traffic values,
+/// the sequence numbers, and the pending plaintext of a partially-read
+/// record.
+struct Connection {
+    socket: Int,
+    /// The key the NEXT client record will be opened with. It starts as the
+    /// client's handshake key and becomes the application key once the
+    /// client's Finished has been read.
+    client_key: Array[Int],
+    client_iv: Array[Int],
+    server_key: Array[Int],
+    server_iv: Array[Int],
+    /// The client's application-epoch key, held until the switch.
+    client_application_key: Array[Int],
+    /// The client's application-epoch IV, held until the switch.
+    client_application_iv: Array[Int],
+    /// Whether reads are still in the handshake epoch.
+    client_epoch_is_handshake: Bool,
+    read_sequence: Int,
+    write_sequence: Int,
+    pending: Array[Int],
+    pending_offset: Int,
+    /// False once the peer has closed or a record failed to authenticate.
+    /// A failed record is fatal in TLS 1.3 — there is no resynchronizing.
+    live: Bool,
+}
+
+/// Build a connection from a completed handshake.
+///
+/// # Example
+///
+/// ```tuo
+/// let connection = std::tls::connect(socket, handshake);
+/// ```
+pub fn connect(take socket: Int, in handshake: Handshake) -> Connection {
+    Connection {
+        socket: socket,
+        // Reading STARTS in the handshake epoch: the client's Finished
+        // arrives under its handshake key, and only afterwards does it
+        // switch to application keys. `fill` performs that switch when it
+        // sees the Finished, which is why both key pairs are carried.
+        client_key: copy_bytes(handshake.client_handshake_key),
+        client_iv: copy_bytes(handshake.client_handshake_iv),
+        server_key: copy_bytes(handshake.server_key),
+        server_iv: copy_bytes(handshake.server_iv),
+        client_application_key: copy_bytes(handshake.client_key),
+        client_application_iv: copy_bytes(handshake.client_iv),
+        client_epoch_is_handshake: true,
+        read_sequence: 0,
+        write_sequence: 0,
+        pending: std::array::empty(),
+        pending_offset: 0,
+        live: handshake.ok,
+    }
+}
+
+/// An owned copy of a borrowed byte array.
+///
+/// # Example
+///
+/// ```tuo
+/// let owned = std::tls::copy_bytes(borrowed);
+/// ```
+pub fn copy_bytes(in bytes: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(bytes) {
+        std::array::push(out, std::array::get(bytes, i) & 255);
+        i = i + 1;
+    }
+    out
+}
+
+/// The plaintext of a record, or an empty array when it failed to
+/// authenticate.
+///
+/// A successfully opened record is never empty — it always carries at least
+/// its inner content type byte — so empty unambiguously means failure. This
+/// exists because `match` is an expression in v0, not a statement, so the
+/// `Option` has to be collapsed to a value before the caller can branch on
+/// it with side effects.
+///
+/// # Example
+///
+/// ```tuo
+/// let plaintext = std::tls::opened_or_empty(key, iv, 0, header, body);
+/// ```
+pub fn opened_or_empty(
+    in key: Array[Int],
+    in iv: Array[Int],
+    take sequence: Int,
+    in header: Array[Int],
+    in body: Array[Int],
+) -> Array[Int] {
+    match open_record(key, iv, sequence, header, body) {
+        Some { value } => value,
+        None => std::array::empty(),
+    }
+}
+
+/// EFFECT: read and decrypt the next record into the connection's buffer.
+///
+/// Returns the inner content type, or -1 when the peer closed, the record
+/// failed to authenticate, or it was malformed. A `change_cipher_spec` record
+/// is skipped rather than surfaced: TLS 1.3 does not use it, but clients send
+/// one purely to look like TLS 1.2 to middleboxes, and a server that treats it
+/// as data or as an error rejects perfectly ordinary clients.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by
+/// `tls_serves_a_real_https_request` in `crates/tuo-cli/tests/stdlib.rs`.
+pub fn fill(mut connection: Connection, take timeout_ms: Int) -> Int {
+    if !connection.live {
+        return 0 - 1;
+    }
+    var kind = 0 - 1;
+    var scanning = true;
+    while scanning {
+        var header = std::array::empty();
+        var i = 0;
+        var header_ok = true;
+        while i < 5 && header_ok {
+            let b = std::rt::read_byte_timeout(connection.socket, timeout_ms);
+            if b < 0 {
+                header_ok = false;
+            } else {
+                std::array::push(header, b);
+                i = i + 1;
+            }
+        }
+        if !header_ok {
+            connection.live = false;
+            return 0 - 1;
+        }
+        let length = u16_at(header, 3);
+        if length < 0 || length > max_ciphertext() {
+            connection.live = false;
+            return 0 - 1;
+        }
+        var body = std::array::empty();
+        var j = 0;
+        var body_ok = true;
+        while j < length && body_ok {
+            let b = std::rt::read_byte_timeout(connection.socket, timeout_ms);
+            if b < 0 {
+                body_ok = false;
+            } else {
+                std::array::push(body, b);
+                j = j + 1;
+            }
+        }
+        if !body_ok {
+            connection.live = false;
+            return 0 - 1;
+        }
+        let outer = byte_at(header, 0);
+        if outer == content_change_cipher_spec() {
+            // Middlebox compatibility: skip it and read the next record.
+            scanning = true;
+        } else {
+            // `match` is an expression here, not a statement, so the
+            // decrypted plaintext is bound first and the empty case stands
+            // for failure. `open_record` never yields an empty plaintext on
+            // success — every record carries at least its inner content
+            // type byte — so the two are distinguishable.
+            let plaintext = opened_or_empty(
+                connection.client_key,
+                connection.client_iv,
+                connection.read_sequence,
+                header,
+                body,
+            );
+            if std::array::len(plaintext) == 0 {
+                // A record that fails to authenticate is fatal: TLS 1.3 has
+                // no way to resynchronize a stream, and continuing would
+                // mean trusting bytes an attacker chose.
+                connection.live = false;
+                return 0 - 1;
+            }
+            connection.read_sequence = connection.read_sequence + 1;
+            kind = inner_content_type(plaintext);
+            connection.pending = inner_payload(plaintext);
+            connection.pending_offset = 0;
+            scanning = false;
+            if connection.client_epoch_is_handshake && kind == content_handshake() {
+                // That was the client's Finished. Everything after it comes
+                // under the application key, with the record sequence
+                // RESTARTING at zero — each epoch counts separately, and
+                // carrying the count across would derive the wrong nonce for
+                // every subsequent record.
+                connection.client_key = copy_bytes(connection.client_application_key);
+                connection.client_iv = copy_bytes(connection.client_application_iv);
+                connection.client_epoch_is_handshake = false;
+                connection.read_sequence = 0;
+                // The Finished carries no application data, so keep reading.
+                scanning = true;
+            }
+        }
+    }
+    kind
+}
+
+/// EFFECT: read one plaintext byte from the connection, decrypting a new
+/// record when the buffer is empty.
+///
+/// Returns the byte, or -1 at end of stream. This is the shape a
+/// byte-oriented protocol (HTTP, say) already expects, which is what lets an
+/// existing server move onto TLS without restructuring its parser.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by
+/// `tls_serves_a_real_https_request` in `crates/tuo-cli/tests/stdlib.rs`.
+pub fn read_byte(mut connection: Connection, take timeout_ms: Int) -> Int {
+    var value = 0 - 1;
+    var looking = true;
+    while looking {
+        if connection.pending_offset < std::array::len(connection.pending) {
+            value = std::array::get(connection.pending, connection.pending_offset) & 255;
+            connection.pending_offset = connection.pending_offset + 1;
+            looking = false;
+        } else {
+            let kind = fill(connection, timeout_ms);
+            if kind < 0 {
+                looking = false;
+            } else {
+                if kind == content_alert() {
+                    // An alert ends the stream. `close_notify` is the
+                    // ordinary one; any other is a peer giving up.
+                    connection.live = false;
+                    looking = false;
+                }
+                // A handshake record after the handshake (a session ticket,
+                // say) carries no application data: loop for the next record.
+            }
+        }
+    }
+    value
+}
+
+/// EFFECT: encrypt and write `plaintext` as one application-data record.
+///
+/// Returns the number of plaintext bytes written, or -1 on failure. Records
+/// longer than `max_plaintext()` are refused rather than silently truncated —
+/// `write_all` below splits them.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by
+/// `tls_serves_a_real_https_request` in `crates/tuo-cli/tests/stdlib.rs`.
+pub fn write_record(mut connection: Connection, in plaintext: Array[Int]) -> Int {
+    if !connection.live {
+        return 0 - 1;
+    }
+    if std::array::len(plaintext) > max_plaintext() {
+        return 0 - 1;
+    }
+    let record = seal_record(
+        connection.server_key,
+        connection.server_iv,
+        connection.write_sequence,
+        content_application_data(),
+        plaintext,
+    );
+    connection.write_sequence = connection.write_sequence + 1;
+    let written = std::rt::write(
+        connection.socket,
+        std::string::as_str(std::crypto::str_of_bytes(record)),
+    );
+    if written < 0 {
+        connection.live = false;
+        return 0 - 1;
+    }
+    std::array::len(plaintext)
+}
+
+/// EFFECT: write `text` as application data, splitting it across records when
+/// it exceeds the per-record limit.
+///
+/// # Example
+///
+/// ```tuo
+/// std::tls::write_all(connection, "HTTP/1.1 200 OK\r\n");
+/// ```
+///
+/// Effectful, so no spec (`R0007`); pinned natively by
+/// `tls_serves_a_real_https_request` in `crates/tuo-cli/tests/stdlib.rs`.
+pub fn write_all(mut connection: Connection, in text: Str) -> Int {
+    let total = std::str::len(text);
+    var sent = 0;
+    while sent < total {
+        var chunk = std::array::empty();
+        var i = 0;
+        while i < max_plaintext() && sent + i < total {
+            std::array::push(chunk, std::str::byte_at(text, sent + i));
+            i = i + 1;
+        }
+        let wrote = write_record(connection, chunk);
+        if wrote < 0 {
+            return 0 - 1;
+        }
+        sent = sent + i;
+    }
+    sent
+}
+
+/// EFFECT: send a `close_notify` alert, the orderly way to end a TLS
+/// connection (RFC 8446 §6.1).
+///
+/// Closing the socket without it is a truncation attack from the peer's point
+/// of view — it cannot tell a finished stream from one an attacker cut short.
+///
+/// Effectful, so no spec (`R0007`); pinned natively by
+/// `tls_serves_a_real_https_request` in `crates/tuo-cli/tests/stdlib.rs`.
+pub fn close_notify(mut connection: Connection) -> Int {
+    if !connection.live {
+        return 0;
+    }
+    var alert = std::array::empty();
+    // warning(1), close_notify(0).
+    std::array::push(alert, 1);
+    std::array::push(alert, 0);
+    let record = seal_record(
+        connection.server_key,
+        connection.server_iv,
+        connection.write_sequence,
+        content_alert(),
+        alert,
+    );
+    connection.write_sequence = connection.write_sequence + 1;
+    std::rt::write(
+        connection.socket,
+        std::string::as_str(std::crypto::str_of_bytes(record)),
+    );
+    connection.live = false;
+    0
+}
+
+spec copy_bytes {
+    then std::array::len(copy_bytes(zeros32())) == 32;
+    then std::array::len(copy_bytes(std::array::empty())) == 0;
+    // A copy, not an alias: the source is unchanged by construction, and the
+    // bytes match.
+    then std::array::get(copy_bytes(one_then(7)), 1) == 7;
+}
+
+spec opened_or_empty {
+    // A record that fails to authenticate collapses to empty, which is the
+    // failure signal `fill` branches on. A genuine success is never empty —
+    // every record carries at least its inner content type byte.
+    then std::array::len(
+        opened_or_empty(zeros32(), zeros12(), 0, std::array::empty(), std::array::empty()),
+    ) == 0;
+    then std::array::len(sealed_then_opened()) > 0;
+}
+
+/// A record sealed and immediately opened, for the spec above.
+fn sealed_then_opened() -> Array[Int] {
+    var payload = std::array::empty();
+    std::array::push(payload, 65);
+    let record = seal_record(zeros32(), zeros12(), 0, content_handshake(), payload);
+    opened_or_empty(
+        zeros32(),
+        zeros12(),
+        0,
+        slice(record, 0, 5),
+        slice(record, 5, std::array::len(record) - 5),
+    )
+}
+
+spec connect {
+    // A failed handshake yields a dead connection — a caller cannot
+    // accidentally read or write on one.
+    then !connect(0, failed_handshake()).live;
+    // Reading starts in the HANDSHAKE epoch: the client's Finished arrives
+    // under its handshake key, not the application key. Starting in the
+    // wrong epoch made a real OpenSSL client's Finished fail to
+    // authenticate, which is why this is asserted rather than assumed.
+    then connect(0, failed_handshake()).client_epoch_is_handshake;
+    then connect(0, failed_handshake()).read_sequence == 0;
+    then connect(0, failed_handshake()).write_sequence == 0;
+}

@@ -1603,12 +1603,25 @@ impl FnLower<'_> {
             Rvalue::Use(Operand::Const(Const::Bool(!is_and))),
         )?;
         self.terminate(Terminator::Goto(join));
+        // The right operand is evaluated only on one path, so it gets its own
+        // scope — exactly as an `if` arm does (see `scoped_value`). Without
+        // it, a temporary the operand allocates lands in the enclosing scope
+        // and the two paths disagree about whether it is initialized: the
+        // short-circuit path never created it, the evaluated path did. That
+        // produced MIR the verifier rejected ("lowered MIR failed
+        // verification") for any heap-allocating expression on the right of
+        // `&&` or `||`, while `tuo check` accepted the program.
+        let before = self.snapshot();
         self.switch_to(rhs_block);
-        if let Some(rhs_value) = self.expr(rhs)? {
+        let rhs_value = self.scoped_value(rhs, &Ty::Bool)?;
+        if let Some(rhs_value) = rhs_value {
             let rhs_op = Self::read_value(rhs_value);
             self.store(&result_place, Rvalue::Use(rhs_op))?;
             self.terminate(Terminator::Goto(join));
         }
+        // Both paths reach the join with the state they had before the
+        // branch: the result slot is a `Bool` temporary, initialized on each.
+        self.restore(&before);
         self.switch_to(join);
         Ok(Some(Value::Place(result_place)))
     }

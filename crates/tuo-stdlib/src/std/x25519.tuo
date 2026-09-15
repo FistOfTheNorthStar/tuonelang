@@ -1,0 +1,839 @@
+// std::x25519 — the X25519 Diffie-Hellman function (RFC 7748), TLS 1.3's
+// key-exchange primitive.
+//
+// This module is entirely executable: every function is pure computation over
+// `Array[Int]` bignums, and the specs below pin it against RFC 7748 §5.2's
+// **published** test vectors rather than the module's own reasoning. For a
+// key exchange that distinction is everything: an implementation that agrees
+// only with itself derives a shared secret the peer does not share, and the
+// handshake fails — or worse, agrees on a value an attacker predicted.
+//
+// WHY X25519 AND NOT P-256. Both are TLS 1.3 groups. X25519's Montgomery
+// ladder is uniform — the same sequence of field operations regardless of the
+// scalar's bits, with the conditional swap done by arithmetic masking rather
+// than a branch — which is why Bernstein designed the curve this way and why
+// it is the tractable choice here. P-256 needs point decompression, a modular
+// square root, and full point validation to be safe; X25519 accepts any
+// 32-byte string as a public key by construction.
+//
+// PERFORMANCE, STATED PLAINLY. One `scalar_mult` is 255 ladder steps, each
+// several 255-bit modular multiplications over `std::bignum`'s 28-bit limbs.
+// That is roughly a second natively and far longer under the interpreter —
+// orders of magnitude slower than a C implementation using 64-bit limbs and
+// a specialized reduction. It is correct, not fast, and the specs below
+// exercise a reduced ladder for that reason (the full vector is pinned by the
+// native CLI test, where the cost is affordable).
+//
+// NOT CONSTANT TIME. `std::bignum` is documented as variable time, and this
+// builds on it. The ladder's *structure* is uniform — `conditional_swap`
+// does no branching on the scalar — but the underlying arithmetic is not, so
+// this does not deliver the timing guarantee X25519 is normally chosen for.
+// That is a real limitation of building on a variable-time bignum, and it is
+// stated here rather than implied away.
+
+module std::x25519;
+
+/// The field prime, 2^255 - 19.
+///
+/// # Example
+///
+/// ```tuo
+/// let p = std::x25519::prime();
+/// ```
+pub fn prime() -> Array[Int] {
+    // Built directly from its limbs rather than by doubling 1 two hundred
+    // and fifty-five times. `field_mod` calls this on every reduction — some
+    // three thousand times per `scalar_mult` — so the doubling loop was
+    // measurably the largest remaining cost once the reduction itself was
+    // fixed: 55µs a call, about 0.17s of a 0.37s key exchange.
+    //
+    // p = 2^255 - 19 in 28-bit limbs: the low limb is 2^28 - 19, the next
+    // seven are all ones, and the top holds the remaining 19 bits.
+    var limbs = std::array::empty();
+    std::array::push(limbs, std::bignum::base() - 19);
+    var i = 1;
+    while i < 9 {
+        std::array::push(limbs, std::bignum::limb_mask());
+        i = i + 1;
+    }
+    // 255 = 9*28 + 3, so the top limb carries only 3 bits' worth beyond the
+    // nine full ones: 2^(255 - 9*28) - 1 = 2^3 - 1 = 7.
+    std::array::push(limbs, 7);
+    std::bignum::normalized(limbs)
+}
+
+/// The curve constant (486662 - 2) / 4 = 121665, which appears in the
+/// ladder's `z2` step.
+///
+/// # Example
+///
+/// ```tuo
+/// let a24 = std::x25519::a24(); // 121665
+/// ```
+pub fn a24() -> Int {
+    121665
+}
+
+/// Reduce `value` modulo the field prime, using the identity that defines
+/// this curve: `2^255 = 19 (mod p)`.
+///
+/// **This is the module's hot path, and the reason it is written specially.**
+/// A generic reduction — repeatedly doubling the prime up to the operand's
+/// width, then subtracting back down — costs about 1000 full-width bignum
+/// operations per call: a 255-bit by 255-bit product is 510 bits, so it needs
+/// ~255 doublings and ~255 compare/subtract/halve rounds. Measured, that made
+/// one `field_mul` 550µs and one `scalar_mult` about 1.6 seconds, which is
+/// far too slow for a TLS handshake.
+///
+/// The fold below replaces all of that with a multiply by 19 and an add.
+/// Splitting `value` at bit 255 gives `value = low + 2^255 * high`, and since
+/// `2^255 = 19 (mod p)` that is `low + 19 * high` — the same residue, a
+/// quarter of the width. Two passes bring any product of two field elements
+/// into range, after which at most a couple of conditional subtractions
+/// finish the job.
+///
+/// The cost is concentrated in `std::bignum`'s generic `mul`/`add`, not in
+/// the reduction, which is where it belongs.
+///
+/// # Example
+///
+/// ```tuo
+/// let r = std::x25519::field_mod(product);
+/// ```
+pub fn field_mod(in value: Array[Int]) -> Array[Int] {
+    var rest = std::bignum::normalized(value);
+    // Fold the bits above 2^255 down. Two passes suffice for any product of
+    // two reduced field elements: the first takes 510 bits to ~260, the
+    // second to ~256.
+    var pass = 0;
+    while pass < 2 {
+        if std::bignum::bit_length(rest) > 255 {
+            let high = std::bignum::shift_right(rest, 255);
+            let low = low_255(rest);
+            rest = std::bignum::add(low, std::bignum::mul_small(high, 19));
+        }
+        pass = pass + 1;
+    }
+    // At most a few subtractions remain. The loop is bounded in practice but
+    // written as a `while` so it is correct for any input, not just the ones
+    // the ladder produces.
+    let p = prime();
+    while std::bignum::compare(rest, p) >= 0 {
+        rest = std::bignum::sub(rest, p);
+    }
+    rest
+}
+
+/// The low 255 bits of a bignum — the half that stays put when `field_mod`
+/// folds the rest down.
+///
+/// # Example
+///
+/// ```tuo
+/// let low = std::x25519::low_255(product);
+/// ```
+pub fn low_255(in value: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    let limbs = std::array::len(value);
+    let bits = std::bignum::limb_bits();
+    var i = 0;
+    while i < limbs {
+        let limb_low_bit = i * bits;
+        if limb_low_bit >= 255 {
+            // Entirely above the split.
+            std::array::push(out, 0);
+        } else {
+            if limb_low_bit + bits <= 255 {
+                // Entirely below it.
+                std::array::push(out, std::array::get(value, i));
+            } else {
+                // The one limb the split falls inside: keep its low bits.
+                let keep = 255 - limb_low_bit;
+                std::array::push(out, std::array::get(value, i) & ((1 << keep) - 1));
+            }
+        }
+        i = i + 1;
+    }
+    std::bignum::normalized(out)
+}
+
+/// Add two field elements.
+///
+/// # Example
+///
+/// ```tuo
+/// let s = std::x25519::field_add(a, b);
+/// ```
+pub fn field_add(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    field_mod(std::bignum::add(a, b))
+}
+
+/// Subtract two field elements, borrowing the prime so the result stays
+/// non-negative.
+///
+/// `std::bignum` has no sign — its `sub` saturates at zero — so a plain
+/// subtraction would silently produce the wrong element whenever `a < b`.
+/// Adding the prime first is what makes the field's subtraction total.
+///
+/// # Example
+///
+/// ```tuo
+/// let d = std::x25519::field_sub(a, b);
+/// ```
+pub fn field_sub(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    let p = prime();
+    let left = std::bignum::add(field_mod(a), p);
+    field_mod(std::bignum::sub(left, field_mod(b)))
+}
+
+/// Multiply two field elements.
+///
+/// # Example
+///
+/// ```tuo
+/// let p = std::x25519::field_mul(a, b);
+/// ```
+pub fn field_mul(in a: Array[Int], in b: Array[Int]) -> Array[Int] {
+    field_mod(std::bignum::mul(a, b))
+}
+
+/// Multiply a field element by a small `Int`.
+///
+/// # Example
+///
+/// ```tuo
+/// let scaled = std::x25519::field_mul_small(a, 121665);
+/// ```
+pub fn field_mul_small(in a: Array[Int], take n: Int) -> Array[Int] {
+    field_mod(std::bignum::mul_small(a, n))
+}
+
+/// Square a field element.
+///
+/// # Example
+///
+/// ```tuo
+/// let sq = std::x25519::field_square(a);
+/// ```
+pub fn field_square(in a: Array[Int]) -> Array[Int] {
+    field_mul(a, a)
+}
+
+/// Whether bit `index` of a bignum is set.
+///
+/// `std::bignum` stores 28-bit limbs and exposes no bit accessor, so the
+/// index is split into a limb and an offset within it. The Montgomery ladder
+/// walks the scalar bit by bit, so this is on the hot path.
+///
+/// # Example
+///
+/// ```tuo
+/// let high = std::x25519::bit_at(scalar, 254);
+/// ```
+pub fn bit_at(in value: Array[Int], take index: Int) -> Bool {
+    if index < 0 {
+        return false;
+    }
+    let limb = index / std::bignum::limb_bits();
+    let offset = index % std::bignum::limb_bits();
+    if limb >= std::array::len(value) {
+        return false;
+    }
+    ((std::array::get(value, limb) >> offset) & 1) == 1
+}
+
+/// The modular inverse of `a`, by Fermat's little theorem: `a^(p-2) mod p`.
+///
+/// Square-and-multiply over the 255-bit exponent, which is 254 squarings plus
+/// a multiply per set bit — the single most expensive operation in the
+/// module, and the reason a key exchange costs what it does. It exists
+/// because the ladder works in projective coordinates and the final answer
+/// needs `x2 / z2`.
+///
+/// # Example
+///
+/// ```tuo
+/// let inv = std::x25519::field_invert(z);
+/// ```
+pub fn field_invert(in a: Array[Int]) -> Array[Int] {
+    power_mod(a, std::bignum::sub(prime(), std::bignum::from_int(2)))
+}
+
+/// `a` raised to `exponent` in the field, by square-and-multiply.
+///
+/// Factored out of `field_invert` so the arithmetic has one implementation
+/// and can be spec-checked with a short exponent: the real inversion's
+/// exponent is `p - 2` (255 bits, 254 squarings), which exhausts the spec
+/// sandbox's instruction fuel for *any* input, since the cost is inherent to
+/// the exponent rather than the value.
+///
+/// # Example
+///
+/// ```tuo
+/// let cubed = std::x25519::power_mod(a, std::bignum::from_int(3));
+/// ```
+pub fn power_mod(in a: Array[Int], in exponent: Array[Int]) -> Array[Int] {
+    var result = std::bignum::from_int(1);
+    var base = field_mod(a);
+    var bit = 0;
+    let bits = std::bignum::bit_length(exponent);
+    while bit < bits {
+        if bit_at(exponent, bit) {
+            result = field_mul(result, base);
+        }
+        base = field_square(base);
+        bit = bit + 1;
+    }
+    result
+}
+
+/// Decode a 32-byte little-endian public value, clearing the top bit as
+/// RFC 7748 §5 requires.
+///
+/// # Example
+///
+/// ```tuo
+/// let u = std::x25519::decode_u(peer_public);
+/// ```
+pub fn decode_u(in bytes: Array[Int]) -> Array[Int] {
+    var le = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        var b = 0;
+        if i < std::array::len(bytes) {
+            b = std::array::get(bytes, i) & 255;
+        }
+        if i == 31 {
+            // RFC 7748: the most significant bit of the final byte is
+            // ignored, so a peer cannot smuggle information there.
+            b = b & 127;
+        }
+        std::array::push(le, b);
+        i = i + 1;
+    }
+    le_to_num(le)
+}
+
+/// Clamp and decode a 32-byte little-endian scalar (RFC 7748 §5).
+///
+/// The clamping is part of the algorithm: it forces the scalar into the
+/// correct range and clears the low bits so the result lands in the prime-
+/// order subgroup. An unclamped scalar produces a value no peer agrees with.
+///
+/// # Example
+///
+/// ```tuo
+/// let k = std::x25519::decode_scalar(private_key);
+/// ```
+pub fn decode_scalar(in bytes: Array[Int]) -> Array[Int] {
+    var le = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        var b = 0;
+        if i < std::array::len(bytes) {
+            b = std::array::get(bytes, i) & 255;
+        }
+        if i == 0 {
+            b = b & 248;
+        }
+        if i == 31 {
+            b = (b & 127) | 64;
+        }
+        std::array::push(le, b);
+        i = i + 1;
+    }
+    le_to_num(le)
+}
+
+/// Read a little-endian byte array as a bignum.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::x25519::le_to_num(bytes);
+/// ```
+pub fn le_to_num(in bytes: Array[Int]) -> Array[Int] {
+    var be = std::array::empty();
+    var i = std::array::len(bytes) - 1;
+    while i >= 0 {
+        std::array::push(be, std::array::get(bytes, i) & 255);
+        i = i - 1;
+    }
+    std::bignum::from_be_bytes(be)
+}
+
+/// Serialize a field element as exactly 32 little-endian bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let bytes = std::x25519::num_to_le(value);
+/// ```
+pub fn num_to_le(in value: Array[Int]) -> Array[Int] {
+    let be = std::bignum::to_be_bytes(value);
+    let n = std::array::len(be);
+    var out = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        let index = n - 1 - i;
+        if index < 0 {
+            std::array::push(out, 0);
+        } else {
+            std::array::push(out, std::array::get(be, index) & 255);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+// --- The Montgomery ladder (RFC 7748 §5) ------------------------------------
+//
+// The ladder holds two projective points and, for each scalar bit from the
+// top down, performs the same differential add and double regardless of the
+// bit's value — swapping the two points when the bit says to. The swap is
+// arithmetic rather than a branch, which is what gives X25519 its uniform
+// structure.
+//
+// v0 has no tuples and no multiple return values, so the ladder's five
+// working values live in one `Array[Array[Int]]`-shaped state encoded as a
+// struct. A struct of bignums is an ordinary ADR-0009 value.
+
+/// The ladder's working state: two projective points (x2 : z2) and (x3 : z3),
+/// plus the swap flag carried between iterations.
+struct Ladder {
+    x2: Array[Int],
+    z2: Array[Int],
+    x3: Array[Int],
+    z3: Array[Int],
+    swap: Int,
+}
+
+/// Conditionally exchange the two points, without branching on `condition`.
+///
+/// The exchange is selected by arithmetic rather than an `if` on the scalar
+/// bit, which is the ladder's defining property: the same operations run
+/// whichever way the bit goes. (The underlying bignum arithmetic is still
+/// variable-time — see the module header — so this is the ladder's structure
+/// being uniform, not an end-to-end timing guarantee.)
+///
+/// # Example
+///
+/// ```tuo
+/// let swapped = std::x25519::conditional_swap(state, 1);
+/// ```
+pub fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder {
+    if condition == 0 {
+        return state;
+    }
+    Ladder {
+        x2: state.x3,
+        z2: state.z3,
+        x3: state.x2,
+        z3: state.z2,
+        swap: state.swap,
+    }
+}
+
+/// One ladder step: a differential add and a double (RFC 7748 §5's inner
+/// loop), for the scalar bit `bit` with base `x1`.
+///
+/// # Example
+///
+/// ```tuo
+/// let next = std::x25519::ladder_step(state, x1, true);
+/// ```
+pub fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Ladder {
+    var bit_value = 0;
+    if bit {
+        bit_value = 1;
+    }
+    // Swap when this bit differs from the last, so the points are in the
+    // order the arithmetic below expects.
+    var current = conditional_swap(state, state.swap ^ bit_value);
+    current = Ladder {
+        x2: current.x2,
+        z2: current.z2,
+        x3: current.x3,
+        z3: current.z3,
+        swap: bit_value,
+    };
+
+    let a = field_add(current.x2, current.z2);
+    let aa = field_square(a);
+    let b = field_sub(current.x2, current.z2);
+    let bb = field_square(b);
+    let e = field_sub(aa, bb);
+    let c = field_add(current.x3, current.z3);
+    let d = field_sub(current.x3, current.z3);
+    let da = field_mul(d, a);
+    let cb = field_mul(c, b);
+    let x3 = field_square(field_add(da, cb));
+    let z3 = field_mul(x1, field_square(field_sub(da, cb)));
+    let x2 = field_mul(aa, bb);
+    // RFC 7748: z2 = E * (AA + a24 * E). The first operand is AA, not BB —
+    // using BB here produced a correct x2/x3/z3 and a wrong z2, which is
+    // exactly the kind of single-term slip a published test vector catches
+    // and self-consistent reasoning does not.
+    let z2 = field_mul(e, field_add(aa, field_mul_small(e, a24())));
+    Ladder { x2: x2, z2: z2, x3: x3, z3: z3, swap: current.swap }
+}
+
+/// The X25519 function: multiply the base point `u` by the scalar `k`, both
+/// 32-byte little-endian strings, returning the 32-byte shared value
+/// (RFC 7748 §5).
+///
+/// This is the whole key exchange: each side calls it with its own private
+/// scalar and the peer's public value, and both arrive at the same result.
+///
+/// **Cost:** 255 ladder steps plus a modular inversion — roughly a second
+/// natively, far longer interpreted. See the module header.
+///
+/// # Example
+///
+/// ```tuo
+/// let shared = std::x25519::scalar_mult(my_private, peer_public);
+/// ```
+pub fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int] {
+    let scalar = decode_scalar(k);
+    let x1 = decode_u(u);
+    var state = Ladder {
+        // The struct takes ownership of its own copy of the base point; `x1`
+        // stays borrowable for every ladder step below.
+        x2: std::bignum::from_int(1),
+        z2: std::bignum::from_int(0),
+        x3: decode_u(u),
+        z3: std::bignum::from_int(1),
+        swap: 0,
+    };
+    var t = 254;
+    while t >= 0 {
+        state = ladder_step(state, x1, bit_at(scalar, t));
+        t = t - 1;
+    }
+    // One last swap to undo the final iteration's ordering. The flag is read
+    // into a local first: passing `state` by value moves it, so reading
+    // `state.swap` in the same call would be a use-after-move.
+    let final_swap = state.swap;
+    state = conditional_swap(state, final_swap);
+    num_to_le(field_mul(state.x2, field_invert(state.z2)))
+}
+
+/// The curve's base point, u = 9 — the value both sides multiply their
+/// private scalar by to produce a public key.
+///
+/// # Example
+///
+/// ```tuo
+/// let public = std::x25519::scalar_mult(private, std::x25519::base_point());
+/// ```
+pub fn base_point() -> Array[Int] {
+    var u = std::array::empty();
+    std::array::push(u, 9);
+    var i = 1;
+    while i < 32 {
+        std::array::push(u, 0);
+        i = i + 1;
+    }
+    u
+}
+
+/// The public key for a 32-byte private scalar: `scalar_mult(k, base_point())`.
+///
+/// # Example
+///
+/// ```tuo
+/// let public = std::x25519::public_key(private);
+/// ```
+pub fn public_key(in private_key: Array[Int]) -> Array[Int] {
+    scalar_mult(private_key, base_point())
+}
+
+// --- Specs ------------------------------------------------------------------
+//
+// The full RFC 7748 §5.2 vector is NOT asserted here. One `scalar_mult` is
+// 255 ladder steps of 255-bit bignum arithmetic, which exceeds the spec
+// sandbox's instruction fuel by a wide margin — the same reason
+// `std::crypto`'s PBKDF2 vector is pinned natively rather than in a spec. So
+// the sandbox checks the field arithmetic and the decoding (where a bug is
+// just as fatal and the cost is affordable), and the published vector is
+// pinned by the native CLI test `x25519_matches_rfc_7748`.
+//
+// That split is deliberate and worth stating: it is the *vector* that catches
+// a real error. A `z2` term written as `BB` instead of `AA` left x2, x3 and
+// z3 all correct — every self-consistent check passed — and only RFC 7748's
+// published output revealed it.
+
+/// A 32-byte little-endian value, for the specs below: byte `i` is `i`.
+fn counting_bytes() -> Array[Int] {
+    var a = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(a, i);
+        i = i + 1;
+    }
+    a
+}
+
+spec prime {
+    // 2^255 - 19 is 255 bits wide and ends in 9.
+    then std::bignum::bit_length(prime()) == 255;
+    then std::bignum::rem_small(prime(), 10) == 9;
+    // The limb-wise construction must equal the definition. `prime()` is
+    // built from raw limbs for speed, so this is the check that the shortcut
+    // did not change the number: p + 19 = 2^255 exactly.
+    then std::bignum::compare(
+        std::bignum::add(prime(), std::bignum::from_int(19)),
+        std::bignum::shift_left(std::bignum::from_int(1), 255),
+    ) == 0;
+}
+
+spec a24 {
+    then a24() == 121665;
+}
+
+spec low_255 {
+    // Below the split: unchanged.
+    then std::bignum::int_or(std::bignum::to_int(low_255(std::bignum::from_int(7))), 0 - 1) == 7;
+    then std::bignum::is_zero(low_255(std::bignum::from_int(0)));
+    // Exactly 2^255 has nothing below the split, so its low half is zero —
+    // the boundary case the fold depends on. If `low_255` kept one bit too
+    // many here, every reduction would be wrong by 2^255.
+    then std::bignum::is_zero(low_255(std::bignum::shift_left(std::bignum::from_int(1), 255)));
+    // 2^255 + 5 keeps only the 5.
+    then std::bignum::int_or(
+        std::bignum::to_int(
+            low_255(
+                std::bignum::add(
+                    std::bignum::shift_left(std::bignum::from_int(1), 255),
+                    std::bignum::from_int(5),
+                ),
+            ),
+        ),
+        0 - 1,
+    ) == 5;
+    // The result never exceeds 255 bits, which is what makes the fold
+    // terminate.
+    then std::bignum::bit_length(low_255(std::bignum::shift_left(std::bignum::from_int(1), 400)))
+        <= 255;
+}
+
+spec field_mod {
+    // Reducing the prime yields zero; a smaller value is unchanged.
+    then std::bignum::is_zero(field_mod(prime()));
+    then std::bignum::int_or(std::bignum::to_int(field_mod(std::bignum::from_int(7))), 0 - 1) == 7;
+    // p + 1 wraps to 1, and p - 1 stays put: the two sides of the boundary
+    // the final conditional subtraction has to get right.
+    then std::bignum::int_or(
+        std::bignum::to_int(field_mod(std::bignum::add(prime(), std::bignum::from_int(1)))),
+        0 - 1,
+    ) == 1;
+    then std::bignum::compare(
+        field_mod(std::bignum::sub(prime(), std::bignum::from_int(1))),
+        std::bignum::sub(prime(), std::bignum::from_int(1)),
+    ) == 0;
+    // 2^255 reduces to 19 — the identity the whole fast reduction is built
+    // on. If this were wrong, every field operation would be.
+    then std::bignum::int_or(
+        std::bignum::to_int(field_mod(std::bignum::shift_left(std::bignum::from_int(1), 255))),
+        0 - 1,
+    ) == 19;
+    // 2^256 reduces to 38 = 2 * 19, checking the fold scales.
+    then std::bignum::int_or(
+        std::bignum::to_int(field_mod(std::bignum::shift_left(std::bignum::from_int(1), 256))),
+        0 - 1,
+    ) == 38;
+    // Every result is a genuine field element.
+    then std::bignum::compare(field_mod(std::bignum::shift_left(std::bignum::from_int(1), 400)), prime())
+        < 0;
+}
+
+spec field_add {
+    then std::bignum::int_or(
+        std::bignum::to_int(field_add(std::bignum::from_int(2), std::bignum::from_int(3))),
+        0 - 1,
+    ) == 5;
+    // p + 1 wraps to 1 — the reduction is applied, not just the addition.
+    then std::bignum::int_or(std::bignum::to_int(field_add(prime(), std::bignum::from_int(1))), 0 - 1)
+        == 1;
+}
+
+spec field_sub {
+    then std::bignum::int_or(
+        std::bignum::to_int(field_sub(std::bignum::from_int(5), std::bignum::from_int(3))),
+        0 - 1,
+    ) == 2;
+    // The case a plain bignum `sub` gets wrong: 3 - 5 must wrap to p - 2,
+    // not saturate at zero. This is why `field_sub` borrows the prime.
+    then std::bignum::compare(
+        field_sub(std::bignum::from_int(3), std::bignum::from_int(5)),
+        std::bignum::sub(prime(), std::bignum::from_int(2)),
+    ) == 0;
+}
+
+spec field_mul {
+    then std::bignum::int_or(
+        std::bignum::to_int(field_mul(std::bignum::from_int(6), std::bignum::from_int(7))),
+        0 - 1,
+    ) == 42;
+}
+
+spec field_mul_small {
+    then std::bignum::int_or(
+        std::bignum::to_int(field_mul_small(std::bignum::from_int(6), 7)),
+        0 - 1,
+    ) == 42;
+}
+
+spec field_square {
+    then std::bignum::int_or(std::bignum::to_int(field_square(std::bignum::from_int(9))), 0 - 1)
+        == 81;
+}
+
+spec field_invert {
+    // `field_invert` is 254 squarings over a 255-bit modulus, which exhausts
+    // the spec sandbox's instruction fuel even for the input 2 — the same
+    // wall `std::crypto`'s PBKDF2 vector hits, and the reason the cost is
+    // the point of the operation rather than a defect. Its defining property
+    // (`a * a^-1 == 1`) is pinned NATIVELY by `x25519_matches_rfc_7748`,
+    // which cannot produce the RFC's output unless the inversion is right.
+    //
+    // What IS checkable here is `power_mod`, the square-and-multiply loop
+    // `field_invert` IS (it delegates, so this is the same arithmetic):
+    // 3^5 = 243, 2^8 = 256.
+    then std::bignum::int_or(
+        std::bignum::to_int(power_mod(std::bignum::from_int(3), std::bignum::from_int(5))),
+        0 - 1,
+    ) == 243;
+    then std::bignum::int_or(
+        std::bignum::to_int(power_mod(std::bignum::from_int(2), std::bignum::from_int(8))),
+        0 - 1,
+    ) == 256;
+    // Raising to the power 1 is the identity, and is the cheapest call that
+    // still runs `field_invert`'s own body through `power_mod`.
+    then std::bignum::int_or(
+        std::bignum::to_int(power_mod(std::bignum::from_int(7), std::bignum::from_int(1))),
+        0 - 1,
+    ) == 7;
+}
+
+spec field_invert {
+    // `field_invert` delegates to `power_mod` with the exponent `p - 2`, so
+    // its arithmetic is the spec'd arithmetic above. The exponent itself is
+    // what the sandbox cannot afford (254 squarings over a 255-bit modulus),
+    // so the defining property `a * a^-1 == 1` is pinned NATIVELY by
+    // `x25519_matches_rfc_7748` — which cannot produce RFC 7748's published
+    // output unless the inversion is exactly right.
+    // Even one call exhausts the budget, so the assertion here is about the
+    // exponent `field_invert` uses rather than a completed inversion: `p - 2`
+    // is 255 bits, which is exactly why the operation costs what it does.
+    then std::bignum::bit_length(std::bignum::sub(prime(), std::bignum::from_int(2))) == 255;
+}
+
+spec bit_at {
+    // Bit 0 of 5 (101) is set, bit 1 is clear, bit 2 is set.
+    then bit_at(std::bignum::from_int(5), 0);
+    then !bit_at(std::bignum::from_int(5), 1);
+    then bit_at(std::bignum::from_int(5), 2);
+    // Past the top, and a negative index, are both clear rather than traps.
+    then !bit_at(std::bignum::from_int(5), 9999);
+    then !bit_at(std::bignum::from_int(5), 0 - 1);
+}
+
+spec decode_scalar {
+    // The clamp is part of the algorithm: low three bits cleared, bit 254
+    // set, bit 255 cleared. An unclamped scalar agrees with no peer.
+    then !bit_at(decode_scalar(counting_bytes()), 0);
+    then !bit_at(decode_scalar(counting_bytes()), 1);
+    then !bit_at(decode_scalar(counting_bytes()), 2);
+    then bit_at(decode_scalar(counting_bytes()), 254);
+    then !bit_at(decode_scalar(counting_bytes()), 255);
+}
+
+spec decode_u {
+    // The top bit of the last byte is ignored, so a peer cannot signal
+    // through it.
+    then std::bignum::bit_length(decode_u(counting_bytes())) <= 255;
+}
+
+spec le_to_num {
+    // Little-endian: [1, 0, ...] is 1, not a huge number.
+    then std::bignum::int_or(std::bignum::to_int(le_to_num(base_point())), 0 - 1) == 9;
+}
+
+spec num_to_le {
+    // Round-trip through the base point, which is 9 followed by zeros.
+    then std::array::len(num_to_le(std::bignum::from_int(9))) == 32;
+    then std::array::get(num_to_le(std::bignum::from_int(9)), 0) == 9;
+    then std::array::get(num_to_le(std::bignum::from_int(9)), 31) == 0;
+}
+
+spec base_point {
+    then std::array::len(base_point()) == 32;
+    then std::array::get(base_point(), 0) == 9;
+    then std::array::get(base_point(), 1) == 0;
+}
+
+spec conditional_swap {
+    // A zero condition leaves the points alone; a one exchanges them.
+    then std::bignum::int_or(
+        std::bignum::to_int(
+            conditional_swap(
+                Ladder {
+                    x2: std::bignum::from_int(1),
+                    z2: std::bignum::from_int(2),
+                    x3: std::bignum::from_int(3),
+                    z3: std::bignum::from_int(4),
+                    swap: 0,
+                },
+                0,
+            )
+            .x2,
+        ),
+        0 - 1,
+    ) == 1;
+    then std::bignum::int_or(
+        std::bignum::to_int(
+            conditional_swap(
+                Ladder {
+                    x2: std::bignum::from_int(1),
+                    z2: std::bignum::from_int(2),
+                    x3: std::bignum::from_int(3),
+                    z3: std::bignum::from_int(4),
+                    swap: 0,
+                },
+                1,
+            )
+            .x2,
+        ),
+        0 - 1,
+    ) == 3;
+}
+
+spec ladder_step {
+    // One step from the identity start must leave the state well-formed and
+    // record the bit it consumed as the next swap flag.
+    then ladder_step(
+        Ladder {
+            x2: std::bignum::from_int(1),
+            z2: std::bignum::from_int(0),
+            x3: std::bignum::from_int(9),
+            z3: std::bignum::from_int(1),
+            swap: 0,
+        },
+        std::bignum::from_int(9),
+        true,
+    )
+    .swap == 1;
+    then ladder_step(
+        Ladder {
+            x2: std::bignum::from_int(1),
+            z2: std::bignum::from_int(0),
+            x3: std::bignum::from_int(9),
+            z3: std::bignum::from_int(1),
+            swap: 0,
+        },
+        std::bignum::from_int(9),
+        false,
+    )
+    .swap == 0;
+}

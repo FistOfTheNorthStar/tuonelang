@@ -1,0 +1,720 @@
+// std::hkdf — HMAC-based key derivation (RFC 5869) and TLS 1.3's key schedule
+// (RFC 8446 §7.1).
+//
+// This module is entirely executable: every function is pure computation over
+// `Array[Int]`, and the specs pin it against RFC 5869's **published** test
+// vectors rather than its own reasoning. For a key schedule that is the only
+// meaningful check — two peers derive keys independently and never compare
+// them directly, so an implementation that agrees only with itself produces a
+// connection where every record fails to decrypt, with no clue as to why.
+//
+// WHAT HKDF IS FOR. A raw Diffie-Hellman output is not a key: it is a group
+// element with structure, the wrong length, and no binding to the session it
+// belongs to. HKDF's two steps fix exactly that. *Extract* concentrates the
+// entropy into a uniformly random pseudorandom key; *expand* stretches that
+// into as many distinct keys as the protocol needs, each labelled so the
+// same input can never yield the same output for two different purposes.
+//
+// The labelling is a security property, not bookkeeping: it is what stops a
+// handshake key from also being a valid application key.
+//
+// NOT CONSTANT TIME. This builds on `std::crypto`'s SHA-256 and HMAC, which
+// are not marked `#[constant_time]`. The derivation runs over secret input,
+// so this module inherits that limitation and does not paper over it.
+
+module std::hkdf;
+
+/// The output length of SHA-256, in bytes — HKDF's "HashLen", which bounds
+/// how much `expand` can produce and sizes `extract`'s output.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::hkdf::hash_len(); // 32
+/// ```
+pub fn hash_len() -> Int {
+    32
+}
+
+/// HKDF-Extract (RFC 5869 §2.2): concentrate `ikm`'s entropy into a
+/// pseudorandom key, under an optional `salt`.
+///
+/// The salt is HMAC's *key* and the input keying material is its *message*,
+/// which reads backwards until you see why: the salt is public and possibly
+/// absent, while the IKM is the secret, and HMAC's security argument wants
+/// the secret in the message position here.
+///
+/// # Example
+///
+/// ```tuo
+/// let prk = std::hkdf::extract(salt, shared_secret);
+/// ```
+pub fn extract(in salt: Array[Int], in ikm: Array[Int]) -> Array[Int] {
+    std::crypto::hmac_sha256(salt, ikm)
+}
+
+/// HKDF-Expand (RFC 5869 §2.3): stretch a pseudorandom key into `length`
+/// bytes of output keying material, bound to `info`.
+///
+/// `info` is what makes two derivations from one `prk` independent, so every
+/// caller must pass something distinct for each key it needs.
+///
+/// Returns an empty array when `length` exceeds 255 * HashLen, which is the
+/// RFC's hard bound: the counter is a single byte, so there is no longer
+/// output to give. Returning empty rather than truncating means a caller
+/// cannot silently receive fewer key bytes than it asked for.
+///
+/// # Example
+///
+/// ```tuo
+/// let key = std::hkdf::expand(prk, info, 32);
+/// ```
+pub fn expand(in prk: Array[Int], in info: Array[Int], take length: Int) -> Array[Int] {
+    var out = std::array::empty();
+    if length <= 0 {
+        return out;
+    }
+    if length > 255 * hash_len() {
+        // The counter below is one byte; beyond 255 blocks there is no
+        // output to produce, and truncating would hand the caller a shorter
+        // key than it asked for.
+        return out;
+    }
+    // T(0) is empty; T(n) = HMAC(prk, T(n-1) || info || n).
+    var previous = std::array::empty();
+    var counter = 1;
+    while std::array::len(out) < length {
+        var message = std::array::empty();
+        var p = 0;
+        while p < std::array::len(previous) {
+            std::array::push(message, std::array::get(previous, p));
+            p = p + 1;
+        }
+        var f = 0;
+        while f < std::array::len(info) {
+            std::array::push(message, std::array::get(info, f) & 255);
+            f = f + 1;
+        }
+        std::array::push(message, counter);
+        let block = std::crypto::hmac_sha256(prk, message);
+        var b = 0;
+        while b < std::array::len(block) && std::array::len(out) < length {
+            std::array::push(out, std::array::get(block, b));
+            b = b + 1;
+        }
+        // Carry the FULL block forward, not the truncated copy in `out`.
+        previous = std::crypto::hmac_sha256(prk, message);
+        counter = counter + 1;
+    }
+    out
+}
+
+// --- TLS 1.3's key schedule (RFC 8446 §7.1) ---------------------------------
+//
+// TLS does not call HKDF-Expand directly. It wraps it in `HKDF-Expand-Label`,
+// which builds a structured `info` field so every derived key is bound to a
+// label, to the transcript so far, and to its own length. That structure is
+// what makes the schedule's keys provably distinct from one another.
+
+/// Append a 16-bit big-endian length, the encoding TLS uses throughout its
+/// wire format.
+///
+/// # Example
+///
+/// ```tuo
+/// std::hkdf::push_be16(buffer, 32);
+/// ```
+pub fn push_be16(mut out: Array[Int], take value: Int) -> Int {
+    std::array::push(out, (value >> 8) & 255);
+    std::array::push(out, value & 255);
+    0
+}
+
+/// Append a byte string prefixed by its one-byte length — TLS's `opaque
+/// x<0..255>` encoding.
+///
+/// # Example
+///
+/// ```tuo
+/// std::hkdf::push_u8_vector(buffer, label_bytes);
+/// ```
+pub fn push_u8_vector(mut out: Array[Int], in bytes: Array[Int]) -> Int {
+    std::array::push(out, std::array::len(bytes) & 255);
+    var i = 0;
+    while i < std::array::len(bytes) {
+        std::array::push(out, std::array::get(bytes, i) & 255);
+        i = i + 1;
+    }
+    0
+}
+
+/// The `HkdfLabel` structure TLS 1.3 feeds to HKDF-Expand as its `info`
+/// (RFC 8446 §7.1): the output length, then `"tls13 " || label`, then the
+/// context, each length-prefixed.
+///
+/// The `"tls13 "` prefix is domain separation across protocol versions: it is
+/// what stops a key derived here from colliding with one derived by some
+/// other protocol that happens to use the same label and secret.
+///
+/// # Example
+///
+/// ```tuo
+/// let info = std::hkdf::label_info("key", context, 32);
+/// ```
+pub fn label_info(in label: Str, in context: Array[Int], take length: Int) -> Array[Int] {
+    var info = std::array::empty();
+    push_be16(info, length);
+    var full = std::array::empty();
+    let prefix = "tls13 ";
+    var p = 0;
+    while p < std::str::len(prefix) {
+        std::array::push(full, std::str::byte_at(prefix, p));
+        p = p + 1;
+    }
+    var l = 0;
+    while l < std::str::len(label) {
+        std::array::push(full, std::str::byte_at(label, l));
+        l = l + 1;
+    }
+    push_u8_vector(info, full);
+    push_u8_vector(info, context);
+    info
+}
+
+/// TLS 1.3's `HKDF-Expand-Label` (RFC 8446 §7.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let key = std::hkdf::expand_label(secret, "key", empty, 32);
+/// ```
+pub fn expand_label(
+    in secret: Array[Int],
+    in label: Str,
+    in context: Array[Int],
+    take length: Int,
+) -> Array[Int] {
+    expand(secret, label_info(label, context, length), length)
+}
+
+/// TLS 1.3's `Derive-Secret` (RFC 8446 §7.1): `Expand-Label` over the
+/// transcript hash, always producing HashLen bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let handshake = std::hkdf::derive_secret(secret, "c hs traffic", transcript);
+/// ```
+pub fn derive_secret(
+    in secret: Array[Int],
+    in label: Str,
+    in transcript_hash: Array[Int],
+) -> Array[Int] {
+    expand_label(secret, label, transcript_hash, hash_len())
+}
+
+/// A byte array of `length` zeros — the all-zero salt and IKM the key
+/// schedule starts from when there is no PSK.
+///
+/// # Example
+///
+/// ```tuo
+/// let zeros = std::hkdf::zeros(32);
+/// ```
+pub fn zeros(take length: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < length {
+        std::array::push(out, 0);
+        i = i + 1;
+    }
+    out
+}
+
+/// The TLS 1.3 **early secret** (RFC 8446 §7.1), for a handshake with no
+/// pre-shared key: `HKDF-Extract(0, 0)`.
+///
+/// # Example
+///
+/// ```tuo
+/// let early = std::hkdf::early_secret();
+/// ```
+pub fn early_secret() -> Array[Int] {
+    extract(zeros(hash_len()), zeros(hash_len()))
+}
+
+/// The TLS 1.3 **handshake secret** (RFC 8446 §7.1): extract the ECDHE
+/// shared secret under the derived early secret.
+///
+/// The `"derived"` step in between is not optional — it binds the previous
+/// stage of the schedule into this one, so the chain cannot be re-entered
+/// from the middle.
+///
+/// # Example
+///
+/// ```tuo
+/// let handshake = std::hkdf::handshake_secret(shared);
+/// ```
+pub fn handshake_secret(in shared: Array[Int]) -> Array[Int] {
+    let derived = derive_secret(early_secret(), "derived", empty_hash());
+    extract(derived, shared)
+}
+
+/// The TLS 1.3 **master secret** (RFC 8446 §7.1).
+///
+/// # Example
+///
+/// ```tuo
+/// let master = std::hkdf::master_secret(handshake);
+/// ```
+pub fn master_secret(in handshake: Array[Int]) -> Array[Int] {
+    let derived = derive_secret(handshake, "derived", empty_hash());
+    extract(derived, zeros(hash_len()))
+}
+
+/// The SHA-256 of the empty string, which the key schedule uses as the
+/// transcript hash for its `"derived"` steps.
+///
+/// # Example
+///
+/// ```tuo
+/// let h = std::hkdf::empty_hash();
+/// ```
+pub fn empty_hash() -> Array[Int] {
+    std::crypto::sha256_bytes("")
+}
+
+/// The record-protection key for a traffic secret (RFC 8446 §7.3) — 32 bytes
+/// for ChaCha20.
+///
+/// # Example
+///
+/// ```tuo
+/// let key = std::hkdf::traffic_key(client_secret);
+/// ```
+pub fn traffic_key(in traffic_secret: Array[Int]) -> Array[Int] {
+    expand_label(traffic_secret, "key", std::array::empty(), 32)
+}
+
+/// The record-protection nonce base for a traffic secret (RFC 8446 §7.3) —
+/// 12 bytes, XORed with the record sequence number per record.
+///
+/// # Example
+///
+/// ```tuo
+/// let iv = std::hkdf::traffic_iv(client_secret);
+/// ```
+pub fn traffic_iv(in traffic_secret: Array[Int]) -> Array[Int] {
+    expand_label(traffic_secret, "iv", std::array::empty(), 12)
+}
+
+/// The per-record nonce: the traffic IV with the record sequence number
+/// XORed into its low-order bytes (RFC 8446 §5.3).
+///
+/// This is what makes a one-time AEAD key safe across many records — every
+/// record gets a distinct nonce, and reusing one would be catastrophic for
+/// both confidentiality and the Poly1305 authenticator.
+///
+/// # Example
+///
+/// ```tuo
+/// let nonce = std::hkdf::record_nonce(iv, 0);
+/// ```
+pub fn record_nonce(in iv: Array[Int], take sequence: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(iv) {
+        std::array::push(out, std::array::get(iv, i) & 255);
+        i = i + 1;
+    }
+    // The sequence number is right-aligned, big-endian, over the last 8 bytes.
+    let n = std::array::len(out);
+    var shift = 0;
+    while shift < 8 {
+        let index = n - 1 - shift;
+        if index >= 0 {
+            let byte = (sequence >> (shift * 8)) & 255;
+            std::array::set(out, index, std::array::get(out, index) ^ byte);
+        }
+        shift = shift + 1;
+    }
+    out
+}
+
+// --- Specs: RFC 5869's PUBLISHED vectors ------------------------------------
+
+/// RFC 5869 A.1 input keying material: 22 bytes of 0x0b.
+fn vector_ikm() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    std::array::push(a, 11);
+    a
+}
+
+/// RFC 5869 A.1 salt.
+fn vector_salt() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 0);
+    std::array::push(a, 1);
+    std::array::push(a, 2);
+    std::array::push(a, 3);
+    std::array::push(a, 4);
+    std::array::push(a, 5);
+    std::array::push(a, 6);
+    std::array::push(a, 7);
+    std::array::push(a, 8);
+    std::array::push(a, 9);
+    std::array::push(a, 10);
+    std::array::push(a, 11);
+    std::array::push(a, 12);
+    a
+}
+
+/// RFC 5869 A.1 info.
+fn vector_info() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 240);
+    std::array::push(a, 241);
+    std::array::push(a, 242);
+    std::array::push(a, 243);
+    std::array::push(a, 244);
+    std::array::push(a, 245);
+    std::array::push(a, 246);
+    std::array::push(a, 247);
+    std::array::push(a, 248);
+    std::array::push(a, 249);
+    a
+}
+
+/// RFC 5869 A.1 published PRK.
+fn vector_prk() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 7);
+    std::array::push(a, 119);
+    std::array::push(a, 9);
+    std::array::push(a, 54);
+    std::array::push(a, 44);
+    std::array::push(a, 46);
+    std::array::push(a, 50);
+    std::array::push(a, 223);
+    std::array::push(a, 13);
+    std::array::push(a, 220);
+    std::array::push(a, 63);
+    std::array::push(a, 13);
+    std::array::push(a, 196);
+    std::array::push(a, 123);
+    std::array::push(a, 186);
+    std::array::push(a, 99);
+    std::array::push(a, 144);
+    std::array::push(a, 182);
+    std::array::push(a, 199);
+    std::array::push(a, 59);
+    std::array::push(a, 181);
+    std::array::push(a, 15);
+    std::array::push(a, 156);
+    std::array::push(a, 49);
+    std::array::push(a, 34);
+    std::array::push(a, 236);
+    std::array::push(a, 132);
+    std::array::push(a, 74);
+    std::array::push(a, 215);
+    std::array::push(a, 194);
+    std::array::push(a, 179);
+    std::array::push(a, 229);
+    a
+}
+
+/// RFC 5869 A.1 published OKM (42 bytes).
+fn vector_okm() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 60);
+    std::array::push(a, 178);
+    std::array::push(a, 95);
+    std::array::push(a, 37);
+    std::array::push(a, 250);
+    std::array::push(a, 172);
+    std::array::push(a, 213);
+    std::array::push(a, 122);
+    std::array::push(a, 144);
+    std::array::push(a, 67);
+    std::array::push(a, 79);
+    std::array::push(a, 100);
+    std::array::push(a, 208);
+    std::array::push(a, 54);
+    std::array::push(a, 47);
+    std::array::push(a, 42);
+    std::array::push(a, 45);
+    std::array::push(a, 45);
+    std::array::push(a, 10);
+    std::array::push(a, 144);
+    std::array::push(a, 207);
+    std::array::push(a, 26);
+    std::array::push(a, 90);
+    std::array::push(a, 76);
+    std::array::push(a, 93);
+    std::array::push(a, 176);
+    std::array::push(a, 45);
+    std::array::push(a, 86);
+    std::array::push(a, 236);
+    std::array::push(a, 196);
+    std::array::push(a, 197);
+    std::array::push(a, 191);
+    std::array::push(a, 52);
+    std::array::push(a, 0);
+    std::array::push(a, 114);
+    std::array::push(a, 8);
+    std::array::push(a, 213);
+    std::array::push(a, 184);
+    std::array::push(a, 135);
+    std::array::push(a, 24);
+    std::array::push(a, 88);
+    std::array::push(a, 101);
+    a
+}
+
+/// A byte of the extracted PRK, for the spec below.
+fn extracted_byte(take i: Int) -> Int {
+    std::array::get(extract(vector_salt(), vector_ikm()), i)
+}
+
+/// A byte of the expanded OKM, for the spec below.
+fn expanded_byte(take i: Int) -> Int {
+    std::array::get(expand(vector_prk(), vector_info(), 42), i)
+}
+
+spec extract {
+    // RFC 5869 A.1's PUBLISHED PRK, every byte.
+    then extracted_byte(0) == 7;
+    then extracted_byte(1) == 119;
+    then extracted_byte(2) == 9;
+    then extracted_byte(3) == 54;
+    then extracted_byte(4) == 44;
+    then extracted_byte(5) == 46;
+    then extracted_byte(6) == 50;
+    then extracted_byte(7) == 223;
+    then extracted_byte(8) == 13;
+    then extracted_byte(9) == 220;
+    then extracted_byte(10) == 63;
+    then extracted_byte(11) == 13;
+    then extracted_byte(12) == 196;
+    then extracted_byte(13) == 123;
+    then extracted_byte(14) == 186;
+    then extracted_byte(15) == 99;
+    then extracted_byte(16) == 144;
+    then extracted_byte(17) == 182;
+    then extracted_byte(18) == 199;
+    then extracted_byte(19) == 59;
+    then extracted_byte(20) == 181;
+    then extracted_byte(21) == 15;
+    then extracted_byte(22) == 156;
+    then extracted_byte(23) == 49;
+    then extracted_byte(24) == 34;
+    then extracted_byte(25) == 236;
+    then extracted_byte(26) == 132;
+    then extracted_byte(27) == 74;
+    then extracted_byte(28) == 215;
+    then extracted_byte(29) == 194;
+    then extracted_byte(30) == 179;
+    then extracted_byte(31) == 229;
+    then std::array::len(extract(vector_salt(), vector_ikm())) == hash_len();
+}
+
+spec expand {
+    // RFC 5869 A.1's PUBLISHED OKM, every byte. This spans two HMAC blocks
+    // plus a truncated third, so it exercises the chaining that a
+    // single-block test would miss.
+    then expanded_byte(0) == 60;
+    then expanded_byte(1) == 178;
+    then expanded_byte(2) == 95;
+    then expanded_byte(3) == 37;
+    then expanded_byte(4) == 250;
+    then expanded_byte(5) == 172;
+    then expanded_byte(6) == 213;
+    then expanded_byte(7) == 122;
+    then expanded_byte(8) == 144;
+    then expanded_byte(9) == 67;
+    then expanded_byte(10) == 79;
+    then expanded_byte(11) == 100;
+    then expanded_byte(12) == 208;
+    then expanded_byte(13) == 54;
+    then expanded_byte(14) == 47;
+    then expanded_byte(15) == 42;
+    then expanded_byte(16) == 45;
+    then expanded_byte(17) == 45;
+    then expanded_byte(18) == 10;
+    then expanded_byte(19) == 144;
+    then expanded_byte(20) == 207;
+    then expanded_byte(21) == 26;
+    then expanded_byte(22) == 90;
+    then expanded_byte(23) == 76;
+    then expanded_byte(24) == 93;
+    then expanded_byte(25) == 176;
+    then expanded_byte(26) == 45;
+    then expanded_byte(27) == 86;
+    then expanded_byte(28) == 236;
+    then expanded_byte(29) == 196;
+    then expanded_byte(30) == 197;
+    then expanded_byte(31) == 191;
+    then expanded_byte(32) == 52;
+    then expanded_byte(33) == 0;
+    then expanded_byte(34) == 114;
+    then expanded_byte(35) == 8;
+    then expanded_byte(36) == 213;
+    then expanded_byte(37) == 184;
+    then expanded_byte(38) == 135;
+    then expanded_byte(39) == 24;
+    then expanded_byte(40) == 88;
+    then expanded_byte(41) == 101;
+    then std::array::len(expand(vector_prk(), vector_info(), 42)) == 42;
+    // The RFC's hard bound: the counter is one byte, so beyond 255 blocks
+    // there is no output. Empty rather than truncated, so a caller cannot
+    // silently get a shorter key than it asked for.
+    then std::array::len(expand(vector_prk(), vector_info(), 255 * 32 + 1)) == 0;
+    then std::array::len(expand(vector_prk(), vector_info(), 0)) == 0;
+    // An exact block boundary, and one byte over it.
+    then std::array::len(expand(vector_prk(), vector_info(), 32)) == 32;
+    then std::array::len(expand(vector_prk(), vector_info(), 33)) == 33;
+}
+
+spec hash_len {
+    then hash_len() == 32;
+}
+
+spec zeros {
+    then std::array::len(zeros(32)) == 32;
+    then std::array::get(zeros(32), 0) == 0;
+    then std::array::len(zeros(0)) == 0;
+}
+
+spec push_be16 {
+    // Big-endian: 258 is 01 02.
+    then std::array::get(label_info("x", std::array::empty(), 258), 0) == 1;
+    then std::array::get(label_info("x", std::array::empty(), 258), 1) == 2;
+}
+
+spec push_u8_vector {
+    // The label is length-prefixed: "tls13 " + "x" is 7 bytes, so byte 2 of
+    // the info is 7.
+    then std::array::get(label_info("x", std::array::empty(), 32), 2) == 7;
+}
+
+spec label_info {
+    // Structure: 2 length bytes, 1 label-length byte, 7 label bytes,
+    // 1 context-length byte, 0 context bytes = 11.
+    then std::array::len(label_info("x", std::array::empty(), 32)) == 11;
+    // The "tls13 " prefix is domain separation across protocols, and must be
+    // present verbatim: 't' is 116.
+    then std::array::get(label_info("x", std::array::empty(), 32), 3) == 116;
+    then std::array::get(label_info("x", std::array::empty(), 32), 4) == 108;
+    then std::array::get(label_info("x", std::array::empty(), 32), 5) == 115;
+    then std::array::get(label_info("x", std::array::empty(), 32), 6) == 49;
+    then std::array::get(label_info("x", std::array::empty(), 32), 7) == 51;
+    then std::array::get(label_info("x", std::array::empty(), 32), 8) == 32;
+    // Then the caller's own label byte.
+    then std::array::get(label_info("x", std::array::empty(), 32), 9) == 120;
+}
+
+spec expand_label {
+    then std::array::len(expand_label(vector_prk(), "key", std::array::empty(), 32)) == 32;
+    // Different labels MUST give different keys from the same secret — this
+    // is the property the whole labelling scheme exists to provide, and the
+    // one whose absence would let a handshake key double as an application
+    // key.
+    then differs(
+        expand_label(vector_prk(), "key", std::array::empty(), 32),
+        expand_label(vector_prk(), "iv", std::array::empty(), 32),
+    );
+}
+
+spec derive_secret {
+    then std::array::len(derive_secret(vector_prk(), "derived", empty_hash())) == hash_len();
+}
+
+spec empty_hash {
+    // SHA-256("") starts e3 b0 c4 42 — one of the most-recognized digests
+    // there is, which makes it a good canary for a broken hash.
+    then std::array::get(empty_hash(), 0) == 227;
+    then std::array::get(empty_hash(), 1) == 176;
+    then std::array::get(empty_hash(), 2) == 196;
+    then std::array::get(empty_hash(), 3) == 66;
+    then std::array::len(empty_hash()) == 32;
+}
+
+spec traffic_key {
+    then std::array::len(traffic_key(vector_prk())) == 32;
+}
+
+/// Whether two byte arrays differ somewhere — the spelling the
+/// "distinct keys" specs need, since v0 has no array comparison and a
+/// compound `||` over several `get`s moves its operands.
+fn differs(in a: Array[Int], in b: Array[Int]) -> Bool {
+    if std::array::len(a) != std::array::len(b) {
+        return true;
+    }
+    var i = 0;
+    var found = false;
+    while i < std::array::len(a) {
+        if std::array::get(a, i) != std::array::get(b, i) {
+            found = true;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+spec traffic_iv {
+    // 12 bytes, the ChaCha20-Poly1305 nonce width.
+    then std::array::len(traffic_iv(vector_prk())) == 12;
+    // The key and the IV come from the same secret but must differ.
+    then differs(traffic_key(vector_prk()), traffic_iv(vector_prk()));
+}
+
+spec record_nonce {
+    // Sequence 0 leaves the IV untouched.
+    then std::array::get(record_nonce(zeros(12), 0), 11) == 0;
+    // The sequence number is big-endian in the LAST bytes: 1 lands in byte 11.
+    then std::array::get(record_nonce(zeros(12), 1), 11) == 1;
+    then std::array::get(record_nonce(zeros(12), 1), 10) == 0;
+    // 256 carries into byte 10.
+    then std::array::get(record_nonce(zeros(12), 256), 10) == 1;
+    then std::array::get(record_nonce(zeros(12), 256), 11) == 0;
+    // Every record gets a DISTINCT nonce — reusing one would break both
+    // confidentiality and the Poly1305 authenticator.
+    then std::array::get(record_nonce(zeros(12), 1), 11)
+        != std::array::get(record_nonce(zeros(12), 2), 11);
+    then std::array::len(record_nonce(zeros(12), 7)) == 12;
+}
+
+spec early_secret {
+    then std::array::len(early_secret()) == hash_len();
+}
+
+spec handshake_secret {
+    then std::array::len(handshake_secret(vector_ikm())) == hash_len();
+    // Different shared secrets give different handshake secrets.
+    then differs(handshake_secret(vector_ikm()), handshake_secret(vector_salt()));
+}
+
+spec master_secret {
+    then std::array::len(master_secret(vector_prk())) == hash_len();
+}

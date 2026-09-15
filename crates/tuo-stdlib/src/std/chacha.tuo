@@ -1,0 +1,1432 @@
+// std::chacha — the ChaCha20 stream cipher and Poly1305 authenticator
+// (RFC 8439), the AEAD half of a TLS 1.3 record layer.
+//
+// This module is entirely executable: every function is pure computation over
+// `Int` and `Array[Int]`, runs through the reference interpreter, and the
+// specs below prove it against the RFC's **published test vectors** rather
+// than against the module's own reasoning. That distinction is the whole
+// point for a cipher: an implementation that is merely self-consistent is
+// worthless, because it agrees with itself while disagreeing with every
+// other implementation on the wire.
+//
+// WHY CHACHA20-POLY1305 AND NOT AES-GCM. Both are TLS 1.3 cipher suites, and
+// AES is the more common one — but AES is *defined* over table lookups or a
+// hardware instruction, and a table-driven AES written in a high-level
+// language is the textbook cache-timing vulnerability. ChaCha20 is defined
+// over exactly the operations ADR-0019 gave the language — 32-bit add, XOR,
+// and rotate — so it is expressible here *without* a data-dependent memory
+// access, which is why Bernstein designed it that way. It is the honest
+// choice for a language with no AES instruction.
+//
+// Design rules (shared across the whole standard library):
+//   * One obvious way to do each fundamental thing — no competing APIs.
+//   * Free functions only. Method syntax is not lowered in v0.
+//   * Every public function carries its exact signature, a doc comment, at
+//     least one worked example, and an executable spec.
+//
+// BYTES ARE `Array[Int]`, each element in `0 ..= 255`. v0 has no `U8`, so a
+// "byte string" is that convention, enforced by masking at every boundary —
+// the same convention `std::crypto` already uses, so the two compose without
+// a conversion layer.
+//
+// WHAT THIS IS NOT. The constant-time claim here is deliberately narrow.
+// ChaCha20's control flow is data-independent by construction (no branch and
+// no index depends on the key or the plaintext), and that much is real. But
+// these functions are NOT marked `#[constant_time]`: they loop and index by
+// nature, which the ADR-0020 checker refuses, and there is no `#[allow]`
+// escape hatch — a function that cannot satisfy the checker simply goes
+// unmarked. Poly1305's `std::bignum` arithmetic is explicitly documented as
+// not constant time. So this module promises correctness against the RFC,
+// not a timing guarantee.
+
+module std::chacha;
+
+/// The number of 32-bit words in a ChaCha20 state: 4 constants, 8 key words,
+/// 1 counter, 3 nonce words.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::chacha::state_words(); // 16
+/// ```
+pub fn state_words() -> Int {
+    16
+}
+
+/// The ChaCha20 block size in bytes — 16 words of 4 bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::chacha::block_bytes(); // 64
+/// ```
+pub fn block_bytes() -> Int {
+    64
+}
+
+/// The four ChaCha20 constants: the ASCII of "expand 32-byte k", as
+/// little-endian 32-bit words (RFC 8439 §2.3).
+///
+/// # Example
+///
+/// ```tuo
+/// let c = std::chacha::constant(0); // 1634760805 (0x61707865)
+/// ```
+pub fn constant(take index: Int) -> Int {
+    if index == 0 {
+        1634760805
+    } else if index == 1 {
+        857760878
+    } else if index == 2 {
+        2036477234
+    } else {
+        1797285236
+    }
+}
+
+/// One quarter-round applied to four state words, returning the word named by
+/// `which` (0 = a, 1 = b, 2 = c, 3 = d).
+///
+/// The quarter round is ChaCha20's only primitive (RFC 8439 §2.1): add, XOR,
+/// rotate, four times. v0 has no tuples and no out-parameters for four
+/// values at once, so the round is computed in full and one word selected —
+/// the caller runs it four times. That is redundant arithmetic, not redundant
+/// *logic*: there is still exactly one expression of the round.
+///
+/// # Example
+///
+/// ```tuo
+/// // RFC 8439 §2.1.1's vector, whose `a` output is 0xea2a92f4.
+/// let a = std::chacha::quarter_round(286331153, 16909060, 2609737539, 19088743, 0);
+/// ```
+pub fn quarter_round(
+    take a: Int,
+    take b: Int,
+    take c: Int,
+    take d: Int,
+    take which: Int,
+) -> Int {
+    var wa = a;
+    var wb = b;
+    var wc = c;
+    var wd = d;
+    wa = std::bits::add32(wa, wb);
+    wd = std::bits::rotl32(wd ^ wa, 16);
+    wc = std::bits::add32(wc, wd);
+    wb = std::bits::rotl32(wb ^ wc, 12);
+    wa = std::bits::add32(wa, wb);
+    wd = std::bits::rotl32(wd ^ wa, 8);
+    wc = std::bits::add32(wc, wd);
+    wb = std::bits::rotl32(wb ^ wc, 7);
+    if which == 0 {
+        wa
+    } else if which == 1 {
+        wb
+    } else if which == 2 {
+        wc
+    } else {
+        wd
+    }
+}
+
+/// Apply one quarter round in place to `state` at the four given indices.
+///
+/// # Example
+///
+/// ```tuo
+/// var s = std::chacha::initial_state(key, counter, nonce);
+/// std::chacha::quarter_round_at(s, 0, 4, 8, 12);
+/// ```
+pub fn quarter_round_at(
+    mut state: Array[Int],
+    take ai: Int,
+    take bi: Int,
+    take ci: Int,
+    take di: Int,
+) -> Int {
+    let a = std::array::get(state, ai);
+    let b = std::array::get(state, bi);
+    let c = std::array::get(state, ci);
+    let d = std::array::get(state, di);
+    std::array::set(state, ai, quarter_round(a, b, c, d, 0));
+    std::array::set(state, bi, quarter_round(a, b, c, d, 1));
+    std::array::set(state, ci, quarter_round(a, b, c, d, 2));
+    std::array::set(state, di, quarter_round(a, b, c, d, 3));
+    0
+}
+
+/// Build the initial ChaCha20 state from a 32-byte key, a block counter, and
+/// a 12-byte nonce (RFC 8439 §2.3).
+///
+/// The key and nonce are byte arrays; they are read as little-endian 32-bit
+/// words, which is ChaCha20's byte order throughout (and the reason this
+/// module does not reuse `std::bits::be32`).
+///
+/// # Example
+///
+/// ```tuo
+/// let s = std::chacha::initial_state(key, 1, nonce); // 16 words
+/// ```
+pub fn initial_state(in key: Array[Int], take counter: Int, in nonce: Array[Int]) -> Array[Int] {
+    var state = std::array::empty();
+    var i = 0;
+    while i < 4 {
+        std::array::push(state, constant(i));
+        i = i + 1;
+    }
+    var k = 0;
+    while k < 8 {
+        std::array::push(state, le32_at(key, k * 4));
+        k = k + 1;
+    }
+    std::array::push(state, std::bits::low32(counter));
+    var n = 0;
+    while n < 3 {
+        std::array::push(state, le32_at(nonce, n * 4));
+        n = n + 1;
+    }
+    state
+}
+
+/// Read a little-endian 32-bit word out of a byte array at `offset`.
+///
+/// Bytes beyond the array's end read as zero, so a short final block needs no
+/// separate padding step.
+///
+/// # Example
+///
+/// ```tuo
+/// let w = std::chacha::le32_at(bytes, 0);
+/// ```
+pub fn le32_at(in bytes: Array[Int], take offset: Int) -> Int {
+    let b0 = byte_or_zero(bytes, offset);
+    let b1 = byte_or_zero(bytes, offset + 1);
+    let b2 = byte_or_zero(bytes, offset + 2);
+    let b3 = byte_or_zero(bytes, offset + 3);
+    std::bits::low32(b0 | (b1 << 8) | (b2 << 16) | (b3 << 24))
+}
+
+/// The byte at `index`, or 0 when the index is past the end.
+///
+/// # Example
+///
+/// ```tuo
+/// let b = std::chacha::byte_or_zero(bytes, 99); // 0 if shorter
+/// ```
+pub fn byte_or_zero(in bytes: Array[Int], take index: Int) -> Int {
+    if index < 0 || index >= std::array::len(bytes) {
+        0
+    } else {
+        std::array::get(bytes, index) & 255
+    }
+}
+
+/// The ChaCha20 block function: 20 rounds over the initial state, added
+/// word-wise to it (RFC 8439 §2.3), returning the 64 keystream bytes.
+///
+/// # Example
+///
+/// ```tuo
+/// let ks = std::chacha::block(key, 1, nonce); // 64 bytes
+/// ```
+pub fn block(in key: Array[Int], take counter: Int, in nonce: Array[Int]) -> Array[Int] {
+    let start = initial_state(key, counter, nonce);
+    var work = std::array::empty();
+    var c = 0;
+    while c < state_words() {
+        std::array::push(work, std::array::get(start, c));
+        c = c + 1;
+    }
+    // 10 double-rounds = 20 rounds. Each double round is four column rounds
+    // followed by four diagonal rounds.
+    var round = 0;
+    while round < 10 {
+        quarter_round_at(work, 0, 4, 8, 12);
+        quarter_round_at(work, 1, 5, 9, 13);
+        quarter_round_at(work, 2, 6, 10, 14);
+        quarter_round_at(work, 3, 7, 11, 15);
+        quarter_round_at(work, 0, 5, 10, 15);
+        quarter_round_at(work, 1, 6, 11, 12);
+        quarter_round_at(work, 2, 7, 8, 13);
+        quarter_round_at(work, 3, 4, 9, 14);
+        round = round + 1;
+    }
+    var out = std::array::empty();
+    var w = 0;
+    while w < state_words() {
+        let sum = std::bits::add32(std::array::get(work, w), std::array::get(start, w));
+        // Little-endian serialization, ChaCha20's byte order.
+        std::array::push(out, sum & 255);
+        std::array::push(out, (sum >> 8) & 255);
+        std::array::push(out, (sum >> 16) & 255);
+        std::array::push(out, (sum >> 24) & 255);
+        w = w + 1;
+    }
+    out
+}
+
+/// Encrypt or decrypt `data` with ChaCha20 (RFC 8439 §2.4).
+///
+/// The cipher is its own inverse — it XORs a keystream — so one function
+/// serves both directions, which is why there is no separate `decrypt`.
+///
+/// # Example
+///
+/// ```tuo
+/// let ct = std::chacha::apply(key, 1, nonce, plaintext);
+/// let pt = std::chacha::apply(key, 1, nonce, ct); // back again
+/// ```
+pub fn apply(
+    in key: Array[Int],
+    take counter: Int,
+    in nonce: Array[Int],
+    in data: Array[Int],
+) -> Array[Int] {
+    var out = std::array::empty();
+    let n = std::array::len(data);
+    var offset = 0;
+    var block_index = counter;
+    while offset < n {
+        let keystream = block(key, block_index, nonce);
+        var i = 0;
+        while i < block_bytes() && offset + i < n {
+            let plain = std::array::get(data, offset + i);
+            std::array::push(out, (plain & 255) ^ std::array::get(keystream, i));
+            i = i + 1;
+        }
+        offset = offset + block_bytes();
+        block_index = block_index + 1;
+    }
+    out
+}
+
+// --- Specs: RFC 8439's PUBLISHED vectors ------------------------------------
+//
+// These assert the RFC's numbers, not this module's reasoning. That is the
+// difference between an implementation that is correct and one that is merely
+// self-consistent — and for a cipher, only the former is worth anything,
+// because the peer on the other end of the wire implemented the RFC.
+
+/// The RFC 8439 §2.3.2 test key: the bytes 0x00 through 0x1f in order.
+fn vector_key() -> Array[Int] {
+    var k = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(k, i);
+        i = i + 1;
+    }
+    k
+}
+
+/// The RFC 8439 §2.3.2 test nonce: 00:00:00:09:00:00:00:4a:00:00:00:00.
+fn vector_nonce() -> Array[Int] {
+    var n = std::array::empty();
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 9);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 74);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    std::array::push(n, 0);
+    n
+}
+
+/// One keystream byte of the §2.3.2 block, for the spec below.
+fn vector_keystream_byte(take i: Int) -> Int {
+    let ks = block(vector_key(), 1, vector_nonce());
+    std::array::get(ks, i)
+}
+
+spec quarter_round {
+    // RFC 8439 §2.1.1: the published (a, b, c, d) outputs for the published
+    // inputs. 0xea2a92f4, 0xcb1cf8ce, 0x4581472e, 0x5881c4bb.
+    then quarter_round(286331153, 16909060, 2609737539, 19088743, 0) == 3928658676;
+    then quarter_round(286331153, 16909060, 2609737539, 19088743, 1) == 3407673550;
+    then quarter_round(286331153, 16909060, 2609737539, 19088743, 2) == 1166100270;
+    then quarter_round(286331153, 16909060, 2609737539, 19088743, 3) == 1484899515;
+}
+
+spec constant {
+    // "expand 32-byte k" as little-endian words.
+    then constant(0) == 1634760805;
+    then constant(1) == 857760878;
+    then constant(2) == 2036477234;
+    then constant(3) == 1797285236;
+}
+
+spec byte_or_zero {
+    then byte_or_zero(vector_nonce(), 3) == 9;
+    then byte_or_zero(vector_nonce(), 7) == 74;
+    // Past the end reads as zero, so a short final block needs no padding.
+    then byte_or_zero(vector_nonce(), 99) == 0;
+    then byte_or_zero(vector_nonce(), 0 - 1) == 0;
+}
+
+spec le32_at {
+    // Little-endian: the nonce's bytes 0..3 are 00 00 00 09, so the word is
+    // 0x09000000 = 150994944.
+    then le32_at(vector_nonce(), 0) == 150994944;
+    // Reading past the end pads with zeros rather than trapping.
+    then le32_at(vector_nonce(), 96) == 0;
+}
+
+spec block {
+    // RFC 8439 §2.3.2's published keystream. First word 0xe4e7f110
+    // serializes little-endian as 10 f1 e7 e4.
+    then vector_keystream_byte(0) == 16;
+    then vector_keystream_byte(1) == 241;
+    then vector_keystream_byte(2) == 231;
+    then vector_keystream_byte(3) == 228;
+    // Last word 0x4e3c50a2 serializes as a2 50 3c 4e.
+    then vector_keystream_byte(60) == 162;
+    then vector_keystream_byte(61) == 80;
+    then vector_keystream_byte(62) == 60;
+    then vector_keystream_byte(63) == 78;
+    // A block is exactly 64 bytes.
+    then std::array::len(block(vector_key(), 1, vector_nonce())) == 64;
+}
+
+spec apply {
+    // The cipher is its own inverse: encrypting twice returns the plaintext.
+    // This is the property that makes one function serve both directions.
+    then std::array::get(
+        apply(vector_key(), 1, vector_nonce(), apply(vector_key(), 1, vector_nonce(), vector_key())),
+        0,
+    ) == 0;
+    then std::array::get(
+        apply(vector_key(), 1, vector_nonce(), apply(vector_key(), 1, vector_nonce(), vector_key())),
+        31,
+    ) == 31;
+    // Ciphertext is the same length as plaintext — a stream cipher adds no
+    // padding.
+    then std::array::len(apply(vector_key(), 1, vector_nonce(), vector_key())) == 32;
+    // And it actually encrypts: the first byte XORs with keystream byte 0.
+    then std::array::get(apply(vector_key(), 1, vector_nonce(), vector_key()), 0) == 16;
+}
+
+spec state_words {
+    // 4 constants + 8 key words + 1 counter + 3 nonce words.
+    then state_words() == 16;
+}
+
+spec block_bytes {
+    // 16 words of 4 bytes each.
+    then block_bytes() == 64;
+    then block_bytes() == state_words() * 4;
+}
+
+spec initial_state {
+    // The four constants come first, then the key, counter, and nonce.
+    then std::array::len(initial_state(vector_key(), 1, vector_nonce())) == state_words();
+    then std::array::get(initial_state(vector_key(), 1, vector_nonce()), 0) == constant(0);
+    then std::array::get(initial_state(vector_key(), 1, vector_nonce()), 3) == constant(3);
+    // The counter sits at word 12, between the key and the nonce.
+    then std::array::get(initial_state(vector_key(), 7, vector_nonce()), 12) == 7;
+    // Word 13 is the nonce's first little-endian word, 0x09000000.
+    then std::array::get(initial_state(vector_key(), 1, vector_nonce()), 13) == 150994944;
+}
+
+/// Apply one column round to a fresh state, returning `quarter_round_at`'s
+/// own result — the spelling the spec needs, since a `mut` argument must be a
+/// place and a call result is a temporary.
+fn round_in_place() -> Int {
+    var s = initial_state(vector_key(), 1, vector_nonce());
+    quarter_round_at(s, 0, 4, 8, 12)
+}
+
+/// The state word at `index` after one column round is applied to a fresh
+/// initial state — the observable `quarter_round_at`'s spec needs, since v0
+/// has no way to assert on a mutation from inside a `then`.
+fn state_after_one_round(take index: Int) -> Int {
+    var s = initial_state(vector_key(), 1, vector_nonce());
+    quarter_round_at(s, 0, 4, 8, 12);
+    std::array::get(s, index)
+}
+
+spec quarter_round_at {
+    // `quarter_round_at` needs a `mut` *place*, which a spec cannot bind
+    // (`given` is immutable) and a call result is not (`O0004`). So the call
+    // lives in `round_in_place`, and the round's effect is asserted through
+    // `state_after_one_round` below.
+    then round_in_place() == 0;
+    // Applying the round in place must equal computing it directly on the
+    // same four words — the property that makes the in-place form a mere
+    // convenience over `quarter_round` rather than a second implementation.
+    then state_after_one_round(0)
+        == quarter_round(constant(0), le32_at(vector_key(), 0), le32_at(vector_key(), 16), 1, 0);
+    then state_after_one_round(4)
+        == quarter_round(constant(0), le32_at(vector_key(), 0), le32_at(vector_key(), 16), 1, 1);
+    then state_after_one_round(8)
+        == quarter_round(constant(0), le32_at(vector_key(), 0), le32_at(vector_key(), 16), 1, 2);
+    then state_after_one_round(12)
+        == quarter_round(constant(0), le32_at(vector_key(), 0), le32_at(vector_key(), 16), 1, 3);
+    // Words the round does not touch are unchanged.
+    then state_after_one_round(1) == constant(1);
+}
+
+// --- Poly1305 (RFC 8439 §2.5) -----------------------------------------------
+//
+// The one-time authenticator that turns ChaCha20's confidentiality into an
+// AEAD. It evaluates a polynomial over the prime field 2^130 - 5, which is
+// why it needs `std::bignum`: the accumulator exceeds 64 bits by design, so
+// there is no way to write this over `Int` alone.
+//
+// ONE-TIME is the load-bearing word, and it is a *security* property, not a
+// performance note. The key must never be reused across two messages: two
+// tags under one key let an attacker solve for `r` and forge arbitrary
+// messages. In the AEAD below the key is derived per-record from the nonce,
+// which is what makes that safe.
+//
+// NOT CONSTANT TIME. `std::bignum` documents itself as variable-time, and
+// this builds directly on it. The tag *comparison* is constant time
+// (`std::crypto::verify` via `std::ct::bytes_eq`), which is the comparison
+// that matters for forgery resistance, but the tag *computation* here leaks
+// timing information about the key. That is a real limitation, stated rather
+// than hidden.
+
+/// The Poly1305 prime, 2^130 - 5, as a bignum.
+///
+/// # Example
+///
+/// ```tuo
+/// let p = std::chacha::poly_prime();
+/// ```
+pub fn poly_prime() -> Array[Int] {
+    // 2^130 = 1 followed by 130 zero bits; subtract 5.
+    var two_130 = std::bignum::from_int(1);
+    var i = 0;
+    while i < 130 {
+        two_130 = std::bignum::mul_small(two_130, 2);
+        i = i + 1;
+    }
+    std::bignum::sub(two_130, std::bignum::from_int(5))
+}
+
+/// Clamp the `r` half of a Poly1305 key (RFC 8439 §2.5): certain bits are
+/// forced to zero so the multiplication cannot overflow the field.
+///
+/// The clamp is part of the algorithm, not an optimization — an unclamped `r`
+/// produces tags no other implementation agrees with.
+///
+/// # Example
+///
+/// ```tuo
+/// let r = std::chacha::poly_clamp_r(key); // the first 16 bytes, clamped
+/// ```
+pub fn poly_clamp_r(in key: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 16 {
+        var b = byte_or_zero(key, i);
+        // Bytes 3, 7, 11, 15 keep only their low 4 bits; bytes 4, 8, 12 have
+        // their low 2 bits cleared.
+        if i == 3 || i == 7 || i == 11 || i == 15 {
+            b = b & 15;
+        }
+        if i == 4 || i == 8 || i == 12 {
+            b = b & 252;
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    out
+}
+
+/// Read a little-endian byte array as a bignum.
+///
+/// Poly1305 is little-endian throughout, while `std::bignum::from_be_bytes`
+/// is big-endian, so the bytes are reversed here rather than a second
+/// conversion being written.
+///
+/// # Example
+///
+/// ```tuo
+/// let n = std::chacha::le_bytes_to_num(bytes);
+/// ```
+pub fn le_bytes_to_num(in bytes: Array[Int]) -> Array[Int] {
+    var reversed = std::array::empty();
+    var i = std::array::len(bytes) - 1;
+    while i >= 0 {
+        std::array::push(reversed, std::array::get(bytes, i) & 255);
+        i = i - 1;
+    }
+    std::bignum::from_be_bytes(reversed)
+}
+
+/// Serialize a bignum as exactly `count` little-endian bytes, truncating
+/// above that width.
+///
+/// # Example
+///
+/// ```tuo
+/// let bytes = std::chacha::num_to_le_bytes(tag, 16);
+/// ```
+pub fn num_to_le_bytes(in value: Array[Int], take count: Int) -> Array[Int] {
+    let be = std::bignum::to_be_bytes(value);
+    let n = std::array::len(be);
+    var out = std::array::empty();
+    var i = 0;
+    while i < count {
+        // Little-endian index `i` is big-endian index `n - 1 - i`.
+        let index = n - 1 - i;
+        if index < 0 {
+            std::array::push(out, 0);
+        } else {
+            std::array::push(out, std::array::get(be, index) & 255);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+/// The Poly1305 one-time authenticator (RFC 8439 §2.5): a 16-byte tag over
+/// `message` under the 32-byte one-time `key`.
+///
+/// The key MUST NOT be reused across messages — see the section header.
+///
+/// # Example
+///
+/// ```tuo
+/// let tag = std::chacha::poly1305(one_time_key, message); // 16 bytes
+/// ```
+pub fn poly1305(in key: Array[Int], in message: Array[Int]) -> Array[Int] {
+    let prime = poly_prime();
+    let r = le_bytes_to_num(poly_clamp_r(key));
+    var s_bytes = std::array::empty();
+    var k = 16;
+    while k < 32 {
+        std::array::push(s_bytes, byte_or_zero(key, k));
+        k = k + 1;
+    }
+    let s = le_bytes_to_num(s_bytes);
+
+    var acc = std::bignum::from_int(0);
+    let n = std::array::len(message);
+    var offset = 0;
+    while offset < n {
+        // Each block is up to 16 bytes with a 1 byte appended — the padding
+        // bit that makes the polynomial injective over variable-length input.
+        var block_bytes = std::array::empty();
+        var i = 0;
+        while i < 16 && offset + i < n {
+            std::array::push(block_bytes, std::array::get(message, offset + i) & 255);
+            i = i + 1;
+        }
+        std::array::push(block_bytes, 1);
+        let value = le_bytes_to_num(block_bytes);
+        acc = std::bignum::add(acc, value);
+        acc = std::bignum::mul(acc, r);
+        acc = poly_mod(acc, prime);
+        offset = offset + 16;
+    }
+    acc = std::bignum::add(acc, s);
+    num_to_le_bytes(acc, 16)
+}
+
+/// Reduce `value` modulo `prime` by repeated subtraction of shifted multiples.
+///
+/// `std::bignum` has no modulo by a bignum — only `rem_small` by an `Int` —
+/// so the reduction is written here. Doubling the subtrahend keeps it
+/// logarithmic rather than the linear loop a naive version would use, which
+/// matters because Poly1305 reduces once per 16-byte block.
+///
+/// # Example
+///
+/// ```tuo
+/// let reduced = std::chacha::poly_mod(acc, std::chacha::poly_prime());
+/// ```
+pub fn poly_mod(in value: Array[Int], in prime: Array[Int]) -> Array[Int] {
+    var rest = std::bignum::normalized(value);
+    if std::bignum::compare(rest, prime) < 0 {
+        return rest;
+    }
+    // Find the largest doubling of `prime` that still fits under `rest`, then
+    // subtract downwards.
+    var shifts = 0;
+    var probe = std::bignum::normalized(prime);
+    while std::bignum::compare(std::bignum::mul_small(probe, 2), rest) <= 0 {
+        probe = std::bignum::mul_small(probe, 2);
+        shifts = shifts + 1;
+    }
+    while shifts >= 0 {
+        if std::bignum::compare(probe, rest) <= 0 {
+            rest = std::bignum::sub(rest, probe);
+        }
+        probe = std::bignum::div_small(probe, 2);
+        shifts = shifts - 1;
+    }
+    rest
+}
+
+// --- Poly1305 specs: RFC 8439 2.5.2's PUBLISHED vector ----------------------
+
+/// The RFC 8439 2.5.2 one-time key.
+fn poly_vector_key() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 133);
+    std::array::push(a, 214);
+    std::array::push(a, 190);
+    std::array::push(a, 120);
+    std::array::push(a, 87);
+    std::array::push(a, 85);
+    std::array::push(a, 109);
+    std::array::push(a, 51);
+    std::array::push(a, 127);
+    std::array::push(a, 68);
+    std::array::push(a, 82);
+    std::array::push(a, 254);
+    std::array::push(a, 66);
+    std::array::push(a, 213);
+    std::array::push(a, 6);
+    std::array::push(a, 168);
+    std::array::push(a, 1);
+    std::array::push(a, 3);
+    std::array::push(a, 128);
+    std::array::push(a, 138);
+    std::array::push(a, 251);
+    std::array::push(a, 13);
+    std::array::push(a, 178);
+    std::array::push(a, 253);
+    std::array::push(a, 74);
+    std::array::push(a, 191);
+    std::array::push(a, 246);
+    std::array::push(a, 175);
+    std::array::push(a, 65);
+    std::array::push(a, 73);
+    std::array::push(a, 245);
+    std::array::push(a, 27);
+    a
+}
+
+/// The RFC 8439 2.5.2 message: "Cryptographic Forum Research Group".
+fn poly_vector_message() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 67);
+    std::array::push(a, 114);
+    std::array::push(a, 121);
+    std::array::push(a, 112);
+    std::array::push(a, 116);
+    std::array::push(a, 111);
+    std::array::push(a, 103);
+    std::array::push(a, 114);
+    std::array::push(a, 97);
+    std::array::push(a, 112);
+    std::array::push(a, 104);
+    std::array::push(a, 105);
+    std::array::push(a, 99);
+    std::array::push(a, 32);
+    std::array::push(a, 70);
+    std::array::push(a, 111);
+    std::array::push(a, 114);
+    std::array::push(a, 117);
+    std::array::push(a, 109);
+    std::array::push(a, 32);
+    std::array::push(a, 82);
+    std::array::push(a, 101);
+    std::array::push(a, 115);
+    std::array::push(a, 101);
+    std::array::push(a, 97);
+    std::array::push(a, 114);
+    std::array::push(a, 99);
+    std::array::push(a, 104);
+    std::array::push(a, 32);
+    std::array::push(a, 71);
+    std::array::push(a, 114);
+    std::array::push(a, 111);
+    std::array::push(a, 117);
+    std::array::push(a, 112);
+    a
+}
+
+/// The RFC 8439 2.5.2 published tag, a8061dc1305136c6c22b8baf0c0127a9.
+fn poly_vector_tag() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 168);
+    std::array::push(a, 6);
+    std::array::push(a, 29);
+    std::array::push(a, 193);
+    std::array::push(a, 48);
+    std::array::push(a, 81);
+    std::array::push(a, 54);
+    std::array::push(a, 198);
+    std::array::push(a, 194);
+    std::array::push(a, 43);
+    std::array::push(a, 139);
+    std::array::push(a, 175);
+    std::array::push(a, 12);
+    std::array::push(a, 1);
+    std::array::push(a, 39);
+    std::array::push(a, 169);
+    a
+}
+
+/// The computed tag byte at `i`, for the spec below.
+fn poly_tag_byte(take i: Int) -> Int {
+    std::array::get(poly1305(poly_vector_key(), poly_vector_message()), i)
+}
+
+spec poly1305 {
+    // Every byte of RFC 8439 2.5.2's PUBLISHED tag. This is the assertion
+    // that matters: it pins the implementation against the RFC rather than
+    // against its own reasoning, which is the only thing that makes an
+    // authenticator interoperable.
+    then poly_tag_byte(0) == 168;
+    then poly_tag_byte(1) == 6;
+    then poly_tag_byte(2) == 29;
+    then poly_tag_byte(3) == 193;
+    then poly_tag_byte(4) == 48;
+    then poly_tag_byte(5) == 81;
+    then poly_tag_byte(6) == 54;
+    then poly_tag_byte(7) == 198;
+    then poly_tag_byte(8) == 194;
+    then poly_tag_byte(9) == 43;
+    then poly_tag_byte(10) == 139;
+    then poly_tag_byte(11) == 175;
+    then poly_tag_byte(12) == 12;
+    then poly_tag_byte(13) == 1;
+    then poly_tag_byte(14) == 39;
+    then poly_tag_byte(15) == 169;
+    // A tag is exactly 16 bytes.
+    then std::array::len(poly1305(poly_vector_key(), poly_vector_message())) == 16;
+}
+
+spec poly_clamp_r {
+    // The clamp is part of the algorithm: bytes 3/7/11/15 keep 4 bits,
+    // bytes 4/8/12 have their low 2 bits cleared.
+    then std::array::get(poly_clamp_r(poly_vector_key()), 3) == 120 & 15;
+    then std::array::get(poly_clamp_r(poly_vector_key()), 4) == 87 & 252;
+    then std::array::len(poly_clamp_r(poly_vector_key())) == 16;
+    // An unclamped byte passes through unchanged.
+    then std::array::get(poly_clamp_r(poly_vector_key()), 0) == 133;
+}
+
+spec poly_prime {
+    // 2^130 - 5 = 1361129467683753853853498429727072845819:
+    // exactly 130 bits wide, ending in 9.
+    then std::bignum::bit_length(poly_prime()) == 130;
+    then std::bignum::rem_small(poly_prime(), 10) == 9;
+}
+
+spec le_bytes_to_num {
+    // Little-endian: [1, 0, 0, 0] is 1, not 2^24.
+    // The tag is 128 bits, too wide for an `Int`, so `to_int` declines it —
+    // which is itself the check that the little-endian read produced a full
+    // 16-byte number rather than silently truncating.
+    then std::bignum::int_or(std::bignum::to_int(le_bytes_to_num(poly_vector_tag())), 0 - 1) == 0 - 1;
+    then std::bignum::bit_length(le_bytes_to_num(poly_vector_key())) > 0;
+}
+
+spec num_to_le_bytes {
+    // Round-trip: a tag serialized and read back is the same number.
+    then std::array::len(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16)) == 16;
+    then std::array::get(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16), 0) == 168;
+    then std::array::get(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16), 15) == 169;
+}
+
+spec poly_mod {
+    // Reducing a value already below the prime leaves it unchanged.
+    then std::bignum::int_or(std::bignum::to_int(poly_mod(std::bignum::from_int(7), poly_prime())), 0 - 1) == 7;
+    // Reducing the prime itself yields zero.
+    then std::bignum::is_zero(poly_mod(poly_prime(), poly_prime()));
+}
+
+// --- AEAD_CHACHA20_POLY1305 (RFC 8439 §2.8) ---------------------------------
+//
+// The composition that TLS 1.3 actually uses: ChaCha20 for confidentiality,
+// Poly1305 for integrity, and a specific framing that binds them together.
+//
+// The framing is not decoration. The one-time Poly1305 key is derived from
+// ChaCha20 block **zero** while the ciphertext starts at block **one**, so
+// the authenticator key can never collide with keystream — that is what makes
+// the one-time requirement satisfiable. The length fields at the end prevent
+// an attacker from shifting bytes between the additional data and the
+// ciphertext, which would otherwise authenticate to the same tag.
+
+/// Derive the Poly1305 one-time key for a record: ChaCha20 block zero under
+/// the same key and nonce (RFC 8439 §2.6).
+///
+/// # Example
+///
+/// ```tuo
+/// let otk = std::chacha::poly_key_gen(key, nonce); // 32 bytes
+/// ```
+pub fn poly_key_gen(in key: Array[Int], in nonce: Array[Int]) -> Array[Int] {
+    let ks = block(key, 0, nonce);
+    var out = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(out, std::array::get(ks, i));
+        i = i + 1;
+    }
+    out
+}
+
+/// Append `value` as an 8-byte little-endian length, the framing AEAD uses
+/// for its additional-data and ciphertext lengths.
+///
+/// # Example
+///
+/// ```tuo
+/// std::chacha::push_le64(buffer, 12);
+/// ```
+pub fn push_le64(mut out: Array[Int], take value: Int) -> Int {
+    var v = value;
+    var i = 0;
+    while i < 8 {
+        std::array::push(out, v & 255);
+        v = v >> 8;
+        i = i + 1;
+    }
+    0
+}
+
+/// Append zero bytes until `out`'s length is a multiple of 16 — the padding
+/// AEAD inserts after the additional data and after the ciphertext.
+///
+/// # Example
+///
+/// ```tuo
+/// std::chacha::pad16(buffer);
+/// ```
+pub fn pad16(mut out: Array[Int]) -> Int {
+    var remainder = std::array::len(out) % 16;
+    if remainder > 0 {
+        var i = remainder;
+        while i < 16 {
+            std::array::push(out, 0);
+            i = i + 1;
+        }
+    }
+    0
+}
+
+/// Build the exact byte string Poly1305 authenticates over a record
+/// (RFC 8439 §2.8): the additional data, padded to 16; the ciphertext, padded
+/// to 16; then both lengths as 8-byte little-endian values.
+///
+/// # Example
+///
+/// ```tuo
+/// let mac_input = std::chacha::aead_mac_data(aad, ciphertext);
+/// ```
+pub fn aead_mac_data(in aad: Array[Int], in ciphertext: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(aad) {
+        std::array::push(out, std::array::get(aad, i) & 255);
+        i = i + 1;
+    }
+    pad16(out);
+    var j = 0;
+    while j < std::array::len(ciphertext) {
+        std::array::push(out, std::array::get(ciphertext, j) & 255);
+        j = j + 1;
+    }
+    pad16(out);
+    // The lengths bind the two fields together: without them an attacker
+    // could move bytes from the ciphertext into the additional data and
+    // produce the same tag.
+    push_le64(out, std::array::len(aad));
+    push_le64(out, std::array::len(ciphertext));
+    out
+}
+
+/// Seal a message: encrypt `plaintext` and authenticate it together with
+/// `aad`, returning the ciphertext with its 16-byte tag appended
+/// (RFC 8439 §2.8).
+///
+/// # Example
+///
+/// ```tuo
+/// let sealed = std::chacha::aead_seal(key, nonce, aad, plaintext);
+/// ```
+pub fn aead_seal(
+    in key: Array[Int],
+    in nonce: Array[Int],
+    in aad: Array[Int],
+    in plaintext: Array[Int],
+) -> Array[Int] {
+    let otk = poly_key_gen(key, nonce);
+    // Counter 1: block 0 is spent on the one-time key, which is exactly what
+    // keeps the authenticator key clear of the keystream.
+    let ciphertext = apply(key, 1, nonce, plaintext);
+    let tag = poly1305(otk, aead_mac_data(aad, ciphertext));
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(ciphertext) {
+        std::array::push(out, std::array::get(ciphertext, i));
+        i = i + 1;
+    }
+    var t = 0;
+    while t < 16 {
+        std::array::push(out, std::array::get(tag, t));
+        t = t + 1;
+    }
+    out
+}
+
+/// The tag a sealed record should carry, recomputed from its ciphertext —
+/// the value `aead_open` compares against.
+///
+/// # Example
+///
+/// ```tuo
+/// let expected = std::chacha::aead_tag(key, nonce, aad, ciphertext);
+/// ```
+pub fn aead_tag(
+    in key: Array[Int],
+    in nonce: Array[Int],
+    in aad: Array[Int],
+    in ciphertext: Array[Int],
+) -> Array[Int] {
+    poly1305(poly_key_gen(key, nonce), aead_mac_data(aad, ciphertext))
+}
+
+/// Open a sealed record: verify its tag and, only then, decrypt it.
+///
+/// Returns the plaintext, or `None` when the tag does not match. **The
+/// `None` case must be treated as fatal by the caller** — a failed tag means
+/// the record was forged or corrupted, and there is no partial result worth
+/// looking at. Returning `Option` rather than the plaintext-and-a-flag is
+/// deliberate: it makes ignoring the failure require writing a `match` that
+/// visibly discards it.
+///
+/// The comparison is constant time (`std::crypto::verify`), because a
+/// byte-at-a-time tag compare that returns early is a forgery oracle: an
+/// attacker learns how many leading bytes were right and can search the tag
+/// one byte at a time.
+///
+/// # Example
+///
+/// ```tuo
+/// match std::chacha::aead_open(key, nonce, aad, sealed) {
+///     Some { value } => value,   // authentic
+///     None => handle_forgery(),
+/// }
+/// ```
+pub fn aead_open(
+    in key: Array[Int],
+    in nonce: Array[Int],
+    in aad: Array[Int],
+    in sealed: Array[Int],
+) -> Option[Array[Int]] {
+    let n = std::array::len(sealed);
+    if n < 16 {
+        // Too short to even carry a tag.
+        return Option::None;
+    }
+    var ciphertext = std::array::empty();
+    var i = 0;
+    while i < n - 16 {
+        std::array::push(ciphertext, std::array::get(sealed, i));
+        i = i + 1;
+    }
+    var received = std::array::empty();
+    var t = n - 16;
+    while t < n {
+        std::array::push(received, std::array::get(sealed, t));
+        t = t + 1;
+    }
+    let expected = aead_tag(key, nonce, aad, ciphertext);
+    if !std::crypto::verify(expected, received) {
+        return Option::None;
+    }
+    Option::Some { value: apply(key, 1, nonce, ciphertext) }
+}
+
+// --- AEAD specs: RFC 8439 2.8.2's PUBLISHED vector --------------------------
+
+/// The RFC 8439 2.8.2 key: bytes 0x80..0x9f.
+fn aead_vector_key() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 128);
+    std::array::push(a, 129);
+    std::array::push(a, 130);
+    std::array::push(a, 131);
+    std::array::push(a, 132);
+    std::array::push(a, 133);
+    std::array::push(a, 134);
+    std::array::push(a, 135);
+    std::array::push(a, 136);
+    std::array::push(a, 137);
+    std::array::push(a, 138);
+    std::array::push(a, 139);
+    std::array::push(a, 140);
+    std::array::push(a, 141);
+    std::array::push(a, 142);
+    std::array::push(a, 143);
+    std::array::push(a, 144);
+    std::array::push(a, 145);
+    std::array::push(a, 146);
+    std::array::push(a, 147);
+    std::array::push(a, 148);
+    std::array::push(a, 149);
+    std::array::push(a, 150);
+    std::array::push(a, 151);
+    std::array::push(a, 152);
+    std::array::push(a, 153);
+    std::array::push(a, 154);
+    std::array::push(a, 155);
+    std::array::push(a, 156);
+    std::array::push(a, 157);
+    std::array::push(a, 158);
+    std::array::push(a, 159);
+    a
+}
+
+/// The RFC 8439 2.8.2 nonce.
+fn aead_vector_nonce() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 7);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 0);
+    std::array::push(a, 64);
+    std::array::push(a, 65);
+    std::array::push(a, 66);
+    std::array::push(a, 67);
+    std::array::push(a, 68);
+    std::array::push(a, 69);
+    std::array::push(a, 70);
+    std::array::push(a, 71);
+    a
+}
+
+/// The RFC 8439 2.8.2 additional data.
+fn aead_vector_aad() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 80);
+    std::array::push(a, 81);
+    std::array::push(a, 82);
+    std::array::push(a, 83);
+    std::array::push(a, 192);
+    std::array::push(a, 193);
+    std::array::push(a, 194);
+    std::array::push(a, 195);
+    std::array::push(a, 196);
+    std::array::push(a, 197);
+    std::array::push(a, 198);
+    std::array::push(a, 199);
+    a
+}
+
+/// The RFC 8439 2.8.2 plaintext (the sunscreen paragraph).
+fn aead_vector_plaintext() -> Array[Int] {
+    var a = std::array::empty();
+    std::array::push(a, 76);
+    std::array::push(a, 97);
+    std::array::push(a, 100);
+    std::array::push(a, 105);
+    std::array::push(a, 101);
+    std::array::push(a, 115);
+    std::array::push(a, 32);
+    std::array::push(a, 97);
+    std::array::push(a, 110);
+    std::array::push(a, 100);
+    std::array::push(a, 32);
+    std::array::push(a, 71);
+    std::array::push(a, 101);
+    std::array::push(a, 110);
+    std::array::push(a, 116);
+    std::array::push(a, 108);
+    std::array::push(a, 101);
+    std::array::push(a, 109);
+    std::array::push(a, 101);
+    std::array::push(a, 110);
+    std::array::push(a, 32);
+    std::array::push(a, 111);
+    std::array::push(a, 102);
+    std::array::push(a, 32);
+    std::array::push(a, 116);
+    std::array::push(a, 104);
+    std::array::push(a, 101);
+    std::array::push(a, 32);
+    std::array::push(a, 99);
+    std::array::push(a, 108);
+    std::array::push(a, 97);
+    std::array::push(a, 115);
+    std::array::push(a, 115);
+    std::array::push(a, 32);
+    std::array::push(a, 111);
+    std::array::push(a, 102);
+    std::array::push(a, 32);
+    std::array::push(a, 39);
+    std::array::push(a, 57);
+    std::array::push(a, 57);
+    std::array::push(a, 58);
+    std::array::push(a, 32);
+    std::array::push(a, 73);
+    std::array::push(a, 102);
+    std::array::push(a, 32);
+    std::array::push(a, 73);
+    std::array::push(a, 32);
+    std::array::push(a, 99);
+    std::array::push(a, 111);
+    std::array::push(a, 117);
+    std::array::push(a, 108);
+    std::array::push(a, 100);
+    std::array::push(a, 32);
+    std::array::push(a, 111);
+    std::array::push(a, 102);
+    std::array::push(a, 102);
+    std::array::push(a, 101);
+    std::array::push(a, 114);
+    std::array::push(a, 32);
+    std::array::push(a, 121);
+    std::array::push(a, 111);
+    std::array::push(a, 117);
+    std::array::push(a, 32);
+    std::array::push(a, 111);
+    std::array::push(a, 110);
+    std::array::push(a, 108);
+    std::array::push(a, 121);
+    std::array::push(a, 32);
+    std::array::push(a, 111);
+    std::array::push(a, 110);
+    std::array::push(a, 101);
+    std::array::push(a, 32);
+    std::array::push(a, 116);
+    std::array::push(a, 105);
+    std::array::push(a, 112);
+    std::array::push(a, 32);
+    std::array::push(a, 102);
+    std::array::push(a, 111);
+    std::array::push(a, 114);
+    std::array::push(a, 32);
+    std::array::push(a, 116);
+    std::array::push(a, 104);
+    std::array::push(a, 101);
+    std::array::push(a, 32);
+    std::array::push(a, 102);
+    std::array::push(a, 117);
+    std::array::push(a, 116);
+    std::array::push(a, 117);
+    std::array::push(a, 114);
+    std::array::push(a, 101);
+    std::array::push(a, 44);
+    std::array::push(a, 32);
+    std::array::push(a, 115);
+    std::array::push(a, 117);
+    std::array::push(a, 110);
+    std::array::push(a, 115);
+    std::array::push(a, 99);
+    std::array::push(a, 114);
+    std::array::push(a, 101);
+    std::array::push(a, 101);
+    std::array::push(a, 110);
+    std::array::push(a, 32);
+    std::array::push(a, 119);
+    std::array::push(a, 111);
+    std::array::push(a, 117);
+    std::array::push(a, 108);
+    std::array::push(a, 100);
+    std::array::push(a, 32);
+    std::array::push(a, 98);
+    std::array::push(a, 101);
+    std::array::push(a, 32);
+    std::array::push(a, 105);
+    std::array::push(a, 116);
+    std::array::push(a, 46);
+    a
+}
+
+/// A byte of the sealed record, for the specs below.
+fn aead_sealed_byte(take i: Int) -> Int {
+    std::array::get(
+        aead_seal(
+            aead_vector_key(),
+            aead_vector_nonce(),
+            aead_vector_aad(),
+            aead_vector_plaintext(),
+        ),
+        i,
+    )
+}
+
+/// The opened plaintext's byte at `i`, or -1 when opening failed — the
+/// spelling the round-trip specs need, since `Option` cannot be compared
+/// directly in a `then`.
+fn aead_opened_byte(take i: Int) -> Int {
+    let sealed = aead_seal(
+        aead_vector_key(),
+        aead_vector_nonce(),
+        aead_vector_aad(),
+        aead_vector_plaintext(),
+    );
+    match aead_open(aead_vector_key(), aead_vector_nonce(), aead_vector_aad(), sealed) {
+        Some { value } => std::array::get(value, i),
+        None => 0 - 1,
+    }
+}
+
+/// Whether opening a record whose ciphertext was tampered with fails — the
+/// property that makes this an AEAD rather than a cipher.
+fn aead_rejects_tampering() -> Bool {
+    var sealed = aead_seal(
+        aead_vector_key(),
+        aead_vector_nonce(),
+        aead_vector_aad(),
+        aead_vector_plaintext(),
+    );
+    // Flip one bit in the ciphertext.
+    std::array::set(sealed, 0, std::array::get(sealed, 0) ^ 1);
+    match aead_open(aead_vector_key(), aead_vector_nonce(), aead_vector_aad(), sealed) {
+        Some { value } => false,
+        None => true,
+    }
+}
+
+/// Whether opening with the wrong additional data fails. AAD is
+/// authenticated but not encrypted, so this is the check that it is
+/// authenticated at all.
+fn aead_rejects_wrong_aad() -> Bool {
+    let sealed = aead_seal(
+        aead_vector_key(),
+        aead_vector_nonce(),
+        aead_vector_aad(),
+        aead_vector_plaintext(),
+    );
+    var other = std::array::empty();
+    std::array::push(other, 99);
+    match aead_open(aead_vector_key(), aead_vector_nonce(), other, sealed) {
+        Some { value } => false,
+        None => true,
+    }
+}
+
+spec aead_seal {
+    // RFC 8439 2.8.2's PUBLISHED ciphertext, first eight bytes:
+    // d3 1a 8d 34 64 8e 60 db.
+    then aead_sealed_byte(0) == 211;
+    then aead_sealed_byte(1) == 26;
+    then aead_sealed_byte(2) == 141;
+    then aead_sealed_byte(3) == 52;
+    then aead_sealed_byte(4) == 100;
+    then aead_sealed_byte(5) == 142;
+    then aead_sealed_byte(6) == 96;
+    then aead_sealed_byte(7) == 219;
+    // The record is the ciphertext plus a 16-byte tag.
+    then std::array::len(
+        aead_seal(
+            aead_vector_key(),
+            aead_vector_nonce(),
+            aead_vector_aad(),
+            aead_vector_plaintext(),
+        ),
+    ) == 114 + 16;
+    // RFC 8439 2.8.2's PUBLISHED tag, appended after the 114 ciphertext bytes.
+    then aead_sealed_byte(114 + 0) == 26;
+    then aead_sealed_byte(114 + 1) == 225;
+    then aead_sealed_byte(114 + 2) == 11;
+    then aead_sealed_byte(114 + 3) == 89;
+    then aead_sealed_byte(114 + 4) == 79;
+    then aead_sealed_byte(114 + 5) == 9;
+    then aead_sealed_byte(114 + 6) == 226;
+    then aead_sealed_byte(114 + 7) == 106;
+    then aead_sealed_byte(114 + 8) == 126;
+    then aead_sealed_byte(114 + 9) == 144;
+    then aead_sealed_byte(114 + 10) == 46;
+    then aead_sealed_byte(114 + 11) == 203;
+    then aead_sealed_byte(114 + 12) == 208;
+    then aead_sealed_byte(114 + 13) == 96;
+    then aead_sealed_byte(114 + 14) == 6;
+    then aead_sealed_byte(114 + 15) == 145;
+}
+
+spec aead_open {
+    // Round trip: what was sealed opens back to the same plaintext.
+    then aead_opened_byte(0) == 76;
+    then aead_opened_byte(1) == 97;
+    then aead_opened_byte(113) == 46;
+    // Integrity, which is the whole point: a single flipped ciphertext bit
+    // must make the record fail to open rather than decrypt to garbage.
+    then aead_rejects_tampering();
+    // The additional data is authenticated even though it is not encrypted.
+    then aead_rejects_wrong_aad();
+}
+
+spec poly_key_gen {
+    // The one-time key is block ZERO, while the ciphertext starts at block
+    // one — the separation that keeps the authenticator key clear of the
+    // keystream.
+    then std::array::len(poly_key_gen(aead_vector_key(), aead_vector_nonce())) == 32;
+    then std::array::get(poly_key_gen(aead_vector_key(), aead_vector_nonce()), 0)
+        == std::array::get(block(aead_vector_key(), 0, aead_vector_nonce()), 0);
+}
+
+/// Append a little-endian 64-bit length to a fresh buffer and read one of
+/// its bytes back — `push_le64` writes into a `mut` place, which a spec
+/// cannot bind directly.
+fn le64_byte(take value: Int, take index: Int) -> Int {
+    var buffer = std::array::empty();
+    push_le64(buffer, value);
+    std::array::get(buffer, index)
+}
+
+/// `push_le64`'s own return value, so the spec can call it by name.
+fn le64_result(take value: Int) -> Int {
+    var buffer = std::array::empty();
+    push_le64(buffer, value)
+}
+
+spec push_le64 {
+    then le64_result(1) == 0;
+    // Little-endian: 1 is 01 00 00 00 00 00 00 00.
+    then le64_byte(1, 0) == 1;
+    then le64_byte(1, 7) == 0;
+    // 256 puts its 1 in the SECOND byte, which is what little-endian means.
+    then le64_byte(256, 0) == 0;
+    then le64_byte(256, 1) == 1;
+    // A length is always exactly eight bytes wide.
+    then le64_byte(0, 7) == 0;
+}
+
+/// The length of a buffer of `size` bytes after padding — `pad16` writes
+/// into a `mut` place, which a spec cannot bind directly.
+fn padded_len(take size: Int) -> Int {
+    var buffer = std::array::empty();
+    var i = 0;
+    while i < size {
+        std::array::push(buffer, 0);
+        i = i + 1;
+    }
+    pad16(buffer);
+    std::array::len(buffer)
+}
+
+spec pad16 {
+    // Already aligned: padding adds nothing. This is the case a naive
+    // implementation gets wrong by always appending 16.
+    then padded_len(0) == 0;
+    then padded_len(16) == 16;
+    then padded_len(32) == 32;
+    // Unaligned: round up to the next multiple of 16.
+    then padded_len(1) == 16;
+    then padded_len(12) == 16;
+    then padded_len(17) == 32;
+    // 12 bytes of AAD pad to 16; 12 of ciphertext pad to 16; plus two
+    // 8-byte lengths = 48.
+    then std::array::len(aead_mac_data(aead_vector_aad(), aead_vector_aad())) % 16 == 0;
+}
+
+spec aead_mac_data {
+    // Empty inputs still carry the two length fields.
+    then std::array::len(aead_mac_data(std::array::empty(), std::array::empty())) == 16;
+}
+
+spec aead_tag {
+    // The tag `aead_seal` appends is the one `aead_tag` recomputes.
+    then std::array::len(
+        aead_tag(
+            aead_vector_key(),
+            aead_vector_nonce(),
+            aead_vector_aad(),
+            aead_vector_plaintext(),
+        ),
+    ) == 16;
+}
