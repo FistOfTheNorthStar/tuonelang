@@ -32,6 +32,29 @@
 // X.509 chain validation (`std::der` decodes; it does not validate). Each is
 // absent rather than stubbed, so nothing here claims a capability the code
 // does not have.
+//
+// NOT CONSTANT TIME, WHICH IS THE LIMITATION THAT MATTERS MOST. This stack
+// completes a real handshake with a real client, which makes it easy to
+// mistake for something deployable. It is not, and the reason is timing
+// rather than any missing feature.
+//
+// `std::bignum` is variable-time by design — correct for public values,
+// unsafe for secrets — and both the key exchange and signing are built on it.
+// So `std::x25519::scalar_mult` on the server's ephemeral private key, and
+// `std::ed25519::sign` on the long-term key, take value-dependent time. An
+// attacker able to measure that may be able to recover the key. The *shapes*
+// are right where they can be — the Montgomery ladder's conditional swap is
+// branchless, and tag comparison goes through `std::ct::bytes_eq` — but shape
+// is not the guarantee; the arithmetic underneath is.
+//
+// Ed25519 **verification** is unaffected, since all of its inputs are public,
+// so certificate checking is sound. It is the two secret-key operations that
+// leak.
+//
+// Closing this means fixed-width field arithmetic that does not route through
+// `std::bignum`, a substantial separate piece of work. Until then, treat this
+// as a demonstration that the protocol is expressible in tuonelang, not as
+// transport security for anything real.
 
 module std::tls;
 

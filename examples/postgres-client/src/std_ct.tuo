@@ -393,6 +393,49 @@ pub fn element_or_zero(in xs: Array[Int], take index: Int) -> Int {
     std::array::get(xs, index)
 }
 
+/// Element-wise `select` over two equal-length arrays: `a` when `choose` is
+/// 1, `b` when it is 0, chosen without branching on `choose`.
+///
+/// This is the array-level counterpart to `select`, and exists for the same
+/// reason `bytes_eq` does: the operation it replaces — an `if` that returns
+/// one array or the other — branches on a value that is usually secret. The
+/// Montgomery ladder in `std::x25519` conditionally exchanges two points once
+/// per scalar bit, and doing that with an `if` is the textbook X25519 timing
+/// leak.
+///
+/// Like the other scans here this is **not** `#[constant_time]`: it loops and
+/// indexes, which the checker refuses. Both arrays are read in full on every
+/// call, so its control flow depends only on their length, which is public —
+/// never on the contents being selected. A length mismatch yields an empty
+/// array rather than a partial result, so a caller cannot silently receive a
+/// truncated value; callers pass same-width limb arrays by construction.
+///
+/// # Example
+/// ```tuo
+/// let taken = std::ct::select_bytes(std::ct::of2(1, 2), std::ct::of2(3, 4), 1); // [1, 2]
+/// ```
+pub fn select_bytes(in a: Array[Int], in b: Array[Int], take choose: Int) -> Array[Int] {
+    var out = std::array::empty();
+    let len_a = std::array::len(a);
+    if len_a != std::array::len(b) {
+        return out;
+    }
+    // One mask for the whole array: `choose` is the secret, and deriving the
+    // mask once outside the loop keeps the per-element work identical.
+    let keep = mask(choose);
+    var i = 0;
+    while i < len_a {
+        let left = std::array::get(a, i);
+        let right = std::array::get(b, i);
+        // `right ^ ((right ^ left) & keep)` is `left` when the mask is all
+        // ones and `right` when it is zero, using only XOR and AND — no
+        // arithmetic whose overflow check could become a data-dependent trap.
+        std::array::push(out, right ^ ((right ^ left) & keep));
+        i = i + 1;
+    }
+    out
+}
+
 /// An `Array[Int]` holding the three given elements.
 ///
 /// A local builder so this module depends on no other: `std::collections` has
@@ -545,6 +588,22 @@ spec bytes_eq {
     then bytes_eq(std::array::empty(), std::array::empty()) == 1;
     then bytes_eq(std::array::empty(), of3(1, 2, 3)) == 0;
     then bytes_eq(of3(1, 2, 3), std::array::empty()) == 0;
+}
+
+spec select_bytes {
+    // Choosing each side returns that side, element for element.
+    then std::array::get(select_bytes(of3(1, 2, 3), of3(4, 5, 6), 1), 0) == 1;
+    then std::array::get(select_bytes(of3(1, 2, 3), of3(4, 5, 6), 1), 2) == 3;
+    then std::array::get(select_bytes(of3(1, 2, 3), of3(4, 5, 6), 0), 0) == 4;
+    then std::array::get(select_bytes(of3(1, 2, 3), of3(4, 5, 6), 0), 2) == 6;
+    then std::array::len(select_bytes(of3(1, 2, 3), of3(4, 5, 6), 1)) == 3;
+    // Values with every limb bit set are selected by the same mask arithmetic,
+    // so a large limb is not treated differently from a small one.
+    then std::array::get(select_bytes(of2(268435455, 0), of2(0, 268435455), 1), 0) == 268435455;
+    then std::array::get(select_bytes(of2(268435455, 0), of2(0, 268435455), 0), 0) == 0;
+    // A length mismatch yields empty rather than a truncated answer.
+    then std::array::len(select_bytes(of2(1, 2), of3(1, 2, 3), 1)) == 0;
+    then std::array::len(select_bytes(std::array::empty(), std::array::empty(), 1)) == 0;
 }
 
 spec of3 {

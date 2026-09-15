@@ -129,7 +129,10 @@ const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[
         "std::chacha",
         &["std::bits", "std::ct", "std::bignum", "std::crypto"],
     ),
-    ("std::x25519", &["std::bignum"]),
+    // `std::ct` for the ladder's conditional swap: exchanging the two points
+    // on a bit of the secret scalar is the textbook X25519 timing leak, so the
+    // selection is the shared branchless one rather than a re-derived `if`.
+    ("std::x25519", &["std::bignum", "std::ct"]),
     // HKDF is HMAC-SHA256 in a loop, so it depends on `std::crypto` (which
     // brings `std::bits` and `std::ct`) rather than carrying a second copy.
     ("std::hkdf", &["std::bits", "std::ct", "std::crypto"]),
@@ -137,7 +140,13 @@ const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[
     // than shipping a second copy, and is defined over SHA-512.
     (
         "std::ed25519",
-        &["std::bits", "std::bignum", "std::x25519", "std::sha512"],
+        &[
+            "std::bits",
+            "std::ct",
+            "std::bignum",
+            "std::x25519",
+            "std::sha512",
+        ],
     ),
     // The protocol layer composes every primitive below it.
     (
@@ -1473,7 +1482,12 @@ fn main() -> Int {
     for release in [false, true] {
         let output = run_with_modules(
             &dir,
-            &[tuo_stdlib::BITS, tuo_stdlib::BIGNUM, tuo_stdlib::X25519],
+            &[
+                tuo_stdlib::BITS,
+                tuo_stdlib::CT,
+                tuo_stdlib::BIGNUM,
+                tuo_stdlib::X25519,
+            ],
             caller,
             release,
         );
@@ -1861,6 +1875,7 @@ fn main() -> Int {
             &dir,
             &[
                 tuo_stdlib::BITS,
+                tuo_stdlib::CT,
                 tuo_stdlib::BIGNUM,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,
@@ -1957,6 +1972,7 @@ fn main() -> Int {
             &dir,
             &[
                 tuo_stdlib::BITS,
+                tuo_stdlib::CT,
                 tuo_stdlib::BIGNUM,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,

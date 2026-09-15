@@ -610,3 +610,58 @@ fn main() -> Int {
          1-based index of the first example that disagreed)"
     );
 }
+
+/// The Montgomery ladder's conditional swap contains no `if`.
+///
+/// This is a **source-structural** test rather than a behavioural one, and it
+/// has to be: exchanging two points with an `if` and exchanging them with a
+/// mask compute exactly the same function, so every spec, every RFC 7748
+/// vector, and every live handshake passes either way. That was verified, not
+/// assumed — reintroducing the branch leaves the whole suite green.
+///
+/// Which means nothing else in this repository can catch the regression. The
+/// branch is the textbook X25519 timing leak: `condition` is a bit of the
+/// secret scalar, and the two paths move different data.
+///
+/// `conditional_swap` cannot carry `#[constant_time]` — it scans limb arrays,
+/// and the checker refuses loops and indexing, exactly as it does for
+/// `select_array` and `bytes_eq`. So the compiler cannot guard this one, and
+/// a text check is what is left. It is deliberately narrow: it asserts the
+/// absence of the one construct that reintroduces the leak, not any broader
+/// property the text cannot support.
+#[test]
+fn the_ladders_conditional_swap_does_not_branch_on_the_scalar_bit() {
+    let module = tuo_stdlib::module("std::x25519").expect("std::x25519 is a catalog module");
+    let body = function_body(module.source, "pub fn conditional_swap(")
+        .expect("std::x25519 defines conditional_swap");
+
+    assert!(
+        !body.contains("if "),
+        "`std::x25519::conditional_swap` contains an `if`, which reintroduces the X25519 \
+         timing leak this function exists to avoid: `condition` is a bit of the secret \
+         scalar. Select with `std::ct::select_bytes` instead. Note that no spec or RFC \
+         vector will catch this — the branching and branchless forms compute the same \
+         function.\n\nbody:\n{body}"
+    );
+    // The positive half: it must really be using the branchless selection,
+    // not merely be free of `if` because someone deleted the exchange.
+    assert!(
+        body.matches("std::ct::select_bytes(").count() == 4,
+        "`std::x25519::conditional_swap` must select all four coordinates with \
+         `std::ct::select_bytes`; found {} call(s).\n\nbody:\n{body}",
+        body.matches("std::ct::select_bytes(").count()
+    );
+}
+
+/// The text of the function whose declaration starts with `header`, from the
+/// declaration to the closing brace at column 0.
+///
+/// A brace-matching parse would be more precise, but the catalog is formatted
+/// canonically by `tuo fmt`, so a top-level `}` is always at column 0 and this
+/// is enough to isolate one function.
+fn function_body(source: &str, header: &str) -> Option<String> {
+    let start = source.find(header)?;
+    let rest = &source[start..];
+    let end = rest.find("\n}\n")? + 3;
+    Some(rest[..end].to_string())
+}

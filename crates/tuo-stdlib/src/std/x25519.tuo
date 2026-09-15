@@ -26,10 +26,24 @@
 //
 // NOT CONSTANT TIME. `std::bignum` is documented as variable time, and this
 // builds on it. The ladder's *structure* is uniform — `conditional_swap`
-// does no branching on the scalar — but the underlying arithmetic is not, so
-// this does not deliver the timing guarantee X25519 is normally chosen for.
-// That is a real limitation of building on a variable-time bignum, and it is
-// stated here rather than implied away.
+// selects with `std::ct::select_bytes` and branches on nothing — but the
+// underlying arithmetic is not, so this does not deliver the timing guarantee
+// X25519 is normally chosen for. That is a real limitation of building on a
+// variable-time bignum, and it is stated here rather than implied away.
+//
+// The swap was not always branchless, and the history is worth keeping. It
+// was originally written with an early-returning `if condition == 0` while
+// its own doc comment claimed it selected "by arithmetic rather than an `if`"
+// — the code and the comment disagreed for as long as both existed. Nothing
+// in the test suite could notice: the two forms compute the same function, so
+// every spec, RFC 7748's vectors, and a live OpenSSL handshake pass either
+// way (verified by reintroducing the branch — the suite stayed green). The
+// guard is therefore a source-structural one,
+// `the_ladders_conditional_swap_does_not_branch_on_the_scalar_bit` in
+// `tuo-cli/tests/constant_time.rs`, because behaviour cannot distinguish the
+// two. Closing the remaining gap means fixed-width field arithmetic that does
+// not go through `std::bignum` at all, which is a separate piece of work and
+// is not pretended here.
 
 module std::x25519;
 
@@ -410,11 +424,34 @@ struct Ladder {
 
 /// Conditionally exchange the two points, without branching on `condition`.
 ///
-/// The exchange is selected by arithmetic rather than an `if` on the scalar
-/// bit, which is the ladder's defining property: the same operations run
-/// whichever way the bit goes. (The underlying bignum arithmetic is still
-/// variable-time — see the module header — so this is the ladder's structure
-/// being uniform, not an end-to-end timing guarantee.)
+/// `condition` is derived from a bit of the secret scalar, so an `if` here is
+/// the textbook X25519 timing leak: the two paths move different data, and
+/// which one ran is what the attacker wants to know. Instead every limb of
+/// all four coordinates is passed through `std::ct::select_bytes`, which
+/// computes both alternatives and combines them with a mask — the same work,
+/// in the same order, whichever way the bit goes.
+///
+/// This was previously written with an early-returning `if` while this
+/// comment already claimed it was branchless; the comment was the wrong half.
+///
+/// The claim carried here is deliberately weaker than `#[constant_time]`, and
+/// this function cannot carry that attribute: it scans limb arrays, and the
+/// checker refuses loops (`T0017`) and indexing (`T0018`), exactly as it does
+/// for `std::ct::select_array` and `std::ct::bytes_eq`. What it promises is
+/// what those scans promise — **no branch depends on the scalar bit or on any
+/// coordinate's value**, only on limb-array lengths, which are public. The
+/// bignum arithmetic *underneath* remains variable-time (see the module
+/// header), so this is the ladder's own structure being uniform, not an
+/// end-to-end guarantee.
+///
+/// The limb arrays must be equal width for the selection to be total, which
+/// is what the `padded_to` normalization below establishes.
+///
+/// **Cost:** selecting both alternatives instead of taking one branch, plus
+/// the width normalization, measured about 8% on a full `scalar_mult`
+/// (~13.3ms to ~14.3ms natively, 20-round average). That is the expected
+/// price of not branching, and it is the right trade: a primitive that is 8%
+/// slower and does not leak the scalar beats a faster one that does.
 ///
 /// # Example
 ///
@@ -422,16 +459,74 @@ struct Ladder {
 /// let swapped = std::x25519::conditional_swap(state, 1);
 /// ```
 pub fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder {
-    if condition == 0 {
-        return state;
-    }
+    // Normalizing every coordinate to one common width first is what makes
+    // the element-wise selection below total: `select_bytes` refuses a length
+    // mismatch, and two field elements can differ in limb count whenever one
+    // happens to have fewer significant limbs than the other.
+    let width = common_width(state);
+    let x2 = padded_to(state.x2, width);
+    let z2 = padded_to(state.z2, width);
+    let x3 = padded_to(state.x3, width);
+    let z3 = padded_to(state.z3, width);
+    // 1 selects the exchanged coordinate, 0 keeps the original.
+    let take_swapped = std::ct::nonzero(condition);
     Ladder {
-        x2: state.x3,
-        z2: state.z3,
-        x3: state.x2,
-        z3: state.z2,
+        x2: std::ct::select_bytes(x3, x2, take_swapped),
+        z2: std::ct::select_bytes(z3, z2, take_swapped),
+        x3: std::ct::select_bytes(x2, x3, take_swapped),
+        z3: std::ct::select_bytes(z2, z3, take_swapped),
         swap: state.swap,
     }
+}
+
+/// The widest limb count among the ladder state's four coordinates.
+///
+/// Only the *lengths* of the limb arrays are inspected, never their contents,
+/// so this reveals nothing about the values being exchanged.
+///
+/// # Example
+///
+/// ```tuo
+/// let w = std::x25519::common_width(state);
+/// ```
+pub fn common_width(in state: Ladder) -> Int {
+    var width = std::array::len(state.x2);
+    if std::array::len(state.z2) > width {
+        width = std::array::len(state.z2);
+    }
+    if std::array::len(state.x3) > width {
+        width = std::array::len(state.x3);
+    }
+    if std::array::len(state.z3) > width {
+        width = std::array::len(state.z3);
+    }
+    width
+}
+
+/// `value`'s limbs extended with leading zeros to exactly `width` limbs.
+///
+/// A bignum's value is unchanged by zero limbs above its most significant one
+/// — limbs are least significant first — so this is a representation change
+/// only. Padding is what lets the conditional swap select element-wise across
+/// coordinates whose natural limb counts differ.
+///
+/// # Example
+///
+/// ```tuo
+/// let padded = std::x25519::padded_to(limbs, 10);
+/// ```
+pub fn padded_to(in value: Array[Int], take width: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < width {
+        var limb = 0;
+        if i < std::array::len(value) {
+            limb = std::array::get(value, i);
+        }
+        std::array::push(out, limb);
+        i = i + 1;
+    }
+    out
 }
 
 /// One ladder step: a differential add and a double (RFC 7748 §5's inner
@@ -771,6 +866,40 @@ spec base_point {
     then std::array::len(base_point()) == 32;
     then std::array::get(base_point(), 0) == 9;
     then std::array::get(base_point(), 1) == 0;
+}
+
+spec padded_to {
+    // Padding adds leading zero limbs, which do not change the value: limbs
+    // are least significant first, so the zeros land above the number.
+    then std::array::len(padded_to(std::bignum::from_int(1), 4)) == 4;
+    then std::bignum::int_or(
+        std::bignum::to_int(std::bignum::normalized(padded_to(std::bignum::from_int(7), 5))),
+        0 - 1,
+    ) == 7;
+    then std::array::get(padded_to(std::bignum::from_int(7), 3), 1) == 0;
+    // Padding to a width at or below the current one truncates to that width
+    // rather than growing; the ladder only ever pads upward.
+    then std::array::len(padded_to(std::bignum::from_int(1), 0)) == 0;
+    // Zero pads to all-zero limbs.
+    then std::array::get(padded_to(std::bignum::from_int(0), 2), 0) == 0;
+}
+
+spec common_width {
+    // The widest of the four coordinates wins, whichever one it is.
+    then common_width(Ladder {
+        x2: padded_to(std::bignum::from_int(1), 6),
+        z2: std::bignum::from_int(2),
+        x3: std::bignum::from_int(3),
+        z3: std::bignum::from_int(4),
+        swap: 0,
+    }) == 6;
+    then common_width(Ladder {
+        x2: std::bignum::from_int(1),
+        z2: std::bignum::from_int(2),
+        x3: std::bignum::from_int(3),
+        z3: padded_to(std::bignum::from_int(4), 9),
+        swap: 0,
+    }) == 9;
 }
 
 spec conditional_swap {
