@@ -2795,7 +2795,13 @@ mod tests {
         assert_eq!(codes(&program), vec![super::code::EFFECT]);
     }
 
+    // `debug_assert_verified` is a no-op unless `debug_assertions` is on, so
+    // under `cargo test --release` there is no panic to catch and the
+    // `should_panic` expectation cannot be met. Gating the test on the same
+    // `cfg` the function is gated on keeps it meaningful in debug builds and
+    // absent — rather than failing — in release ones.
     #[test]
+    #[cfg(debug_assertions)]
     #[should_panic(expected = "produced unverifiable MIR")]
     fn debug_assert_verified_rejects_malformed_mir() {
         // A dangling goto: a pass that produced this is a compiler bug.

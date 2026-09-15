@@ -316,6 +316,8 @@ std::x25519
   fn le_to_num(in bytes: Array[Int]) -> Array[Int]
   fn num_to_le(in value: Array[Int]) -> Array[Int]
   fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder
+  fn common_width(in state: Ladder) -> Int
+  fn padded_to(in value: Array[Int], take width: Int) -> Array[Int]
   fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Ladder
   fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int]
   fn base_point() -> Array[Int]
@@ -500,6 +502,7 @@ std::ct
   fn select_array(in xs: Array[Int], take index: Int) -> Int
   fn bytes_eq(in a: Array[Int], in b: Array[Int]) -> Int
   fn element_or_zero(in xs: Array[Int], take index: Int) -> Int
+  fn select_bytes(in a: Array[Int], in b: Array[Int], take choose: Int) -> Array[Int]
   fn of3(take a: Int, take b: Int, take c: Int) -> Array[Int]
   fn of2(take a: Int, take b: Int) -> Array[Int]
 
