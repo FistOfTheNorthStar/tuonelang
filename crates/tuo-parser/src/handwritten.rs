@@ -23,7 +23,7 @@
 
 use tuo_diagnostics::Diagnostic;
 use tuo_lexer::{LexResult, TokenKind as K};
-use tuo_source::SourceText;
+use tuo_source::{SourceText, Span, TextRange};
 use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
@@ -452,10 +452,48 @@ impl Parser<'_> {
 
     fn generic_params(&mut self) -> R {
         let mut els = Els::new();
+        let open = self.pos;
         self.expect(K::OpenBracket, &mut els)?;
+        // An empty list (`fn f[]`) is not in the grammar — `generic_params`
+        // requires at least one parameter — but falling through to
+        // `Err(Fail)` discards a shape we can already see and lets the
+        // item-level recovery report two `P0002` "malformed item" errors,
+        // neither of which points at the brackets. Report the empty list at
+        // its own span and parse on, the way `param_missing_mode` does for
+        // an omitted parameter mode: one clear diagnostic, and the rest of
+        // the signature still parses.
+        if self.at(K::CloseBracket) {
+            self.empty_generic_params(open);
+            els.push(self.bump());
+            return Ok(node(SyntaxKind::GenericParams, els));
+        }
         self.comma_list(&mut els, true, Self::generic_param)?;
         self.expect(K::CloseBracket, &mut els)?;
         Ok(node(SyntaxKind::GenericParams, els))
+    }
+
+    /// Report `[]` written where a generic parameter list was started.
+    ///
+    /// The span covers both brackets, since deleting them is the fix: a
+    /// declaration with no type parameters is written without a list at all.
+    /// The wording stays declaration-agnostic because `generic_params` is
+    /// shared by `fn`, `struct`, `enum`, `interface`, and `impl`.
+    fn empty_generic_params(&mut self, open: usize) {
+        let start = byte_span(open, self.toks, self.lex, self.source);
+        let end = byte_span(self.pos, self.toks, self.lex, self.source);
+        // Both brackets, when they form a well-ordered range; the opening
+        // one alone otherwise, so a malformed stream still gets a located
+        // diagnostic rather than none.
+        let primary = TextRange::new(start.range().start(), end.range().end())
+            .map_or(start, |range| Span::new(start.source(), range));
+        self.diagnostics.push(
+            Diagnostic::error(code(1), "empty generic parameter list".to_owned(), primary)
+                .with_primary_label("a generic parameter list needs at least one parameter")
+                .with_help(concat!(
+                    "name a type parameter (`[T]`), or remove the brackets — a ",
+                    "declaration with no type parameters is written without a list",
+                )),
+        );
     }
 
     fn generic_param(&mut self) -> R {

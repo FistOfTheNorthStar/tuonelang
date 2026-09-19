@@ -293,3 +293,18 @@ fn a_trailing_comma_in_the_parameter_list_is_handled() {
     let (start, end, _) = &found[0];
     assert_eq!(&source[*start..*end], "[T,]");
 }
+
+/// `fn f[]` is now its own `P0001` parse error (rather than two whole-item
+/// recovery skips) and still produces a `GenericParams` node. The advisory
+/// must stay silent on it: the function declares no type parameters, so
+/// there is nothing to monomorphize, and a layout warning stacked on a
+/// parse error would be noise rather than help.
+#[test]
+fn an_empty_generic_parameter_list_produces_no_advisory() {
+    let result = check("fn f[](take x: Int) -> Int {\n    1\n}\n");
+    assert!(
+        generic_advisories(&result).is_empty(),
+        "an empty list declares no type parameters; the parse error is the \
+         only diagnostic that belongs here"
+    );
+}

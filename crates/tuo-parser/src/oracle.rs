@@ -83,7 +83,18 @@ pub(crate) const TARGETED: &str = "\u{1}targeted:";
 /// exactly — same code, message, label, and help — because `oracle_parity`
 /// compares them.
 fn targeted_recovery(message: &str, primary: Span, source: &SourceText) -> Option<Diagnostic> {
-    if message.strip_prefix(TARGETED)? != "param-missing-mode" {
+    let kind = message.strip_prefix(TARGETED)?;
+    if kind == "generic-params-empty" {
+        return Some(
+            Diagnostic::error(code(1), "empty generic parameter list".to_owned(), primary)
+                .with_primary_label("a generic parameter list needs at least one parameter")
+                .with_help(concat!(
+                    "name a type parameter (`[T]`), or remove the brackets — a ",
+                    "declaration with no type parameters is written without a list",
+                )),
+        );
+    }
+    if kind != "param-missing-mode" {
         return None;
     }
     let range = primary.range();

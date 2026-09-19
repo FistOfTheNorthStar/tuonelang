@@ -51,7 +51,7 @@ what makes this a tractable increment rather than a new subsystem:
 | Layer | State |
 |---|---|
 | `grammar.ebnf` | `generic_params` / `generic_param` (rules at §18) are specified, and applied to `fn`, `struct`, `enum`, `interface`, `impl` |
-| `tuo-parser` | parses `[T]` on a `fn`; **rejects `impl` outright** (`P0002`, "skipped 3 tokens starting with `impl`") |
+| `tuo-parser` | parses `[T]` on a `fn`, bounds and trailing comma included; **rejects `impl` outright** (`P0002`, "skipped 3 tokens starting with `impl`"); an empty `[]` is a targeted `P0001` |
 | `tuo-types` | `Ty::Param(SymbolId)`; `FnSig::type_params`; `instantiate_fn`; turbofish arguments; `struct_shape`/`enum_shape` carry `type_params` and `Ty::Struct`/`Ty::Enum` carry `args` |
 | `tuo-ownership` | documents that "checking is pre-monomorphization" (`lib.rs`) |
 | `tuo-mir` | `Function` is keyed by a bare `SymbolId`; `Callee::Direct(SymbolId)` |

@@ -122,11 +122,11 @@ pub(crate) fn advisories(asts: &[Ast<'_>]) -> Vec<Diagnostic> {
 /// because the list is what makes the body unlowerable and what a reader
 /// would delete to fix it.
 ///
-/// The "no named parameters" guard is defensive rather than reachable: an
-/// empty list (`fn f[]`) is a `P0002` parse error, so the only way to reach
-/// it is a recovery node whose parameters have no names. Staying silent
-/// there is right — the parse error is the real diagnostic, and a layout
-/// advisory about a function the parser could not read would be noise.
+/// An empty list (`fn f[]`) is reported as its own `P0001` parse error and
+/// still yields a `GenericParams` node, so the guard below is load-bearing
+/// rather than defensive: such a function declares no type parameters, has
+/// nothing to substitute, and the backends lower it fine. Warning there
+/// would add noise on top of a parse error that already says what is wrong.
 fn report_generics(decl: tuo_ast::FnDecl<'_>, out: &mut Vec<Diagnostic>) {
     let Some(generics) = decl.generics() else {
         return;

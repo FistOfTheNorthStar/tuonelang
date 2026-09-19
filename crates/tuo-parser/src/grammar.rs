@@ -750,12 +750,36 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         SyntaxKind::GenericParam,
         tok(K::Ident).then(tok(K::Colon).then(bound_list.clone()).or_not()),
     );
-    let generic_params = node!(
+    // An empty list (`fn f[]`) is not in the grammar — `generic_params`
+    // requires at least one parameter — but letting it fall through to
+    // item-level recovery reports two "malformed item: skipped N tokens"
+    // errors, neither of which points at the brackets. Diagnose it here the
+    // way `param_missing_mode` does below, so the rest of the signature
+    // still parses and one located error replaces the pair. The handwritten
+    // engine builds the identical diagnostic directly; `oracle_parity` over
+    // the `invalid/` corpus pins them together.
+    let generic_params_empty = node!(
         SyntaxKind::GenericParams,
-        tok(K::OpenBracket)
-            .then(comma_list1(generic_param.boxed()))
-            .then(tok(K::CloseBracket)),
+        tok(K::OpenBracket).then(tok(K::CloseBracket)),
     )
+    .validate(|node, extra, emitter| {
+        emitter.emit(Rich::custom(
+            extra.span(),
+            format!("{}generic-params-empty", crate::oracle::TARGETED),
+        ));
+        node
+    })
+    .boxed();
+    let generic_params = choice((
+        node!(
+            SyntaxKind::GenericParams,
+            tok(K::OpenBracket)
+                .then(comma_list1(generic_param.boxed()))
+                .then(tok(K::CloseBracket)),
+        )
+        .boxed(),
+        generic_params_empty,
+    ))
     .boxed();
     let where_pred = node!(
         SyntaxKind::WherePred,
