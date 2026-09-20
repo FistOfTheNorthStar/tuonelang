@@ -284,3 +284,68 @@ fn every_mode_less_parameter_in_a_list_is_reported() {
     assert!(messages[1].contains('z'), "second: {}", messages[1]);
     assert_eq!(count(&result, SyntaxKind::Param), 3);
 }
+
+/// `fn f[]` — an empty generic parameter list — is not in the grammar
+/// (`generic_params` requires at least one parameter), but letting it fall
+/// through to item-level recovery produced *two* `P0002` "malformed item"
+/// errors, neither pointing at the brackets, with the whole function
+/// discarded. It now gets one located diagnosis and the rest of the
+/// signature still parses, the same treatment a mode-less parameter gets.
+#[test]
+fn an_empty_generic_parameter_list_is_diagnosed_at_the_brackets() {
+    let result = parse_str("fn f[](take x: Int) -> Int {\n    1\n}\n");
+    let codes: Vec<String> = result
+        .all_diagnostics()
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(
+        codes,
+        vec!["P0001".to_owned()],
+        "exactly one targeted error, not a pair of recovery skips"
+    );
+
+    let diagnostics = result.all_diagnostics();
+    let diagnostic = &diagnostics[0];
+    assert!(
+        diagnostic.message.contains("empty generic parameter list"),
+        "the message names the construct: {}",
+        diagnostic.message
+    );
+    // Pointing at `[]` rather than at `fn` is the whole improvement.
+    assert_eq!(
+        diagnostic.primary_span.range().start().as_usize(),
+        4,
+        "the span starts at the opening bracket"
+    );
+    // The signature still parsed, so the parameter survives in the tree —
+    // without this the function was discarded entirely and every later
+    // error in it was cascade noise.
+    assert_eq!(count(&result, SyntaxKind::Param), 1);
+}
+
+/// `generic_params` is shared by `fn`, `struct`, `enum`, `interface`, and
+/// `impl`, so the diagnostic must read correctly on all of them — hence its
+/// declaration-agnostic wording. A `fn`-specific help text ("a *function*
+/// with no type parameters") would be wrong on four of the five.
+#[test]
+fn an_empty_generic_parameter_list_is_diagnosed_on_a_struct_too() {
+    for source in ["struct S[] { a: Int }\n", "enum E[] { A, B }\n"] {
+        let result = parse_str(source);
+        let diagnostics = result.all_diagnostics();
+        let targeted: Vec<_> = diagnostics
+            .iter()
+            .filter(|d| d.message.contains("empty generic parameter list"))
+            .collect();
+        assert_eq!(
+            targeted.len(),
+            1,
+            "exactly one targeted error for `{source}`"
+        );
+        let help = format!("{:?}", targeted[0]);
+        assert!(
+            !help.contains("a function with no type parameters"),
+            "the help must not call a struct or enum a function: {help}"
+        );
+    }
+}

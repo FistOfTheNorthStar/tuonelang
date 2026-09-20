@@ -189,7 +189,7 @@ enum Failure {
         stage: &'static str,
         message: String,
         unsupported: bool,
-        /// The located `T0022` runnable-core advisories of this program, if
+        /// The located `T0022`/`T0023` runnable-core advisories of this program, if
         /// any. A backend refuses an unlowerable construct at
         /// storage-classification time, where it knows the function but not
         /// the span; the front end already computed exactly which written
@@ -400,22 +400,32 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
     }
 }
 
-/// The `T0022` runnable-core advisories among `diagnostics` — the located
-/// warnings naming exactly which written types the native backends cannot
-/// lower (see `tuo_compiler`'s `native_core`).
+/// The runnable-core advisories among `diagnostics` — the located warnings
+/// naming exactly which constructs the native backends cannot lower (see
+/// `tuo_compiler`'s `native_core`).
+///
+/// Two codes carry them, one per construct that causes the gap: `T0022` for
+/// a heap-wrapper **value** in storage position, and `T0023` for a generic
+/// declaration, whose `Ty::Param` has no layout until monomorphized
+/// (ADR-0027). Both are warnings, and both exist so a backend's
+/// storage-classification refusal — which knows the offending function but
+/// not the span — can be reported at the construct that caused it.
 fn runnable_core_advisories(
     diagnostics: &[diagnostics::Diagnostic],
 ) -> Vec<diagnostics::Diagnostic> {
     diagnostics
         .iter()
-        .filter(|diagnostic| diagnostic.code.to_string() == "T0022")
+        .filter(|diagnostic| {
+            let code = diagnostic.code.to_string();
+            code == "T0022" || code == "T0023"
+        })
         .cloned()
         .collect()
 }
 
 /// Map a [`CodegenError`] to a reportable failure, preserving "unsupported".
 ///
-/// `advisories` are the program's located `T0022` diagnostics. A backend
+/// `advisories` are the program's located `T0022`/`T0023` diagnostics. A backend
 /// refuses an unlowerable construct at storage-classification time, where it
 /// knows the offending function but not the span; carrying the front end's
 /// advisories lets the report point at the written type instead.
