@@ -455,6 +455,28 @@ network. The resolver itself now returns real addresses and stays outside
 this repository, since a committed test may not depend on the public
 internet.
 
+**Post-exercise update (2026-09-15) — TLS is no longer out, and the reason
+it was is recorded as superseded.** The paragraph above says TLS "additionally
+needs X.509, a certificate store, and AEAD ciphers". All three turned out to
+be expressible in tuonelang on ADR-0019's operators: `std::tls` is a TLS 1.3
+server handshake and record layer (RFC 8446) over six new modules —
+`std::sha512`, `std::hkdf`, `std::chacha`, `std::x25519`, `std::ed25519`,
+`std::der` — each pinned to its RFC's published vectors, the key schedule to
+RFC 8448's, and the stack as a whole by a real handshake against OpenSSL's
+`s_client` and a served HTTPS request. Two findings matter more than the
+feature. First, the parsing half runs on **hostile, pre-authentication
+input**, and a trap aborts the process, so every reader had to be total —
+the same lesson `router`'s unchecked length taught, now applied by design
+rather than by patch; building it also surfaced a MIR lowering bug (a heap
+temporary in a short-circuit operand was dropped on only one path), fixed
+and regression-pinned. Second, and the limitation the module's own header
+puts first: it is **not constant time**. Key exchange and signing route
+through `std::bignum`, which is variable-time by design, so this is a
+demonstration that the protocol is expressible, not transport security —
+exactly the gap [ADR-0022](specification/adr/ADR-0022-constant-time-bignum.md)
+is open for. A certificate store and chain validation stay absent (`std::der`
+decodes; it does not validate), absent rather than stubbed.
+
 ### ADR-0019 — bitwise operations and the crypto primitives
 
 The first dogfooding target the language could not express **at all**, rather
