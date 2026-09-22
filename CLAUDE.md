@@ -334,7 +334,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   diagnostics, the agent protocol, the corpus, the codegen benchmark). Its five
   sections are assembled from compiler-owned sources: the syntax skeleton
   carries `grammar.ebnf`'s own `GRAMMAR-VERSION`; the standard-library section
-  drives the sixteen `tuo-stdlib` catalog modules through the **real** front end
+  drives the twenty-three `tuo-stdlib` catalog modules through the **real** front end
   (`check_sources` is the acceptance gate — the brief refuses to describe a
   library that does not compile) and lists each public `fn` as its *declaration*,
   parameter names and written type spellings included, because that is the form
@@ -504,8 +504,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tuo` binary makes — and the dependency-policy guard keeps it at layer 117 with
   no edge into the pipeline.
 - **The language is dogfooded with real programs; a discovered gap becomes an ADR
-  with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds nine
-  real, multi-function programs written *against* v0, not to test it from inside:
+  with a benchmark plan, never ad-hoc syntax.** Top-level `examples/` holds eleven
+  real, multi-function programs written *against* v0, not to test it from inside
+  (the eleventh, `gguf-reader`, walks the little-endian GGUF model container
+  and is the round that deliberately produced *no* ADR — see `DOGFOODING.md`):
   `cli-stats` (a command-line statistics tool), `data-pipeline` (a record/JSON-style
   processor that decodes packed-integer fields and runs a filter+map+reduce),
   `workspace/` (a medium three-package graph `app → geometry → numeric` wired by
@@ -660,9 +662,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   and UDP: three of the four items ADR-0014 had listed as additive
   *"when its need is demonstrated by dogfooding"*, landed in three stages at
   ABI v10 with the gating `udp-echo` and `connect-timeout` workloads;
-  **TLS and DNS stay out** — TLS needs a crypto dependency this workspace
-  avoids, and DNS is properly written *in tuonelang* on the new UDP
-  primitives). `ADR-0019` (bitwise operations and crypto) is **accepted, both
+  **DNS stays out** — properly written *in tuonelang* on the new UDP
+  primitives, and kept outside the repository since a committed test may
+  not reach the public internet; TLS was out for the same reason at the
+  time, a framing since superseded by `std::tls` — see below). `ADR-0019` (bitwise operations and crypto) is **accepted, both
   stages landed**: the PostgreSQL-connector target was the first dogfooding
   case the language could not express *at all*, and it needed two separable
   things — Stage A the operator surface (see the runnable-core entry above),
@@ -697,10 +700,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `md5_password` pinning the protocol composition against an independent
   implementation — so nothing from ADR-0019 remains unimplemented. SCRAM
   stays the primary path regardless, being the default on every current
-  server. Note Stage B weakens but does not overturn the TLS
-  exclusion above: SHA-256/HMAC written *in tuonelang* need no external
-  dependency, but TLS additionally needs X.509, a certificate store, and AEAD
-  ciphers, so it stays out. Resolved
+  server. Stage B weakened the TLS exclusion above (SHA-256/HMAC written
+  *in tuonelang* need no external dependency), and the 2026-09-15 TLS
+  round overturned it: **`std::tls` is a TLS 1.3 server handshake and
+  record layer written entirely in tuonelang** over six new catalog
+  modules — `std::sha512`, `std::hkdf`, `std::chacha` (ChaCha20-Poly1305),
+  `std::x25519`, `std::ed25519` (verification sound, signing not), and
+  `std::der` (X.690 decoding and the X.509 fields; it decodes, it does not
+  validate a chain) — each pinned to its RFC's published vectors, the key
+  schedule to RFC 8448's, and the whole stack by a real handshake against
+  OpenSSL's `s_client` plus a served HTTPS request
+  (`tuo-cli/tests/stdlib.rs`). Every reader of hostile input is total
+  (a failure value, never a trap, since a trap kills the process). Its
+  header states the limitation that matters most: it is **not constant
+  time** — key exchange and signing route through the variable-time
+  `std::bignum` (the gap ADR-0022 names), so it demonstrates the protocol
+  is expressible, not that it is deployable; no resumption, 0-RTT, client
+  certificates, HelloRetryRequest, RSA/P-256, or chain validation, each
+  absent rather than stubbed. Resolved
   `examples/**/tdg.lock` files embed machine-absolute dependency paths and
   are therefore gitignored, not committed.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
@@ -916,9 +933,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   into three honest tiers — executable, effect, and contract — it never
   advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
-  compiler machinery, layer 90): each of the sixteen modules — `std::core`,
+  compiler machinery, layer 90): each of the twenty-three modules — `std::core`,
   `std::collections`, `std::math`, `std::bits`, `std::bignum`, `std::ct`,
-  `std::crypto`,
+  `std::crypto`, `std::sha512`, `std::hkdf`, `std::chacha`, `std::x25519`,
+  `std::ed25519`, `std::der`, `std::tls`,
   `std::str`,
   `std::json`, `std::io`,
   `std::fs`, `std::net`, `std::time`, `std::process`, `std::sync`,
@@ -946,9 +964,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   somewhere equally wrong costs a round trip and is worse than silence
   (pinned by `crates/tuo-types/tests/wrong_module.rs`, whose negative cases
   are as load-bearing as its positive ones). Note the ambiguity is in the
-  **builtins**, not the catalog: 253 of the catalog's 269 public functions
-  have globally unique names and only 16 collide, so the sixteen-module split
-  is not what makes a name hard to place. Because **methods are not lowered** (`impl`
+  **builtins**, not the catalog: 421 of the catalog's 471 public functions
+  have globally unique names and only 50 collide (24 shared names, most of
+  them field-arithmetic vocabulary such as `add`/`mul`/`zero` inside the
+  crypto stack), so the twenty-three-module split is not what makes a name
+  hard to place. Because **methods are not lowered** (`impl`
   method calls are v0 no-ops pending the trait system), the library is *free
   functions only*, and each module separates an **executable tier** (pure
   computation — ordering, `Option`/`Result` combinators, `Duration` arithmetic,

@@ -25,12 +25,13 @@ the interpreter.
 - ✅ Native compilation: a Cranelift debug backend and an optimizing LLVM
   `--release` backend, kept interpreter-equivalent by differential test suites.
 - ✅ A standard library **written in tuonelang** and consumed as compiler input —
-  twelve modules (`core`, `collections`, `math`, `str`, `json`, `io`, `fs`,
-  `net`, `time`, `process`, `sync`, `test`), each public function either spec'd
-  or pinned by a native test.
+  twenty-three modules (`core`, `collections`, `math`, `bits`, `bignum`, `ct`,
+  `crypto`, `sha512`, `hkdf`, `chacha`, `x25519`, `ed25519`, `der`, `tls`,
+  `str`, `json`, `io`, `fs`, `net`, `time`, `process`, `sync`, `test`), each
+  public function either spec'd or pinned by a native test.
 - ✅ Tooling: canonical formatter, package system (manifest + lockfile + path
   deps), LSP core, an agent protocol server, a compiler-validated corpus, and
-  benchmark harnesses — including a performance lab whose seventeen runtime
+  benchmark harnesses — including a performance lab whose eighteen runtime
   workloads all measure against equivalent C and Go peers.
 - 📋 The **0.1 release gate** (`specification/RELEASE-0.1-GATE.md`) currently
   reads **READY** — all sixteen criteria are `MET`, each backed by a committed
@@ -48,15 +49,25 @@ concurrency** over the one primitive `std::rt::par_map` (ADR-0007); the **OS
 effect boundary** — clock, argv, and files (ADR-0013); **TCP sockets**
 (ADR-0014); **channels and mutexes** (ADR-0015); the **data increment** —
 `Float` array elements, indexed writes, and `std::json` (ADR-0016); and
-**bounded waits, IPv6, and UDP** (ADR-0017). Every ADR is `accepted`; **none
-remains `proposed`**.
+**bounded waits, IPv6, and UDP** (ADR-0017); **bitwise operators and the
+crypto primitives** (ADR-0019); and **compiler-verified constant-time code**
+(ADR-0020). Five ADRs remain `proposed` and unlanded — secret taint tracking
+(ADR-0021), a constant-time bignum (ADR-0022), owned map values (ADR-0023
+Stage B2.2), capturing closures (ADR-0024), and monomorphization
+(ADR-0027) — each recorded as open rather than implied done.
 
 Still outside the core, and refused rather than mis-compiled: **capturing
 closures** (ADR-0008 Tier 2), the heap-wrapper **values** `Box`/`Shared`/`Weak`,
 recursive nominal types without a heap-wrapper indirection (a front-end error
-since ADR-0016), and **TLS/DNS** — deliberately out of ADR-0017, since TLS would
-need a crypto dependency this workspace avoids and DNS belongs *in tuonelang* on
-the UDP primitives.
+since ADR-0016), and **DNS** — deliberately out of ADR-0017, since it belongs
+*in tuonelang* on the UDP primitives (a resolver written that way lives outside
+this repository, because a committed test may not depend on the public
+internet). **TLS is no longer out**, but only as a demonstration: `std::tls` is a
+TLS 1.3 *server* handshake and record layer written entirely in tuonelang
+(X25519, ChaCha20-Poly1305, Ed25519, DER) that completes a real handshake with
+OpenSSL's `s_client` in the test suite — and its own header says it is **not
+constant time** (the key exchange and signing run on the variable-time
+`std::bignum`) and so is not transport security for anything real.
 
 Because tuonelang v0 ships a deliberately bounded core, the compiler
 **refuses** programs outside it rather than mis-compiling them — no component
@@ -101,7 +112,11 @@ For real, multi-function programs written against v0, see [`examples/`](examples
 `data-pipeline` folds heap-backed `Array[Record]` values through a generic
 first-class `fold` and cross-checks them against a `Map[Int, Int]` aggregation,
 `http-service` **serves itself over a live loopback socket**, `concurrent-worker`
-runs a real `par_map` thread pool and drains a shared channel queue, and
+runs a real `par_map` thread pool and drains a shared channel queue,
+`router` serves HTTP from a declarative dispatch table over a concurrent worker
+pool, `postgres-auth`/`postgres-client` implement the PostgreSQL v3 handshake
+(SCRAM-SHA-256 pinned against RFC 7677, the client live against a real server),
+`gguf-reader` walks the little-endian GGUF model container, and
 `workspace/` is a three-package graph that checks and tests green. Every one is
 re-validated by the real `tuo` binary on each `cargo test`. The findings from
 building them — and the ADRs those findings produced — are in
