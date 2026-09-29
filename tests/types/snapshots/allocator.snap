@@ -2,6 +2,6 @@ T0002@336..359 this call takes 2 arguments but 1 was supplied | expected count 2
 T0001@416..417 mismatched types | expected type `I64` | actual type `Str`
 T0001@419..420 mismatched types | expected type `I64` | actual type `Str`
 T0001@651..666 mismatched types | expected type `String` | actual type `Str`
-T0001@708..763 mismatched types | expected type `String` | actual type `Str`
+T0001@714..761 mismatched types | expected type `String` | actual type `Str`
 T0001@1157..1163 mismatched types | expected type `I64` | actual type `Str`
 R0007@1274..1346 spec `"via write_string"` reaches the effectful function `emit`; specs execute only the pure core in the deterministic sandbox | actual name `emit`
