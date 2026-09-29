@@ -676,10 +676,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 // of a unit place likewise occupies no ABI slot).
                 Storage::Unit => LocalKind::Unit,
                 _ if borrow_param => {
-                    let cell = self
-                        .builder
-                        .build_alloca(self.ptr_ty, &format!("brw{index}"))
-                        .map_err(builder_err("allocating a borrow pointer cell"))?;
+                    let cell = self.entry_alloca(self.ptr_ty, &format!("brw{index}"))?;
                     LocalKind::Borrowed {
                         cell,
                         ty: local.ty.clone(),
@@ -687,10 +684,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 Storage::Scalar => {
                     let ty = require_scalar(self.ctx, &local.ty, &self.function.name)?;
-                    let ptr = self
-                        .builder
-                        .build_alloca(ty, &format!("local{index}"))
-                        .map_err(builder_err("allocating a scalar slot"))?;
+                    let ptr = self.entry_alloca(ty, &format!("local{index}"))?;
                     LocalKind::Scalar(ptr, ty)
                 }
                 Storage::Aggregate(layout) => {
@@ -3434,9 +3428,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     /// the found flag plus the widest value stride, so the same buffer serves a
     /// word-sized value and a two-word `Str` view.
     fn map_out_addr(&mut self) -> Result<PointerValue<'ctx>, CodegenError> {
-        self.builder
-            .build_alloca(self.ctx.i64_type().array_type(3), "map_out")
-            .map_err(builder_err("allocating the map out buffer"))
+        self.entry_alloca(self.ctx.i64_type().array_type(3), "map_out")
     }
 
     /// Declare (idempotently) and call a `tuo_rt_map_*` shim function: the
@@ -3865,10 +3857,8 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                         // A `Str` value is its two-word view: store the parts
                         // as-is, exactly as a `Str` *key* is stored.
                         let (vp, vn) = self.str_operand_parts(value)?;
-                        let slot = self
-                            .builder
-                            .build_alloca(self.ctx.i64_type().array_type(2), "map_val")
-                            .map_err(builder_err("allocating the map value slot"))?;
+                        let slot =
+                            self.entry_alloca(self.ctx.i64_type().array_type(2), "map_val")?;
                         self.builder
                             .build_store(slot, vp)
                             .map_err(builder_err("storing a map Str value pointer"))?;
@@ -3880,10 +3870,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     } else {
                         let lowered = self.lower_operand(value)?;
                         let word = self.value_as_word(lowered)?;
-                        let slot = self
-                            .builder
-                            .build_alloca(self.ctx.i64_type(), "map_val")
-                            .map_err(builder_err("allocating the map value slot"))?;
+                        let slot = self.entry_alloca(self.ctx.i64_type(), "map_val")?;
                         self.builder
                             .build_store(slot, word)
                             .map_err(builder_err("storing a map scalar value"))?;
@@ -4776,6 +4763,39 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         CodegenError::backend(format!("ABI layout failed during lowering: {error}"))
     }
 
+    /// Allocate a stack slot of type `ty` at the top of the function's entry
+    /// block, wherever the builder currently is, then return the builder to
+    /// the end of the block it was in.
+    ///
+    /// Every alloca goes through here. An alloca anywhere but the entry block
+    /// is a *dynamic* stack allocation that is only released when the function
+    /// returns, so one emitted for a temporary inside a loop body — an
+    /// aggregate call argument, a map out-buffer — grows the stack on every
+    /// iteration until a long enough loop overflows it (a `--release`-only
+    /// SIGSEGV; the Cranelift backend's stack slots are static by
+    /// construction). In the entry block the slot is static: sized once in
+    /// the frame, and a candidate for `mem2reg`.
+    fn entry_alloca<T: inkwell::types::BasicType<'ctx>>(
+        &self,
+        ty: T,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let entry = self.blocks[0];
+        let current = self.builder.get_insert_block();
+        match entry.get_first_instruction() {
+            Some(first) => self.builder.position_before(&first),
+            None => self.builder.position_at_end(entry),
+        }
+        let slot = self
+            .builder
+            .build_alloca(ty, name)
+            .map_err(builder_err("allocating a stack slot"));
+        if let Some(block) = current {
+            self.builder.position_at_end(block);
+        }
+        slot
+    }
+
     /// Allocate an aggregate slot of `layout`: an `[size x i8]` alloca whose
     /// alignment is forced to the ABI alignment (LLVM's default alloca align may
     /// be smaller, which would make aligned field loads UB under O2). `index` is
@@ -4785,19 +4805,14 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         layout: Layout,
         index: usize,
     ) -> Result<PointerValue<'ctx>, CodegenError> {
-        let i8 = self.ctx.i8_type();
-        // The element count must be a pointer-width constant: an i8-typed count
-        // would silently truncate any aggregate larger than 255 bytes.
-        let size = self.ctx.i64_type().const_int(layout.size, false);
+        let size = u32::try_from(layout.size)
+            .map_err(|_| CodegenError::backend("aggregate size exceeds u32"))?;
         let name = if index == usize::MAX {
             "agg_tmp".to_owned()
         } else {
             format!("agg{index}")
         };
-        let ptr = self
-            .builder
-            .build_array_alloca(i8, size, &name)
-            .map_err(builder_err("allocating an aggregate slot"))?;
+        let ptr = self.entry_alloca(self.ctx.i8_type().array_type(size), &name)?;
         // Force the alloca's alignment to the ABI alignment.
         let align = u32::try_from(layout.align)
             .map_err(|_| CodegenError::backend("aggregate alignment exceeds u32"))?;

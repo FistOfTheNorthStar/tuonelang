@@ -107,13 +107,18 @@ pub fn alloc_decision(size: usize, align: usize) -> AllocDecision {
 #[must_use]
 pub fn alloc_runtime_c_source() -> String {
     // `aligned_alloc` (C11) requires `size` be a multiple of `align`; the
-    // rounding here matches `alloc_decision`. `tuo_rt_trap` is declared by
+    // rounding here matches `alloc_decision`. An alignment `malloc` already
+    // guarantees (`_Alignof(max_align_t)`, 16 on every supported host — and
+    // every v0 layout is at most word-aligned) takes plain `malloc`, the
+    // allocator's fast path: `aligned_alloc` goes through the slower
+    // memalign route even when the request needs nothing `malloc` lacks. `tuo_rt_trap` is declared by
     // `trap_runtime_c_source`; both C units link together, so the extern
     // resolves against it.
     let sentinel = ZERO_SIZE_SENTINEL;
     let failure = ALLOC_FAILURE_TRAP.as_i32();
     format!(
         "#include <stdlib.h>\n\
+         #include <stddef.h>\n\
          #include <stdint.h>\n\
          \n\
          extern void tuo_rt_trap(int code);\n\
@@ -122,7 +127,8 @@ pub fn alloc_runtime_c_source() -> String {
          \x20   if (size == 0) return (void *){sentinel};\n\
          \x20   if (align < sizeof(void *)) align = sizeof(void *);\n\
          \x20   size_t rounded = (size + (align - 1)) & ~(align - 1);\n\
-         \x20   void *p = aligned_alloc(align, rounded);\n\
+         \x20   void *p = align <= _Alignof(max_align_t) ? malloc(rounded)\n\
+         \x20                                            : aligned_alloc(align, rounded);\n\
          \x20   if (p == NULL) tuo_rt_trap({failure});\n\
          \x20   return p;\n\
          }}\n\
@@ -186,6 +192,8 @@ mod tests {
         // OOM routes to the trap with the policy's code; never returns null.
         assert!(source.contains(&format!("tuo_rt_trap({});", ALLOC_FAILURE_TRAP.as_i32())));
         assert!(source.contains("aligned_alloc(align, rounded)"));
+        // Alignments `malloc` already guarantees take its fast path.
+        assert!(source.contains("align <= _Alignof(max_align_t) ? malloc(rounded)"));
         // The zero-size sentinel value matches the Rust policy.
         assert!(source.contains(&format!("return (void *){ZERO_SIZE_SENTINEL};")));
         assert!(source.contains(&format!("ptr == (void *){ZERO_SIZE_SENTINEL}")));

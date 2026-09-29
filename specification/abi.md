@@ -225,14 +225,22 @@ the type checker: they need the deep-copy-on-read and recursive-drop path, and
 `tuo_rt_map_drop` does not yet run per-value glue.
 
 Every observable is defined by the insertion-ordered dense region: `keys`
-lists keys in insertion order, `remove` shifts the tail down one slot
-(preserving the relative order of the rest), and an overwrite keeps the key's
-position — exactly the reference interpreter's association-list semantics.
+lists keys in insertion order, `remove` preserves the relative order of the
+rest, and an overwrite keeps the key's position — exactly the reference
+interpreter's association-list semantics. The dense region may hold **holes**:
+`remove` is O(1), clearing the entry's live flag and tombstoning its index
+slot rather than shifting the tail, and `keys` skips holes. The holes are
+reclaimed when an insert finds the dense region full, by rehoming the live
+entries in order into a same-capacity block (at most half live) or a doubled
+one — the ordered-`dict` design. Because of the holes, only `len` counts
+entries; `ptr[0..len]` is *not* the entry list, and nothing outside the shim
+may read it.
 
 The **hash index is not part of the ABI a backend consults**: it lives inside
 the same allocation, *before* the entries
-(`[ u64 index[index_cap] ][ u64 index_cap ][ entries ]`, `index_cap = 2 ×
-cap`, slots holding `dense_index + 1` or `0`), and is owned entirely by the
+(`[ u64 index[index_cap] ][ u8 live[cap] ][ u64 used ][ u64 index_cap ][ entries ]`,
+`index_cap = 2 × cap`, slots holding `dense_index + 1`, `0`, or a tombstone;
+`used` the dense slots handed out since the last rehome), and is owned entirely by the
 `tuo_rt_map_*` runtime shim (`tuo_runtime::map::map_runtime_c_source`,
 linked into every built binary). Backends lower the map operations to shim
 calls and never touch the internals; only `len` (a header word read) and
@@ -275,7 +283,7 @@ when absent) from which the backend materializes the `Option[Int]` result;
 `tuo_rt_alloc`; the sentinel header for an empty map); `drop` frees the whole
 block (index + entries) via `tuo_rt_dealloc`, taking the entry stride only to
 compute the block size. Growth doubles the entry capacity from 8, allocating
-a new block, copying the dense entries, and rebuilding the index. `Map[K, V]`
+a new block, copying the live entries in order, and rebuilding the index. `Map[K, V]`
 is non-`Copy`; a map moves as a 24-byte header memcpy like `String`/`Array`.
 
 ## Function values (Tier 1)
