@@ -13,13 +13,16 @@
 //!
 //! LLVM is a large external toolchain with its own release cadence and API
 //! breaks between majors; a backend must pin the major it builds against. This
-//! crate is pinned to **LLVM 19** through inkwell's `llvm19-1` feature (declared
-//! in `Cargo.toml`). Building it therefore requires an LLVM 19 development
+//! crate is pinned to **LLVM 21** through inkwell's `llvm21-1` feature (declared
+//! in `Cargo.toml`). Building it therefore requires an LLVM 21 development
 //! install; `llvm-sys` (inkwell's `-sys` layer) locates it at build time from
-//! `LLVM_SYS_191_PREFIX`, or from `llvm-config`/`llvm-config-19` on `PATH`, or
-//! from a Homebrew `llvm@19`. Moving to a newer LLVM is a deliberate, tested
+//! `LLVM_SYS_211_PREFIX`, or from `llvm-config`/`llvm-config-21` on `PATH`, or
+//! from a Homebrew `llvm@21`. Moving to a newer LLVM is a deliberate, tested
 //! change: bump the inkwell feature here and update the toolchain the CI gate
-//! installs, in one commit.
+//! installs, in one commit. The move from 19 to 21 was made for code quality:
+//! LLVM 19's SLP vectorizer packed SHA-256's 32-bit rotations into NEON lanes
+//! on AArch64, putting register-file crossings on the round's dependency
+//! chain, and the `sha256-hash` workload ran ~1.6x slower than under 21.
 //!
 //! # What it lowers (v0)
 //!

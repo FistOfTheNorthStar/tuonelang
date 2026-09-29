@@ -228,7 +228,7 @@ cargo fmt --check
 cargo run -p tuo-cli -- --help
 ```
 
-The LLVM `--release` backend requires LLVM 19; the debug (Cranelift) path and
+The LLVM `--release` backend requires LLVM 21; the debug (Cranelift) path and
 every command above need no external toolchain beyond a C compiler for linking.
 
 ## License
