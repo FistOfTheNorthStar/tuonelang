@@ -39,6 +39,29 @@ pub const DEALLOC_SYMBOL: &str = "tuo_rt_dealloc";
 /// eight), so it satisfies any `align` a zero-size layout could carry.
 pub const ZERO_SIZE_SENTINEL: usize = 64;
 
+/// The fewest bytes a growing `String`/`Array` buffer is given: one cache
+/// line. See [`min_growth_capacity`].
+pub const MIN_GROWTH_BYTES: u64 = 64;
+
+/// The smallest capacity, in elements of `stride` bytes, a buffer grows to.
+///
+/// Growth is `max(needed, cap × 2, min_growth_capacity(stride))`. Doubling
+/// from 1 spends its first several reallocations — each an allocate, copy, and
+/// free — on buffers of one, two, and four elements; starting at a cache line
+/// (8 `Int`s, 64 bytes of a `String`, one element of 64 bytes or more) skips
+/// them for at most 64 bytes of slack. Capacity is unobservable (the
+/// interpreter and native builds agree on length and contents, never on
+/// capacity), so this is a free choice, made once here so both backends make
+/// it identically.
+#[must_use]
+pub const fn min_growth_capacity(stride: u64) -> u64 {
+    if stride == 0 || stride >= MIN_GROWTH_BYTES {
+        1
+    } else {
+        MIN_GROWTH_BYTES / stride
+    }
+}
+
 /// The trap code the allocator raises when it cannot satisfy a request.
 ///
 /// Out-of-memory is a deterministic abort, not a value a program can observe;
@@ -146,7 +169,7 @@ pub fn alloc_runtime_c_source() -> String {
 mod tests {
     use super::{
         ALLOC_FAILURE_TRAP, ALLOC_SYMBOL, AllocDecision, DEALLOC_SYMBOL, ZERO_SIZE_SENTINEL,
-        alloc_decision, alloc_runtime_c_source,
+        alloc_decision, alloc_runtime_c_source, min_growth_capacity,
     };
 
     #[test]
@@ -182,6 +205,17 @@ mod tests {
                 align: 16
             }
         );
+    }
+
+    #[test]
+    fn growth_starts_at_one_cache_line_of_elements() {
+        assert_eq!(min_growth_capacity(1), 64); // a String's bytes
+        assert_eq!(min_growth_capacity(8), 8); // Int
+        assert_eq!(min_growth_capacity(16), 4); // Str
+        assert_eq!(min_growth_capacity(24), 2);
+        assert_eq!(min_growth_capacity(64), 1);
+        assert_eq!(min_growth_capacity(200), 1);
+        assert_eq!(min_growth_capacity(0), 1); // a zero-sized element
     }
 
     #[test]

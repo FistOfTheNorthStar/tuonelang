@@ -3704,7 +3704,8 @@ impl<'a> Lowering<'a> {
 
     /// Ensure `target`'s buffer has room for `extra` more elements (bytes for a
     /// `String`, `stride`-wide elements for an `Array`): if `len + extra > cap`,
-    /// allocate a new buffer of `max(len + extra, cap * 2, 1)` capacity, copy the
+    /// allocate a new buffer of `max(len + extra, cap * 2, min)` capacity (`min`
+    /// being [`alloc::min_growth_capacity`]), copy the
     /// live `len × stride` bytes over, free the old buffer (only when the old
     /// `cap != 0`), and update the header's `ptr`/`cap` in place. Returns the
     /// (possibly new) buffer pointer, with `len` unchanged. Capacity and buffer
@@ -3733,13 +3734,15 @@ impl<'a> Lowering<'a> {
             .ins()
             .brif(fits, done_block, &[ptr.into()], grow_block, &[]);
 
-        // Grow: new_cap = max(needed, cap*2, 1).
+        // Grow: new_cap = max(needed, cap*2, min_growth_capacity(stride)).
         self.builder.switch_to_block(grow_block);
         self.builder.seal_block(grow_block);
         let doubled = self.builder.ins().imul_imm(cap, 2);
         let mut new_cap = self.builder.ins().umax(needed, doubled);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        new_cap = self.builder.ins().umax(new_cap, one);
+        let floor = i64::try_from(alloc::min_growth_capacity(stride.unsigned_abs()))
+            .map_err(|_| CodegenError::backend("minimum growth capacity exceeds i64"))?;
+        let floor = self.builder.ins().iconst(types::I64, floor);
+        new_cap = self.builder.ins().umax(new_cap, floor);
         // Allocate new_cap * stride bytes.
         let new_bytes = self.builder.ins().imul_imm(new_cap, stride);
         let new_buf = self.rt_alloc(new_bytes, align);

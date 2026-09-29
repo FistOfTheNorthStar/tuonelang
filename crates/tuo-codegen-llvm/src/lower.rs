@@ -123,6 +123,7 @@ use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::intrinsics::Intrinsic;
+use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
 use inkwell::types::{BasicMetadataTypeEnum, BasicType as _, BasicTypeEnum, IntType};
 use inkwell::values::{
@@ -433,6 +434,8 @@ pub(crate) fn lower_program<'ctx>(
     program: &Program,
     types: &TypeckResult,
 ) -> Result<HashMap<SymbolId, FunctionValue<'ctx>>, CodegenError> {
+    link_gep_helper(ctx, module)?;
+
     // Pass 1: declare every function so direct calls can reference them before
     // their bodies are defined.
     let mut ids: HashMap<SymbolId, FunctionValue<'ctx>> = HashMap::new();
@@ -462,6 +465,50 @@ pub(crate) fn lower_program<'ctx>(
         lowering.run()?;
     }
     Ok(ids)
+}
+
+/// The internal helper every derived address goes through (see
+/// [`link_gep_helper`]).
+const GEP_HELPER: &str = "tuo.gep";
+
+/// Its definition: a byte-offset `getelementptr` — deliberately not
+/// `inbounds`, since a zero-capacity buffer's pointer is the allocator's
+/// sentinel, not an allocation. NUL-terminated, as LLVM's IR parser requires
+/// of its buffer.
+const GEP_HELPER_IR: &str = "define ptr @tuo.gep(ptr %base, i64 %offset) alwaysinline {
+  %addr = getelementptr i8, ptr %base, i64 %offset
+  ret ptr %addr
+}
+\0";
+
+/// Link [`GEP_HELPER`] into `module`.
+///
+/// Every field and element address is `base + offset`, and it must be a real
+/// `getelementptr`, not `inttoptr(ptrtoint(base) + offset)`: a pointer
+/// rebuilt from an integer has lost its provenance, so LLVM's alias analysis
+/// must assume a load or store through it may touch *any* escaped memory —
+/// an `Array`'s own `{ptr, len, cap}` header included. Every `get`/`push` in
+/// a loop then reloads the header and cannot be hoisted or vectorized. But
+/// inkwell's GEP builders are `unsafe fn`s and `unsafe_code` is forbidden
+/// workspace-wide, so the GEP is written once in textual IR — parsed and
+/// linked through inkwell's safe API — as an always-inline function that the
+/// optimizer dissolves into the bare instruction.
+fn link_gep_helper<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> Result<(), CodegenError> {
+    let buffer = MemoryBuffer::create_from_memory_range_copy(GEP_HELPER_IR.as_bytes(), GEP_HELPER);
+    let helper = ctx
+        .create_module_from_ir(buffer)
+        .map_err(|error| CodegenError::backend(format!("parsing the GEP helper: {error}")))?;
+    module
+        .link_in_module(helper)
+        .map_err(|error| CodegenError::backend(format!("linking the GEP helper: {error}")))?;
+    // Defined with default linkage because the IR linker only brings in an
+    // `internal` symbol that something already references; made internal
+    // once linked, so it is never exported and dies once inlined.
+    module
+        .get_function(GEP_HELPER)
+        .ok_or_else(|| CodegenError::backend("the GEP helper did not link"))?
+        .set_linkage(Linkage::Internal);
+    Ok(())
 }
 
 /// The LLVM function type of a MIR function (v0 ABI, Stage-1 aggregates).
@@ -1971,11 +2018,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         Ok((addr, cur_ty))
     }
 
-    /// Advance a byte pointer by `offset` bytes. Computed as
-    /// `inttoptr(ptrtoint(base) + offset)` — pointer arithmetic without an
-    /// `unsafe` GEP (`unsafe_code` is forbidden workspace-wide). The offset is a
-    /// byte displacement from the ABI, so no LLVM struct type is needed; the
-    /// result addresses the same bytes an i8-GEP would.
+    /// Advance a byte pointer by `offset` bytes, as a provenance-preserving
+    /// byte GEP through [`GEP_HELPER`]. The offset is a byte displacement from
+    /// the ABI, so no LLVM struct type is needed.
     fn byte_gep(
         &mut self,
         base: PointerValue<'ctx>,
@@ -1984,50 +2029,45 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         if offset == 0 {
             return Ok(base);
         }
-        // Pointer-width integer (POINTER_SIZE = 8 on the supported hosts).
-        let usize_ty = self.ctx.i64_type();
-        let base_int = self
-            .builder
-            .build_ptr_to_int(base, usize_ty, "base_int")
-            .map_err(builder_err("converting a base pointer to an integer"))?;
-        let off = usize_ty.const_int(offset, false);
-        let sum = self
-            .builder
-            .build_int_add(base_int, off, "field_int")
-            .map_err(builder_err("adding a field offset"))?;
-        self.builder
-            .build_int_to_ptr(sum, self.ptr_ty, "field")
-            .map_err(builder_err("converting a field integer back to a pointer"))
+        let offset = self.ctx.i64_type().const_int(offset, false);
+        self.offset_pointer(base, offset, "field")
     }
 
     /// Advance a byte pointer by a **runtime** element index times a constant
-    /// `stride`. The dynamic counterpart of [`Self::byte_gep`], used only by
-    /// `Projection::Index`: `inttoptr(ptrtoint(base) + index × stride)`.
+    /// `stride`. The dynamic counterpart of [`Self::byte_gep`].
     fn dynamic_byte_gep(
         &mut self,
         base: PointerValue<'ctx>,
         index: IntValue<'ctx>,
         stride: u64,
     ) -> Result<PointerValue<'ctx>, CodegenError> {
-        let usize_ty = self.ctx.i64_type();
-        let base_int = self
-            .builder
-            .build_ptr_to_int(base, usize_ty, "base_int")
-            .map_err(builder_err("converting a base pointer to an integer"))?;
-        let stride = usize_ty.const_int(stride, false);
-        let scaled = self
+        let stride = self.ctx.i64_type().const_int(stride, false);
+        let offset = self
             .builder
             .build_int_mul(index, stride, "elem_off")
             .map_err(builder_err("scaling an array index by the element stride"))?;
-        let sum = self
+        self.offset_pointer(base, offset, "elem")
+    }
+
+    /// `base + offset` bytes, through the linked [`GEP_HELPER`].
+    fn offset_pointer(
+        &mut self,
+        base: PointerValue<'ctx>,
+        offset: IntValue<'ctx>,
+        name: &str,
+    ) -> Result<PointerValue<'ctx>, CodegenError> {
+        let helper = self
+            .module
+            .get_function(GEP_HELPER)
+            .ok_or_else(|| CodegenError::backend("the GEP helper is not linked"))?;
+        let call = self
             .builder
-            .build_int_add(base_int, scaled, "elem_int")
-            .map_err(builder_err("adding an element offset"))?;
-        self.builder
-            .build_int_to_ptr(sum, self.ptr_ty, "elem")
-            .map_err(builder_err(
-                "converting an element integer back to a pointer",
-            ))
+            .build_call(helper, &[base.into(), offset.into()], name)
+            .map_err(builder_err("offsetting a pointer"))?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(value) => Ok(value.into_pointer_value()),
+            _ => Err(CodegenError::backend("the GEP helper returned no value")),
+        }
     }
 
     /// Materialize a `Rvalue::Aggregate` in place into `dest`'s byte storage.
@@ -3911,7 +3951,8 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     }
 
     /// Ensure `target`'s buffer has room for `extra` more elements: if `len +
-    /// extra > cap`, allocate `max(needed, cap*2, 1)` capacity, copy the live
+    /// extra > cap`, allocate `max(needed, cap*2, min)` capacity (`min` being
+    /// [`alloc::min_growth_capacity`]), copy the live
     /// `len × stride` bytes, free the old buffer (only when the old `cap != 0`),
     /// and update the header's `ptr`/`cap`. Returns the (possibly new) buffer
     /// pointer, `len` unchanged. Mirrors the Cranelift backend's
@@ -3945,7 +3986,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .build_conditional_branch(fits, done_block, grow_block)
             .map_err(builder_err("branching on capacity"))?;
 
-        // Grow: new_cap = max(needed, cap*2, 1).
+        // Grow: new_cap = max(needed, cap*2, min_growth_capacity(stride)).
         self.builder.position_at_end(grow_block);
         let two = i64_ty.const_int(2, false);
         let doubled = self
@@ -3961,15 +4002,15 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .build_select(need_ge_double, needed, doubled, "cap_max")
             .map_err(builder_err("selecting the grown capacity"))?
             .into_int_value();
-        let one = i64_ty.const_int(1, false);
-        let ge_one = self
+        let floor = i64_ty.const_int(alloc::min_growth_capacity(stride), false);
+        let ge_floor = self
             .builder
-            .build_int_compare(IntPredicate::UGE, max1, one, "ge_one")
-            .map_err(builder_err("comparing the grown capacity to one"))?;
+            .build_int_compare(IntPredicate::UGE, max1, floor, "ge_floor")
+            .map_err(builder_err("comparing the grown capacity to its floor"))?;
         let new_cap = self
             .builder
-            .build_select(ge_one, max1, one, "new_cap")
-            .map_err(builder_err("flooring the grown capacity at one"))?
+            .build_select(ge_floor, max1, floor, "new_cap")
+            .map_err(builder_err("flooring the grown capacity"))?
             .into_int_value();
         let stride_c = i64_ty.const_int(stride, false);
         let new_bytes = self
@@ -4992,4 +5033,99 @@ fn mangle(symbol: SymbolId) -> String {
 /// backend fault (misplaced builder, malformed IR request), never a user error.
 fn builder_err(what: &'static str) -> impl Fn(inkwell::builder::BuilderError) -> CodegenError {
     move |error| CodegenError::backend(format!("LLVM builder failed while {what}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use inkwell::context::Context;
+    use tuo_mir::{
+        AggregateKind, BasicBlock, Const, Function, LocalDecl, LocalId, Operand, Place, Program,
+        Projection, Rvalue, Statement, Terminator,
+    };
+    use tuo_resolve::SymbolId;
+    use tuo_source::{SourceId, Span, TextRange};
+    use tuo_types::{IntKind, Ty, TypeckResult};
+
+    use super::{GEP_HELPER, lower_program};
+
+    /// Every derived address must be a real `getelementptr`. A pointer rebuilt
+    /// with `inttoptr` has lost its provenance, so LLVM must assume a store
+    /// through it may clobber any escaped memory — an `Array`'s header
+    /// included — and cannot keep the header in registers across a loop.
+    /// Programs behave identically either way, so no execution test can tell;
+    /// this reads the lowered IR instead.
+    #[test]
+    fn element_and_field_addresses_keep_their_provenance() {
+        let span = Span::new(
+            SourceId::from_raw(0),
+            TextRange::new(0, 1).expect("forward range"),
+        );
+        let local = |ty: Ty| LocalDecl {
+            ty,
+            name: None,
+            span,
+        };
+        let int = |value: i128, kind: IntKind| Operand::Const(Const::Int(value, kind));
+        // fn main() -> Int { let a = [1, 2, 3, 4]; let i: Usize = 2; a[i] }
+        let main = Function {
+            symbol: SymbolId::from_raw(0),
+            name: "main".to_owned(),
+            params: Vec::new(),
+            locals: vec![
+                local(Ty::FixedArray(Box::new(Ty::Int(IntKind::I64)), 4)),
+                local(Ty::Int(IntKind::Usize)),
+                local(Ty::Int(IntKind::I64)),
+            ],
+            blocks: vec![BasicBlock {
+                statements: vec![
+                    Statement::Assign {
+                        place: Place::local(LocalId(0)),
+                        rvalue: Rvalue::Aggregate {
+                            kind: AggregateKind::Array {
+                                element: Ty::Int(IntKind::I64),
+                                len: 4,
+                            },
+                            fields: (1..=4).map(|v| int(v, IntKind::I64)).collect(),
+                        },
+                    },
+                    Statement::Assign {
+                        place: Place::local(LocalId(1)),
+                        rvalue: Rvalue::Use(int(2, IntKind::Usize)),
+                    },
+                    Statement::Assign {
+                        place: Place::local(LocalId(2)),
+                        rvalue: Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId(0),
+                            projection: vec![Projection::Index(LocalId(1))],
+                        })),
+                    },
+                ],
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(2)))),
+            }],
+            ret: Ty::Int(IntKind::I64),
+            span,
+        };
+        let program = Program {
+            functions: vec![main],
+            skipped: Vec::new(),
+        };
+        let ctx = Context::create();
+        let module = ctx.create_module("provenance");
+        lower_program(&ctx, &module, &program, &TypeckResult::default())
+            .expect("the program lowers");
+        module.verify().expect("the lowered module verifies");
+        let ir = module.print_to_string().to_string();
+        assert!(
+            ir.contains(&format!("call ptr @{GEP_HELPER}(")),
+            "array elements are addressed through the GEP helper:\n{ir}"
+        );
+        assert!(
+            ir.contains("getelementptr i8"),
+            "the helper is a byte GEP:\n{ir}"
+        );
+        assert!(
+            !ir.contains("inttoptr"),
+            "no address may be rebuilt from an integer:\n{ir}"
+        );
+    }
 }
