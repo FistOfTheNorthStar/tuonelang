@@ -10,9 +10,11 @@
 **/*.rs.bk
 
 # Resolved lockfiles for the dogfooding example packages under examples/.
-# `tuo build --manifest <pkg>` regenerates them on demand, and a resolved
-# `tdg.lock` embeds machine-absolute dependency paths (source = "path+/abs/…"),
-# so it is not portable and must not be committed. See DOGFOODING.md finding D-6.
+# Every package command regenerates them on demand, so the dogfooding tests
+# rewrite them on each run. A resolved `tdg.lock` is portable since DOGFOODING.md
+# finding D-6 was fixed (dependency paths are recorded relative to the root
+# package), so committing them is now possible; they stay ignored here only
+# because nothing yet requires the examples to be pinned.
 examples/**/tdg.lock
 
 # MSVC Windows builds of rustc generate these, which store debugging information

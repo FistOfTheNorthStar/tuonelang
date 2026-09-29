@@ -282,3 +282,104 @@ fn resolution_is_deterministic() {
     let second = fs::read_to_string(app.join("tdg.lock")).expect("second lock");
     assert_eq!(first, second, "the lockfile is deterministic");
 }
+
+/// Build a two-package graph whose `main` returns a value that can only come
+/// from the dependency: `app` calls `util::double(21)`. Returns `(app, util)`.
+fn app_depending_on_util(ws: &Path) -> (PathBuf, PathBuf) {
+    expect_success(&run_in(ws, &["new", "app"]), "new app");
+    expect_success(&run_in(ws, &["new", "util"]), "new util");
+    let app = ws.join("app");
+    let util = ws.join("util");
+    fs::write(
+        util.join("src/lib.tuo"),
+        "module util;\n\n\
+         /// Double an integer.\n\
+         pub fn double(take x: Int) -> Int {\n    x + x\n}\n\n\
+         spec double {\n    then double(21) == 42;\n}\n",
+    )
+    .expect("write util lib");
+    expect_success(
+        &run_in(&app, &["add", "util", "--path", "../util"]),
+        "tuo add",
+    );
+    fs::write(
+        app.join("src/main.tuo"),
+        "module app;\n\n\
+         import util::double;\n\n\
+         fn main() -> Int {\n    double(21)\n}\n\n\
+         spec main {\n    then main() == 42;\n}\n",
+    )
+    .expect("write app main");
+    (app, util)
+}
+
+#[test]
+fn run_with_no_files_runs_the_package_across_its_graph() {
+    let ws = workspace("package_run");
+    let (app, _util) = app_depending_on_util(&ws);
+
+    // From inside the package: the exit status is `main`'s own value, which
+    // exists only if the dependency's code was resolved, compiled, and linked.
+    let inside = run_in(&app, &["run"]);
+    assert_eq!(
+        inside.status.code(),
+        Some(42),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&inside.stderr)
+    );
+
+    // From elsewhere, naming the package directory.
+    let outside = run_in(&ws, &["run", "--manifest", "app"]);
+    assert_eq!(
+        outside.status.code(),
+        Some(42),
+        "stderr:\n{}",
+        String::from_utf8_lossy(&outside.stderr)
+    );
+
+    // A run leaves no executable behind in the package, unlike a build.
+    assert!(
+        !app.join("app").exists(),
+        "`run` wrote a binary into the package"
+    );
+}
+
+#[test]
+fn run_refuses_a_tampered_dependency_before_executing_anything() {
+    let ws = workspace("package_run_drift");
+    let (app, util) = app_depending_on_util(&ws);
+    assert_eq!(run_in(&app, &["run"]).status.code(), Some(42));
+
+    // Change the dependency's bytes behind the lockfile's back. Were the
+    // program to run, it would now exit 63 — so any status other than the
+    // refusal proves drifted code executed.
+    fs::write(
+        util.join("src/lib.tuo"),
+        "module util;\n\npub fn double(take x: Int) -> Int {\n    x + x + x\n}\n",
+    )
+    .expect("tamper with util");
+    let refused = run_in(&app, &["run"]);
+    assert_ne!(refused.status.code(), Some(63), "drifted code was executed");
+    assert!(!refused.status.success());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("checksum"),
+        "the refusal names the cause: {stderr}"
+    );
+}
+
+#[test]
+fn the_written_lockfile_is_portable() {
+    let ws = workspace("portable_lock");
+    let (app, _util) = app_depending_on_util(&ws);
+    let lock = fs::read_to_string(app.join("tdg.lock")).expect("lockfile");
+    assert!(
+        lock.contains("source = \"path+../util\""),
+        "the dependency is recorded relative to the root package: {lock}"
+    );
+    let here = ws.canonicalize().expect("workspace exists");
+    assert!(
+        !lock.contains(&here.display().to_string()),
+        "the lockfile embeds this machine's path: {lock}"
+    );
+}

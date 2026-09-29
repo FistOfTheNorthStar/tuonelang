@@ -169,9 +169,13 @@ enum Command {
         /// debug Cranelift backend.
         #[arg(long)]
         release: bool,
-        /// The tuonelang source files forming the program.
-        #[arg(required = true)]
+        /// The tuonelang source files forming the program. Omit to run the
+        /// package in the manifest directory instead.
         files: Vec<PathBuf>,
+        /// Operate on the package rooted at this directory. Ignored when files
+        /// are given.
+        #[arg(long, value_name = "DIR")]
+        manifest: Option<PathBuf>,
     },
     /// Emit a dense, context-injectable language brief for a coding agent
     /// or a local model (ADR-0018).
@@ -440,7 +444,17 @@ impl Cli {
                     codegen::build(output, release, &files, mode)
                 }
             }
-            Some(Command::Run { release, files }) => codegen::run(release, &files, mode),
+            Some(Command::Run {
+                release,
+                files,
+                manifest,
+            }) => {
+                if files.is_empty() {
+                    package::run(&manifest_dir(manifest), release, mode)
+                } else {
+                    codegen::run(release, &files, mode)
+                }
+            }
             Some(Command::New { name, path }) => package::new(&name, path, mode),
             Some(Command::Add {
                 name,
