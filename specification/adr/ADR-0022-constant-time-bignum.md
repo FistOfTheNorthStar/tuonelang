@@ -93,6 +93,68 @@ needs X.509, a certificate store, and AEAD ciphers on top of all of the above.
   *public-length* loops is the same question ADR-0021 raises as its question
   (2), and the two ADRs should be resolved together.
 
+## Amendment (2026-09-28) — the need has arrived, and the trap tension with it
+
+Two statements above were true when written and are no longer.
+
+**"Nothing in the workspace needs it" is superseded.** The 2026-09-15 TLS
+round added `std::x25519`, `std::ed25519`, and `std::tls`, and all three
+declare `std::bignum` as a dependency (`DECLARED_DEPENDENCIES`,
+`tuo-cli/tests/stdlib.rs`). X25519's field arithmetic is `std::bignum`'s
+`add`/`sub`/`mul`/`compare` behind a curve-specific reduction, and the scalar
+it multiplies by is a private key. Each module says so in its header, and
+`std::tls` names the limitation as the one that matters most. This ADR
+predicted that the requirement would arrive *with* the elliptic-curve
+algorithms. It did. The prediction that this ADR would then be "a companion
+to whichever ADR adds them" did not hold, because no ADR added them; they
+landed as stdlib modules. This amendment is the record that the programs
+which need a constant-time bignum now exist in the catalog.
+
+**"This also keeps ADR-0019's TLS exclusion intact" is superseded** for the
+same reason. The exclusion was overturned; see DOGFOODING.md's 2026-09-15
+update. What survives of it is this ADR's subject: the stack demonstrates that
+the protocol is expressible and is not deployable, and the distance between
+those two is a constant-time bignum.
+
+**The trap tension ADR-0020 recorded belongs here.** ADR-0020 noted that
+trapping arithmetic and constant-time code are in conflict, sidestepped the
+conflict by building its primitives from shifts alone, and said a future ADR
+"may need to widen" the wrapping-arithmetic escape hatch. That ADR is this
+one, and the point becomes requirement (5):
+
+5. **Limb arithmetic that cannot trap.** A trap is a data-dependent branch to
+   an abort, so fixed-width limb code must be written such that no `+` or `*`
+   can overflow for *any* input, and the checker must be able to see that.
+   The 28-bit limb already guarantees it for schoolbook multiplication (the
+   56-bit bound above). What is missing is the means to state it: today
+   `#[constant_time]` refuses trapping arithmetic outright (`T0019`), which is
+   sound and rejects every bignum.
+
+The existing workarounds show the shape of the problem. `std::bits::add32` and
+`mul32` compute modular results by masking, and `std::sha512::add64` adds
+through 32-bit halves because two words with their high bits set would
+otherwise abort the process. The 32-bit pair is referenced on 49 lines across
+the catalog. All of them are correct, and none is verified: each is an
+argument in a comment that an intermediate stays in range.
+
+Two ways to discharge (5) are open, and choosing between them is part of
+accepting this ADR rather than something this amendment settles:
+
+- **Wrapping operators as builtins** (`std::bits::wrapping_add` and peers),
+  lowered to the machine's native modular arithmetic. Simple, and it makes
+  `add32`/`add64` one instruction instead of several. It also adds a second
+  integer arithmetic to a language whose first is deliberately the trapping
+  one (ADR-0026), so its use would need to stay visibly exceptional.
+- **Range reasoning in the checker**, so that masked operands are known to be
+  in range and the `+` between them is provably non-trapping. No new
+  arithmetic, and the existing workarounds become verified rather than
+  replaced. It is a substantially larger piece of work, and ADR-0021's
+  question (2) on public-length loops is the same kind of reasoning.
+
+Either way the benchmark plan above gains a second measurement: `sha256-hash`
+and the forthcoming bignum workload before and after, since the first option
+changes the emitted code of every hash in the catalog.
+
 ## What this ADR does not propose
 
 Changing `std::bignum`. Its caveat is a correct description of what it does,
