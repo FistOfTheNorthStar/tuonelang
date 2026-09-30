@@ -753,10 +753,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   relocatable `ObjectArtifact`) and the plain values that cross the boundary
   (`TargetSpec`, `ObjectArtifact`, `CodegenError`, `EntryAbi`). Two backends implement
   it — `tuo-codegen-cranelift` (the default debug build) and `tuo-codegen-llvm` (the
-  `--release` build, wrapping LLVM 19 via inkwell, pinned by the `llvm19-1` feature and
-  located at build time through `LLVM_SYS_191_PREFIX` / `llvm-config-19` / a Homebrew
-  `llvm@19`; the local default prefix is set in `.cargo/config.toml`, CI installs LLVM
-  19 and sets the env var); **no Cranelift, inkwell, or LLVM type appears in anything
+  `--release` build, wrapping LLVM 21 via inkwell, pinned by the `llvm21-1` feature and
+  located at build time through `LLVM_SYS_211_PREFIX` / `llvm-config-21` / a Homebrew
+  `llvm@21`; the local default prefix is set in `.cargo/config.toml`, CI installs LLVM
+  21 from apt.llvm.org and sets the env var); **no Cranelift, inkwell, or LLVM type appears in anything
   either exports**, so neither can leak into MIR, type checking, the CLI protocol, or
   the runtime's public surface. A backend consumes only *verified* MIR (it never
   re-checks) and must agree with the MIR interpreter instruction for instruction —

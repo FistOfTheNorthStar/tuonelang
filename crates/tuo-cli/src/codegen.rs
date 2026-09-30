@@ -5,9 +5,11 @@
 //! [`CodegenBackend`](tuo_codegen::CodegenBackend) interface, then link the
 //! emitted object together with the runtime's trap shim (compiled from
 //! [`tuo_runtime::trap_runtime_c_source`]), effect shim (compiled from
-//! [`tuo_runtime::effect::effect_runtime_c_source`], ADR-0006 Stage B), and
+//! [`tuo_runtime::effect::effect_runtime_c_source`], ADR-0006 Stage B),
 //! allocator shim (compiled from [`tuo_runtime::alloc::alloc_runtime_c_source`],
-//! ADR-0009 Stage B) into a native executable using the platform `cc`.
+//! ADR-0009 Stage B), and map shim (compiled from
+//! [`tuo_runtime::map::map_runtime_c_source`], ADR-0011 Stage B) into a native
+//! executable using the platform `cc`.
 //!
 //! Which backend runs is a `--release` choice, and the *only* thing it changes
 //! is speed: the default debug build uses the [Cranelift
@@ -484,8 +486,15 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     // host. `-lm` resolves the C math library's `fmod`/`fmodf`, which the
     // Cranelift backend calls for float remainder (Cranelift has no `frem`
     // instruction) — harmless on macOS (libm is part of libSystem), required on
-    // Linux.
+    // Linux. `-O2` optimizes the C runtime shims — the map table, the
+    // allocator, the effect wrappers — in every build, the way a language's
+    // runtime library ships optimized even under a debug profile: the
+    // debug/release choice governs the *program's* code, which the backend
+    // has already compiled into the object, and `cc` hands that object to the
+    // linker untouched. It costs link time (the shims are recompiled on every
+    // build), which is the accepted trade: running speed comes first.
     let status = Command::new("cc")
+        .arg("-O2")
         .arg(&object_path)
         .arg(&runtime_c)
         .arg(&effect_c)

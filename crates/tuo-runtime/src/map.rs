@@ -19,19 +19,33 @@
 //! Memory shape (one block per map, allocated via `tuo_rt_alloc`):
 //!
 //! ```text
-//! block:  [ u64 index[index_cap] ][ u64 index_cap ][ entry entries[cap] ]
-//!                                                    ^ header.ptr
+//! block:  [ u64 index[index_cap] ][ u8 live[cap] ][ u64 used ][ u64 index_cap ][ entry entries[cap] ]
+//!                                                                              ^ header.ptr
 //! ```
 //!
 //! The program-visible header is the same three words as `String`/`Array` —
 //! `{ptr, len, cap}` — where `ptr` points at the **dense entries** region,
 //! `len` is the live entry count, and `cap` the entry capacity. The hash
 //! index (open addressing, linear probing, `index_cap == 2 × cap`, slots
-//! holding `dense_index + 1` or `0` for empty) and its length word sit
-//! *before* the entries in the same block, so the shim can recover the block
-//! start from `ptr` alone (`index_cap` is at `ptr[-1]`) and the header never
+//! holding `dense_index + 1`, `0` for empty, or a tombstone), the per-entry
+//! live bytes, and two bookkeeping words sit *before* the entries in the same
+//! block, so the shim can recover the block start from `ptr` and `cap` alone
+//! (`index_cap` is at `ptr[-1]`, `used` at `ptr[-2]`) and the header never
 //! carries a fourth word. An empty map is the sentinel header
 //! `{ZERO_SIZE_SENTINEL, 0, 0}` with no allocation at all.
+//!
+//! **Removal is O(1) and moves nothing.** It clears the entry's live byte and
+//! tombstones its index slot, leaving a hole in the dense region; the
+//! survivors keep their positions and therefore their insertion order, and
+//! `keys` skips holes. `used` counts the dense slots handed out since the
+//! last rehome, live or not, so appends go at `used` and `len <= used <= cap`.
+//! Holes are reclaimed only when an insert finds `used == cap`: the live
+//! entries are rehomed, packed in order under a fresh tombstone-free index,
+//! into a same-capacity block when at most half are live and a doubled one
+//! otherwise — so each O(cap) rehome is paid for by at least `cap / 2`
+//! inserts. (This is the design CPython's ordered `dict` uses.) Every index
+//! tombstone matches a hole below `used`, so the index is never more than
+//! half full and every probe terminates.
 //!
 //! Entry layout: an entry is its key followed by its value, so the **entry
 //! stride is `key_size + value_stride`**. An `Int` key occupies one word
@@ -186,10 +200,11 @@ pub fn hash_str(key: &[u8]) -> u64 {
 /// The table mirrors the module docs: dense insertion-ordered entries, an
 /// open-addressing index of `dense_index + 1` slots with linear probing,
 /// `index_cap == 2 × cap` (both powers of two), growth by doubling from
-/// [`INITIAL_CAPACITY`], removal by shifting the dense tail down one slot and
-/// rebuilding the index (O(n), preserving order — the documented v0
-/// contract), and the [`hash_int`]/[`hash_str`] functions with the same
-/// constants pinned by this module's tests.
+/// [`INITIAL_CAPACITY`], O(1) order-preserving removal by hole + tombstone
+/// with holes reclaimed when the dense region fills, and the
+/// [`hash_int`]/[`hash_str`] functions with the same constants pinned by this
+/// module's tests. `tests/map_model.rs` checks it against the interpreter's
+/// association-list semantics.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn map_runtime_c_source() -> String {
@@ -202,9 +217,25 @@ extern void *tuo_rt_alloc(size_t size, size_t align);
 extern void tuo_rt_dealloc(void *ptr, size_t size, size_t align);
 
 /* The program-visible header: {{entries_ptr, len, cap}}, three words.   */
-/* Block: [ u64 index[index_cap] ][ u64 index_cap ][ entries[cap] ].   */
-/* Index slot: 0 = empty, else dense_index + 1. An empty map is the    */
-/* sentinel header {{{sentinel}, 0, 0}} with no allocation.            */
+/* `len` is the LIVE entry count. With E = entries_ptr, the block is     */
+/*   [ u64 index[index_cap] ][ u8 live[cap] ][ u64 used ][ u64 index_cap ][ entries[cap] ] */
+/*                                            = E[-2]    = E[-1]          ^ E             */
+/* `used` counts the dense slots handed out since the last rehome, live */
+/* or removed, and `live[i]` is 1 while dense slot i holds an entry.    */
+/* Index slot: 0 = empty, TUO_MAP_TOMB = a removed entry, else          */
+/* dense_index + 1. An empty map is the sentinel header                 */
+/* {{{sentinel}, 0, 0}} with no allocation.                             */
+/*                                                                      */
+/* Removal is O(1): it clears the entry's live byte and tombstones its  */
+/* index slot, so the survivors keep their dense positions and hence    */
+/* their insertion order. Holes are squeezed out only when an insert    */
+/* finds every dense slot used — by a same-capacity compaction when at  */
+/* most half are live, else by doubling — so each O(cap) rehome is paid */
+/* for by at least cap/2 inserts. Every index tombstone matches a hole  */
+/* below `used`, and `used <= cap == index_cap / 2`, so the index never */
+/* passes half full and every probe reaches an empty slot.              */
+
+#define TUO_MAP_TOMB UINT64_MAX
 
 static uint64_t tuo_map_hash_int(int64_t key) {{
     uint64_t x = (uint64_t)key;
@@ -223,24 +254,42 @@ static uint64_t tuo_map_hash_str(const unsigned char *ptr, uint64_t len) {{
     return h;
 }}
 
-static uint64_t *tuo_map_index(unsigned char *entries) {{
-    uint64_t index_cap = ((uint64_t *)entries)[-1];
-    return (uint64_t *)(entries - 8 - 8 * index_cap);
-}}
-
 static uint64_t tuo_map_index_cap(const unsigned char *entries) {{
     return ((const uint64_t *)entries)[-1];
 }}
 
-static size_t tuo_map_block_size(uint64_t index_cap, uint64_t cap, uint64_t stride) {{
-    return (size_t)(8 * index_cap + 8 + cap * stride);
+static uint64_t tuo_map_used(const unsigned char *entries) {{
+    return ((const uint64_t *)entries)[-2];
 }}
 
-/* Rebuild the whole index from the dense entries (after removal or    */
-/* growth). `hash_of(entries + i * stride)` is inlined per key kind    */
-/* via the two concrete rebuild functions below.                       */
-static void tuo_map_index_clear(uint64_t *index, uint64_t index_cap) {{
-    memset(index, 0, (size_t)(8 * index_cap));
+static void tuo_map_set_used(unsigned char *entries, uint64_t used) {{
+    ((uint64_t *)entries)[-2] = used;
+}}
+
+/* `cap` is a power of two >= 8, so the live bytes end word-aligned.   */
+static unsigned char *tuo_map_live(const unsigned char *entries, uint64_t cap) {{
+    return (unsigned char *)entries - 16 - cap;
+}}
+
+static uint64_t *tuo_map_index(const unsigned char *entries, uint64_t cap) {{
+    return (uint64_t *)(tuo_map_live(entries, cap) - 8 * tuo_map_index_cap(entries));
+}}
+
+static size_t tuo_map_block_size(uint64_t index_cap, uint64_t cap, uint64_t stride) {{
+    return (size_t)(8 * index_cap + cap + 16 + cap * stride);
+}}
+
+static uint64_t tuo_map_key_hash(const unsigned char *entry, int is_str) {{
+    if (is_str) {{
+        const unsigned char *kp;
+        uint64_t kn;
+        memcpy(&kp, entry, 8);
+        memcpy(&kn, entry + 8, 8);
+        return tuo_map_hash_str(kp, kn);
+    }}
+    int64_t key;
+    memcpy(&key, entry, 8);
+    return tuo_map_hash_int(key);
 }}
 
 static void tuo_map_index_place(uint64_t *index, uint64_t index_cap,
@@ -251,68 +300,81 @@ static void tuo_map_index_place(uint64_t *index, uint64_t index_cap,
     index[slot] = dense + 1;
 }}
 
-static void tuo_map_rebuild_int(unsigned char *entries, uint64_t len, uint64_t stride) {{
-    uint64_t index_cap = tuo_map_index_cap(entries);
-    uint64_t *index = tuo_map_index(entries);
-    tuo_map_index_clear(index, index_cap);
-    for (uint64_t i = 0; i < len; i++) {{
-        int64_t key;
-        memcpy(&key, entries + i * stride, 8);
-        tuo_map_index_place(index, index_cap, tuo_map_hash_int(key), i);
-    }}
-}}
-
-static void tuo_map_rebuild_str(unsigned char *entries, uint64_t len, uint64_t stride) {{
-    uint64_t index_cap = tuo_map_index_cap(entries);
-    uint64_t *index = tuo_map_index(entries);
-    tuo_map_index_clear(index, index_cap);
-    for (uint64_t i = 0; i < len; i++) {{
-        const unsigned char *kp;
-        uint64_t kn;
-        memcpy(&kp, entries + i * stride, 8);
-        memcpy(&kn, entries + i * stride + 8, 8);
-        tuo_map_index_place(index, index_cap, tuo_map_hash_str(kp, kn), i);
-    }}
-}}
-
-/* Grow (or first-allocate) to `new_cap` entries, copying the dense     */
-/* region and rebuilding the index. Returns the new entries pointer.    */
-static unsigned char *tuo_map_grow(long long *hdr, uint64_t new_cap,
-                                   uint64_t stride, int is_str) {{
-    uint64_t len = (uint64_t)hdr[1];
+/* Rehome the live entries into a fresh block of `new_cap` entries — a */
+/* first allocation, a doubling, or a same-capacity compaction — packed */
+/* in their existing order under a freshly built, tombstone-free index.*/
+static unsigned char *tuo_map_rehome(long long *hdr, uint64_t new_cap,
+                                     uint64_t stride, int is_str) {{
     uint64_t old_cap = (uint64_t)hdr[2];
     uint64_t new_index_cap = 2 * new_cap;
     unsigned char *block =
         (unsigned char *)tuo_rt_alloc(tuo_map_block_size(new_index_cap, new_cap, stride), 8);
-    unsigned char *entries = block + 8 * new_index_cap + 8;
+    uint64_t *index = (uint64_t *)block;
+    unsigned char *live = block + 8 * new_index_cap;
+    unsigned char *entries = live + new_cap + 16;
     ((uint64_t *)entries)[-1] = new_index_cap;
+    memset(index, 0, (size_t)(8 * new_index_cap));
+    memset(live, 0, (size_t)new_cap);
+    uint64_t packed = 0;
     if (old_cap != 0) {{
         unsigned char *old_entries = (unsigned char *)hdr[0];
-        memcpy(entries, old_entries, (size_t)(len * stride));
-        uint64_t old_index_cap = tuo_map_index_cap(old_entries);
-        tuo_rt_dealloc(tuo_map_index(old_entries),
-                       tuo_map_block_size(old_index_cap, old_cap, stride), 8);
+        const unsigned char *old_live = tuo_map_live(old_entries, old_cap);
+        uint64_t old_used = tuo_map_used(old_entries);
+        for (uint64_t i = 0; i < old_used; i++) {{
+            if (!old_live[i]) continue;
+            unsigned char *dst = entries + packed * stride;
+            memcpy(dst, old_entries + i * stride, (size_t)stride);
+            live[packed] = 1;
+            tuo_map_index_place(index, new_index_cap, tuo_map_key_hash(dst, is_str), packed);
+            packed++;
+        }}
+        tuo_rt_dealloc(tuo_map_index(old_entries, old_cap),
+                       tuo_map_block_size(tuo_map_index_cap(old_entries), old_cap, stride), 8);
     }}
-    if (is_str) tuo_map_rebuild_str(entries, len, stride);
-    else tuo_map_rebuild_int(entries, len, stride);
+    tuo_map_set_used(entries, packed);
     hdr[0] = (long long)entries;
     hdr[2] = (long long)new_cap;
     return entries;
 }}
 
-/* Probe for an int key. Returns the dense index or (uint64_t)-1.       */
+/* Append a new entry (key bytes, then value bytes) at the next dense  */
+/* slot and index it. The caller has already proven the key absent.    */
+static void tuo_map_append(long long *hdr, const void *key, uint64_t key_size,
+                           const void *v, uint64_t vs, uint64_t hash, int is_str) {{
+    uint64_t stride = key_size + vs;
+    uint64_t cap = (uint64_t)hdr[2];
+    unsigned char *entries = (unsigned char *)hdr[0];
+    if (cap == 0) {{
+        entries = tuo_map_rehome(hdr, {initial_cap}, stride, is_str);
+    }} else if (tuo_map_used(entries) == cap) {{
+        uint64_t len = (uint64_t)hdr[1];
+        entries = tuo_map_rehome(hdr, 2 * len > cap ? cap * 2 : cap, stride, is_str);
+    }}
+    cap = (uint64_t)hdr[2];
+    uint64_t used = tuo_map_used(entries);
+    memcpy(entries + used * stride, key, (size_t)key_size);
+    memcpy(entries + used * stride + key_size, v, (size_t)vs);
+    tuo_map_live(entries, cap)[used] = 1;
+    tuo_map_index_place(tuo_map_index(entries, cap), tuo_map_index_cap(entries), hash, used);
+    tuo_map_set_used(entries, used + 1);
+    hdr[1] = hdr[1] + 1;
+}}
+
+/* Probe for an int key. Returns the INDEX SLOT that refers to it, or   */
+/* (uint64_t)-1; the entry is then `tuo_map_entry_at(hdr, slot, ...)`.  */
 static uint64_t tuo_map_find_int(const long long *hdr, int64_t key, uint64_t stride) {{
-    if (hdr[2] == 0) return (uint64_t)-1;
+    uint64_t cap = (uint64_t)hdr[2];
+    if (cap == 0) return (uint64_t)-1;
     const unsigned char *entries = (const unsigned char *)hdr[0];
-    uint64_t index_cap = tuo_map_index_cap(entries);
-    const uint64_t *index = (const uint64_t *)(entries - 8 - 8 * index_cap);
-    uint64_t mask = index_cap - 1;
+    const uint64_t *index = tuo_map_index(entries, cap);
+    uint64_t mask = tuo_map_index_cap(entries) - 1;
     uint64_t slot = tuo_map_hash_int(key) & mask;
     while (index[slot] != 0) {{
-        uint64_t dense = index[slot] - 1;
-        int64_t stored;
-        memcpy(&stored, entries + dense * stride, 8);
-        if (stored == key) return dense;
+        if (index[slot] != TUO_MAP_TOMB) {{
+            int64_t stored;
+            memcpy(&stored, entries + (index[slot] - 1) * stride, 8);
+            if (stored == key) return slot;
+        }}
         slot = (slot + 1) & mask;
     }}
     return (uint64_t)-1;
@@ -320,22 +382,68 @@ static uint64_t tuo_map_find_int(const long long *hdr, int64_t key, uint64_t str
 
 static uint64_t tuo_map_find_str(const long long *hdr, const unsigned char *kp, uint64_t kn,
                                  uint64_t stride) {{
-    if (hdr[2] == 0) return (uint64_t)-1;
+    uint64_t cap = (uint64_t)hdr[2];
+    if (cap == 0) return (uint64_t)-1;
     const unsigned char *entries = (const unsigned char *)hdr[0];
-    uint64_t index_cap = tuo_map_index_cap(entries);
-    const uint64_t *index = (const uint64_t *)(entries - 8 - 8 * index_cap);
-    uint64_t mask = index_cap - 1;
+    const uint64_t *index = tuo_map_index(entries, cap);
+    uint64_t mask = tuo_map_index_cap(entries) - 1;
     uint64_t slot = tuo_map_hash_str(kp, kn) & mask;
     while (index[slot] != 0) {{
-        uint64_t dense = index[slot] - 1;
-        const unsigned char *sp;
-        uint64_t sn;
-        memcpy(&sp, entries + dense * stride, 8);
-        memcpy(&sn, entries + dense * stride + 8, 8);
-        if (sn == kn && (kn == 0 || memcmp(sp, kp, (size_t)kn) == 0)) return dense;
+        if (index[slot] != TUO_MAP_TOMB) {{
+            const unsigned char *entry = entries + (index[slot] - 1) * stride;
+            const unsigned char *sp;
+            uint64_t sn;
+            memcpy(&sp, entry, 8);
+            memcpy(&sn, entry + 8, 8);
+            if (sn == kn && (kn == 0 || memcmp(sp, kp, (size_t)kn) == 0)) return slot;
+        }}
         slot = (slot + 1) & mask;
     }}
     return (uint64_t)-1;
+}}
+
+/* The entry an index slot returned by `tuo_map_find_*` refers to.     */
+static unsigned char *tuo_map_entry_at(const long long *hdr, uint64_t slot, uint64_t stride) {{
+    const unsigned char *entries = (const unsigned char *)hdr[0];
+    uint64_t dense = tuo_map_index(entries, (uint64_t)hdr[2])[slot] - 1;
+    return (unsigned char *)entries + dense * stride;
+}}
+
+/* Remove the entry at index slot `slot`: copy its value out, then      */
+/* leave a hole and a tombstone. Nothing moves, so order is preserved. */
+static void tuo_map_remove_at(long long *hdr, uint64_t slot, uint64_t key_size,
+                              uint64_t vs, long long *out) {{
+    unsigned char *entries = (unsigned char *)hdr[0];
+    uint64_t cap = (uint64_t)hdr[2];
+    uint64_t *index = tuo_map_index(entries, cap);
+    uint64_t dense = index[slot] - 1;
+    out[0] = 1;
+    memcpy(&out[1], entries + dense * (key_size + vs) + key_size, (size_t)vs);
+    tuo_map_live(entries, cap)[dense] = 0;
+    index[slot] = TUO_MAP_TOMB;
+    hdr[1] = hdr[1] - 1;
+}}
+
+/* Write a fresh Array header of the live keys (`key_size` bytes each) */
+/* in insertion order, skipping holes.                                 */
+static void tuo_map_keys(const long long *hdr, uint64_t key_size, uint64_t vs,
+                         long long *out_hdr) {{
+    uint64_t len = (uint64_t)hdr[1];
+    if (len == 0) {{ out_hdr[0] = {sentinel}; out_hdr[1] = 0; out_hdr[2] = 0; return; }}
+    const unsigned char *entries = (const unsigned char *)hdr[0];
+    const unsigned char *live = tuo_map_live(entries, (uint64_t)hdr[2]);
+    uint64_t used = tuo_map_used(entries);
+    uint64_t stride = key_size + vs;
+    unsigned char *buf = (unsigned char *)tuo_rt_alloc((size_t)(key_size * len), 8);
+    uint64_t n = 0;
+    for (uint64_t i = 0; i < used; i++) {{
+        if (!live[i]) continue;
+        memcpy(buf + n * key_size, entries + i * stride, (size_t)key_size);
+        n++;
+    }}
+    out_hdr[0] = (long long)buf;
+    out_hdr[1] = (long long)len;
+    out_hdr[2] = (long long)len;
 }}
 
 /* Every value-touching entry point takes `vs` — the value stride in bytes  */
@@ -347,143 +455,84 @@ static uint64_t tuo_map_find_str(const long long *hdr, const unsigned char *kp, 
 void tuo_rt_map_int_get(const long long *hdr, long long k, unsigned long long vs,
                         long long *out) {{
     uint64_t stride = {int_key} + vs;
-    uint64_t dense = tuo_map_find_int(hdr, k, stride);
-    if (dense == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
-    const unsigned char *entries = (const unsigned char *)hdr[0];
+    uint64_t slot = tuo_map_find_int(hdr, k, stride);
+    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
     out[0] = 1;
-    memcpy(&out[1], entries + dense * stride + {int_key}, (size_t)vs);
+    memcpy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {int_key}, (size_t)vs);
 }}
 
 void tuo_rt_map_int_insert(long long *hdr, long long k, const void *v,
                            unsigned long long vs, long long *out) {{
     uint64_t stride = {int_key} + vs;
-    uint64_t dense = tuo_map_find_int(hdr, k, stride);
-    if (dense != (uint64_t)-1) {{
-        unsigned char *entries = (unsigned char *)hdr[0];
-        memcpy(&out[1], entries + dense * stride + {int_key}, (size_t)vs);
+    uint64_t slot = tuo_map_find_int(hdr, k, stride);
+    if (slot != (uint64_t)-1) {{
+        unsigned char *value = tuo_map_entry_at(hdr, slot, stride) + {int_key};
+        memcpy(&out[1], value, (size_t)vs);
         out[0] = 1;
-        memcpy(entries + dense * stride + {int_key}, v, (size_t)vs);
+        memcpy(value, v, (size_t)vs);
         return;
     }}
     out[0] = 0; memset(&out[1], 0, (size_t)vs);
-    uint64_t len = (uint64_t)hdr[1];
-    uint64_t cap = (uint64_t)hdr[2];
-    unsigned char *entries;
-    if (len == cap) {{
-        entries = tuo_map_grow(hdr, cap == 0 ? {initial_cap} : cap * 2, stride, 0);
-    }} else {{
-        entries = (unsigned char *)hdr[0];
-    }}
-    memcpy(entries + len * stride, &k, 8);
-    memcpy(entries + len * stride + {int_key}, v, (size_t)vs);
-    tuo_map_index_place(tuo_map_index(entries), tuo_map_index_cap(entries),
-                        tuo_map_hash_int(k), len);
-    hdr[1] = (long long)(len + 1);
+    tuo_map_append(hdr, &k, {int_key}, v, vs, tuo_map_hash_int(k), 0);
 }}
 
 void tuo_rt_map_int_remove(long long *hdr, long long k, unsigned long long vs,
                            long long *out) {{
     uint64_t stride = {int_key} + vs;
-    uint64_t dense = tuo_map_find_int(hdr, k, stride);
-    if (dense == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
-    unsigned char *entries = (unsigned char *)hdr[0];
-    uint64_t len = (uint64_t)hdr[1];
-    out[0] = 1;
-    memcpy(&out[1], entries + dense * stride + {int_key}, (size_t)vs);
-    memmove(entries + dense * stride, entries + (dense + 1) * stride,
-            (size_t)((len - 1 - dense) * stride));
-    hdr[1] = (long long)(len - 1);
-    tuo_map_rebuild_int(entries, len - 1, stride);
+    uint64_t slot = tuo_map_find_int(hdr, k, stride);
+    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    tuo_map_remove_at(hdr, slot, {int_key}, vs, out);
 }}
 
 void tuo_rt_map_int_keys(const long long *hdr, unsigned long long vs, long long *out_hdr) {{
-    uint64_t len = (uint64_t)hdr[1];
-    if (len == 0) {{ out_hdr[0] = {sentinel}; out_hdr[1] = 0; out_hdr[2] = 0; return; }}
-    const unsigned char *entries = (const unsigned char *)hdr[0];
-    uint64_t stride = {int_key} + vs;
-    unsigned char *buf = (unsigned char *)tuo_rt_alloc((size_t)(8 * len), 8);
-    for (uint64_t i = 0; i < len; i++) {{
-        memcpy(buf + i * 8, entries + i * stride, 8);
-    }}
-    out_hdr[0] = (long long)buf;
-    out_hdr[1] = (long long)len;
-    out_hdr[2] = (long long)len;
+    tuo_map_keys(hdr, {int_key}, vs, out_hdr);
 }}
 
 void tuo_rt_map_str_get(const long long *hdr, const unsigned char *kp, unsigned long long kn,
                         unsigned long long vs, long long *out) {{
     uint64_t stride = {str_key} + vs;
-    uint64_t dense = tuo_map_find_str(hdr, kp, kn, stride);
-    if (dense == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
-    const unsigned char *entries = (const unsigned char *)hdr[0];
+    uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
+    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
     out[0] = 1;
-    memcpy(&out[1], entries + dense * stride + {str_key}, (size_t)vs);
+    memcpy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {str_key}, (size_t)vs);
 }}
 
 void tuo_rt_map_str_insert(long long *hdr, const unsigned char *kp, unsigned long long kn,
                            const void *v, unsigned long long vs, long long *out) {{
     uint64_t stride = {str_key} + vs;
-    uint64_t dense = tuo_map_find_str(hdr, kp, kn, stride);
-    if (dense != (uint64_t)-1) {{
-        unsigned char *entries = (unsigned char *)hdr[0];
-        memcpy(&out[1], entries + dense * stride + {str_key}, (size_t)vs);
+    uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
+    if (slot != (uint64_t)-1) {{
+        unsigned char *value = tuo_map_entry_at(hdr, slot, stride) + {str_key};
+        memcpy(&out[1], value, (size_t)vs);
         out[0] = 1;
-        memcpy(entries + dense * stride + {str_key}, v, (size_t)vs);
+        memcpy(value, v, (size_t)vs);
         return;
     }}
     out[0] = 0; memset(&out[1], 0, (size_t)vs);
-    uint64_t len = (uint64_t)hdr[1];
-    uint64_t cap = (uint64_t)hdr[2];
-    unsigned char *entries;
-    if (len == cap) {{
-        entries = tuo_map_grow(hdr, cap == 0 ? {initial_cap} : cap * 2, stride, 1);
-    }} else {{
-        entries = (unsigned char *)hdr[0];
-    }}
-    memcpy(entries + len * stride, &kp, 8);
-    memcpy(entries + len * stride + 8, &kn, 8);
-    memcpy(entries + len * stride + {str_key}, v, (size_t)vs);
-    tuo_map_index_place(tuo_map_index(entries), tuo_map_index_cap(entries),
-                        tuo_map_hash_str(kp, kn), len);
-    hdr[1] = (long long)(len + 1);
+    unsigned char key[{str_key}];
+    memcpy(key, &kp, 8);
+    memcpy(key + 8, &kn, 8);
+    tuo_map_append(hdr, key, {str_key}, v, vs, tuo_map_hash_str(kp, kn), 1);
 }}
 
 void tuo_rt_map_str_remove(long long *hdr, const unsigned char *kp, unsigned long long kn,
                            unsigned long long vs, long long *out) {{
     uint64_t stride = {str_key} + vs;
-    uint64_t dense = tuo_map_find_str(hdr, kp, kn, stride);
-    if (dense == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
-    unsigned char *entries = (unsigned char *)hdr[0];
-    uint64_t len = (uint64_t)hdr[1];
-    out[0] = 1;
-    memcpy(&out[1], entries + dense * stride + {str_key}, (size_t)vs);
-    memmove(entries + dense * stride, entries + (dense + 1) * stride,
-            (size_t)((len - 1 - dense) * stride));
-    hdr[1] = (long long)(len - 1);
-    tuo_map_rebuild_str(entries, len - 1, stride);
+    uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
+    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    tuo_map_remove_at(hdr, slot, {str_key}, vs, out);
 }}
 
 void tuo_rt_map_str_keys(const long long *hdr, unsigned long long vs, long long *out_hdr) {{
-    uint64_t len = (uint64_t)hdr[1];
-    if (len == 0) {{ out_hdr[0] = {sentinel}; out_hdr[1] = 0; out_hdr[2] = 0; return; }}
-    const unsigned char *entries = (const unsigned char *)hdr[0];
-    uint64_t stride = {str_key} + vs;
-    unsigned char *buf = (unsigned char *)tuo_rt_alloc((size_t)({str_key} * len), 8);
-    for (uint64_t i = 0; i < len; i++) {{
-        memcpy(buf + i * {str_key}, entries + i * stride, {str_key});
-    }}
-    out_hdr[0] = (long long)buf;
-    out_hdr[1] = (long long)len;
-    out_hdr[2] = (long long)len;
+    tuo_map_keys(hdr, {str_key}, vs, out_hdr);
 }}
 
 void tuo_rt_map_drop(long long *hdr, long long stride) {{
     uint64_t cap = (uint64_t)hdr[2];
     if (cap == 0) return;
     unsigned char *entries = (unsigned char *)hdr[0];
-    uint64_t index_cap = tuo_map_index_cap(entries);
-    tuo_rt_dealloc(tuo_map_index(entries),
-                   tuo_map_block_size(index_cap, cap, (uint64_t)stride), 8);
+    tuo_rt_dealloc(tuo_map_index(entries, cap),
+                   tuo_map_block_size(tuo_map_index_cap(entries), cap, (uint64_t)stride), 8);
 }}
 "#,
         sentinel = sentinel,
@@ -552,7 +601,10 @@ mod tests {
         // pinned is the key size each kind adds to the caller's value stride.
         assert!(source.contains(&format!("uint64_t stride = {INT_KEY_SIZE} + vs;")));
         assert!(source.contains(&format!("uint64_t stride = {STR_KEY_SIZE} + vs;")));
-        assert!(source.contains(&format!("cap == 0 ? {INITIAL_CAPACITY} : cap * 2")));
+        assert!(source.contains(&format!(
+            "tuo_map_rehome(hdr, {INITIAL_CAPACITY}, stride, is_str)"
+        )));
+        assert!(source.contains("2 * len > cap ? cap * 2 : cap"));
         // Every value-touching entry point takes the stride as a parameter, so
         // the shim stays type-agnostic. A hardcoded 8-byte value copy would be
         // the Stage B regression this pins against.

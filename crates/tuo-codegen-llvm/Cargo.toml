@@ -20,10 +20,10 @@ tuo-types.workspace = true
 tuo-runtime.workspace = true
 tuo-codegen.workspace = true
 
-# The LLVM release backend. `inkwell` is the safe Rust wrapper; the `llvm19-1`
-# feature pins the supported LLVM major to **19** (see the crate docs). LLVM is
+# The LLVM release backend. `inkwell` is the safe Rust wrapper; the `llvm21-1`
+# feature pins the supported LLVM major to **21** (see the crate docs). LLVM is
 # an external toolchain located at build time by `llvm-sys` (inkwell's `-sys`
-# layer): it honours `LLVM_SYS_191_PREFIX`, otherwise searches `PATH` for
-# `llvm-config`/`llvm-config-19`, and finally probes a Homebrew `llvm@19`. No
+# layer): it honours `LLVM_SYS_211_PREFIX`, otherwise searches `PATH` for
+# `llvm-config`/`llvm-config-21`, and finally probes a Homebrew `llvm@21`. No
 # inkwell or LLVM type is re-exported from this crate.
 inkwell.workspace = true
