@@ -73,6 +73,21 @@ cargo fmt                      # format (stable rustfmt, config in rustfmt.toml)
 
 Toolchain is pinned to **stable** (`rust-toolchain.toml`), edition **2024**, resolver 3.
 
+## Writing tuonelang
+
+Before writing or editing any `.tuo` file, read the generated language brief:
+`cargo run -p tuo-cli -- cheatsheet` (or the `tuo_cheatsheet` tool). Do not
+write tuonelang from priors — there are no methods, no `Box::new`, parameters
+always state a mode, and enum variants are unit or named-field only; the brief
+is generated from the compiler and is the authority.
+
+The `tuo` MCP server (`.mcp.json`, `tools/tuo-mcp/`) puts the agent protocol in
+the tool list. Prefer it over shelling out: `tuo_open_file` then `tuo_check`
+after each edit; `tuo_imports_for_symbol` instead of guessing a module path;
+`tuo_expected_type_at` / `tuo_valid_members_of` / `tuo_call_signature` for what
+to write next; `tuo_apply_safe_fix` for the compiler's own fixes. It needs a
+built `tuo` (`cargo build -p tuo-cli`).
+
 ## Architecture
 
 The workspace is a strictly **layered compiler pipeline**. A crate must never depend on

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tuo": {
+      "command": "node",
+      "args": ["tools/tuo-mcp/server.mjs"]
+    }
+  }
+}
