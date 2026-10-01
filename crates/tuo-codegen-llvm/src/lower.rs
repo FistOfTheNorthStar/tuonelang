@@ -119,6 +119,7 @@ use std::collections::HashMap;
 use inkwell::AddressSpace;
 use inkwell::FloatPredicate;
 use inkwell::IntPredicate;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock as LlvmBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -414,9 +415,14 @@ fn scalar_type_is_some(ty: &Ty) -> bool {
     )
 }
 
-/// The linkage a compiled tuonelang function gets: external, so the entry (and
-/// the `main` shim) are visible to the linker and inter-function calls resolve.
-const FUNCTION_LINKAGE: Linkage = Linkage::External;
+/// The linkage a compiled tuonelang function gets: **internal**. A program is
+/// one module, and only the C-ABI `main` shim (external, emitted separately)
+/// must be visible to the linker, so every tuonelang function is private to
+/// it — as the C peers' helpers are `static`. That lets LLVM optimize the
+/// program as a whole: inline with its local-function bonuses, specialize a
+/// function on its callers' constants, and drop what nothing calls (see
+/// [`keep_inspectable_bodies`] for the bodies it keeps regardless).
+const FUNCTION_LINKAGE: Linkage = Linkage::Internal;
 
 /// Declare then define every lowerable function of `program` into `module`.
 ///
@@ -443,6 +449,12 @@ pub(crate) fn lower_program<'ctx>(
         let fn_type = function_type(ctx, function, types)?;
         let name = mangle(function.symbol);
         let value = module.add_function(&name, fn_type, Some(FUNCTION_LINKAGE));
+        mark_borrows_noalias(ctx, value, function, types)?;
+        if types.is_constant_time(function.symbol) {
+            let noinline =
+                ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("noinline"), 0);
+            value.add_attribute(AttributeLoc::Function, noinline);
+        }
         ids.insert(function.symbol, value);
     }
 
@@ -465,6 +477,121 @@ pub(crate) fn lower_program<'ctx>(
         lowering.run()?;
     }
     Ok(ids)
+}
+
+/// Keep the standalone body of every lowered function `entry` cannot reach,
+/// and of every `#[constant_time]` function, by listing them in
+/// `llvm.compiler.used`.
+///
+/// Functions are internal ([`FUNCTION_LINKAGE`]), so LLVM would delete a
+/// function nothing calls and one it has inlined everywhere. The first are kept
+/// because they cost nothing — they never run — and keep a module's code
+/// inspectable function by function in a probe binary, which the constant-time
+/// disassembly checks (`tuo-cli/tests/constant_time.rs`) rely on. The reachable
+/// functions are deliberately *not* kept: listing a function makes it
+/// address-taken, which stops LLVM specializing it on its callers' constants,
+/// and that measured as a 15% loss on `nbody`.
+///
+/// A `#[constant_time]` function is kept and is `noinline` (set where it is
+/// declared), so the body that runs is the body the checks verified, never a
+/// copy merged into a caller where the optimizer could reintroduce a branch.
+///
+/// Reachability is read off the lowered IR: a function is reachable when its
+/// address is an operand of an instruction in a reachable function, which
+/// covers a direct call and a function value alike.
+pub(crate) fn keep_inspectable_bodies<'ctx>(
+    ctx: &'ctx Context,
+    module: &Module<'ctx>,
+    ids: &HashMap<SymbolId, FunctionValue<'ctx>>,
+    types: &TypeckResult,
+    entry: FunctionValue<'ctx>,
+) {
+    use inkwell::values::{AsValueRef as _, Operand};
+
+    let ours: HashMap<_, FunctionValue<'ctx>> =
+        ids.values().map(|f| (f.as_value_ref(), *f)).collect();
+    let mut reachable = std::collections::HashSet::new();
+    let mut worklist = vec![entry];
+    while let Some(function) = worklist.pop() {
+        for block in function.get_basic_block_iter() {
+            for instruction in block.get_instructions() {
+                for operand in instruction.get_operands().flatten() {
+                    let Operand::Value(BasicValueEnum::PointerValue(pointer)) = operand else {
+                        continue;
+                    };
+                    if let Some(callee) = ours.get(&pointer.as_value_ref()) {
+                        if reachable.insert(pointer.as_value_ref()) {
+                            worklist.push(*callee);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut kept: Vec<(SymbolId, FunctionValue<'ctx>)> = ids
+        .iter()
+        .filter(|(symbol, f)| {
+            !reachable.contains(&f.as_value_ref()) || types.is_constant_time(**symbol)
+        })
+        .map(|(symbol, f)| (*symbol, *f))
+        .collect();
+    if kept.is_empty() {
+        return;
+    }
+    // Deterministic module contents: list in symbol order.
+    kept.sort_by_key(|(symbol, _)| *symbol);
+    let ptr_ty = ctx.ptr_type(AddressSpace::default());
+    let pointers: Vec<PointerValue<'ctx>> = kept
+        .iter()
+        .map(|(_, f)| f.as_global_value().as_pointer_value())
+        .collect();
+    let array = ptr_ty.const_array(&pointers);
+    let used = module.add_global(array.get_type(), None, "llvm.compiler.used");
+    used.set_linkage(Linkage::Appending);
+    used.set_section(Some("llvm.metadata"));
+    used.set_initializer(&array);
+}
+
+/// Mark every borrow-mode (`in`/`mut`) parameter of `function` `noalias`.
+///
+/// The ownership checker refuses a call that borrows overlapping places when
+/// either borrow is `mut` (`O0005`), v0 has no globals, an index expression is
+/// not a borrowable place, and a function value cannot capture — so for the
+/// duration of a call, memory reached through a `mut` parameter is reached
+/// through nothing else, and memory behind an `in` parameter is modified by no
+/// one. That is LLVM's `noalias` contract, which constrains only memory
+/// *modified* during the call, so two `in` borrows of one place stay legal.
+/// (Capturing closures, ADR-0024, would add a path to a caller's place and
+/// must revisit this.)
+///
+/// It is what lets LLVM keep a borrowed array's `{ptr, len, cap}` header in
+/// registers across stores into a *different* array: without it, a store
+/// through `mut out`'s buffer might rewrite `in v`'s length, so `v`'s header is
+/// reloaded every iteration and the bounds check a `j < len(v)` loop already
+/// implies stays in. `spectral-norm` ran ~15% faster with it.
+fn mark_borrows_noalias<'ctx>(
+    ctx: &'ctx Context,
+    value: FunctionValue<'ctx>,
+    function: &Function,
+    types: &TypeckResult,
+) -> Result<(), CodegenError> {
+    let noalias = ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("noalias"), 0);
+    let mut native = u32::from(matches!(
+        classify_storage(&function.ret, types, &function.name)?,
+        Storage::Aggregate(_)
+    ));
+    for (index, mode) in function.params.iter().enumerate() {
+        let storage = classify_storage(&function.locals[index].ty, types, &function.name)?;
+        if matches!(storage, Storage::Unit) {
+            continue;
+        }
+        if *mode != PassMode::Value {
+            value.add_attribute(AttributeLoc::Param(native), noalias);
+        }
+        native += 1;
+    }
+    Ok(())
 }
 
 /// The internal helper every derived address goes through (see
@@ -1557,17 +1684,17 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .build_call(decl, &[l.into(), r.into()], "arith")
             .map_err(builder_err("calling an overflow intrinsic"))?;
         let agg = call.try_as_basic_value().unwrap_basic().into_struct_value();
-        let result = self
-            .builder
-            .build_extract_value(agg, 0, "arith_val")
-            .map_err(builder_err("extracting the arithmetic result"))?
-            .into_int_value();
         let overflow = self
             .builder
             .build_extract_value(agg, 1, "arith_ovf")
             .map_err(builder_err("extracting the overflow flag"))?
             .into_int_value();
         self.guard(overflow, TrapCode::IntegerOverflow)?;
+        let result = self
+            .builder
+            .build_extract_value(agg, 0, "arith_val")
+            .map_err(builder_err("extracting the arithmetic result"))?
+            .into_int_value();
         Ok(result)
     }
 
@@ -5067,6 +5194,57 @@ mod tests {
     use tuo_types::{IntKind, Ty, TypeckResult};
 
     use super::{GEP_HELPER, lower_program};
+    use tuo_mir::PassMode;
+
+    /// Borrow-mode parameters are `noalias`; by-value ones are not. Programs
+    /// behave identically either way, so only the declaration can show it.
+    #[test]
+    fn borrow_parameters_are_noalias_and_values_are_not() {
+        let span = Span::new(
+            SourceId::from_raw(0),
+            TextRange::new(0, 1).expect("forward range"),
+        );
+        let local = |ty: Ty| LocalDecl {
+            ty,
+            name: None,
+            span,
+        };
+        // fn f(in a: Int, mut b: Int, take c: Int) -> Int { c }
+        let f = Function {
+            symbol: SymbolId::from_raw(0),
+            name: "f".to_owned(),
+            params: vec![PassMode::Borrow, PassMode::BorrowMut, PassMode::Value],
+            locals: vec![
+                local(Ty::Int(IntKind::I64)),
+                local(Ty::Int(IntKind::I64)),
+                local(Ty::Int(IntKind::I64)),
+            ],
+            blocks: vec![BasicBlock {
+                statements: Vec::new(),
+                terminator: Terminator::Return(Operand::Copy(Place::local(LocalId(2)))),
+            }],
+            ret: Ty::Int(IntKind::I64),
+            span,
+        };
+        let program = Program {
+            functions: vec![f],
+            skipped: Vec::new(),
+        };
+        let ctx = Context::create();
+        let module = ctx.create_module("noalias");
+        lower_program(&ctx, &module, &program, &TypeckResult::default())
+            .expect("the program lowers");
+        let ir = module.print_to_string().to_string();
+        let declaration = ir
+            .lines()
+            .find(|line| line.starts_with("define") && line.contains("tuo_fn_0"))
+            .expect("f is defined");
+        assert_eq!(
+            declaration.matches("noalias").count(),
+            2,
+            "the `in` and `mut` pointers are noalias, the `take` scalar is not: {declaration}"
+        );
+    }
 
     /// Every derived address must be a real `getelementptr`. A pointer rebuilt
     /// with `inttoptr` has lost its provenance, so LLVM must assume a store

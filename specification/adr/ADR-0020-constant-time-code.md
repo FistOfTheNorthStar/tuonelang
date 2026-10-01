@@ -301,6 +301,19 @@ so if the compiler ever gains bounds-check elimination the test fails and says
 the documentation is now out of date — good news arriving as a visible failure
 rather than as silent staleness.
 
+*Amendment (2026-10-02).* That failure arrived. Once the LLVM backend marked
+borrowed parameters `noalias` (a borrowed array's length can then no longer
+change under a store elsewhere), the release build drops the check from the
+canonical loop over a borrowed array; the unoptimizing debug build still keeps
+it. The test was replaced by
+`canonical_loop_bounds_check_survives_only_the_unoptimizing_backend`, which
+pins both halves. The scans' claim is unchanged — length-dependent control flow
+on every backend — because an optimization is not a guarantee, and the scans
+stay unmarked because `T0018` is a rule about the source. The same change
+keeps every `#[constant_time]` function out of line (`noinline`) in the release
+build, so the code that runs is the body the branch-freedom checks verify;
+`constant_time_functions_stay_out_of_line_under_llvm` pins it.
+
 **Correction 3 — the two backends require different assertions, and the reason
 is structural.** Stage B expected one branchlessness rule applied to both.
 Cranelift is deliberately non-optimizing, so it keeps every trap check
@@ -434,8 +447,9 @@ function that needs no such comment.
 
 `select_array` and `bytes_eq` cannot be marked. A scan needs a loop (`T0017`)
 and indexing (`T0018`) by its nature, and no rewriting removes that — Stage B
-already established that tuonelang's bounds check survives optimization even
-for the canonical `while i < len(xs)` loop.
+already established that tuonelang's bounds check survived optimization even
+for the canonical `while i < len(xs)` loop (since 2026-10-02, only in the
+unoptimizing debug build — see the amendment to Correction 2).
 
 The exemption is therefore an **absence, not an override**. There is
 deliberately no `#[allow]` and no escape hatch: a function that cannot satisfy

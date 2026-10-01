@@ -277,6 +277,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         struct_shapes,
         enum_shapes,
         effectful,
+        constant_time,
     }
 }
 

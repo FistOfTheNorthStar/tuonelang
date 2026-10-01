@@ -227,6 +227,10 @@ impl CodegenBackend for LlvmBackend {
         let ids = lower_program(&context, &module, program, types)?;
         let entry_value = ids[&entry_fn.symbol];
         emit_main_shim(&context, &module, entry_value, entry_kind)?;
+        let main_shim = module
+            .get_function("main")
+            .ok_or_else(|| CodegenError::backend("the main shim was not emitted"))?;
+        lower::keep_inspectable_bodies(&context, &module, &ids, types, main_shim);
 
         // The module must verify before we optimize or emit — a verification
         // failure is a backend bug (we produced malformed IR), not a user error.
