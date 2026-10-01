@@ -12,6 +12,12 @@ Tools:
   `tuo` binary, and its tests compare the translated program's runtime answer
   against CPython's. Python-only; nothing in the workspace depends on it.
 
+- **[`tuo-mcp`](tuo-mcp/)** — the agent protocol (`tuo agent --stdio`) as
+  Model Context Protocol tools, so a coding agent sees `tuo_check`,
+  `tuo_expected_type_at`, `tuo_imports_for_symbol`, and the rest in its tool
+  list. A dependency-free Node bridge; registered for Claude Code by the
+  repository's `.mcp.json`. Nothing in the workspace depends on it.
+
 - **[`tokenizer-lab`](tokenizer-lab/)** — a data-driven harness that measures how
   candidate tuonelang syntax tokenizes across multiple tokenizers, so syntax is
   not designed around a single tokenizer's quirks. See its README for usage and
