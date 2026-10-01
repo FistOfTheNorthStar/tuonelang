@@ -1,0 +1,95 @@
+// The spectral-norm workload — the Benchmarks Game's spectral-norm: the
+// spectral norm of the infinite matrix A(i,j) = 1 / ((i+j)(i+j+1)/2 + i + 1),
+// approximated by ten rounds of the power method on a 2000-element
+// `Array[Float]` (in-place `std::array::set`). The C, Rust, and Go peers sum
+// the same rows in the same order with no fused multiply-add.
+//
+// The final square root is a verbatim copy of `std::math::sqrt` (twenty Newton
+// iterations; the peers use the hardware instruction) — called once, so it is
+// immaterial to the time here, and within an ulp, so immaterial to the result.
+//
+// The exit byte folds the norm: (norm * 1e9) as Int % 256 = 24.
+
+fn sqrt(take x: Float) -> Float {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    var guess = x;
+    var i = 0;
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0;
+        i = i + 1;
+    }
+    guess
+}
+
+fn a(take i: Int, take j: Int) -> Float {
+    1.0 / (((i + j) * (i + j + 1) / 2 + i + 1) as Float)
+}
+
+fn mul_av(in v: Array[Float], mut out: Array[Float]) {
+    let n = std::array::len(v);
+    var i = 0;
+    while i < n {
+        var sum = 0.0;
+        var j = 0;
+        while j < n {
+            sum = sum + a(i, j) * std::array::get(v, j);
+            j = j + 1;
+        }
+        std::array::set(out, i, sum);
+        i = i + 1;
+    }
+}
+
+fn mul_atv(in v: Array[Float], mut out: Array[Float]) {
+    let n = std::array::len(v);
+    var i = 0;
+    while i < n {
+        var sum = 0.0;
+        var j = 0;
+        while j < n {
+            sum = sum + a(j, i) * std::array::get(v, j);
+            j = j + 1;
+        }
+        std::array::set(out, i, sum);
+        i = i + 1;
+    }
+}
+
+fn mul_atav(in v: Array[Float], mut out: Array[Float], mut tmp: Array[Float]) {
+    mul_av(v, tmp);
+    mul_atv(tmp, out);
+}
+
+fn filled(take n: Int, take value: Float) -> Array[Float] {
+    var xs = std::array::empty();
+    var i = 0;
+    while i < n {
+        std::array::push(xs, value);
+        i = i + 1;
+    }
+    xs
+}
+
+fn main() -> Int {
+    let n = 2000;
+    var u = filled(n, 1.0);
+    var v = filled(n, 0.0);
+    var tmp = filled(n, 0.0);
+    var round = 0;
+    while round < 10 {
+        mul_atav(u, v, tmp);
+        mul_atav(v, u, tmp);
+        round = round + 1;
+    }
+    var vbv = 0.0;
+    var vv = 0.0;
+    var i = 0;
+    while i < n {
+        vbv = vbv + std::array::get(u, i) * std::array::get(v, i);
+        vv = vv + std::array::get(v, i) * std::array::get(v, i);
+        i = i + 1;
+    }
+    (sqrt(vbv / vv) * 1e9) as Int % 256
+}

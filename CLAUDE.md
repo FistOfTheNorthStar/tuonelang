@@ -392,7 +392,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
   honesty rule the prompt demands is enforced structurally: all **eighteen**
-  runtime workloads (**startup, integer-computation, function-calls,
+  language-feature runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
   landed — **string-processing**, a byte-level tokenize/scan/slice-compare
@@ -442,9 +442,22 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   tuonelang is forced into (`0 - bit` traps on `i64::MIN`), the Go peer its
   standard **`crypto/subtle.ConstantTimeCompare`**) carry a real program and are
   `Support::Supported` —
-  none remains `Unsupported`, and the mechanism (an entry with the *exact
-  reason* and **no number**, flipping the moment its feature lands) stays as
-  the documented re-entry path for any future workload.
+  none of them remains `Unsupported`, and the mechanism (an entry with the
+  *exact reason* and **no number**, flipping the moment its feature lands)
+  stays as the documented re-entry path for any future workload.
+  The catalog's second half is the **Computer Language Benchmarks Game**
+  (`lab::runtime::BENCHMARKS_GAME`): `nbody`, `spectral-norm`,
+  `fannkuch-redux`, `mandelbrot`, and `fasta` are supported, each the
+  benchmark's own algorithm with its output folded into the exit byte, and
+  each carrying **C, Go, and Rust** peers (`PeerLanguage::Rust`, `rustc -O`,
+  for this set only; C is built with `-ffp-contract=off` and the Go peers
+  wrap products in `float64` so all four languages round identically);
+  `binary-trees` is the one `Unsupported` entry, waiting on native `Box`
+  values. `tuo-cli/tests/lab_command.rs`'s `#[ignore]`d
+  `benchmarks_game_speed_table` builds each with `tuo build --release` and
+  every peer, times them (fastest of five after a warm-up), and prints the
+  ratio to each peer — asserting correctness only, never a ratio; CI runs it
+  with `--ignored --nocapture` so the current figures are in every log.
   Since ADR-0007, the lab also owns the **parallel-speedup category**
   (`lab::parallel`): one CPU-bound reduction committed four ways (tuonelang
   serial + `par_map`, C serial + pthreads, same thread count, same exit byte),

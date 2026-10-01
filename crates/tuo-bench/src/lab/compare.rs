@@ -17,7 +17,11 @@
 //!    to a native binary and has a matching 64-bit integer / byte-slice model,
 //!    but it ships a managed runtime (GC + goroutine scheduler), so it measures
 //!    the *runtime-bearing* AOT point that C (no runtime) does not — the two
-//!    peers bracket tuonelang rather than duplicating each other. Each Go peer
+//!    peers bracket tuonelang rather than duplicating each other. **Rust** is
+//!    the third peer, for the Computer Language Benchmarks Game workloads
+//!    ([`BENCHMARKS_GAME`](super::runtime::BENCHMARKS_GAME)): the safe,
+//!    runtime-free language at the top of that suite, and so the most direct
+//!    answer to "is tuonelang as fast as the fastest". Each Go peer
 //!    computes the same value the same way as its C counterpart (the allocation
 //!    peer even replicates the explicit doubling growth rather than leaning on
 //!    Go's `append` heuristic), so the equivalent-semantics rule still holds. A
@@ -60,6 +64,12 @@ pub enum PeerLanguage {
     /// runtime-free peer and a runtime-bearing one) rather than duplicating a
     /// single point of comparison.
     Go,
+    /// Rust, compiled ahead-of-time with `rustc -O`. Like C it has no runtime
+    /// between the program and the CPU; like tuonelang it is memory-safe and
+    /// bounds-checks indexing (it does not check integer overflow in a
+    /// release build, which tuonelang always does). It carries a program for
+    /// the Benchmarks Game workloads only.
+    Rust,
 }
 
 impl PeerLanguage {
@@ -69,15 +79,17 @@ impl PeerLanguage {
         match self {
             Self::C => "c",
             Self::Go => "go",
+            Self::Rust => "rust",
         }
     }
 
-    /// Every peer language a supported workload is compared against, in a stable
-    /// order. The comparison builder pairs each supported workload with one
-    /// [`ComparisonWorkload`] per entry here.
+    /// Every peer language, in a stable order. The comparison builder pairs
+    /// each supported workload with one [`ComparisonWorkload`] per entry here
+    /// that has a program for it: C and Go for every workload, Rust for the
+    /// Benchmarks Game set.
     #[must_use]
-    pub fn all() -> [PeerLanguage; 2] {
-        [PeerLanguage::C, PeerLanguage::Go]
+    pub fn all() -> [PeerLanguage; 3] {
+        [PeerLanguage::C, PeerLanguage::Go, PeerLanguage::Rust]
     }
 }
 
@@ -124,6 +136,7 @@ pub fn comparison_for_peer(
     let peer_source = match peer {
         PeerLanguage::C => c_equivalent(&workload.label)?,
         PeerLanguage::Go => go_equivalent(&workload.label)?,
+        PeerLanguage::Rust => rust_equivalent(&workload.label)?,
     };
     Some(ComparisonWorkload {
         label: workload.label.clone(),
@@ -183,6 +196,15 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "connect-timeout" => {
             include_str!("../../../../benchmarks/runtime/programs/c/connect-timeout.c")
         }
+        "nbody" => include_str!("../../../../benchmarks/runtime/programs/c/nbody.c"),
+        "spectral-norm" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/spectral-norm.c")
+        }
+        "fannkuch-redux" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/fannkuch-redux.c")
+        }
+        "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/c/mandelbrot.c"),
+        "fasta" => include_str!("../../../../benchmarks/runtime/programs/c/fasta.c"),
         _ => return None,
     })
 }
@@ -227,6 +249,36 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
         "connect-timeout" => {
             include_str!("../../../../benchmarks/runtime/programs/go/connect-timeout.go")
         }
+        "nbody" => include_str!("../../../../benchmarks/runtime/programs/go/nbody.go"),
+        "spectral-norm" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/spectral-norm.go")
+        }
+        "fannkuch-redux" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/fannkuch-redux.go")
+        }
+        "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/go/mandelbrot.go"),
+        "fasta" => include_str!("../../../../benchmarks/runtime/programs/go/fasta.go"),
+        _ => return None,
+    })
+}
+
+/// The Rust program equivalent to a supported Benchmarks Game workload,
+/// computing the same value the same way. Returns `None` for every other label:
+/// Rust peers exist for the Benchmarks Game set only.
+fn rust_equivalent(label: &str) -> Option<&'static str> {
+    // Each Rust peer program is the committed file under
+    // `benchmarks/runtime/programs/rust/`, embedded via `include_str!` like
+    // the C and Go peers, so the recorded source cannot drift.
+    Some(match label {
+        "nbody" => include_str!("../../../../benchmarks/runtime/programs/rust/nbody.rs"),
+        "spectral-norm" => {
+            include_str!("../../../../benchmarks/runtime/programs/rust/spectral-norm.rs")
+        }
+        "fannkuch-redux" => {
+            include_str!("../../../../benchmarks/runtime/programs/rust/fannkuch-redux.rs")
+        }
+        "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/rust/mandelbrot.rs"),
+        "fasta" => include_str!("../../../../benchmarks/runtime/programs/rust/fasta.rs"),
         _ => return None,
     })
 }
@@ -320,7 +372,7 @@ pub fn run_comparison<R: ComparisonRunner>(runner: &R, workload: &ComparisonWork
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::lab::runtime::workloads;
+    use crate::lab::runtime::{BENCHMARKS_GAME, workloads};
 
     #[test]
     fn only_supported_workloads_get_a_comparison() {
@@ -336,21 +388,21 @@ mod tests {
     }
 
     #[test]
-    fn every_supported_workload_has_both_peers_and_unsupported_has_none() {
+    fn every_supported_workload_has_its_peers_and_unsupported_has_none() {
         for workload in workloads() {
             let comparisons = comparisons_for(&workload);
             if workload.is_supported() {
-                assert_eq!(
-                    comparisons.len(),
-                    PeerLanguage::all().len(),
-                    "supported workload `{}` must have one comparison per peer",
-                    workload.label
-                );
+                // C and Go for every workload; Rust for exactly the Benchmarks
+                // Game set.
+                let mut expected = vec![PeerLanguage::C, PeerLanguage::Go];
+                if BENCHMARKS_GAME.contains(&workload.label.as_str()) {
+                    expected.push(PeerLanguage::Rust);
+                }
                 let peers: Vec<PeerLanguage> = comparisons.iter().map(|c| c.peer).collect();
                 assert_eq!(
-                    peers,
-                    PeerLanguage::all().to_vec(),
-                    "comparisons must be in stable peer order"
+                    peers, expected,
+                    "supported workload `{}` must have exactly its peers, in stable order",
+                    workload.label
                 );
             } else {
                 assert!(
@@ -385,9 +437,31 @@ mod tests {
     }
 
     #[test]
+    fn rust_peer_targets_the_same_result_as_the_workload() {
+        for workload in workloads() {
+            if let (Some(cmp), Support::Supported { expected_exit, .. }) = (
+                comparison_for_peer(&workload, PeerLanguage::Rust),
+                &workload.support,
+            ) {
+                assert_eq!(
+                    cmp.expected_exit, *expected_exit,
+                    "the Rust peer for `{}` must target the same result",
+                    workload.label
+                );
+                assert!(
+                    cmp.peer_source.contains("fn main()"),
+                    "the Rust peer for `{}` must be a real Rust program",
+                    workload.label
+                );
+            }
+        }
+    }
+
+    #[test]
     fn peer_labels_are_stable_and_distinct() {
         assert_eq!(PeerLanguage::C.label(), "c");
         assert_eq!(PeerLanguage::Go.label(), "go");
+        assert_eq!(PeerLanguage::Rust.label(), "rust");
     }
 
     #[test]

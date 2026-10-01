@@ -1,0 +1,89 @@
+// The fannkuch-redux workload — the Benchmarks Game's fannkuch-redux: for
+// every permutation of 0..10, count the prefix reversals ("pancake flips")
+// until 0 reaches the front, tracking the maximum and an alternating-sign
+// checksum. Permutations are generated in the benchmark's rotation order over
+// growable `Array[Int]`s updated in place; the C, Rust, and Go peers make the
+// identical walk. For n = 10 the checksum is 73196 and the maximum 38, so the
+// exit byte is (73196 + 38) % 256 = 18.
+
+fn zeros(take n: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    var i = 0;
+    while i < n {
+        std::array::push(xs, 0);
+        i = i + 1;
+    }
+    xs
+}
+
+fn fannkuch(take n: Int) -> Int {
+    var perm = zeros(n);
+    var perm1 = zeros(n);
+    var count = zeros(n);
+    var max_flips = 0;
+    var checksum = 0;
+    var perm_count = 0;
+    var r = n;
+    var i = 0;
+    while i < n {
+        std::array::set(perm1, i, i);
+        i = i + 1;
+    }
+    while true {
+        while r != 1 {
+            std::array::set(count, r - 1, r);
+            r = r - 1;
+        }
+        i = 0;
+        while i < n {
+            std::array::set(perm, i, std::array::get(perm1, i));
+            i = i + 1;
+        }
+        var flips = 0;
+        var k = std::array::get(perm, 0);
+        while k != 0 {
+            var lo = 0;
+            var hi = k;
+            while lo < hi {
+                let t = std::array::get(perm, lo);
+                std::array::set(perm, lo, std::array::get(perm, hi));
+                std::array::set(perm, hi, t);
+                lo = lo + 1;
+                hi = hi - 1;
+            }
+            flips = flips + 1;
+            k = std::array::get(perm, 0);
+        }
+        if flips > max_flips {
+            max_flips = flips;
+        }
+        if perm_count % 2 == 0 {
+            checksum = checksum + flips;
+        } else {
+            checksum = checksum - flips;
+        }
+        while true {
+            if r == n {
+                return (checksum + max_flips) % 256;
+            }
+            let perm0 = std::array::get(perm1, 0);
+            i = 0;
+            while i < r {
+                std::array::set(perm1, i, std::array::get(perm1, i + 1));
+                i = i + 1;
+            }
+            std::array::set(perm1, r, perm0);
+            std::array::set(count, r, std::array::get(count, r) - 1);
+            if std::array::get(count, r) > 0 {
+                break;
+            }
+            r = r + 1;
+        }
+        perm_count = perm_count + 1;
+    }
+    0
+}
+
+fn main() -> Int {
+    fannkuch(10)
+}

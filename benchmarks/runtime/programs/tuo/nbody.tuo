@@ -1,0 +1,175 @@
+// The nbody workload — the Computer Language Benchmarks Game's n-body: a
+// Jovian-planet orbit simulation with symplectic integration, 1,000,000 steps
+// of dt = 0.01 over five bodies held in parallel `Array[Float]` columns (the
+// ADR-0016 Float elements, updated in place with `std::array::set`). The C,
+// Rust, and Go peers make the identical pairwise updates in the same order
+// with no fused multiply-add.
+//
+// `sqrt` is a verbatim copy of `std::math::sqrt` (the lab's workloads are
+// single-file): twenty Newton iterations, where every peer uses the
+// hardware's correctly-rounded square root. That is the language's real
+// cost today — v0 has no native square root — and this workload is where it
+// shows; the checksum is unaffected because the iteration converges to
+// within an ulp for every distance the orbit reaches.
+//
+// The exit byte folds the final energy: (-energy * 1e9) as Int % 256 = 232.
+
+struct Bodies {
+    x: Array[Float],
+    y: Array[Float],
+    z: Array[Float],
+    vx: Array[Float],
+    vy: Array[Float],
+    vz: Array[Float],
+    mass: Array[Float],
+}
+
+fn pi() -> Float {
+    3.141592653589793
+}
+
+fn solar_mass() -> Float {
+    4.0 * pi() * pi()
+}
+
+fn days_per_year() -> Float {
+    365.24
+}
+
+fn sqrt(take x: Float) -> Float {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    var guess = x;
+    var i = 0;
+    while i < 20 {
+        guess = (guess + x / guess) / 2.0;
+        i = i + 1;
+    }
+    guess
+}
+
+fn add_body(mut b: Bodies, take p: [Float; 7]) {
+    std::array::push(b.x, p[0]);
+    std::array::push(b.y, p[1]);
+    std::array::push(b.z, p[2]);
+    std::array::push(b.vx, p[3] * days_per_year());
+    std::array::push(b.vy, p[4] * days_per_year());
+    std::array::push(b.vz, p[5] * days_per_year());
+    std::array::push(b.mass, p[6] * solar_mass());
+}
+
+fn system() -> Bodies {
+    var b = Bodies {
+        x: std::array::empty(),
+        y: std::array::empty(),
+        z: std::array::empty(),
+        vx: std::array::empty(),
+        vy: std::array::empty(),
+        vz: std::array::empty(),
+        mass: std::array::empty(),
+    };
+    add_body(b, [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0]);
+    add_body(b, [
+        4.84143144246472090e+00, -1.16032004402742839e+00, -1.03622044471123109e-01,
+        1.66007664274403694e-03, 7.69901118419740425e-03, -6.90460016972063023e-05,
+        9.54791938424326609e-04,
+    ]);
+    add_body(b, [
+        8.34336671824457987e+00, 4.12479856412430479e+00, -4.03523417114321381e-01,
+        -2.76742510726862411e-03, 4.99852801234917238e-03, 2.30417297573763929e-05,
+        2.85885980666130812e-04,
+    ]);
+    add_body(b, [
+        1.28943695621391310e+01, -1.51111514016986312e+01, -2.23307578892655734e-01,
+        2.96460137564761618e-03, 2.37847173959480950e-03, -2.96589568540237556e-05,
+        4.36624404335156298e-05,
+    ]);
+    add_body(b, [
+        1.53796971148509165e+01, -2.59193146099879641e+01, 1.79258772950371181e-01,
+        2.68067772490389322e-03, 1.62824170038242295e-03, -9.51592254519715870e-05,
+        5.15138902046611451e-05,
+    ]);
+    b
+}
+
+fn offset_momentum(mut b: Bodies) {
+    var px = 0.0;
+    var py = 0.0;
+    var pz = 0.0;
+    var i = 0;
+    while i < 5 {
+        let m = std::array::get(b.mass, i);
+        px = px + std::array::get(b.vx, i) * m;
+        py = py + std::array::get(b.vy, i) * m;
+        pz = pz + std::array::get(b.vz, i) * m;
+        i = i + 1;
+    }
+    std::array::set(b.vx, 0, -px / solar_mass());
+    std::array::set(b.vy, 0, -py / solar_mass());
+    std::array::set(b.vz, 0, -pz / solar_mass());
+}
+
+fn energy(in b: Bodies) -> Float {
+    var e = 0.0;
+    var i = 0;
+    while i < 5 {
+        let vx = std::array::get(b.vx, i);
+        let vy = std::array::get(b.vy, i);
+        let vz = std::array::get(b.vz, i);
+        e = e + 0.5 * std::array::get(b.mass, i) * (vx * vx + vy * vy + vz * vz);
+        var j = i + 1;
+        while j < 5 {
+            let dx = std::array::get(b.x, i) - std::array::get(b.x, j);
+            let dy = std::array::get(b.y, i) - std::array::get(b.y, j);
+            let dz = std::array::get(b.z, i) - std::array::get(b.z, j);
+            e = e - std::array::get(b.mass, i) * std::array::get(b.mass, j)
+                / sqrt(dx * dx + dy * dy + dz * dz);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    e
+}
+
+fn advance(mut b: Bodies, take dt: Float) {
+    var i = 0;
+    while i < 5 {
+        var j = i + 1;
+        while j < 5 {
+            let dx = std::array::get(b.x, i) - std::array::get(b.x, j);
+            let dy = std::array::get(b.y, i) - std::array::get(b.y, j);
+            let dz = std::array::get(b.z, i) - std::array::get(b.z, j);
+            let d2 = dx * dx + dy * dy + dz * dz;
+            let mag = dt / (d2 * sqrt(d2));
+            let mi = std::array::get(b.mass, i);
+            let mj = std::array::get(b.mass, j);
+            std::array::set(b.vx, i, std::array::get(b.vx, i) - dx * mj * mag);
+            std::array::set(b.vy, i, std::array::get(b.vy, i) - dy * mj * mag);
+            std::array::set(b.vz, i, std::array::get(b.vz, i) - dz * mj * mag);
+            std::array::set(b.vx, j, std::array::get(b.vx, j) + dx * mi * mag);
+            std::array::set(b.vy, j, std::array::get(b.vy, j) + dy * mi * mag);
+            std::array::set(b.vz, j, std::array::get(b.vz, j) + dz * mi * mag);
+            j = j + 1;
+        }
+        i = i + 1;
+    }
+    i = 0;
+    while i < 5 {
+        std::array::set(b.x, i, std::array::get(b.x, i) + dt * std::array::get(b.vx, i));
+        std::array::set(b.y, i, std::array::get(b.y, i) + dt * std::array::get(b.vy, i));
+        std::array::set(b.z, i, std::array::get(b.z, i) + dt * std::array::get(b.vz, i));
+        i = i + 1;
+    }
+}
+
+fn main() -> Int {
+    var b = system();
+    offset_momentum(b);
+    var step = 0;
+    while step < 1000000 {
+        advance(b, 0.01);
+        step = step + 1;
+    }
+    ((-energy(b)) * 1e9) as Int % 256
+}

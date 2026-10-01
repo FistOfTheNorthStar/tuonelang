@@ -60,6 +60,12 @@ impl NativeRunner for TuoRunNativeRunner {
 /// The real C comparison runner: compile the peer with `cc -O2` and run it,
 /// recording the toolchain version and the exact command. Returns `Err` (which
 /// the lab turns into a recorded *skip*) if `cc` is absent or anything fails.
+/// The C peer's optimization flags. `-ffp-contract=off` stops clang fusing
+/// `a * b + c` into one multiply-add, which tuonelang, Rust, and Go (whose
+/// peers write the products out explicitly) do not do: the same arithmetic
+/// the same way, so the floating-point workloads compare like with like.
+const C_FLAGS: [&str; 2] = ["-O2", "-ffp-contract=off"];
+
 struct CcComparisonRunner;
 
 impl ComparisonRunner for CcComparisonRunner {
@@ -72,12 +78,18 @@ impl ComparisonRunner for CcComparisonRunner {
         let exe_path = scratch("peer", "out");
         std::fs::write(&src_path, source).map_err(|e| format!("writing C source: {e}"))?;
 
-        let command = format!("cc -O2 {} -o {}", src_path.display(), exe_path.display());
+        let command = format!(
+            "cc {} {} -o {} -lm",
+            C_FLAGS.join(" "),
+            src_path.display(),
+            exe_path.display()
+        );
         let compile = Command::new("cc")
-            .arg("-O2")
+            .args(C_FLAGS)
             .arg(&src_path)
             .arg("-o")
             .arg(&exe_path)
+            .arg("-lm")
             .output()
             .map_err(|e| format!("no C compiler available: {e}"))?;
         if !compile.status.success() {
@@ -189,15 +201,15 @@ fn supported_workloads_run_natively_and_match() {
     let results = run_supported(&TuoRunNativeRunner);
     assert_eq!(
         results.len(),
-        18,
-        "exactly the seventeen supported workloads run (the scalar core plus the \
+        23,
+        "exactly the twenty-three supported workloads run (the scalar core plus the \
          fixed-array collections workload, the borrowed-Str string-processing \
          workload, the allocator-core allocation workload, the function-value \
          indirect-calls workload, the hash-map map-lookup workload, the \
          OS-boundary file-io workload, the socket networking workload, the \
          channel workload, the json-parse workload, the ADR-0017 udp-echo and \
          connect-timeout pair, and the ADR-0019 sha256-hash and wire-decode \
-         pair)"
+         pair, and five Computer Language Benchmarks Game programs)"
     );
     for (label, outcome) in results {
         let outcome = outcome.unwrap_or_else(|e| panic!("workload `{label}` failed to run: {e}"));
@@ -253,7 +265,7 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     }
     // Either the toolchain was present (comparisons measured) or it was not
     // (all skipped) — but every supported workload was accounted for.
-    assert_eq!(measured + skipped, 18);
+    assert_eq!(measured + skipped, 23);
     // On CI and dev machines `cc` is present, so we expect real measurements;
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {
@@ -308,10 +320,109 @@ fn go_comparison_agrees_where_the_toolchain_exists() {
             }
         }
     }
-    assert_eq!(measured + skipped, 18);
+    assert_eq!(measured + skipped, 23);
     if measured == 0 {
         eprintln!("note: no Go toolchain found; all Go comparisons recorded as skipped");
     }
+}
+
+/// The Rust peer: `rustc -O` (opt-level 2, matching the C peer's `-O2` and
+/// tuonelang's release pipeline), edition 2021.
+struct RustcComparisonRunner;
+
+impl RustcComparisonRunner {
+    /// The flags every Rust peer is compiled with.
+    const FLAGS: [&str; 3] = ["-O", "--edition", "2021"];
+}
+
+impl ComparisonRunner for RustcComparisonRunner {
+    fn language(&self) -> PeerLanguage {
+        PeerLanguage::Rust
+    }
+
+    fn compile_link_run(&self, source: &str) -> Result<PeerRun, String> {
+        let src_path = scratch("peer", "rs");
+        let exe_path = scratch("peer", "rsout");
+        std::fs::write(&src_path, source).map_err(|e| format!("writing Rust source: {e}"))?;
+        let command = format!(
+            "rustc {} {} -o {}",
+            Self::FLAGS.join(" "),
+            src_path.display(),
+            exe_path.display()
+        );
+        let compile = Command::new("rustc")
+            .args(Self::FLAGS)
+            .arg(&src_path)
+            .arg("-o")
+            .arg(&exe_path)
+            .output()
+            .map_err(|e| format!("no Rust compiler available: {e}"))?;
+        let _ = std::fs::remove_file(&src_path);
+        if !compile.status.success() {
+            return Err(format!(
+                "Rust compile failed: {}",
+                String::from_utf8_lossy(&compile.stderr)
+            ));
+        }
+        let version = Command::new("rustc")
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .next()
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| "rustc (version unknown)".to_string());
+        let run = Command::new(&exe_path)
+            .output()
+            .map_err(|e| format!("running the Rust binary: {e}"))?;
+        let _ = std::fs::remove_file(&exe_path);
+        let exit_status = run
+            .status
+            .code()
+            .ok_or_else(|| "Rust process terminated by signal".to_string())?;
+        Ok(PeerRun {
+            exit_status,
+            compiler_version: version,
+            command,
+        })
+    }
+}
+
+/// The Rust cross-language comparison: each Benchmarks Game workload's Rust
+/// peer compiles with `rustc -O` and must reach the tuonelang program's exit
+/// byte. `rustc` is the toolchain building this test, so unlike `cc` and `go`
+/// it is never absent here; a skip is therefore a failure.
+#[test]
+fn rust_comparison_agrees_on_the_benchmarks_game() {
+    let runner = RustcComparisonRunner;
+    let mut measured = 0;
+    for workload in workloads() {
+        let Some(comparison) = comparison_for_peer(&workload, PeerLanguage::Rust) else {
+            continue;
+        };
+        match run_comparison(&runner, &comparison) {
+            Verdict::Measured { command, .. } => {
+                measured += 1;
+                assert!(
+                    command.starts_with("rustc -O"),
+                    "the exact command is recorded"
+                );
+            }
+            Verdict::Skipped { reason } => {
+                panic!(
+                    "the Rust peer for `{}` did not agree: {reason}",
+                    workload.label
+                )
+            }
+        }
+    }
+    assert_eq!(
+        measured, 5,
+        "every supported Benchmarks Game workload has a Rust peer"
+    );
 }
 
 /// The real timed runner for the parallel-speedup category (ADR-0007): build
@@ -456,4 +567,173 @@ fn parallel_speedup_measures_live_through_the_real_cli() {
             assert!(!reason.trim().is_empty());
         }
     }
+}
+
+/// One language's side of the speed table: build `source` to an executable,
+/// or explain why it could not be built.
+fn build_for_speed(peer: Option<PeerLanguage>, source: &str, tag: &str) -> Result<PathBuf, String> {
+    let ext = match peer {
+        None => "tuo",
+        Some(PeerLanguage::C) => "c",
+        Some(PeerLanguage::Go) => "go",
+        Some(PeerLanguage::Rust) => "rs",
+    };
+    let src_path = scratch(&format!("speed-{tag}"), ext);
+    let exe_path = scratch(&format!("speed-{tag}"), "bin");
+    std::fs::write(&src_path, source).map_err(|e| format!("writing source: {e}"))?;
+    let mut command = match peer {
+        None => {
+            let mut c = Command::new(env!("CARGO_BIN_EXE_tuo"));
+            c.args(["build", "--release", "-o"])
+                .arg(&exe_path)
+                .arg(&src_path);
+            c
+        }
+        Some(PeerLanguage::C) => {
+            let mut c = Command::new("cc");
+            c.args(C_FLAGS)
+                .arg(&src_path)
+                .arg("-o")
+                .arg(&exe_path)
+                .arg("-lm");
+            c
+        }
+        Some(PeerLanguage::Rust) => {
+            let mut c = Command::new("rustc");
+            c.args(RustcComparisonRunner::FLAGS)
+                .arg(&src_path)
+                .arg("-o")
+                .arg(&exe_path);
+            c
+        }
+        Some(PeerLanguage::Go) => {
+            let mut c = Command::new("go");
+            c.arg("build").arg("-o").arg(&exe_path).arg(&src_path);
+            c
+        }
+    };
+    let output = command
+        .output()
+        .map_err(|e| format!("toolchain unavailable: {e}"));
+    let _ = std::fs::remove_file(&src_path);
+    let output = output?;
+    if !output.status.success() {
+        return Err(format!(
+            "build failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    Ok(exe_path)
+}
+
+/// Run `exe` once untimed (first-exec costs), then `runs` timed; return the
+/// fastest wall-clock time in milliseconds, requiring every run to exit with
+/// `expected`.
+fn best_of(exe: &std::path::Path, runs: usize, expected: i32) -> Result<f64, String> {
+    let warmup = Command::new(exe)
+        .output()
+        .map_err(|e| format!("running: {e}"))?;
+    if warmup.status.code() != Some(expected) {
+        return Err(format!(
+            "exited {:?}, expected {expected}",
+            warmup.status.code()
+        ));
+    }
+    let mut best = f64::INFINITY;
+    for _ in 0..runs {
+        let started = std::time::Instant::now();
+        let run = Command::new(exe)
+            .output()
+            .map_err(|e| format!("running: {e}"))?;
+        let millis = started.elapsed().as_secs_f64() * 1000.0;
+        if run.status.code() != Some(expected) {
+            return Err(format!(
+                "exited {:?}, expected {expected}",
+                run.status.code()
+            ));
+        }
+        best = best.min(millis);
+    }
+    Ok(best)
+}
+
+/// The speed table: every supported Computer Language Benchmarks Game
+/// workload built by `tuo build --release` and by each peer's optimizing
+/// compiler, each binary timed (fastest of five runs after a warm-up) and its
+/// time reported as a ratio to C. Every run must reach the workload's exit
+/// byte, so a number is only ever printed for a program that computed the
+/// right answer; a peer whose toolchain is absent is shown as skipped.
+///
+/// This is a measurement, not a gate: the timings are wall-clock on whatever
+/// machine runs it, so it asserts correctness only and never a ratio. It is
+/// `#[ignore]`d to keep the ordinary test run fast; CI runs it explicitly with
+/// `--ignored --nocapture` so the table appears in the log.
+#[test]
+#[ignore = "a timing table; run with --ignored --nocapture"]
+#[expect(clippy::print_stdout, reason = "the speed table is this test's output")]
+fn benchmarks_game_speed_table() {
+    use tuo_bench::lab::runtime::{BENCHMARKS_GAME, Support};
+
+    const RUNS: usize = 5;
+    let peers = [PeerLanguage::C, PeerLanguage::Rust, PeerLanguage::Go];
+    println!(
+        "{:<16} {:>11} {:>9} {:>9} {:>9}   {:>6} {:>7} {:>6}",
+        "workload", "tuonelang", "c", "rust", "go", "vs c", "vs rust", "vs go"
+    );
+    let mut measured = 0;
+    for workload in workloads() {
+        if !BENCHMARKS_GAME.contains(&workload.label.as_str()) {
+            continue;
+        }
+        let Support::Supported {
+            source,
+            expected_exit,
+        } = &workload.support
+        else {
+            println!("{:<16} not yet expressible natively", workload.label);
+            continue;
+        };
+        let tuo_exe = build_for_speed(None, source, &workload.label)
+            .unwrap_or_else(|e| panic!("`{}` must build with tuo --release: {e}", workload.label));
+        let tuo_ms = best_of(&tuo_exe, RUNS, *expected_exit)
+            .unwrap_or_else(|e| panic!("`{}` (tuonelang): {e}", workload.label));
+        let _ = std::fs::remove_file(&tuo_exe);
+        measured += 1;
+
+        let mut cells = Vec::new();
+        let mut ratios = Vec::new();
+        for peer in peers {
+            let timing = comparison_for_peer(&workload, peer)
+                .ok_or_else(|| "no peer program".to_string())
+                .and_then(|cmp| {
+                    let tag = format!("{}-{}", workload.label, peer.label());
+                    let exe = build_for_speed(Some(peer), &cmp.peer_source, &tag)?;
+                    let result = best_of(&exe, RUNS, cmp.expected_exit);
+                    let _ = std::fs::remove_file(&exe);
+                    result
+                });
+            match timing {
+                Ok(ms) => {
+                    cells.push(format!("{ms:>7.1}ms"));
+                    ratios.push(format!("{:>5.2}x", tuo_ms / ms));
+                }
+                Err(_) => {
+                    cells.push(format!("{:>9}", "skipped"));
+                    ratios.push(format!("{:>6}", "-"));
+                }
+            }
+        }
+        println!(
+            "{:<16} {:>9.1}ms {} {} {}   {} {:>7} {}",
+            workload.label, tuo_ms, cells[0], cells[1], cells[2], ratios[0], ratios[1], ratios[2]
+        );
+    }
+    println!(
+        "(fastest of {RUNS} runs after a warm-up; ratio = tuonelang time / peer time, \
+         so below 1.00x means tuonelang was faster)"
+    );
+    assert_eq!(
+        measured, 5,
+        "every supported Benchmarks Game workload was timed"
+    );
 }

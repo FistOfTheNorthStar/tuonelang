@@ -1,0 +1,52 @@
+// The mandelbrot workload — the Benchmarks Game's mandelbrot: the 1600 x 1600
+// bitmap of the Mandelbrot set over [-1.5, 0.5] x [-1, 1], 50 iterations per
+// point, packed eight pixels to a byte. Instead of writing the PBM image,
+// every packed byte is folded into a checksum (sum = (sum * 31 + byte) %
+// 1000003) so the exit byte witnesses the whole image. The C, Rust, and Go
+// peers make the identical iteration with no fused multiply-add, which
+// matters here: a fused `2*Zr*Zi + Ci` flips pixels on the set's boundary.
+// Exit byte: 145.
+
+fn main() -> Int {
+    let n = 1600;
+    var sum = 0;
+    var y = 0;
+    while y < n {
+        let ci = 2.0 * (y as Float) / (n as Float) - 1.0;
+        var bits = 0;
+        var count = 0;
+        var x = 0;
+        while x < n {
+            let cr = 2.0 * (x as Float) / (n as Float) - 1.5;
+            var zr = 0.0;
+            var zi = 0.0;
+            var tr = 0.0;
+            var ti = 0.0;
+            var i = 0;
+            while i < 50 && tr + ti <= 4.0 {
+                zi = 2.0 * zr * zi + ci;
+                zr = tr - ti + cr;
+                tr = zr * zr;
+                ti = zi * zi;
+                i = i + 1;
+            }
+            bits = bits * 2 + (if tr + ti <= 4.0 { 1 } else { 0 });
+            count = count + 1;
+            if count == 8 {
+                sum = (sum * 31 + bits) % 1000003;
+                bits = 0;
+                count = 0;
+            }
+            x = x + 1;
+        }
+        if count > 0 {
+            while count < 8 {
+                bits = bits * 2;
+                count = count + 1;
+            }
+            sum = (sum * 31 + bits) % 1000003;
+        }
+        y = y + 1;
+    }
+    sum % 256
+}
