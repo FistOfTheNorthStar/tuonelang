@@ -1524,7 +1524,11 @@ impl<'a> Checker<'a> {
                 self.locals.insert(symbol, ty);
             }
         }
-        let body_span = self.at(body.span());
+        // A mismatch against the declared return type is reported at the
+        // expression that produced the value, not at the body's opening
+        // brace: the brace sits beside the annotation, so a caret there reads
+        // as blaming the signature for what the body got wrong.
+        let body_span = self.at(block_value_span(body).or_else(|| body.span()));
         let actual = self.block(body);
         self.expect_ty(&ret, &actual, body_span);
         self.finish_body();
@@ -3403,4 +3407,22 @@ fn substitute(ty: &Ty, map: &HashMap<SymbolId, Ty>) -> Ty {
 /// least one token).
 fn value_span(expr: &Expr<'_>) -> Option<Span> {
     expr.span()
+}
+
+/// The span of the expression a block evaluates to, when it has one.
+///
+/// Mirrors the value rule `Checker::block` applies: the syntactic tail, or
+/// else a final expression statement written without a semicolon. A block
+/// with neither evaluates to `Unit` (or diverges) and has no such
+/// expression, so the caller falls back to the block itself.
+fn block_value_span(block: Block<'_>) -> Option<Span> {
+    if let Some(tail) = block.tail() {
+        return value_span(&tail);
+    }
+    match block.statements().last() {
+        Some(Statement::Expr(statement)) if !statement.has_semicolon() => {
+            statement.expr().and_then(|expr| value_span(&expr))
+        }
+        _ => None,
+    }
 }

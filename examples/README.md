@@ -86,14 +86,13 @@ tuo test --manifest examples/gguf-reader               # 31 passed, 0 failed
 tuo run examples/gguf-reader/src/main.tuo examples/gguf-reader/src/std_str.tuo ; echo $?           # 2
 tuo run --release examples/gguf-reader/src/main.tuo examples/gguf-reader/src/std_str.tuo ; echo $? # 2
 
-# The multi-package workspace: check/test the graph, then build + run the binary.
-# (`tuo run` is file-based, so a package binary is built and then executed —
-#  see DOGFOODING.md finding D-7.)
+# The multi-package workspace: check/test the graph, then run the binary.
 tuo test  --manifest examples/workspace/app            # 14 specs across 3 packages
+tuo run   --manifest examples/workspace/app ; echo $?  # 26
 tuo build --manifest examples/workspace/app -o /tmp/app && /tmp/app ; echo $?   # 26
 ```
 
-Each package resolves a `tdg.lock` on build; those lockfiles embed
-machine-absolute dependency paths and are therefore **not committed** (they are
-gitignored under `examples/`, and regenerated on demand — DOGFOODING.md finding
-D-6).
+Each package resolves a `tdg.lock` on build. The lockfile records each
+dependency relative to the root package, so it is portable between checkouts
+(DOGFOODING.md finding D-6, fixed). The examples' lockfiles are still
+gitignored and regenerated on demand, since nothing requires them pinned.

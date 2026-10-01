@@ -228,3 +228,63 @@ fn resolution_is_deterministic() {
     // And the emitted lockfile round-trips through the parser.
     assert!(Lockfile::parse(&a).is_ok(), "lockfile re-parses");
 }
+
+/// Build the three-package `app -> util -> core` workspace under `root`, with
+/// `core` nested a level deeper so the relative spellings differ in shape.
+fn write_workspace(root: &Path) {
+    write_package(
+        &root.join("libs/core"),
+        "core",
+        "",
+        "module core;\n\npub fn id(take x: Int) -> Int {\n    x\n}\n",
+    );
+    write_package(
+        &root.join("util"),
+        "util",
+        "core = { path = \"../libs/core\" }\n",
+        "module util;\n\npub fn u() -> Int {\n    0\n}\n",
+    );
+    write_package(
+        &root.join("app"),
+        "app",
+        "util = { path = \"../util\" }\n",
+        "module app;\n\nfn main() -> Int {\n    0\n}\n",
+    );
+}
+
+#[test]
+fn the_lockfile_records_dependency_paths_relative_to_the_root_package() {
+    let root = scratch("relative-source");
+    write_workspace(&root);
+
+    let lock = resolve(&root.join("app")).expect("resolves").to_lockfile();
+    let text = lock.to_toml();
+    // A direct dependency, and a transitive one reached through `util`: both
+    // are spelled from the *root* package, the one directory a reader of this
+    // lockfile is known to be standing in.
+    assert!(text.contains("source = \"path+../util\""), "{text}");
+    assert!(text.contains("source = \"path+../libs/core\""), "{text}");
+    // Nothing about where the workspace happens to live may reach the file.
+    let scratch_dir = root.canonicalize().expect("scratch dir exists");
+    assert!(
+        !text.contains(&scratch_dir.display().to_string()),
+        "the lockfile embeds the resolving machine's path:\n{text}"
+    );
+}
+
+#[test]
+fn the_lockfile_is_byte_identical_wherever_the_workspace_lives() {
+    // The same workspace at two different absolute locations — two checkouts,
+    // or two machines — must resolve to the same bytes, or the lockfile cannot
+    // be committed.
+    let first = scratch("portable-first");
+    let second = scratch("portable-second").join("nested/deeper");
+    write_workspace(&first);
+    write_workspace(&second);
+
+    let a = resolve(&first.join("app")).expect("resolves").to_lockfile();
+    let b = resolve(&second.join("app"))
+        .expect("resolves")
+        .to_lockfile();
+    assert_eq!(a.to_toml(), b.to_toml());
+}

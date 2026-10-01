@@ -182,6 +182,26 @@ pub(crate) fn build_loaded(
     )
 }
 
+/// The package-aware `tuo run`: compile an already-resolved package graph to a
+/// temporary executable and run it, exiting with the program's own status.
+pub(crate) fn run_loaded(
+    map: &SourceMap,
+    sources: &[SourceId],
+    names: &[PathBuf],
+    release: bool,
+    mode: OutputMode,
+) -> ExitCode {
+    drive_loaded(
+        map,
+        sources,
+        names,
+        None,
+        Backend::select(release),
+        Mode::Run,
+        mode,
+    )
+}
+
 /// A failure carrying enough to report through either output mode.
 enum Failure {
     /// The front end rejected the program; carries its diagnostics.

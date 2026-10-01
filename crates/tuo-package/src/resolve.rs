@@ -241,6 +241,7 @@ pub fn resolve(root_dir: &Path) -> Result<ResolvedGraph, ResolveError> {
     let mut stack: Vec<PackageName> = Vec::new();
     walk(
         &root_dir,
+        &root_dir,
         &root_manifest,
         true,
         &mut claimed,
@@ -291,7 +292,11 @@ pub fn verify_against_lock(graph: &ResolvedGraph, lock: &Lockfile) -> Result<(),
 }
 
 /// Recursively load `manifest`'s package (at `dir`) and its path dependencies.
+///
+/// `root_dir` is the directory of the package under resolution; a dependency's
+/// locked source is recorded relative to it (see [`relative_to`]).
 fn walk(
+    root_dir: &Path,
     dir: &Path,
     manifest: &Manifest,
     is_root: bool,
@@ -335,7 +340,15 @@ fn walk(
                 // The declared dependency key must match the dependency's own
                 // package name, so imports and the lockfile agree.
                 dep_names.push(dep_manifest.name.clone());
-                walk(&dep_dir, &dep_manifest, false, claimed, packages, stack)?;
+                walk(
+                    root_dir,
+                    &dep_dir,
+                    &dep_manifest,
+                    false,
+                    claimed,
+                    packages,
+                    stack,
+                )?;
             }
         }
     }
@@ -347,7 +360,7 @@ fn walk(
     let source = if is_root {
         LockedSource::Root
     } else {
-        LockedSource::Path(dir.display().to_string())
+        LockedSource::Path(relative_to(root_dir, dir))
     };
 
     packages.insert(
@@ -453,6 +466,46 @@ fn checksum_of(modules: &[ModuleSource]) -> String {
         bytes.push(0);
     }
     sha256::hex(&bytes)
+}
+
+/// Spell `dir` relative to `root`, with `/` separators on every platform.
+///
+/// This is what the lockfile records for a path dependency. An absolute path
+/// would make `tdg.lock` differ between two checkouts of the same workspace
+/// (and leak the resolving machine's directory layout into a file meant to be
+/// committed); the relative spelling depends only on how the packages sit
+/// beside each other, so a workspace resolves to a byte-identical lock
+/// wherever it is cloned.
+///
+/// Both inputs are expected absolute. When they share no common prefix at all
+/// (different drive prefixes), no relative spelling exists and the absolute
+/// path is recorded as the only honest answer.
+fn relative_to(root: &Path, dir: &Path) -> String {
+    let root_parts: Vec<_> = root.components().collect();
+    let dir_parts: Vec<_> = dir.components().collect();
+    let shared = root_parts
+        .iter()
+        .zip(&dir_parts)
+        .take_while(|(a, b)| a == b)
+        .count();
+    if shared == 0 {
+        return dir.display().to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    parts.extend(std::iter::repeat_n(
+        "..".to_string(),
+        root_parts.len() - shared,
+    ));
+    parts.extend(
+        dir_parts[shared..]
+            .iter()
+            .map(|part| part.as_os_str().to_string_lossy().into_owned()),
+    );
+    if parts.is_empty() {
+        ".".to_string()
+    } else {
+        parts.join("/")
+    }
 }
 
 /// Make a path absolute against the current directory without touching the

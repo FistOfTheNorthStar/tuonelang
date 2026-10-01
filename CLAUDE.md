@@ -48,6 +48,7 @@ cargo run -p tuo-cli -- add util --path ../util # add a path dependency; re-reso
 cargo run -p tuo-cli -- remove util            # drop a dependency; re-resolve tdg.lock
 cargo run -p tuo-cli -- check                  # …with no files: resolve+check the package in `.`
 cargo run -p tuo-cli -- build [--release]      # …resolve+compile the package (checksum-verified deps)
+cargo run -p tuo-cli -- run [--release]        # …resolve+compile+run the package; exit status = `main`'s result
 cargo run -p tuo-cli -- verify                 # …resolve+static-check+run the package's specs
 cargo run -p tuo-cli -- test                   # run the package's tests (its specs) across the graph
 cargo run -p tuo-cli -- --message-format=json package symbols # a package's real exported symbols
@@ -241,7 +242,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   versioned JSON-lines agent protocol over stdio — a long-lived compiler-intelligence
   server reusing one database across requests; see the agent-protocol convention below),
   and the **package commands** — `tuo new <name>`, `tuo add <name> --path <p>`,
-  `tuo remove <name>`, `tuo test`, the package-aware forms of `check`/`build`/`verify`
+  `tuo remove <name>`, `tuo test`, the package-aware forms of `check`/`build`/`run`/`verify`
   (invoked with no file arguments, optionally `--manifest <dir>`, they resolve the
   package graph rooted at that directory and drive the same front end / backend / spec
   runner over its loaded sources), and `tuo package symbols` (a machine-only query of a
@@ -717,9 +718,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::bignum` (the gap ADR-0022 names), so it demonstrates the protocol
   is expressible, not that it is deployable; no resumption, 0-RTT, client
   certificates, HelloRetryRequest, RSA/P-256, or chain validation, each
-  absent rather than stubbed. Resolved
-  `examples/**/tdg.lock` files embed machine-absolute dependency paths and
-  are therefore gitignored, not committed.
+  absent rather than stubbed. A resolved
+  `tdg.lock` records each dependency **relative to the root package**, so a
+  workspace resolves to a byte-identical lock wherever it is checked out
+  (finding D-6, fixed); the `examples/**/tdg.lock` files remain gitignored
+  because the dogfooding tests regenerate them, not because they are
+  unportable. The heap-wrapper gap every refusal message defers to "a later
+  ADR" is now `ADR-0028` (**proposed**), which records two findings the
+  documentation had not: no program can *construct* a wrapper value, since
+  the types have no constructor, and a struct holding one in a field can be
+  declared and borrowed but not held by value.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
@@ -1122,7 +1130,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   duplicate names, and returns the whole graph (`ResolvedGraph`) in deterministic name
   order; **lockfile semantics** — `Lockfile` (`tdg.lock`, format `LOCKFILE_VERSION`) pins
   every resolved package's checksum and direct dependencies and is always written in name
-  order, so a workspace resolves to a byte-identical lock; **checksums** — each package's
+  order, with each dependency's source spelled relative to the root package
+  rather than as an absolute path, so a workspace resolves to a byte-identical
+  lock on any machine; **checksums** — each package's
   content is SHA-256'd (`sha256`, a hand-rolled, FIPS-180-4-vector-pinned implementation,
   no new dependency) over its module names+text, and a compile refuses a **dependency**
   whose bytes drifted from the lock (`verify_against_lock`) while deliberately exempting

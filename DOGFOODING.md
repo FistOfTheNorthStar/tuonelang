@@ -178,10 +178,16 @@ Gaps found by dogfooding:
   ```
   The caret lands on `-> Int`, not on the offending `n < 10`. Correct diagnosis,
   imprecise location. (Backlog finding, no ADR — a diagnostics-quality bug, not a
-  language change.)
+  language change.) **Fixed 2026-09-28:** the mismatch is reported at the
+  expression the body evaluates to (`2:5`, under `n < 10`). A body with no
+  value expression still reports at the body, there being nothing narrower to
+  point at. Pinned in `crates/tuo-types/tests/return_span.rs`.
 - **D-5b — a missing parameter mode degrades to coarse recovery (`P0002`,
   "skipped 14 tokens").** `fn f(n: Int)` yields a whole-item skip rather than a
   targeted "parameter needs a mode" hint. (Backlog finding, no ADR.)
+  **Fixed** before 2026-09-28: it is now a targeted `P0001`, "parameter `n` is
+  missing its passing mode", at the parameter name, with the three modes
+  explained. This entry had outlived the bug.
 - **D-5c — ownership diagnostics are unreachable from the runnable core.** Every
   scalar-core type is `Copy`, so no `tuo run`-able program can exercise `O0001`;
   it fires only on heap types (`Box`/`Shared`), which are interpreter-tier. This
@@ -328,11 +334,11 @@ benchmark-consideration section, per the prompt. None was patched ad hoc.
 | **D-2b** | No *growable* collection whose size is not compile-time-fixed — *data-pipeline filter+collect* | [ADR-0009](specification/adr/ADR-0009-allocator-core.md) **(accepted, landed)** — data-pipeline now `push`es its filtered subset onto a heap-backed `Array[Int]` and folds it, spec-pinned equal to the streaming fold |
 | **D-4** | No concurrency model — *concurrent-worker execution* | [ADR-0007](specification/adr/ADR-0007-concurrency-model.md) **(accepted, landed)** — the model resolved to structured fork-join over one primitive (`std::rt::par_map`, a typed effect); concurrent-worker now runs its pool live, exiting with the model's makespan only when the real parallel run agrees — the scheduling model as the runtime oracle, exactly as this table predicted. The dynamically-drained shared queue its contract named followed via [ADR-0015](specification/adr/ADR-0015-channels-and-mutexes.md) **(accepted, landed)** — `dynamic_total` drains a real channel with racing workers, exit 15 only when the drained total equals the serial cost |
 | **D-8** | No first-class functions/closures — *generic map/fold in stdlib & pipeline* | [ADR-0008](specification/adr/ADR-0008-first-class-functions.md) **(Tier 1 accepted, landed)** — a bare `fn` name is now a `Copy` function value called indirectly (native, three-way pinned); `std::collections` ships generic `fold`/`map_into`/`filter_into`/`any`/`all` over a function value, and data-pipeline's fold calls the generic `fold` with `add` by value, same verdicts/exit byte. Tier 2 capturing closures deferred to a future ADR |
-| **D-5a** | `T0001` span points at the return annotation, not the offending body expression | backlog (diagnostics bug, no ADR) |
-| **D-5b** | Missing parameter mode degrades to coarse `P0002` whole-item recovery | backlog (diagnostics bug, no ADR) |
+| **D-5a** | `T0001` span points at the return annotation, not the offending body expression | **fixed 2026-09-28** — reported at the body's value expression |
+| **D-5b** | Missing parameter mode degrades to coarse `P0002` whole-item recovery | **fixed** — a targeted `P0001` at the parameter name |
 | **D-5c** | Ownership diagnostics unreachable from the runnable core (all scalar types `Copy`) | closes with D-1/D-2 |
-| **D-6** | Resolved `tdg.lock` embeds machine-absolute dependency paths → not portable; gitignored under `examples/` | backlog (package tooling, no ADR) |
-| **D-7** | No package-aware `tuo run`; a multi-package binary must be `tuo build --manifest` then executed | backlog (CLI ergonomics, no ADR) |
+| **D-6** | Resolved `tdg.lock` embeds machine-absolute dependency paths → not portable; gitignored under `examples/` | **fixed 2026-09-28** — paths are recorded relative to the root package, so a workspace resolves to a byte-identical lock at any location |
+| **D-7** | No package-aware `tuo run`; a multi-package binary must be `tuo build --manifest` then executed | **fixed 2026-09-28** — `tuo run` with no files runs the package (`--manifest <dir>` to name it), with the same drift check as `build` |
 
 The four ADRs (0004, 0006, 0007, 0008) are the durable output of this exercise:
 they turn "the language can't do X" into a reviewed, benchmarkable decision

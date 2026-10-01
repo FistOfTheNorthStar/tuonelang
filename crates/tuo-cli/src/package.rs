@@ -1,5 +1,5 @@
-//! The `tuo` package commands: `new`, `add`, `remove`, `build`, `check`,
-//! `verify`, and `test`.
+//! The `tuo` package commands: `new`, `add`, `remove`, `build`, `run`,
+//! `check`, `verify`, and `test`.
 //!
 //! These operate on a **package** — a directory holding a `tdg.toml` manifest
 //! and a module root of `.tuo` sources — rather than on a bare list of files.
@@ -8,7 +8,7 @@
 //! * **Manifest management** — `new` scaffolds a package; `add`/`remove` edit
 //!   its `[dependencies]` and re-resolve the lockfile. These change files on
 //!   disk and report a short confirmation.
-//! * **Compile/run** — `check`, `build`, `verify`, and `test` resolve the
+//! * **Compile/run** — `check`, `build`, `run`, `verify`, and `test` resolve the
 //!   package's dependency graph ([`tuo_package::resolve`]), load every module
 //!   source across the graph into one `SourceMap`, and then drive the **exact
 //!   same** front end, backend, and spec runner the file-based commands use.
@@ -17,7 +17,7 @@
 //!
 //! Resolution is deterministic and path-dependency based, so a package always
 //! resolves to the same lockfile. Every compile command re-resolves and rewrites
-//! `tdg.lock`, and `verify`/`build`/`test` additionally check the resolved
+//! `tdg.lock`, and `verify`/`build`/`run`/`test` additionally check the resolved
 //! sources against the previous lockfile's checksums so a build never silently
 //! compiles drifted dependency bytes.
 //!
@@ -191,6 +191,17 @@ pub(crate) fn build(
 ) -> ExitCode {
     compile_command(dir, mode, move |map, sources, names, mode| {
         codegen::build_loaded(map, sources, names, output.clone(), release, mode)
+    })
+}
+
+/// `tuo run [--release] [--manifest <dir>]`: resolve and compile the package,
+/// then run it, exiting with the status its `main` returns.
+///
+/// The same resolution, lockfile refresh, and dependency-drift check as
+/// `build` — a drifted dependency is refused before anything executes.
+pub(crate) fn run(dir: &Path, release: bool, mode: OutputMode) -> ExitCode {
+    compile_command(dir, mode, move |map, sources, names, mode| {
+        codegen::run_loaded(map, sources, names, release, mode)
     })
 }
 
