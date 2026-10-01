@@ -157,6 +157,7 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
                 crate::mir::UnOp::Neg => "neg",
                 crate::mir::UnOp::Not => "not",
                 crate::mir::UnOp::BitNot => "bitnot",
+                crate::mir::UnOp::Sqrt => "sqrt",
             };
             format!("{name}({})", render_operand(operand))
         }

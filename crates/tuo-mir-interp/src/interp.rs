@@ -872,6 +872,23 @@ impl Machine<'_, '_> {
                 Value::Float(v, kind) => Ok(Value::Float(-v, kind)),
                 other => Err(self.type_bug(function, "unary `-` on a non-number", &other)),
             },
+            // ADR-0029: IEEE 754's correctly-rounded square root, which
+            // `f64::sqrt` (and `f32::sqrt`) guarantee — the same value the
+            // native `sqrt` instructions produce, so the engines agree bit for
+            // bit. An F32 is held at f64 precision, so it is rounded to f32
+            // first and its root rounded at f32.
+            UnOp::Sqrt => match value {
+                Value::Float(v, FloatKind::F32) => {
+                    #[expect(
+                        clippy::cast_possible_truncation,
+                        reason = "an F32 value is held at f64 precision but is exactly an f32"
+                    )]
+                    let narrow = v as f32;
+                    Ok(Value::Float(f64::from(narrow.sqrt()), FloatKind::F32))
+                }
+                Value::Float(v, kind) => Ok(Value::Float(v.sqrt(), kind)),
+                other => Err(self.type_bug(function, "square root of a non-float", &other)),
+            },
         }
     }
 

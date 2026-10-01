@@ -1352,6 +1352,26 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     .map_err(builder_err("emitting float negation"))?
                     .into())
             }
+            // ADR-0029: `llvm.sqrt` is the IEEE 754 correctly-rounded square
+            // root and lowers to the hardware instruction; with no fast-math
+            // flags LLVM may not approximate it, so it is the interpreter's
+            // value exactly.
+            UnOp::Sqrt => {
+                let value = value.into_float_value();
+                let intrinsic = Intrinsic::find("llvm.sqrt")
+                    .ok_or_else(|| CodegenError::backend("missing LLVM intrinsic llvm.sqrt"))?;
+                let decl = intrinsic
+                    .get_declaration(self.module, &[value.get_type().into()])
+                    .ok_or_else(|| CodegenError::backend("declaring LLVM intrinsic llvm.sqrt"))?;
+                let call = self
+                    .builder
+                    .build_call(decl, &[value.into()], "sqrt")
+                    .map_err(builder_err("emitting a square root"))?;
+                match call.try_as_basic_value() {
+                    inkwell::values::ValueKind::Basic(root) => Ok(root),
+                    _ => Err(CodegenError::backend("llvm.sqrt returned no value")),
+                }
+            }
             UnOp::Neg => {
                 let value = value.into_int_value();
                 let kind = self.operand_int_kind(operand)?;

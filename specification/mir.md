@@ -382,6 +382,10 @@ value of a statically known type.
 - **`Not`** — boolean negation.
 - **`BitNot`** — (ADR-0019) bitwise complement of an integer. Never traps: every
   bit pattern is a value of the type. Distinct from `Not`, which is `Bool -> Bool`.
+- **`Sqrt`** — (ADR-0029) the IEEE 754 square root of a float, correctly
+  rounded: `sqrt(-1.0)` is NaN, `sqrt(-0.0)` is `-0.0`, `sqrt(+inf)` is `+inf`.
+  Never traps. The lowering of `std::float::sqrt`; every engine computes the
+  same correctly-rounded value, so they agree bit for bit.
 
 ### 5.3 Binary operations (`BinOp`)
 

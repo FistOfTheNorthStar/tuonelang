@@ -170,6 +170,7 @@ fn floats_match_the_interpreter() {
         "flt_cast_sat.tuo",
         "flt_f32.tuo",
         "flt_struct.tuo",
+        "flt_sqrt.tuo",
     ] {
         assert_agrees(name);
     }

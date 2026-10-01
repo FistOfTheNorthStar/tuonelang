@@ -229,7 +229,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `0..width` **traps** `InvalidShift` rather than adopting the target's
   shift-masking, so all three engines agree; `|` is one token serving both
   pattern alternation and bitwise-or, disambiguated by grammatical context;
-  no new type, no ABI change) — and *refuse* — never
+  no new type, no ABI change); and — since ADR-0029 — the **native square
+  root** `std::float::sqrt` (IEEE 754's correctly-rounded root as MIR's
+  `UnOp::Sqrt`: Cranelift's `sqrt`, LLVM's `llvm.sqrt`, the interpreter's
+  `f64::sqrt`, agreeing bit for bit; `std::math::sqrt` delegates to it, having
+  been a twenty-step Newton loop that was both slow and, far from 1, wrong)
+  — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier
   2, deferred), refusing at storage-classification time with a message naming

@@ -77,6 +77,7 @@ the replacement, preserving the decision history.
 | [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
 | [ADR-0027](ADR-0027-monomorphization.md) | Monomorphization — making the generics the front end already accepts run natively | proposed |
 | [ADR-0028](ADR-0028-heap-wrapper-values.md) | Heap-wrapper values — giving `Box[T]` a constructor, and recursive types a runtime | proposed |
+| [ADR-0029](ADR-0029-native-square-root.md) | A native, correctly-rounded square root — `std::float::sqrt` | accepted |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally

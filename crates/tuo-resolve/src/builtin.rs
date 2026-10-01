@@ -4,7 +4,8 @@
 //! `Option`/`Some`/`None` resolve without one: the **effect builtins** of
 //! `std::rt`, the **pure `Str` builtins** of `std::str` (ADR-0006), and the
 //! **pure allocator-core builtins** of `std::string` and `std::array`
-//! (ADR-0009). They are installed by [`resolve`](crate::resolve) as real
+//! (ADR-0009), and the **pure float builtin** `std::float::sqrt` (ADR-0029).
+//! They are installed by [`resolve`](crate::resolve) as real
 //! symbols in real, always-present modules — reached by ordinary path
 //! resolution — and have **no tuonelang bodies**: the type checker knows
 //! their fixed signatures, MIR lowering turns calls to them into dedicated
@@ -296,6 +297,12 @@ pub enum Builtin {
     /// ADR requires; `remove` preserves the relative order of the rest).
     /// Pure; never traps. (ADR-0011.)
     MapKeys,
+    /// `std::float::sqrt(take x: Float) -> Float` — the IEEE 754 square
+    /// root, correctly rounded (`sqrt(-1.0)` is NaN, `sqrt(-0.0)` is
+    /// `-0.0`). Lowers to the hardware instruction; the interpreter computes
+    /// the same correctly-rounded value, so every engine agrees bit for bit.
+    /// Pure; never traps. (ADR-0029.)
+    FloatSqrt,
 }
 
 /// How one builtin parameter receives its argument (the surface
@@ -314,7 +321,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 58] = [
+    pub const ALL: [Self; 59] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -373,6 +380,7 @@ impl Builtin {
         Self::MapRemove,
         Self::MapLen,
         Self::MapKeys,
+        Self::FloatSqrt,
     ];
 
     /// The path of the module the builtin lives in.
@@ -435,6 +443,7 @@ impl Builtin {
             | Self::MapRemove
             | Self::MapLen
             | Self::MapKeys => &["std", "map"],
+            Self::FloatSqrt => &["std", "float"],
         }
     }
 
@@ -492,6 +501,7 @@ impl Builtin {
             Self::MapContainsKey => "contains_key",
             Self::MapRemove => "remove",
             Self::MapKeys => "keys",
+            Self::FloatSqrt => "sqrt",
         }
     }
 
@@ -557,6 +567,7 @@ impl Builtin {
             Self::MapRemove => "std::map::remove",
             Self::MapLen => "std::map::len",
             Self::MapKeys => "std::map::keys",
+            Self::FloatSqrt => "std::float::sqrt",
         }
     }
 
@@ -654,6 +665,7 @@ impl Builtin {
             Self::MapGet | Self::MapContainsKey => &[In, Take],
             Self::MapRemove => &[Mut, Take],
             Self::MapLen | Self::MapKeys => &[In],
+            Self::FloatSqrt => &[Take],
         }
     }
 }

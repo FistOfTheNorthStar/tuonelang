@@ -4,9 +4,8 @@
 // `Array[Float]` (in-place `std::array::set`). The C, Rust, and Go peers sum
 // the same rows in the same order with no fused multiply-add.
 //
-// The final square root is a verbatim copy of `std::math::sqrt` (twenty Newton
-// iterations; the peers use the hardware instruction) — called once, so it is
-// immaterial to the time here, and within an ulp, so immaterial to the result.
+// The final square root is a verbatim copy of `std::math::sqrt`: since
+// ADR-0029 the hardware's correctly-rounded root, as every peer computes it.
 //
 // The exit byte folds the norm: (norm * 1e9) as Int % 256 = 24.
 
@@ -14,13 +13,7 @@ fn sqrt(take x: Float) -> Float {
     if x <= 0.0 {
         return 0.0;
     }
-    var guess = x;
-    var i = 0;
-    while i < 20 {
-        guess = (guess + x / guess) / 2.0;
-        i = i + 1;
-    }
-    guess
+    std::float::sqrt(x)
 }
 
 fn a(take i: Int, take j: Int) -> Float {

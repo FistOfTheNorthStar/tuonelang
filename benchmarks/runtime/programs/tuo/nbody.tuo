@@ -6,11 +6,10 @@
 // with no fused multiply-add.
 //
 // `sqrt` is a verbatim copy of `std::math::sqrt` (the lab's workloads are
-// single-file): twenty Newton iterations, where every peer uses the
-// hardware's correctly-rounded square root. That is the language's real
-// cost today — v0 has no native square root — and this workload is where it
-// shows; the checksum is unaffected because the iteration converges to
-// within an ulp for every distance the orbit reaches.
+// single-file), which since ADR-0029 is the hardware's correctly-rounded
+// square root through the `std::float::sqrt` builtin — the same instruction
+// every peer uses. Before it, `std::math::sqrt` was twenty Newton iterations
+// and this workload ran 6x slower than C; it is where that gap was measured.
 //
 // The exit byte folds the final energy: (-energy * 1e9) as Int % 256 = 232.
 
@@ -40,13 +39,7 @@ fn sqrt(take x: Float) -> Float {
     if x <= 0.0 {
         return 0.0;
     }
-    var guess = x;
-    var i = 0;
-    while i < 20 {
-        guess = (guess + x / guess) / 2.0;
-        i = i + 1;
-    }
-    guess
+    std::float::sqrt(x)
 }
 
 fn add_body(mut b: Bodies, take p: [Float; 7]) {

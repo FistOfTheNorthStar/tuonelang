@@ -387,10 +387,9 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             "the Benchmarks Game's n-body: a Jovian-planet orbit simulation, \
              1,000,000 symplectic steps over five bodies held in parallel \
              Array[Float] columns — floating-point arithmetic and one square \
-             root per body pair per step. v0 has no native square root, so the \
-             tuonelang program carries std::math::sqrt's twenty-step Newton \
-             iteration where every peer uses the hardware instruction; this is \
-             where that gap is measured",
+             root per body pair per step, the hardware instruction on every \
+             side since ADR-0029's std::float::sqrt (before it, std::math::sqrt \
+             was a twenty-step Newton iteration and this ran 6x slower than C)",
             include_str!("../../../../benchmarks/runtime/programs/tuo/nbody.tuo"),
             // (-energy * 1e9) as Int % 256 after 1,000,000 steps.
             232,

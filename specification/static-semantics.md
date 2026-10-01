@@ -591,6 +591,19 @@ a loop (`T0017`) and indexing (`T0018`) by its nature.
 
 ---
 
+### 3.11 The float builtin (ADR-0029)
+
+One builtin module, `std::float`, provides the floating-point operation the
+hardware performs and the language cannot otherwise express. It is checked
+exactly like the §3.6 builtins and is **pure**.
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn sqrt(take x: Float) -> Float` | IEEE 754's correctly-rounded square root: NaN for a negative `x`, `-0.0` for `-0.0`, `+inf` for `+inf`. Never traps. |
+
+`std::math::sqrt` (a catalog function) wraps it, returning `0.0` for a
+non-positive input instead of NaN.
+
 ## 4. Ownership of each rule (the syntax/semantics boundary)
 
 This table (from [`syntax.md`](syntax.md)) is the authoritative index of which
