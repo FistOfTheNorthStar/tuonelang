@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "qwen3:4b@t0",
+    "provider": "http://localhost:11434/v1",
+    "temperature": "0",
+    "extra": [
+      {
+        "key": "seed",
+        "value": "7"
+      },
+      {
+        "key": "primed",
+        "value": "false"
+      },
+      {
+        "key": "system_prompt_sha256",
+        "value": "f93adeec154ca09da9960c928e398f7f797a25c64ebeae5266a9662effa4b649"
+      },
+      {
+        "key": "transport",
+        "value": "curl"
+      }
+    ]
+  },
+  "compiler_version": "0.1.0",
+  "language_version": "2024",
+  "task_set_digest": "4909242b7981199c+e98ef1adebcfb10d",
+  "runs": [
+    {
+      "task_id": "double",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.",
+          "output": "fn double(take Int x) -> Int { x * 2 }\n",
+          "generated_tokens": 2219,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn double(take Int x) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with `fn`\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
+          "output": "fn double(x: Int) -> Int { x * 2 }\n",
+          "generated_tokens": 1511,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn double(x: Int) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0001: parameter `x` is missing its passing mode",
+          "output": "fn double(x: take Int) -> Int { x * 2 }\n",
+          "generated_tokens": 971,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "double",
+      "variant": "add",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]",
+          "output": "double: (Int take) -> Int { take * 2 }\n",
+          "generated_tokens": 2713,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 0
+        },
+        {
+          "turn": 1,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\ndouble: (Int take) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 13 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
+          "output": "double: (take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 3786,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\ndouble: (take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
+          "output": "func double(take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 2832,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "double",
+      "variant": "mul",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]",
+          "output": "double(take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 2920,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\ndouble(take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 13 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
+          "output": "def double(take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 2171,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\ndef double(take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
+          "output": "def double(take: Int) : Int { take * 2 }\n",
+          "generated_tokens": 7741,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "min",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.",
+          "output": "fn min(a: Int, b: Int): Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n",
+          "generated_tokens": 2356,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nfn min(a: Int, b: Int): Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n\n\n[compiler feedback]\nP0002: malformed item: skipped 26 token(s) starting with `fn`\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope",
+          "output": "fn min(a: Int, b: Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n",
+          "generated_tokens": 2183,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nfn min(a: Int, b: Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n\n\n[compiler feedback]\nP0001: parameter `a` is missing its passing mode\nP0001: parameter `b` is missing its passing mode",
+          "output": "fn min(a: in Int, b: in Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n",
+          "generated_tokens": 916,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 0,
+          "unrelated_edit": false
+        }
+      ]
+    }
+  ]
+}

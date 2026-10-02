@@ -40,25 +40,25 @@
           "checked": false,
           "specs_passed": false,
           "invented_symbols": 3,
-          "feedback_latency_ms": 1
+          "feedback_latency_ms": 3
         },
         {
           "turn": 1,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn double(take Int x) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with `fn`\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
-          "output": "fn double(x: Int) -> Int { x * 2 }\n",
-          "generated_tokens": 1511,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn double(take Int x) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 14 token(s) starting with `fn` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "fn \"double\"(x: Int) -> Int { x * 2 }\n",
+          "generated_tokens": 3372,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
-          "invented_symbols": 0,
+          "invented_symbols": 3,
           "feedback_latency_ms": 1,
           "unrelated_edit": false
         },
         {
           "turn": 2,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn double(x: Int) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0001: parameter `x` is missing its passing mode",
-          "output": "fn double(x: take Int) -> Int { x * 2 }\n",
-          "generated_tokens": 971,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[previous attempt]\nfn \"double\"(x: Int) -> Int { x * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 14 token(s) starting with `fn` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "fn \"double\"(x: Int) -> Int { x * 2 };\n",
+          "generated_tokens": 5572,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
@@ -81,13 +81,13 @@
           "checked": false,
           "specs_passed": false,
           "invented_symbols": 3,
-          "feedback_latency_ms": 0
+          "feedback_latency_ms": 9
         },
         {
           "turn": 1,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\ndouble: (Int take) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 13 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
-          "output": "double: (take: Int) -> Int { take * 2 }\n",
-          "generated_tokens": 3786,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\ndouble: (Int take) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 13 token(s) starting with identifier — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "\"double\": (Int take) -> Int { take * 2 }\n",
+          "generated_tokens": 3740,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
@@ -97,9 +97,9 @@
         },
         {
           "turn": 2,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\ndouble: (take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
-          "output": "func double(take: Int) -> Int { take * 2 }\n",
-          "generated_tokens": 2832,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]\n\n[previous attempt]\n\"double\": (Int take) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 13 token(s) starting with string literal — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "double: (Int take) -> Int { take * 2 }\n",
+          "generated_tokens": 3334,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
@@ -126,9 +126,9 @@
         },
         {
           "turn": 1,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\ndouble(take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 13 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
-          "output": "def double(take: Int) -> Int { take * 2 }\n",
-          "generated_tokens": 2171,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\ndouble(take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 13 token(s) starting with identifier — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "\"double\" (take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 2316,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
@@ -138,14 +138,14 @@
         },
         {
           "turn": 2,
-          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\ndef double(take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002: malformed item: skipped 14 token(s) starting with identifier\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope\nR0002: cannot find `double` in this scope",
-          "output": "def double(take: Int) : Int { take * 2 }\n",
-          "generated_tokens": 7741,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]\n\n[previous attempt]\n\"double\" (take: Int) -> Int { take * 2 }\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 13 token(s) starting with string literal — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 3:6: cannot find `double` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 4:10: cannot find `double` in this scope — not found\nR0002 at 5:10: cannot find `double` in this scope — not found",
+          "output": "double (take: Int) -> Int { take * 2 }\n",
+          "generated_tokens": 4797,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
           "invented_symbols": 3,
-          "feedback_latency_ms": 5,
+          "feedback_latency_ms": 1,
           "unrelated_edit": false
         }
       ]
@@ -163,30 +163,30 @@
           "checked": false,
           "specs_passed": false,
           "invented_symbols": 4,
-          "feedback_latency_ms": 1
+          "feedback_latency_ms": 2
         },
         {
           "turn": 1,
-          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nfn min(a: Int, b: Int): Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n\n\n[compiler feedback]\nP0002: malformed item: skipped 26 token(s) starting with `fn`\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope\nR0002: cannot find `min` in this scope",
-          "output": "fn min(a: Int, b: Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n",
-          "generated_tokens": 2183,
-          "parsed": false,
-          "checked": false,
-          "specs_passed": false,
-          "invented_symbols": 0,
-          "feedback_latency_ms": 1,
-          "unrelated_edit": false
-        },
-        {
-          "turn": 2,
-          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nfn min(a: Int, b: Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n\n\n[compiler feedback]\nP0001: parameter `a` is missing its passing mode\nP0001: parameter `b` is missing its passing mode",
-          "output": "fn min(a: in Int, b: in Int) -> Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n",
-          "generated_tokens": 916,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nfn min(a: Int, b: Int): Int {\n    if a < b {\n        b\n    } else {\n        a\n    }\n}\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 26 token(s) starting with `fn` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 9:6: cannot find `min` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 10:10: cannot find `min` in this scope — not found\nR0002 at 11:10: cannot find `min` in this scope — not found\nR0002 at 12:10: cannot find `min` in this scope — not found",
+          "output": "module main {\n    fn min(a: Int, b: Int): Int {\n        if a < b {\n            b\n        } else {\n            a\n        }\n    }\n}\n",
+          "generated_tokens": 2400,
           "parsed": false,
           "checked": false,
           "specs_passed": false,
           "invented_symbols": 4,
-          "feedback_latency_ms": 0,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.\n\n[previous attempt]\nmodule main {\n    fn min(a: Int, b: Int): Int {\n        if a < b {\n            b\n        } else {\n            a\n        }\n    }\n}\n\n\n[compiler feedback]\nP0002 at 1:1: malformed item: skipped 3 token(s) starting with `module` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 2:5: malformed item: skipped 27 token(s) starting with `fn` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 11:6: cannot find `min` in this scope — not found\n  help: an identifier-named spec targets a module-level function; use a string name for a free-standing spec\nR0002 at 12:10: cannot find `min` in this scope — not found\nR0002 at 13:10: cannot find `min` in this scope — not found\nR0002 at 14:10: cannot find `min` in this scope — not found",
+          "output": "spec \"min\" {\n    fn (a: Int, b: Int): Int {\n        if a < b {\n            b\n        } else {\n            a\n        }\n    }\n}\n",
+          "generated_tokens": 2080,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1,
           "unrelated_edit": false
         }
       ]
