@@ -235,7 +235,12 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   root** `std::float::sqrt` (IEEE 754's correctly-rounded root as MIR's
   `UnOp::Sqrt`: Cranelift's `sqrt`, LLVM's `llvm.sqrt`, the interpreter's
   `f64::sqrt`, agreeing bit for bit; `std::math::sqrt` delegates to it, having
-  been a twenty-step Newton loop that was both slow and, far from 1, wrong)
+  been a twenty-step Newton loop that was both slow and, far from 1, wrong);
+  and — since ADR-0030 — **scratch buffers**: indexed assignment `xs[i] = v`
+  on a fixed or growable array in a mutable place (bounds-checked like a
+  read; `Copy` elements only, `O0012` otherwise) and
+  `std::array::filled(n, v)` (one allocation; `HeapOp::ArrayFilled`), which
+  took the `sha256-hash` workload and `std::crypto`'s digests 1.5x faster
   — and *refuse* — never
   mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
   **values**, array elements containing one, and **capturing closures** — Tier

@@ -1,0 +1,41 @@
+// ownership.md §2, ADR-0030 — an indexed write `xs[i] = v` mutates the array
+// place underneath it, so the array must be a mutable, usable place, and the
+// element must be `Copy` (nothing drops the element being overwritten:
+// `O0012`). `std::array::filled` duplicates its value, so the value must be
+// `Copy` too (`O0010`, the repeat literal's rule).
+
+fn case_let_array() {
+    let w = [0; 4];
+    w[0 as Usize] = 1; // ERROR: O0004 a `let` binding is not mutable
+}
+
+fn case_in_parameter(in w: [Int; 4]) {
+    w[0 as Usize] = 1; // ERROR: O0004 an `in` parameter is read-only
+}
+
+fn make() -> [Int; 4] {
+    [0; 4]
+}
+
+fn case_temporary() {
+    make()[0 as Usize] = 1; // ERROR: O0004 a call result is not a place
+}
+
+fn case_non_copy_element(take s: String) {
+    var xs = std::array::empty();
+    std::array::push(xs, std::string::from_str("a"));
+    xs[0 as Usize] = s; // ERROR: O0012 a `String` element would leak
+}
+
+fn sink(take xs: Array[Int]) { }
+
+fn case_moved_array() {
+    var xs = std::array::empty();
+    std::array::push(xs, 1);
+    sink(xs);
+    xs[0 as Usize] = 2; // ERROR: O0001 writing into a moved array uses it
+}
+
+fn case_filled_non_copy(take s: String) {
+    let xs = std::array::filled(2, s); // ERROR: O0010 a `String` cannot be duplicated
+}

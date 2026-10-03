@@ -25,9 +25,9 @@ use tuo_diagnostics::Diagnostic;
 use tuo_source::SourceMap;
 
 /// The ownership diagnostic codes fixed by `specification/ownership.md` §15.
-const KNOWN_CODES: [&str; 11] = [
+const KNOWN_CODES: [&str; 12] = [
     "O0001", "O0002", "O0003", "O0004", "O0005", "O0006", "O0007", "O0008", "O0009", "O0010",
-    "O0011",
+    "O0011", "O0012",
 ];
 
 /// Minimum number of cases each corpus must hold (ADR-0003).

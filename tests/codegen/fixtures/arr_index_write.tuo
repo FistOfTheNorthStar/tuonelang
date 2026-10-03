@@ -1,0 +1,38 @@
+// ADR-0030: indexed assignment — a fixed stack array, a growable array, a
+// `mut` parameter, a struct field, and a nested `[[Int; 3]; 2]`, each written
+// by index. 8 + 60 + 10 + 7 + 9 = 94.
+struct Buf {
+    data: [Int; 4],
+    len: Int,
+}
+
+fn fill(mut xs: [Int; 4]) {
+    var i: Usize = 0;
+    while i < 4 {
+        xs[i] = (i as Int) * 10;
+        i = i + 1;
+    }
+}
+
+fn main() -> Int {
+    // A fixed stack array written by index.
+    var w = [0; 8];
+    var t: Usize = 0;
+    while t < 8 {
+        w[t] = (t as Int) + 1;
+        t = t + 1;
+    }
+    // A growable array written by index.
+    var g = std::array::empty();
+    std::array::push(g, 5);
+    std::array::push(g, 6);
+    g[1 as Usize] = 60;
+    // Through a `mut` parameter, and a struct field.
+    var b = Buf { data: [0; 4], len: 0 };
+    fill(b.data);
+    b.data[3 as Usize] = 7;
+    // Nested.
+    var m = [[0; 3]; 2];
+    m[1 as Usize][2 as Usize] = 9;
+    w[7 as Usize] + std::array::get(g, 1) + b.data[1 as Usize] + b.data[3 as Usize] + m[1 as Usize][2 as Usize]
+}

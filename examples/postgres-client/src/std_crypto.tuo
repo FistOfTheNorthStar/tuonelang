@@ -146,7 +146,7 @@ pub fn sha256_pad(in data: Str) -> Array[Int] {
 /// ```
 pub fn sha256_bytes(in data: Str) -> Array[Int] {
     let k = sha256_k();
-    var w = sha256_schedule();
+    var w = [0; 64];
     sha256_finish(sha256_initial_state(), 0, bytes_of_str(data), k, w)
 }
 
@@ -169,79 +169,63 @@ pub fn push_be32(mut out: Array[Int], take value: Int) {
 //
 // Every digest in this module — `sha256_bytes`, HMAC, PBKDF2, SCRAM — runs
 // through `sha256_finish`, which hashes byte arrays directly (no `String`
-// round trip) and reuses one 64-word message-schedule buffer across every
-// block of a call rather than growing a fresh one per block. HMAC starts from
-// a saved state after its key block, so PBKDF2 compresses that block once
-// instead of on every iteration.
+// round trip). The hash state is a stack `[Int; 8]` and the message schedule a
+// stack `[Int; 64]`, written by index (ADR-0030), so a compression allocates
+// nothing; the padded tail and the digest are made at their final size with
+// `std::array::filled`. HMAC starts from a saved state after its key block —
+// a `Copy` value, so resuming from it is a copy — and PBKDF2 compresses that
+// block once instead of on every iteration.
 // ----------------------------------------------------------------------------
 
 // The initial hash value H(0): the first 32 bits of the fractional parts of
 // the square roots of the first eight primes.
-fn sha256_initial_state() -> Array[Int] {
-    var h = std::array::empty();
-    std::array::push(h, 1779033703);
-    std::array::push(h, 3144134277);
-    std::array::push(h, 1013904242);
-    std::array::push(h, 2773480762);
-    std::array::push(h, 1359893119);
-    std::array::push(h, 2600822924);
-    std::array::push(h, 528734635);
-    std::array::push(h, 1541459225);
-    h
-}
-
-// A 64-word message-schedule buffer, rewritten in place by every
-// compression that is handed it.
-fn sha256_schedule() -> Array[Int] {
-    var w = std::array::empty();
-    var t = 0;
-    while t < 64 {
-        std::array::push(w, 0);
-        t = t + 1;
-    }
-    w
+fn sha256_initial_state() -> [Int; 8] {
+    [
+        1779033703, 3144134277, 1013904242, 2773480762,
+        1359893119, 2600822924, 528734635, 1541459225,
+    ]
 }
 
 // Compress the 64-byte block of `data` starting at `base` into `state` (the
 // eight working words), using `w` as the message-schedule scratch buffer.
-fn sha256_compress(mut state: Array[Int], in data: Array[Int], take base: Int, in k: [Int; 64], mut w: Array[Int]) {
+fn sha256_compress(mut state: [Int; 8], in data: Array[Int], take base: Int, in k: [Int; 64], mut w: [Int; 64]) {
     // The message schedule: 16 words read from the block, then 48 more
     // derived from them.
     var t = 0;
     while t < 16 {
         let at = base + (t * 4);
-        std::array::set(w, t, std::bits::be32(
+        w[t as Usize] = std::bits::be32(
             std::array::get(data, at),
             std::array::get(data, at + 1),
             std::array::get(data, at + 2),
             std::array::get(data, at + 3)
-        ));
+        );
         t = t + 1;
     }
     while t < 64 {
-        let w15 = std::array::get(w, t - 15);
-        let w2 = std::array::get(w, t - 2);
+        let w15 = w[(t - 15) as Usize];
+        let w2 = w[(t - 2) as Usize];
         let s0 = std::bits::rotr32(w15, 7)
             ^ std::bits::rotr32(w15, 18)
             ^ std::bits::shr32(w15, 3);
         let s1 = std::bits::rotr32(w2, 17)
             ^ std::bits::rotr32(w2, 19)
             ^ std::bits::shr32(w2, 10);
-        std::array::set(w, t, std::bits::add32(
-            std::bits::add32(std::array::get(w, t - 16), s0),
-            std::bits::add32(std::array::get(w, t - 7), s1)
-        ));
+        w[t as Usize] = std::bits::add32(
+            std::bits::add32(w[(t - 16) as Usize], s0),
+            std::bits::add32(w[(t - 7) as Usize], s1)
+        );
         t = t + 1;
     }
 
-    var a = std::array::get(state, 0);
-    var b = std::array::get(state, 1);
-    var c = std::array::get(state, 2);
-    var d = std::array::get(state, 3);
-    var e = std::array::get(state, 4);
-    var f = std::array::get(state, 5);
-    var g = std::array::get(state, 6);
-    var h = std::array::get(state, 7);
+    var a = state[0 as Usize];
+    var b = state[1 as Usize];
+    var c = state[2 as Usize];
+    var d = state[3 as Usize];
+    var e = state[4 as Usize];
+    var f = state[5 as Usize];
+    var g = state[6 as Usize];
+    var h = state[7 as Usize];
 
     var round = 0;
     while round < 64 {
@@ -253,7 +237,7 @@ fn sha256_compress(mut state: Array[Int], in data: Array[Int], take base: Int, i
             std::bits::add32(h, big1),
             std::bits::add32(
                 std::bits::add32(choose, k[round as Usize]),
-                std::array::get(w, round)
+                w[round as Usize]
             )
         );
         let big0 = std::bits::rotr32(a, 2)
@@ -273,27 +257,22 @@ fn sha256_compress(mut state: Array[Int], in data: Array[Int], take base: Int, i
         round = round + 1;
     }
 
-    std::array::set(state, 0, std::bits::add32(std::array::get(state, 0), a));
-    std::array::set(state, 1, std::bits::add32(std::array::get(state, 1), b));
-    std::array::set(state, 2, std::bits::add32(std::array::get(state, 2), c));
-    std::array::set(state, 3, std::bits::add32(std::array::get(state, 3), d));
-    std::array::set(state, 4, std::bits::add32(std::array::get(state, 4), e));
-    std::array::set(state, 5, std::bits::add32(std::array::get(state, 5), f));
-    std::array::set(state, 6, std::bits::add32(std::array::get(state, 6), g));
-    std::array::set(state, 7, std::bits::add32(std::array::get(state, 7), h));
+    state[0 as Usize] = std::bits::add32(state[0 as Usize], a);
+    state[1 as Usize] = std::bits::add32(state[1 as Usize], b);
+    state[2 as Usize] = std::bits::add32(state[2 as Usize], c);
+    state[3 as Usize] = std::bits::add32(state[3 as Usize], d);
+    state[4 as Usize] = std::bits::add32(state[4 as Usize], e);
+    state[5 as Usize] = std::bits::add32(state[5 as Usize], f);
+    state[6 as Usize] = std::bits::add32(state[6 as Usize], g);
+    state[7 as Usize] = std::bits::add32(state[7 as Usize], h);
 }
 
 // The digest of `message`, hashed onward from `state`, which has already
 // absorbed `prefix` bytes (a multiple of 64) — 0 from the initial state, 64
 // from an HMAC key-block state. Complete blocks are compressed straight out of
 // `message`; only the final one or two padded blocks are copied.
-fn sha256_finish(in state: Array[Int], take prefix: Int, in message: Array[Int], in k: [Int; 64], mut w: Array[Int]) -> Array[Int] {
-    var h = std::array::empty();
-    var j = 0;
-    while j < 8 {
-        std::array::push(h, std::array::get(state, j));
-        j = j + 1;
-    }
+fn sha256_finish(in state: [Int; 8], take prefix: Int, in message: Array[Int], in k: [Int; 64], mut w: [Int; 64]) -> Array[Int] {
+    var h = state;
 
     let length = std::array::len(message);
     let full = length / 64;
@@ -304,38 +283,38 @@ fn sha256_finish(in state: Array[Int], take prefix: Int, in message: Array[Int],
     }
 
     // The tail: the leftover bytes, the mandatory 1 bit (as a whole byte),
-    // zeros to 56 mod 64, then the total length in bits as a 64-bit
-    // big-endian integer (its high four bytes are zero for any input this
-    // implementation can hold).
-    var tail = std::array::empty();
-    var i = full * 64;
-    while i < length {
-        std::array::push(tail, std::array::get(message, i));
+    // zeros, then the total length in bits as a 64-bit big-endian integer in
+    // the last eight bytes (its high four bytes are zero for any input this
+    // implementation can hold). One block when the leftover and those nine
+    // bytes fit in 64, else two.
+    let rest = length - (full * 64);
+    let tail_len = if rest + 9 <= 64 { 64 } else { 128 };
+    var tail = std::array::filled(tail_len, 0);
+    var i = 0;
+    while i < rest {
+        tail[i as Usize] = std::array::get(message, (full * 64) + i);
         i = i + 1;
     }
-    std::array::push(tail, 128);
-    while (std::array::len(tail) % 64) != 56 {
-        std::array::push(tail, 0);
-    }
+    tail[rest as Usize] = 128;
     let bits = (prefix + length) * 8;
-    std::array::push(tail, 0);
-    std::array::push(tail, 0);
-    std::array::push(tail, 0);
-    std::array::push(tail, 0);
-    std::array::push(tail, std::bits::byte_of_be32(bits, 0));
-    std::array::push(tail, std::bits::byte_of_be32(bits, 1));
-    std::array::push(tail, std::bits::byte_of_be32(bits, 2));
-    std::array::push(tail, std::bits::byte_of_be32(bits, 3));
+    tail[(tail_len - 4) as Usize] = std::bits::byte_of_be32(bits, 0);
+    tail[(tail_len - 3) as Usize] = std::bits::byte_of_be32(bits, 1);
+    tail[(tail_len - 2) as Usize] = std::bits::byte_of_be32(bits, 2);
+    tail[(tail_len - 1) as Usize] = std::bits::byte_of_be32(bits, 3);
     var at = 0;
-    while at < std::array::len(tail) {
+    while at < tail_len {
         sha256_compress(h, tail, at, k, w);
         at = at + 64;
     }
 
-    var digest = std::array::empty();
-    j = 0;
+    var digest = std::array::filled(32, 0);
+    var j = 0;
     while j < 8 {
-        push_be32(digest, std::array::get(h, j));
+        var byte = 0;
+        while byte < 4 {
+            digest[((j * 4) + byte) as Usize] = std::bits::byte_of_be32(h[j as Usize], byte);
+            byte = byte + 1;
+        }
         j = j + 1;
     }
     digest
@@ -345,24 +324,21 @@ fn sha256_finish(in state: Array[Int], take prefix: Int, in message: Array[Int],
 // its digest when longer than the 64-byte block, per RFC 2104), zero-padded
 // to 64 bytes, each byte XORed with `pad` (0x36 for the inner hash, 0x5c for
 // the outer).
-fn hmac_key_state(in key: Array[Int], take pad: Int, in k: [Int; 64], mut w: Array[Int]) -> Array[Int] {
-    var block = std::array::empty();
+fn hmac_key_state(in key: Array[Int], take pad: Int, in k: [Int; 64], mut w: [Int; 64]) -> [Int; 8] {
+    var block = std::array::filled(64, pad);
     if std::array::len(key) > 64 {
         let hashed = sha256_finish(sha256_initial_state(), 0, key, k, w);
         var i = 0;
         while i < std::array::len(hashed) {
-            std::array::push(block, std::array::get(hashed, i) ^ pad);
+            block[i as Usize] = std::array::get(hashed, i) ^ pad;
             i = i + 1;
         }
     } else {
         var i = 0;
         while i < std::array::len(key) {
-            std::array::push(block, std::array::get(key, i) ^ pad);
+            block[i as Usize] = std::array::get(key, i) ^ pad;
             i = i + 1;
         }
-    }
-    while std::array::len(block) < 64 {
-        std::array::push(block, pad);
     }
     var state = sha256_initial_state();
     sha256_compress(state, block, 0, k, w);
@@ -371,7 +347,7 @@ fn hmac_key_state(in key: Array[Int], take pad: Int, in k: [Int; 64], mut w: Arr
 
 // HMAC-SHA-256 of `message`, resumed from the two key-block states:
 // H(outer || H(inner || message)).
-fn hmac_from_states(in inner_state: Array[Int], in outer_state: Array[Int], in message: Array[Int], in k: [Int; 64], mut w: Array[Int]) -> Array[Int] {
+fn hmac_from_states(in inner_state: [Int; 8], in outer_state: [Int; 8], in message: Array[Int], in k: [Int; 64], mut w: [Int; 64]) -> Array[Int] {
     let inner = sha256_finish(inner_state, 64, message, k, w);
     sha256_finish(outer_state, 64, inner, k, w)
 }
@@ -453,7 +429,7 @@ pub fn hex_digit(take value: Int) -> Int {
 /// ```
 pub fn hmac_sha256(in key: Array[Int], in message: Array[Int]) -> Array[Int] {
     let k = sha256_k();
-    var w = sha256_schedule();
+    var w = [0; 64];
     let inner_state = hmac_key_state(key, 54, k, w);
     let outer_state = hmac_key_state(key, 92, k, w);
     hmac_from_states(inner_state, outer_state, message, k, w)
@@ -474,11 +450,11 @@ pub fn hmac_sha256(in key: Array[Int], in message: Array[Int]) -> Array[Int] {
 /// let bytes = std::crypto::bytes_of_str("abc"); // [97, 98, 99]
 /// ```
 pub fn bytes_of_str(in text: Str) -> Array[Int] {
-    var out = std::array::empty();
     let n = std::str::len(text);
+    var out = std::array::filled(n, 0);
     var i = 0;
     while i < n {
-        std::array::push(out, std::str::byte_at(text, i));
+        out[i as Usize] = std::str::byte_at(text, i);
         i = i + 1;
     }
     out
@@ -535,7 +511,7 @@ pub fn pbkdf2_sha256(in password: Str, in salt: Str, take iterations: Int) -> Ar
     // (key ^ ipad, key ^ opad) are compressed once, here, and each iteration
     // resumes from those states: two compressions per iteration, not four.
     let k = sha256_k();
-    var w = sha256_schedule();
+    var w = [0; 64];
     let inner_state = hmac_key_state(key, 54, k, w);
     let outer_state = hmac_key_state(key, 92, k, w);
 

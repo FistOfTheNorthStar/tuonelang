@@ -177,6 +177,14 @@ fn floats_match_the_interpreter() {
 }
 
 #[test]
+fn scratch_buffers_match_the_interpreter() {
+    // ADR-0030: indexed assignment and `std::array::filled`.
+    for name in ["arr_index_write.tuo", "arr_filled.tuo"] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
 fn borrow_mode_calls_match_the_interpreter() {
     // Borrow-mode (`in`/`mut`) call arguments: the caller passes the address
     // of its place, the callee reads/writes through the pointer (no copy-in,

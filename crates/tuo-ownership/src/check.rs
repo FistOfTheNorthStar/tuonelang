@@ -960,6 +960,97 @@ impl<'a> Body<'a> {
         }
     }
 
+    /// `base[i] = value` (ADR-0030): a write of one `Copy` element, checked as
+    /// a mutation of the array place underneath — exactly what passing it as
+    /// `std::array::set`'s `mut` argument is. The array must be usable
+    /// (initialized, not moved) and mutable; the element must be `Copy`, since
+    /// nothing drops the element being overwritten. Index chains
+    /// (`m[i][j] = x`) peel down to the array place they write into.
+    fn assign_index(&mut self, index: tuo_ast::IndexExpr<'_>, span: Span) {
+        let mut depth = 0usize;
+        let mut current = index;
+        let base = loop {
+            if let Some(sub) = current.index() {
+                self.expr(sub, Use::Read);
+            }
+            depth += 1;
+            match current.base() {
+                Some(Expr::Index(inner)) => current = inner,
+                Some(Expr::Group(group)) => match group.inner() {
+                    Some(Expr::Index(inner)) => current = inner,
+                    other => break other,
+                },
+                other => break other,
+            }
+        };
+        let Some(base) = base else {
+            return;
+        };
+        let Some(place) = self.place_of(base) else {
+            self.expr(base, Use::Read);
+            self.report(
+                Diagnostic::error(code(4), "assignment target is not a mutable place", span)
+                    .with_primary_label(
+                        "an indexed write needs an array held in a binding, a parameter, or a \
+                         field of one",
+                    ),
+            );
+            return;
+        };
+        let base_span = self.at(base.span());
+        // The element written is `depth` array layers below the place.
+        let mut element = self.place_ty(&place);
+        for _ in 0..depth {
+            element = match element {
+                Some(Ty::Array(inner) | Ty::FixedArray(inner, _)) => Some(*inner),
+                _ => None,
+            };
+        }
+        if let Some(element) = element {
+            if !self.cx.env.is_copy(&element) {
+                self.report(
+                    Diagnostic::error(
+                        code(12),
+                        "cannot assign a non-`Copy` element through an index",
+                        span,
+                    )
+                    .with_primary_label(
+                        "an indexed write overwrites the element in place, and nothing would \
+                         drop the value it replaces",
+                    )
+                    .with_help("use `std::array::set`, which drops the old element"),
+                );
+                return;
+            }
+        }
+        if !self.check_usable(&place, base_span) {
+            return;
+        }
+        let Some(root) = self.roots.get(&place.root) else {
+            return;
+        };
+        if !root.origin.is_mutable() {
+            let root_name = root.name.clone();
+            let describe = root.origin.describe();
+            let decl = root.decl;
+            let origin = root.origin;
+            let mut diagnostic = Diagnostic::error(
+                code(4),
+                format!(
+                    "cannot assign through an index into `{}`: `{root_name}` is {describe}",
+                    self.display(&place)
+                ),
+                span,
+            )
+            .with_secondary_label(decl, format!("`{root_name}` declared immutable here"));
+            if matches!(origin, Origin::Let { .. } | Origin::PatternBinding) {
+                diagnostic = diagnostic
+                    .with_help(format!("declare it `var {root_name}` to make it mutable"));
+            }
+            self.report(diagnostic);
+        }
+    }
+
     fn assign(&mut self, assign: AssignExpr<'_>) {
         if let Some(rhs) = assign.rhs() {
             self.expr(rhs, Use::Value);
@@ -968,6 +1059,10 @@ impl<'a> Body<'a> {
             return;
         };
         let span = self.at(lhs.span());
+        if let Expr::Index(index) = lhs {
+            self.assign_index(index, span);
+            return;
+        }
         let Some(place) = self.place_of(lhs) else {
             self.expr(lhs, Use::Read);
             self.report(
@@ -1137,6 +1232,27 @@ impl<'a> Body<'a> {
             if let Some(place) = self.place_of(callee) {
                 let span = self.at(callee.span());
                 self.read_place(&place, span);
+            }
+        }
+        // ADR-0030: `std::array::filled` duplicates its value `n` times, so
+        // the value must be `Copy` — the repeat literal's rule (`O0010`).
+        if callee_symbol.and_then(|symbol| self.cx.resolution.builtin(symbol))
+            == Some(tuo_resolve::Builtin::ArrayFilled)
+        {
+            if let Some(value) = call.args().nth(1) {
+                let ty = value.span().and_then(|span| self.cx.types.expr_ty(span));
+                if ty.is_some_and(|ty| !self.cx.env.is_copy(ty)) {
+                    let span = self.at(value.span());
+                    self.report(
+                        Diagnostic::error(
+                            code(10),
+                            "the value of `std::array::filled` must be a `Copy` type",
+                            span,
+                        )
+                        .with_primary_label("a non-`Copy` value cannot be duplicated")
+                        .with_help("push each element, or use a `Copy` element type"),
+                    );
+                }
             }
         }
         let modes = callee_symbol

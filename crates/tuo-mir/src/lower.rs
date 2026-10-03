@@ -1920,6 +1920,7 @@ impl FnLower<'_> {
             | Builtin::StringSlice
             | Builtin::StringAsStr
             | Builtin::ArrayEmpty
+            | Builtin::ArrayFilled
             | Builtin::ArrayLen
             | Builtin::ArrayGet
             | Builtin::MapEmpty
@@ -1936,6 +1937,7 @@ impl FnLower<'_> {
                     Builtin::StringSlice => HeapOp::StringSlice,
                     Builtin::StringAsStr => HeapOp::StringAsStr,
                     Builtin::ArrayEmpty => HeapOp::ArrayEmpty,
+                    Builtin::ArrayFilled => HeapOp::ArrayFilled,
                     Builtin::ArrayLen => HeapOp::ArrayLen,
                     Builtin::MapEmpty => HeapOp::MapEmpty,
                     Builtin::MapGet => HeapOp::MapGet,
@@ -1990,6 +1992,22 @@ impl FnLower<'_> {
             return Ok(None);
         };
         let base_place = self.place_of(base_value, &base_ty, base.span)?;
+        Ok(self
+            .checked_index(base_place, &base_ty, index)?
+            .map(Value::Place))
+    }
+
+    /// `base_place[index]` as a place, behind a bounds check: evaluate the
+    /// index into a `Usize` temp, assert it is below the length (a fixed
+    /// array's constant, a growable array's `Len`), and project. Shared by
+    /// indexed reads and, since ADR-0030, indexed writes. `None` when the
+    /// index expression diverges.
+    fn checked_index(
+        &mut self,
+        base_place: Place,
+        base_ty: &Ty,
+        index: &Expr,
+    ) -> Result<Option<Place>, Skip> {
         let Some(index_value) = self.expr(index)? else {
             return Ok(None);
         };
@@ -2001,7 +2019,7 @@ impl FnLower<'_> {
         // (ADR-0004 Stage 2). Everything downstream of the `len` temp —
         // the `Lt` compare, the `Assert`, the `Index` projection — is
         // identical for both array types.
-        let len_rvalue = match &base_ty {
+        let len_rvalue = match base_ty {
             Ty::FixedArray(_, n) => {
                 Rvalue::Use(Operand::Const(Const::Int(i128::from(*n), IntKind::Usize)))
             }
@@ -2026,7 +2044,7 @@ impl FnLower<'_> {
         self.switch_to(target);
         let mut place = base_place;
         place.projection.push(Projection::Index(index_place.local));
-        Ok(Some(Value::Place(place)))
+        Ok(Some(place))
     }
 
     fn cast(&mut self, expr: &Expr, value: &Expr) -> Lowered {
@@ -2860,6 +2878,16 @@ impl FnLower<'_> {
                 let (index, _) = self.field_index(&receiver_ty, name)?;
                 place.projection.push(Projection::Field(index));
                 Ok(place)
+            }
+            // ADR-0030: an indexed write. The base is resolved as a place —
+            // the array's own storage, never a copy — so `m[i][j]` and
+            // `s.buf[i]` write where they name; the ownership checker has
+            // already limited this to `Copy` elements of a mutable array.
+            ExprKind::Index { base, index } => {
+                let base_ty = self.expr_ty(base)?;
+                let base_place = self.lower_place(base)?;
+                self.checked_index(base_place, &base_ty, index)?
+                    .ok_or_else(|| "an indexed write whose index diverges".to_owned())
             }
             _ => Err("assignment target or `mut` argument is not a place".to_owned()),
         }

@@ -768,6 +768,10 @@ pub enum HeapOp {
     /// `get(subject: Array[I64], i: I64) -> I64` — the element at `i`.
     /// **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`.
     ArrayGet,
+    /// `filled(n: I64, value: T) -> Array[T]` — `n` copies of the `Copy`
+    /// value, in one allocation of `n` elements (ADR-0030). **Traps
+    /// `IntegerOverflow`** when `n < 0` or `n` elements' bytes overflow.
+    ArrayFilled,
     /// `empty() -> Map[K, V]` — the empty hash map (ADR-0011). Never traps.
     MapEmpty,
     /// `get(subject: Map[K, V], k: K) -> Option[V]` — the value for `k`
@@ -798,6 +802,7 @@ impl HeapOp {
             Self::StringSlice => "string_slice",
             Self::StringAsStr => "string_as_str",
             Self::ArrayEmpty => "array_empty",
+            Self::ArrayFilled => "array_filled",
             Self::ArrayLen => "array_len",
             Self::ArrayGet => "array_get",
             Self::MapEmpty => "map_empty",
@@ -845,7 +850,7 @@ impl HeapOp {
             | Self::ArrayGet
             | Self::MapGet
             | Self::MapContainsKey => 1,
-            Self::StringConcat | Self::StringSlice => 2,
+            Self::StringConcat | Self::StringSlice | Self::ArrayFilled => 2,
         }
     }
 }

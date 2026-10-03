@@ -497,6 +497,7 @@ verified (§7.1, `M0012`). Let `len(x)` be the byte/element length:
 | `ArrayEmpty` | — | — | `Array[I64]` | The empty array. Never traps. |
 | `ArrayLen` | `Array[I64]` | — | `I64` | `len(subject)`. Never traps. |
 | `ArrayGet` | `Array[I64]` | `i: I64` | `I64` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(subject)`. |
+| `ArrayFilled` | — | `n: I64`, `v: T` | `Array[T]` | (ADR-0030) `n` copies of the `Copy` value `v`, in one allocation of `n` elements. **Traps `IntegerOverflow`** when `n < 0` or `n` elements' bytes overflow. The interpreter checks its live-value budget before building the array (`MemoryBudget`). |
 | `MapEmpty` (ADR-0011) | — | — | `Map[K, V]` | The empty map. Never traps. |
 | `MapGet` (ADR-0011) | `Map[K, V]` | `k: K` | `Option[V]` | The value for `k` (`Some`) or `None`. Never traps. |
 | `MapContainsKey` (ADR-0011) | `Map[K, V]` | `k: K` | `Bool` | Is `k` present? Never traps. |
