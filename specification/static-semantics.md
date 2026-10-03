@@ -393,7 +393,8 @@ builtins whose element type is resolved from the call, not user type parameters:
 | `fn pop(mut xs: Array[T]) -> Option[T]` | Removes and returns the last element; `None` when empty. Never traps. |
 | `fn len(in xs: Array[T]) -> Int` | The element count. Never traps. |
 | `fn get(in xs: Array[T], take i: Int) -> T` | The element at `i`. **Traps `IndexOutOfBounds`** when `i < 0` or `i >= len(xs)`. |
-| `fn set(mut xs: Array[T], take i: Int, take v: T)` | (ADR-0016) Overwrites the element at `i` with `v` in place — the previous element is dropped. **Traps `IndexOutOfBounds`** on `get`'s bounds; `set` never grows the array. The one in-place element write, mirroring `get` as the one read. |
+| `fn set(mut xs: Array[T], take i: Int, take v: T)` | (ADR-0016) Overwrites the element at `i` with `v` in place — the previous element is dropped. **Traps `IndexOutOfBounds`** on `get`'s bounds; `set` never grows the array. The in-place write for any element type; for a `Copy` element, `xs[i] = v` is the same write (ADR-0030). |
+| `fn filled(take n: Int, take v: T) -> Array[T]` | (ADR-0030) An array of `n` copies of `v`, made with one allocation of exactly `n` elements. `T` must be `Copy` (`O0010`). **Traps `IntegerOverflow`** when `n < 0` or `n` elements' bytes overflow — an unsatisfiable size. |
 
 The **v0-supported element set** is the scalars `Int`/`Float`/`Bool`/`Str`/
 `String` (`Float` since ADR-0016) and user structs/enums whose fields are
@@ -430,6 +431,14 @@ to `Str` at the type level — type equality is exact, so mixing them is
 `String` and `Array[T]` remain **non-`Copy`** ([`ownership.md`](ownership.md)
 §2): a `take` argument moves them, and a `mut` argument requires a mutable
 place (`O0004` otherwise).
+
+**Indexed assignment (ADR-0030).** `xs[i] = v` is an assignment when `xs` is a
+fixed array `[T; N]` or a growable `Array[T]` held in a mutable place (a `var`
+binding, a `mut` parameter, a field of one, or another indexed element of
+one). The index is a `Usize` and `v` must have the element type `T`; the write
+is bounds-checked and **traps `IndexOutOfBounds`** exactly like a read. The
+element must be `Copy` (`O0012`) — for an owning element, `std::array::set`
+drops the value it replaces.
 
 **Hash-map builtins (`std::map`)** — the builtin `Map[K, V]` (ADR-0011). The
 type is generic and non-`Copy` (it owns a heap table); the v0 **operation

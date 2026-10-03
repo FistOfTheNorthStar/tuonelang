@@ -386,6 +386,7 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::StringSlice => (vec![Ty::String, Ty::int(), Ty::int()], Ty::String),
         Builtin::StringAsStr => (vec![Ty::String], Ty::Str),
         Builtin::ArrayEmpty => (Vec::new(), int_array()),
+        Builtin::ArrayFilled => (vec![Ty::int(), Ty::int()], int_array()),
         Builtin::ArrayPush => (vec![int_array(), Ty::int()], Ty::Unit),
         Builtin::ArraySet => (vec![int_array(), Ty::int(), Ty::int()], Ty::Unit),
         Builtin::ArrayPop => (vec![int_array()], Ty::Option(Box::new(Ty::int()))),
@@ -2922,6 +2923,15 @@ impl<'a> Checker<'a> {
                 self.check_args(&[array, int, elem.clone()], args, span);
                 self.reject_unsupported_array_element(&elem, span);
                 Some(Ty::Unit)
+            }
+            Builtin::ArrayFilled => {
+                // `filled(Int, T) -> Array[T]` (ADR-0030); T is witnessed by
+                // the value. Its `Copy` requirement is the ownership pass's
+                // (`O0010`), as for the repeat literal.
+                let elem = self.fresh(span);
+                self.check_args(&[int, elem.clone()], args, span);
+                self.reject_unsupported_array_element(&elem, span);
+                Some(Ty::Array(Box::new(elem)))
             }
             Builtin::ArrayLen => {
                 // `len(Array[T]) -> Int`; the count, always `Int`.

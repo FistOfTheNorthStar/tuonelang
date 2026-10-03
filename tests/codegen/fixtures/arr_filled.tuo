@@ -1,0 +1,27 @@
+// ADR-0030: `std::array::filled` over each element kind — Int (then written by
+// index), Float, Bool, Str, a Copy struct — and n = 0. Exit 141.
+struct P {
+    x: Int,
+    y: Int,
+}
+
+fn main() -> Int {
+    var ints = std::array::filled(5, 7);
+    ints[2 as Usize] = 100;
+    let floats = std::array::filled(3, 2.5);
+    let flags = std::array::filled(4, true);
+    let words = std::array::filled(2, "ab");
+    let points = std::array::filled(3, P { x: 1, y: 2 });
+    let none = std::array::filled(0, 9);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(ints) {
+        total = total + std::array::get(ints, i);
+        i = i + 1;
+    }
+    total = total + (std::array::get(floats, 2) * 2.0) as Int;
+    total = total + (if std::array::get(flags, 3) { 1 } else { 0 });
+    total = total + std::str::len(std::array::get(words, 1));
+    total = total + std::array::get(points, 2).y;
+    total + std::array::len(none) + std::array::len(points)
+}

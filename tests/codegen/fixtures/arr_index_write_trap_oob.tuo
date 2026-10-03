@@ -1,0 +1,8 @@
+// ADR-0030: an indexed write past the end traps `IndexOutOfBounds`, exactly
+// as an indexed read does, on every engine.
+fn main() -> Int {
+    var w = [0; 4];
+    let i: Usize = 4;
+    w[i] = 1;
+    0
+}

@@ -303,6 +303,13 @@ pub enum Builtin {
     /// the same correctly-rounded value, so every engine agrees bit for bit.
     /// Pure; never traps. (ADR-0029.)
     FloatSqrt,
+    /// `std::array::filled(take n: Int, take value: T) -> Array[T]` — an
+    /// array of `n` copies of `value`, made with one allocation of exactly
+    /// the needed size (no growth from empty). `T` must be `Copy` (`O0010`,
+    /// as for the repeat literal `[x; N]`). Pure. **Traps `IntegerOverflow`**
+    /// on a negative `n` or one whose byte size overflows — an unsatisfiable
+    /// length, the class an allocation failure already reports. (ADR-0030.)
+    ArrayFilled,
 }
 
 /// How one builtin parameter receives its argument (the surface
@@ -321,7 +328,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 59] = [
+    pub const ALL: [Self; 60] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -381,6 +388,7 @@ impl Builtin {
         Self::MapLen,
         Self::MapKeys,
         Self::FloatSqrt,
+        Self::ArrayFilled,
     ];
 
     /// The path of the module the builtin lives in.
@@ -435,7 +443,8 @@ impl Builtin {
             | Self::ArrayPop
             | Self::ArrayLen
             | Self::ArrayGet
-            | Self::ArraySet => &["std", "array"],
+            | Self::ArraySet
+            | Self::ArrayFilled => &["std", "array"],
             Self::MapEmpty
             | Self::MapInsert
             | Self::MapGet
@@ -502,6 +511,7 @@ impl Builtin {
             Self::MapRemove => "remove",
             Self::MapKeys => "keys",
             Self::FloatSqrt => "sqrt",
+            Self::ArrayFilled => "filled",
         }
     }
 
@@ -568,6 +578,7 @@ impl Builtin {
             Self::MapLen => "std::map::len",
             Self::MapKeys => "std::map::keys",
             Self::FloatSqrt => "std::float::sqrt",
+            Self::ArrayFilled => "std::array::filled",
         }
     }
 
@@ -666,6 +677,7 @@ impl Builtin {
             Self::MapRemove => &[Mut, Take],
             Self::MapLen | Self::MapKeys => &[In],
             Self::FloatSqrt => &[Take],
+            Self::ArrayFilled => &[Take, Take],
         }
     }
 }

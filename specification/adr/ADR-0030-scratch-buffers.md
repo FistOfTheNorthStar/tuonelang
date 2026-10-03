@@ -1,6 +1,6 @@
 # ADR-0030: Scratch buffers — indexed assignment, and arrays made at their size
 
-- **Status:** proposed
+- **Status:** accepted (2026-10-03 — landed; see Resolution)
 - **Date:** 2026-10-03
 
 ## Context
@@ -132,6 +132,43 @@ implementation so the result cannot be chosen after the fact.
 - **`Usize` friction.** Indexing takes a `Usize`, so a loop counted in `Int`
   needs `i as Usize` at each index. That is a usability question about
   indexing in general, not about writes.
+
+## Resolution (2026-10-03)
+
+Landed as proposed, and the benchmark plan was run as written.
+
+- **Indexed assignment**: the ownership pass checks `xs[i] = v` as a mutation
+  of the array place beneath it (`O0001`/`O0004` as for a `mut` argument) and
+  refuses a non-`Copy` element with the new **`O0012`**; MIR lowers the target
+  through the same bounds-checked `Index` projection a read uses, so the
+  interpreter and both backends needed no new write path.
+- **`std::array::filled`**: a new `HeapOp::ArrayFilled` — one
+  `ensure_capacity` for all `n` elements and a fill loop in each backend, the
+  interpreter checking its live-value budget before it builds the array. A
+  negative `n` (or one whose bytes overflow) traps `IntegerOverflow`; a
+  non-`Copy` value is `O0010`.
+- **Three-way pinned**: `arr_index_write`, `arr_filled`,
+  `arr_index_write_trap_oob`, and `arr_filled_trap_negative` agree on the
+  interpreter, Cranelift, and LLVM; the ownership fixtures cover every refusal.
+
+Measured (release, fastest of 9–11 interleaved runs):
+
+| | before | after | |
+|---|---|---|---|
+| `sha256-hash` lab workload (scaled) | 39.3 ms | 25.6 ms | 1.53x — the C-side experiment predicted ~1.25x |
+| `std::crypto::sha256_bytes`, 200,000 one-shot digests | 171.5 ms | 112.5 ms | 1.52x (target was 1.2x) |
+| PBKDF2-HMAC-SHA-256, 40,960 iterations | 44.6 ms | 25.7 ms | 1.74x (target was no regression) |
+
+`std::crypto` now keeps the hash state in a stack `[Int; 8]` (a `Copy` value,
+so resuming HMAC from a saved key-block state is a copy) and the schedule in a
+stack `[Int; 64]`; its padded tail, digest, and `bytes_of_str` are made with
+`filled`. The Benchmarks Game speed table did not move. One cost is visible:
+the interpreter copies a fixed array in and out of a `mut` parameter, so the
+crypto specs run slower in the spec sandbox (about 1.3 s, from 0.15 s), still
+well within its fuel.
+
+The brief (`tuo cheatsheet`) dropped its anti-pattern row that called
+`xs[i] = v;` wrong and now says when it applies.
 
 ## Consequences
 
