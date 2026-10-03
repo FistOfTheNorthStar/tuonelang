@@ -283,7 +283,7 @@ enum Command {
     /// Run programs through the compiler-validated corpus pipeline.
     #[command(subcommand)]
     Corpus(CorpusCommand),
-    /// Score a recorded code-generation benchmark run.
+    /// Score a recorded code-generation benchmark run, or produce one live.
     #[command(subcommand)]
     Bench(BenchCommand),
 }
@@ -308,6 +308,49 @@ enum BenchCommand {
         /// The recorded benchmark-run file (JSON) to score.
         #[arg(value_name = "RUN")]
         run: PathBuf,
+    },
+    /// Generate fresh outputs through a live OpenAI-compatible endpoint, record
+    /// the run, and report it.
+    ///
+    /// Drives every pinned task (and each of its syntax variants) through the
+    /// real harness: the model is asked for a program, the compiler evaluates
+    /// it, and while it fails and repair turns remain the compiler's diagnostics
+    /// go back to the model. Any server speaking `/v1/chat/completions` works —
+    /// vLLM, Ollama, LM Studio, a hosted provider with `--api-key-env`. Requests
+    /// go through the system `curl`. The run file written to `--output` is a
+    /// complete record (prompts, outputs, per-turn verdicts, model config) and is
+    /// exactly what `tuo bench report` rescores, so nothing here is trusted on
+    /// the model's say-so. `--prime` puts the generated language brief
+    /// (`tuo cheatsheet`) in the system prompt, for measuring what the brief is
+    /// worth to a given model.
+    Run {
+        /// The pinned task-set file (JSON).
+        #[arg(value_name = "TASKS")]
+        tasks: PathBuf,
+        /// Where to write the recorded run (JSON).
+        #[arg(long, short, value_name = "RUN")]
+        output: PathBuf,
+        /// The endpoint base URL (the part before `/chat/completions`).
+        #[arg(long, default_value = "http://localhost:11434/v1")]
+        endpoint: String,
+        /// The served model name, as the endpoint's `/v1/models` lists it.
+        #[arg(long)]
+        model: String,
+        /// Repair turns after the initial generation.
+        #[arg(long, default_value_t = 2)]
+        max_repairs: usize,
+        /// Sampling temperature.
+        #[arg(long, default_value_t = 0.0)]
+        temperature: f64,
+        /// Put the generated language brief in the system prompt.
+        #[arg(long)]
+        prime: bool,
+        /// Name of an environment variable holding a bearer token for the endpoint.
+        #[arg(long, value_name = "VAR")]
+        api_key_env: Option<String>,
+        /// Per-request timeout in seconds.
+        #[arg(long, default_value_t = 600)]
+        timeout: u64,
     },
 }
 
@@ -476,6 +519,30 @@ impl Cli {
             Some(Command::Bench(BenchCommand::Report { tasks, run })) => {
                 bench::report(&tasks, &run, mode)
             }
+            Some(Command::Bench(BenchCommand::Run {
+                tasks,
+                output,
+                endpoint,
+                model,
+                max_repairs,
+                temperature,
+                prime,
+                api_key_env,
+                timeout,
+            })) => bench::run_live(
+                &bench::LiveOptions {
+                    tasks: &tasks,
+                    output: &output,
+                    endpoint: &endpoint,
+                    model: &model,
+                    max_repairs,
+                    temperature,
+                    prime,
+                    api_key_env: api_key_env.as_deref(),
+                    timeout_secs: timeout,
+                },
+                mode,
+            ),
             // The agent protocol is its own versioned JSON-lines contract on
             // stdio, independent of `--message-format` (which governs the
             // result-producing commands' output). `mode` is passed only so

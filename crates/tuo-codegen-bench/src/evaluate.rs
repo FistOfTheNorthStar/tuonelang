@@ -100,7 +100,7 @@ pub fn evaluate(generation: &str, specs: &[String], limits: Limits) -> Evaluatio
     let checked = !check.has_errors();
     let invented_symbols = count_code(&check.diagnostics, UNDEFINED_NAME);
     let error_lines = error_lines_of(map.source(source), &check.diagnostics, generation_lines);
-    let mut feedback = render_all(&check.diagnostics);
+    let mut feedback = render_all(map.source(source), &check.diagnostics, generation_lines);
 
     // Specs only run on a program that checks; otherwise the spec runner would
     // just re-report the front-end errors.
@@ -108,7 +108,7 @@ pub fn evaluate(generation: &str, specs: &[String], limits: Limits) -> Evaluatio
         match tuo_spec::run(&map, &sources, &Selection::All, limits) {
             RunOutcome::Ran(report) => report.passed(),
             RunOutcome::NotChecked(mut problems) => {
-                feedback.extend(render_all(&problems));
+                feedback.extend(render_all(map.source(source), &problems, generation_lines));
                 problems.clear();
                 false
             }
@@ -208,14 +208,71 @@ fn count_code(diagnostics: &[Diagnostic], code: (Namespace, u16)) -> u32 {
     .unwrap_or(u32::MAX)
 }
 
-/// Render each error/warning to a stable one-line `CODE: message` string for
-/// repair feedback.
-fn render_all(diagnostics: &[Diagnostic]) -> Vec<String> {
+/// Render each error/warning for repair feedback, one entry per diagnostic.
+///
+/// An entry carries everything the compiler attached that a repairer can act
+/// on: the code, the one-based `line:column` the diagnostic is about, the
+/// message, the primary label (what is wrong *at* that place), the notes, and
+/// the help. The first live benchmark showed why the label and help matter: a
+/// model told only `P0001: parameter \`x\` is missing its passing mode` wrote
+/// `x: take Int` three turns running, while the compiler's own label — `expected
+/// \`in\`, \`mut\`, or \`take\` before this name` — says where the mode goes.
+/// Dropping it threw away the part of the diagnostic that answers the question.
+///
+/// A diagnostic located **past** the generation — in the spec text the harness
+/// appended, which the model did not write — is rendered differently: it is
+/// attributed to the task's spec, and its label, notes, and help are dropped,
+/// because they are addressed to the spec's author. The same first run showed
+/// why: when the model's program failed to parse, the spec's `double(3)` could
+/// not find `double`, and that error's help ("use a string name for a
+/// free-standing spec") was shown as if it were about the model's code. The
+/// model did what it was told and wrote `fn "double"`. Advice meant for someone
+/// else is worse than no advice.
+///
+/// The rendering is stable text, not the CLI's human renderer: no source
+/// excerpts, no colour, so a run file reads the same everywhere.
+fn render_all(text: &SourceText, diagnostics: &[Diagnostic], generation_lines: u32) -> Vec<String> {
     diagnostics
         .iter()
         .filter(|d| matches!(d.severity, Severity::Error | Severity::Warning))
-        .map(|d| format!("{}: {}", d.code, d.message))
+        .map(|d| render_one(text, d, generation_lines))
         .collect()
+}
+
+/// Render one diagnostic as described on [`render_all`].
+fn render_one(text: &SourceText, d: &Diagnostic, generation_lines: u32) -> String {
+    let at = text.line_col(d.primary_span.range().start()).ok();
+    let in_generation = at.is_none_or(|at| at.line < generation_lines);
+    let mut out = String::new();
+    out.push_str(&d.code.to_string());
+    if let Some(at) = at {
+        if in_generation {
+            out.push_str(&format!(" at {}:{}", at.line + 1, at.column + 1));
+        } else {
+            out.push_str(&format!(
+                " in the task's spec (which you did not write), spec line {}",
+                at.line + 1 - generation_lines
+            ));
+        }
+    }
+    out.push_str(": ");
+    out.push_str(&d.message);
+    if !in_generation {
+        return out;
+    }
+    if let Some(label) = &d.primary_label {
+        out.push_str(" — ");
+        out.push_str(label);
+    }
+    for note in &d.notes {
+        out.push_str("\n  note: ");
+        out.push_str(note);
+    }
+    if let Some(help) = &d.help {
+        out.push_str("\n  help: ");
+        out.push_str(help);
+    }
+    out
 }
 
 #[cfg(test)]
@@ -231,6 +288,53 @@ mod tests {
 
     fn limits() -> Limits {
         Limits::default()
+    }
+
+    #[test]
+    fn feedback_carries_the_location_label_and_help_not_just_the_message() {
+        // A parameter without a mode: the compiler's label says where the mode
+        // goes and its help explains the three modes. Both must reach the model.
+        let e = evaluate("fn double(x: Int) -> Int {\n    x + x\n}\n", &[], limits());
+        let line = e
+            .feedback
+            .iter()
+            .find(|f| f.starts_with("P0001"))
+            .expect("the missing-mode diagnostic is in the feedback");
+        assert!(line.starts_with("P0001 at 1:11:"), "location first: {line}");
+        assert!(line.contains("missing its passing mode"), "message: {line}");
+        assert!(
+            line.contains("expected `in`, `mut`, or `take` before this name"),
+            "primary label: {line}"
+        );
+        assert!(line.contains("help: "), "help line: {line}");
+    }
+
+    #[test]
+    fn errors_in_the_appended_spec_are_attributed_to_it_without_its_help() {
+        // The generation does not define `double` at all, so the spec's calls
+        // cannot resolve. Those errors sit in text the model did not write; they
+        // are reported as the spec's, and the help addressed to a spec author
+        // ("use a string name for a free-standing spec") must not be forwarded.
+        let e = evaluate(
+            "fn twice(take x: Int) -> Int {\n    x + x\n}\n",
+            &[GOOD_SPEC.to_string()],
+            limits(),
+        );
+        let spec_lines: Vec<&String> = e
+            .feedback
+            .iter()
+            .filter(|f| f.starts_with("R0002"))
+            .collect();
+        assert!(
+            !spec_lines.is_empty(),
+            "the spec's lookups fail: {:?}",
+            e.feedback
+        );
+        for line in spec_lines {
+            assert!(line.contains("in the task's spec"), "attributed: {line}");
+            assert!(!line.contains("help:"), "spec-author help withheld: {line}");
+            assert!(!line.contains(" at "), "no in-generation location: {line}");
+        }
     }
 
     #[test]

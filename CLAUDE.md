@@ -58,6 +58,8 @@ cargo run -p tuo-cli -- --message-format=json corpus validate file.tuo # …with
 cargo run -p tuo-cli -- cheatsheet             # emit the context-injectable language brief (ADR-0018)
 cargo run -p tuo-cli -- --message-format=json cheatsheet # …the brief as a protocol item
 cargo run -p tuo-cli -- bench report tasks.json run.json # score a code-gen benchmark by recompiling the model's outputs
+cargo run -p tuo-cli -- bench run tasks.json --model qwen3:4b -o run.json # produce a run live against an OpenAI-compatible endpoint (Ollama default)
+cargo run -p tuo-cli -- bench run tasks.json --model qwen3:4b --prime -o run.json # …with the generated brief as the system prompt
 cargo run -p tuo-cli -- --message-format=json bench report tasks.json run.json # …the metric summary as a protocol item
 cargo run -p tuo-cli -- debug hir file.tuo     # dump the lowered HIR (dev tool)
 cargo run -p tuo-cli -- debug mir file.tuo [fn] # dump the lowered MIR (dev tool)
@@ -342,7 +344,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `benchmarks/llm/codegen/tasks/` re-verifies its pin), and
   `tuo-cli/tests/bench_command.rs` (the whole thing through the real binary,
   including a run whose recorded verdict is a *lie* that recompilation exposes).
-  The dependency-policy guard keeps `tuo-codegen-bench` at layer 116.
+  The CLI can now also **generate live**: `tuo bench run <tasks> --model <m>
+  [--endpoint <url>] [--prime] -o <run>` drives every pinned task and variant
+  through the real harness against any OpenAI-compatible
+  `/v1/chat/completions` endpoint (vLLM, Ollama — the default — LM Studio, a
+  hosted provider via `--api-key-env`), through the one `ModelAdapter` the CLI
+  can honestly provide: an HTTP chat client that shells out to the system
+  `curl` (the same host-tool seam linking uses for `cc`, so no HTTP or TLS
+  dependency enters the workspace). Still **no model is embedded** — the CLI
+  reaches one. Temperature `0` and a fixed seed by default; `--prime` puts the
+  generated brief (`tuo cheatsheet`) in the system prompt, which is the
+  measurement ADR-0018 was written for; the system prompt's SHA-256, the seed,
+  and the priming flag are recorded in the run's `ModelConfig`; and the
+  written run is exactly what `bench report` rescores, so a live run is never
+  trusted on its own say-so. Pinned by `tuo-cli/tests/bench_run.rs` against a
+  fake endpoint served from the test (request shape, fenced-source extraction,
+  token accounting, an endpoint error recorded rather than fatal, priming
+  recorded, and the run accepted by `bench report`), skipping cleanly without
+  `curl`. The dependency-policy guard keeps `tuo-codegen-bench` at layer 116.
 - **The context-injectable brief is generated from the compiler, never authored
   as prose about it.** `tuo cheatsheet` (ADR-0018) emits a dense language brief
   meant to be pasted into a coding agent's or a local model's context before it

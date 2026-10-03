@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "qwen3:4b@t0+primed",
+    "provider": "http://localhost:11434/v1",
+    "temperature": "0",
+    "extra": [
+      {
+        "key": "seed",
+        "value": "7"
+      },
+      {
+        "key": "primed",
+        "value": "true"
+      },
+      {
+        "key": "system_prompt_sha256",
+        "value": "1660f999f21b7025958ccf79d4fca240333d80d86df609679152290a1555cebd"
+      },
+      {
+        "key": "transport",
+        "value": "curl"
+      }
+    ]
+  },
+  "compiler_version": "0.1.0",
+  "language_version": "2024",
+  "task_set_digest": "4909242b7981199c+e98ef1adebcfb10d",
+  "runs": [
+    {
+      "task_id": "double",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.",
+          "output": "module app;\n\npub fn double(take x: Int) -> Int {\n    x * 2\n}\n",
+          "generated_tokens": 2886,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "double",
+      "variant": "add",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: add]",
+          "output": "module stats;\n\npub fn double(take x: Int) -> Int {\n    x * 2\n}\n",
+          "generated_tokens": 2168,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 11
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "double",
+      "variant": "mul",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a function `double` taking an Int by `take` and returning it doubled.\n\n[variant: mul]",
+          "output": "module app;\n\npub fn double(take x: Int) -> Int {\n    x * 2\n}\n",
+          "generated_tokens": 2076,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "min",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `min` returning the smaller of two Ints, using an if-expression.",
+          "output": "module stats;\n\npub fn min(take a: Int, take b: Int) -> Int {\n    if a < b { a } else { b }\n}\n",
+          "generated_tokens": 1563,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    }
+  ]
+}
