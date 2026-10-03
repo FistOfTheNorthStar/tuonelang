@@ -65,9 +65,10 @@ const BRANCH_FREE: &[&str] = &[
 
 /// Write `std::ct` into `dir`, plus a `main` calling each given expression.
 ///
-/// The calls do not determine what ends up in the binary — the compiler emits
-/// every function in a loaded module, reachable or not — but a driver is still
-/// needed for the program to link.
+/// The calls barely affect what ends up in the binary: both backends keep the
+/// standalone body of every `#[constant_time]` function and of every function
+/// `main` cannot reach (the LLVM backend's `keep_inspectable_bodies`), so the
+/// whole module stays inspectable. A driver is still needed to link.
 fn write_program(dir: &Path, calls: &[&str]) -> Vec<PathBuf> {
     // `std::ct` is self-contained, so this is the whole library it needs.
     let mut sources = Vec::new();
@@ -163,16 +164,28 @@ fn tuonelang_functions(disassembly: &str) -> Vec<(String, Vec<String>)> {
 
 /// The mnemonic of one disassembled instruction line.
 ///
-/// `objdump` emits `<address>: <encoding>\t<mnemonic>\t<operands>`, so
-/// splitting on tabs puts the address and encoding first and the mnemonic
-/// second. Taking the wrong field here silently defeats every assertion built
-/// on it — the mnemonic becomes an operand, which never looks like a branch —
-/// so `mnemonic_parsing_finds_real_branches` pins it against real output.
+/// The two disassemblers lay a line out differently. LLVM's `objdump` (macOS)
+/// writes `<address>: <encoding>\t<mnemonic>\t<operands>`, with the address
+/// and encoding in one tab-separated field; GNU `objdump` (Linux) writes
+/// `<address>:\t<encoding>\t<mnemonic> <operands>`, with the encoding in a
+/// field of its own and the operands space-separated. So the mnemonic is the
+/// first word of the first field that is neither the address nor raw
+/// instruction bytes. Taking the wrong field silently defeats every assertion
+/// built on it — the mnemonic becomes hex, which never looks like a branch, so
+/// every branch-freedom check passes having checked nothing (which is what
+/// happened on Linux until this parser learned GNU's layout) — so
+/// `mnemonic_parsing_finds_real_branches` pins it against both.
 fn mnemonic(line: &str) -> String {
+    let is_encoding = |field: &str| {
+        field.split_whitespace().all(|token| {
+            matches!(token.len(), 2 | 4 | 8) && token.chars().all(|c| c.is_ascii_hexdigit())
+        })
+    };
     line.split('\t')
         .map(str::trim)
         .filter(|field| !field.is_empty())
-        .nth(1)
+        .filter(|field| !field.ends_with(':') && !is_encoding(field))
+        .find(|field| !field.contains(": "))
         .unwrap_or("")
         .split_whitespace()
         .next()
@@ -253,8 +266,8 @@ fn assert_branch_free(release: bool, strict: bool) {
         return;
     };
 
-    // The compiler emits *every* function in a loaded module, so the
-    // primitives are picked out by symbol: `tuo_fn_<n>` numbers follow
+    // The compiler keeps every primitive's standalone body (each is
+    // `#[constant_time]`), so the primitives are picked out by symbol: `tuo_fn_<n>` numbers follow
     // declaration order, and `std::ct` declares its scalar primitives first.
     // `emitted_symbols_follow_declaration_order` pins that assumption.
     let functions = tuonelang_functions(&disassembly);
@@ -358,60 +371,77 @@ fn main() -> Int {
     );
 }
 
-/// Even a canonical, trivially-in-range loop keeps its bounds check.
+/// Whether a canonical loop keeps its bounds check is the backend's call, not
+/// the module's.
 ///
-/// This pins the *scope* of the limitation `std::ct` documents: the surviving
-/// bounds check in the array scans is a property of the compiler, not of how
-/// this module happens to be written. Without this, a reader could reasonably
-/// assume the scans could be rewritten to avoid it, and waste effort trying.
+/// This pins the *scope* of the limitation `std::ct` documents. The scans
+/// cannot be marked `#[constant_time]` because they index (`T0018` is a rule
+/// about the source), and their claim is the weaker one — control flow depends
+/// only on array lengths — which holds whether or not a bounds check survives.
+/// What survives is a property of the compiler: the unoptimizing Cranelift
+/// build keeps every check, while the LLVM release build, since borrowed
+/// parameters are `noalias`, can prove `i < len(xs)` keeps the index in range
+/// and drops the check.
 ///
-/// This was measured rather than assumed, and it is why `std::ct` claims only
-/// that the scans' control flow depends on array *lengths* — never on their
-/// contents — instead of claiming they are branch-free.
+/// The probe is built so nothing else can explain the result: `total` is
+/// never called, so its standalone body is kept and optimized with its array
+/// an unknown parameter (nothing to constant-fold, nothing inlined away), and
+/// the fold is `^`, which cannot trap — so the only possible trap is the
+/// bounds check. If the release build ever keeps the check again, or the debug
+/// build loses it, the documentation in `std::ct` and ADR-0020 is out of date.
 #[test]
 #[expect(
     clippy::print_stderr,
     reason = "records a skip when the host has no disassembler; a silent pass would \
 claim a property that was never checked"
 )]
-fn the_bounds_check_limitation_is_the_compilers_not_this_modules() {
-    let dir = scratch_dir("canonical_loop");
+fn canonical_loop_bounds_check_survives_only_the_unoptimizing_backend() {
     let program = "\
 fn total(in xs: Array[Int]) -> Int {
     var t = 0;
     var i = 0;
     while i < std::array::len(xs) {
-        t = t + std::array::get(xs, i);
+        t = t ^ std::array::get(xs, i);
         i = i + 1;
     }
     t
 }
 
 fn main() -> Int {
-    var xs = std::array::empty();
-    std::array::push(xs, 1);
-    total(xs) & 1
+    0
 }
 ";
-    let file = dir.join("canonical.tuo");
-    std::fs::write(&file, program).expect("write the canonical-loop probe");
-    let binary = dir.join("canonical");
-    build(&[file], &binary, true);
+    for release in [false, true] {
+        let label = if release { "release" } else { "debug" };
+        let dir = scratch_dir(&format!("canonical_loop_{label}"));
+        let file = dir.join("canonical.tuo");
+        std::fs::write(&file, program).expect("write the canonical-loop probe");
+        let binary = dir.join("canonical");
+        build(&[file], &binary, release);
 
-    let Some(disassembly) = disassemble(&binary) else {
-        eprintln!("SKIPPED: no objdump on this host.");
-        return;
-    };
-    let traps = tuonelang_functions(&disassembly)
-        .iter()
-        .filter(|(_, body)| reaches_a_trap(body))
-        .count();
-    assert!(
-        traps > 0,
-        "the canonical `while i < len(xs)` loop no longer emits a bounds check — the compiler \
-         has gained bounds-check elimination, which is good news that makes `std::ct`'s \
-         documented loop caveat and ADR-0020's account of it out of date"
-    );
+        let Some(disassembly) = disassemble(&binary) else {
+            eprintln!("SKIPPED: no objdump on this host.");
+            return;
+        };
+        // `total` is declared first, so it is the first generated function.
+        let functions = tuonelang_functions(&disassembly);
+        let (symbol, body) = functions.first().expect("`total` is emitted");
+        if release {
+            assert!(
+                !reaches_a_trap(body),
+                "{label}: `{symbol}` (total) keeps its bounds check: LLVM no longer \
+                 eliminates it in a canonical `while i < len(xs)` loop over a borrowed array, \
+                 so `std::ct`'s account of the scans and ADR-0020's are out of date"
+            );
+        } else {
+            assert!(
+                reaches_a_trap(body),
+                "{label}: `{symbol}` (total) lost its bounds check: the unoptimizing backend \
+                 has started eliminating checks, so `std::ct`'s account of the scans and \
+                 ADR-0020's are out of date"
+            );
+        }
+    }
 }
 
 /// The naive mask idiom really does trap, which is why `std::ct::mask` does
@@ -451,6 +481,62 @@ fn main() -> Int {
     assert!(
         stderr.contains("integer overflow"),
         "expected an integer-overflow trap, got: {stderr}"
+    );
+}
+
+/// A `#[constant_time]` function stays out of line in a release build, so the
+/// code that runs is the body the branch-freedom checks inspect.
+///
+/// LLVM inlines small functions freely, and these primitives are a handful of
+/// instructions each. Inlined, the executed code would be a copy merged into
+/// its caller, where the optimizer may combine it with the surrounding code —
+/// exactly where a branch could reappear — and the standalone body the checks
+/// verify would never run. The backend marks such functions `noinline`; this
+/// pins that `main`'s call to `select` really is a call.
+#[test]
+#[expect(
+    clippy::print_stderr,
+    reason = "records a skip when the host has no disassembler; a silent pass would \
+claim a property that was never checked"
+)]
+fn constant_time_functions_stay_out_of_line_under_llvm() {
+    let dir = scratch_dir("out_of_line");
+    let sources = write_program(&dir, &["std::ct::select(std::rt::arg_count(), 10, 20)"]);
+    let binary = dir.join("probe");
+    build(&sources, &binary, true);
+    let Some(disassembly) = disassemble(&binary) else {
+        eprintln!("SKIPPED: no objdump on this host.");
+        return;
+    };
+    let functions = tuonelang_functions(&disassembly);
+    let select_index = BRANCH_FREE
+        .iter()
+        .position(|name| *name == "select")
+        .expect("select is a primitive");
+    let (select, _) = &functions[select_index];
+    let called = disassembly.lines().any(|line| {
+        let op = mnemonic(line);
+        matches!(op.as_str(), "bl" | "b" | "call" | "callq" | "jmp")
+            && line.contains(&format!("<{select}>"))
+    });
+    let mentions: Vec<&str> = disassembly
+        .lines()
+        .filter(|line| line.contains(select.trim_start_matches('_')))
+        .collect();
+    let main_body: Vec<&str> = disassembly
+        .lines()
+        .skip_while(|line| {
+            !line.trim_end().ends_with("<main>:") && !line.trim_end().ends_with("<_main>:")
+        })
+        .take_while(|line| !line.trim().is_empty())
+        .collect();
+    assert!(
+        called,
+        "`{select}` (std::ct::select) is never called: it was inlined into its caller, so \
+         the code that runs is not the body the branch-freedom checks verify.\n\
+         lines mentioning it:\n{}\nmain:\n{}",
+        mentions.join("\n"),
+        main_body.join("\n")
     );
 }
 
@@ -544,6 +630,23 @@ fn mnemonic_parsing_finds_real_branches() {
     let call = "1000005fc: 94000024    \tbl\t0x10000068c <_tuo_rt_trap>";
     assert_eq!(mnemonic(call), "bl");
     assert!(!is_conditional_branch(&mnemonic(call)));
+
+    // x86-64 as GNU objdump prints it on Linux: the encoding is a tab field
+    // of its own, and the operands follow the mnemonic after spaces. These
+    // are real lines from the CI runner's disassembly.
+    let gnu_call = "    29e3:\te8 38 fa ff ff       \tcall   2420 <tuo_fn_75>";
+    assert_eq!(mnemonic(gnu_call), "call");
+    let gnu_jump = "    250a:\te9 11 ff ff ff       \tjmp    2420 <tuo_fn_75>";
+    assert_eq!(mnemonic(gnu_jump), "jmp");
+    assert!(!is_conditional_branch(&mnemonic(gnu_jump)));
+    let gnu_branch = "    2433:\t74 0b                \tje     2440 <tuo_fn_75+0x20>";
+    assert_eq!(mnemonic(gnu_branch), "je");
+    assert!(is_conditional_branch(&mnemonic(gnu_branch)));
+    let gnu_move = "    29d6:\tbe 0a 00 00 00       \tmov    $0xa,%esi";
+    assert_eq!(mnemonic(gnu_move), "mov");
+    // ...and without raw bytes (`--no-show-raw-insn`), on either tool.
+    assert_eq!(mnemonic("    2923:\tcall   2420 <tuo_fn_75>"), "call");
+    assert_eq!(mnemonic("1000006a8:     \tadds\tx0, x0, x10"), "adds");
 
     for name in [
         "cbz", "cbnz", "tbz", "tbnz", "b.lt", "b.ne", "je", "jne", "jl",

@@ -236,14 +236,15 @@ pub fn round(take x: Float) -> Float {
     }
 }
 
-/// The non-negative square root of `x`, to within a small tolerance, by
-/// Newton–Raphson iteration.
+/// The non-negative square root of `x`, correctly rounded.
 ///
 /// `sqrt(0.0)` is `0.0`. A negative `x` has no real root; the function returns
 /// `0.0` for it rather than a NaN, so a caller need not guard downstream
 /// arithmetic — validate the sign first if a negative input is a real error.
-/// The result satisfies `fabs(sqrt(x) * sqrt(x) - x) < 0.000001 * x` for the
-/// positive inputs its spec pins.
+/// For every other input the result is IEEE 754's correctly-rounded root,
+/// computed by the hardware instruction through the `std::float::sqrt`
+/// builtin (ADR-0029); use that builtin directly for IEEE's own edge cases
+/// (a NaN for a negative input, `-0.0` for `-0.0`).
 ///
 /// # Example
 /// ```tuo
@@ -253,15 +254,7 @@ pub fn sqrt(take x: Float) -> Float {
     if x <= 0.0 {
         return 0.0;
     }
-    var guess = x;
-    var i = 0;
-    // Twenty iterations converge to binary64 precision for every input the
-    // runnable core can form; the loop is bounded so it always terminates.
-    while i < 20 {
-        guess = (guess + x / guess) / 2.0;
-        i = i + 1;
-    }
-    guess
+    std::float::sqrt(x)
 }
 
 // ----------------------------------------------------------------------------
@@ -363,13 +356,18 @@ spec round {
 }
 
 spec sqrt {
-    // Exact roots land exactly after convergence.
+    // Exact roots are exact.
     then sqrt(9.0) == 3.0;
     then sqrt(16.0) == 4.0;
     then sqrt(0.0) == 0.0;
     then sqrt(1.0) == 1.0;
-    // Non-square inputs: bound the error rather than compare an approximation.
-    then fabs(sqrt(2.0) * sqrt(2.0) - 2.0) < 0.000001;
+    // Correctly rounded, so a non-square input has one right answer: the
+    // binary64 value nearest the true root.
+    then sqrt(2.0) == 1.4142135623730951;
+    // Large and subnormal inputs, which a fixed-iteration Newton loop
+    // started at `x` gets wrong.
+    then sqrt(1e300) == 1e150;
+    then sqrt(1e-310) == 9.999999999999986e-156;
     // A negative input yields 0.0 (no real root, no NaN).
     then sqrt(0.0 - 4.0) == 0.0;
 }

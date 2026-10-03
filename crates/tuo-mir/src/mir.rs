@@ -903,6 +903,10 @@ pub enum UnOp {
     /// defined on every bit pattern of every width. Distinct from
     /// [`UnOp::Not`], which is `Bool -> Bool`.
     BitNot,
+    /// The IEEE 754 square root of a float, correctly rounded (ADR-0029):
+    /// `sqrt(-1.0)` is NaN, `sqrt(-0.0)` is `-0.0`, `sqrt(+inf)` is `+inf`.
+    /// Never traps. Float operands only.
+    Sqrt,
 }
 
 /// A binary operator. Integer arithmetic is two's complement with

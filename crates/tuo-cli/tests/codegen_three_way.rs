@@ -272,6 +272,7 @@ fn floats_agree_across_all_three_engines() {
         "flt_cast_sat.tuo", // float→int saturation high/low, NaN → 0
         "flt_f32.tuo",      // F32 arithmetic + F32↔F64 casts
         "flt_struct.tuo",   // a Float field in a struct, passed `take`
+        "flt_sqrt.tuo",     // std::float::sqrt, correctly rounded (ADR-0029)
     ] {
         assert_three_way_agreement(name);
     }

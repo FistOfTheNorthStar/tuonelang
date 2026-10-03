@@ -26,6 +26,15 @@
 //! blocking `connect` has no bounded outcome. Every named workload carries a
 //! real program.
 //!
+//! The catalog's second half is the **Computer Language Benchmarks Game**
+//! set ([`BENCHMARKS_GAME`]) — the established cross-language suite, so a
+//! claim about tuonelang's speed is made on programs others recognise rather
+//! than on microbenchmarks chosen here. Each is the benchmark's own algorithm
+//! with its output folded into the exit byte, and each carries C, Go, **and
+//! Rust** peers (Rust being the safe, AOT-native peer at the top of that
+//! suite). `binary-trees` is recorded **unsupported**: it allocates a tree of
+//! individually boxed nodes, and `Box` values do not lower natively yet.
+//!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
 //! [`RuntimeWorkload`] with an explicit [`Support`]:
@@ -92,14 +101,10 @@ impl RuntimeWorkload {
 
     /// A workload the current language cannot express, with the exact reason.
     ///
-    /// No catalog entry uses this today — ADR-0014 flipped the last one
-    /// (networking) — but it stays as the documented re-entry path: a future
-    /// workload whose primitive is missing enters through here, with a
-    /// reason and no number, never through a faked `supported`.
-    #[expect(
-        dead_code,
-        reason = "the documented re-entry path for a future unsupported workload"
-    )]
+    /// A workload whose primitive is missing enters through here, with a
+    /// reason and no number, never through a faked `supported`. ADR-0014
+    /// flipped the last of the original entries (networking); `binary-trees`
+    /// is the current one.
     fn unsupported(label: &str, description: &str, reason: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -116,6 +121,18 @@ impl RuntimeWorkload {
         matches!(self.support, Support::Supported { .. })
     }
 }
+
+/// The Computer Language Benchmarks Game workloads in [`workloads`], in
+/// catalog order: the established cross-language suite, compared against C,
+/// Go, and Rust peers, and the set the speed table reports on.
+pub const BENCHMARKS_GAME: &[&str] = &[
+    "nbody",
+    "spectral-norm",
+    "fannkuch-redux",
+    "mandelbrot",
+    "fasta",
+    "binary-trees",
+];
 
 /// The complete, honest v0 runtime-workload catalog — every workload the prompt
 /// names, each tagged supported (with a real program) or unsupported (with the
@@ -359,11 +376,75 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // 200 rounds, each contributing 1 bounded outcome; exit byte 200.
             200,
         ),
-        // Every workload the catalog names is now supported: the last
-        // unsupported entry (networking) flipped when ADR-0014 landed the
-        // socket effects — exactly the move this catalog's contract promises.
-        // A future workload without its primitive re-enters through
-        // `RuntimeWorkload::unsupported`, never through a faked number.
+        // --- The Computer Language Benchmarks Game. ---
+        //
+        // Each program is the benchmark's own algorithm at a size where the
+        // C peer runs for tens to hundreds of milliseconds, with its output
+        // (an energy, a norm, an image, a sequence) folded into the exit byte
+        // so all four languages are checked to compute the same answer.
+        RuntimeWorkload::supported(
+            "nbody",
+            "the Benchmarks Game's n-body: a Jovian-planet orbit simulation, \
+             1,000,000 symplectic steps over five bodies held in parallel \
+             Array[Float] columns — floating-point arithmetic and one square \
+             root per body pair per step, the hardware instruction on every \
+             side since ADR-0029's std::float::sqrt (before it, std::math::sqrt \
+             was a twenty-step Newton iteration and this ran 6x slower than C)",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/nbody.tuo"),
+            // (-energy * 1e9) as Int % 256 after 1,000,000 steps.
+            232,
+        ),
+        RuntimeWorkload::supported(
+            "spectral-norm",
+            "the Benchmarks Game's spectral-norm: ten rounds of the power \
+             method for the norm of A(i,j) = 1/((i+j)(i+j+1)/2+i+1) on a \
+             2000-element vector — dense floating-point dot products with \
+             integer index arithmetic",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/spectral-norm.tuo"),
+            // (norm * 1e9) as Int % 256 for norm = 1.2742241...
+            24,
+        ),
+        RuntimeWorkload::supported(
+            "fannkuch-redux",
+            "the Benchmarks Game's fannkuch-redux: every permutation of \
+             0..10, counting prefix reversals until 0 leads — integer array \
+             shuffling in place, the benchmark's rotation-order walk",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/fannkuch-redux.tuo"),
+            // checksum 73196 + maximum flips 38 = 73234; 73234 % 256 = 18.
+            18,
+        ),
+        RuntimeWorkload::supported(
+            "mandelbrot",
+            "the Benchmarks Game's mandelbrot: the 1600 x 1600 bitmap of the \
+             Mandelbrot set at 50 iterations per point, packed eight pixels \
+             to a byte and checksummed — a tight floating-point escape loop",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/mandelbrot.tuo"),
+            // The folded image checksum % 256.
+            145,
+        ),
+        RuntimeWorkload::supported(
+            "fasta",
+            "the Benchmarks Game's fasta: 10,000,000 DNA bases — ALU repeated, \
+             then IUB and Homo sapiens frequencies drawn with the benchmark's \
+             linear congruential generator — wrapped at 60 per line and \
+             checksummed rather than printed",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/fasta.tuo"),
+            // The folded byte-stream checksum % 256.
+            175,
+        ),
+        RuntimeWorkload::unsupported(
+            "binary-trees",
+            "the Benchmarks Game's binary-trees: allocate, walk, and free many \
+             perfect binary trees of individually allocated nodes — the \
+             allocator and pointer-chasing benchmark",
+            "a tree of individually allocated nodes needs a recursive type \
+             through a heap wrapper (`Box[Node]`), and `Box`/`Shared`/`Weak` \
+             values are refused at build time (the T0022 runnable-core \
+             advisory): the interpreter runs such a program, native code does \
+             not yet. An index arena in an `Array` would compute the same \
+             checksum but would measure a different program, which the \
+             benchmark's rules exclude.",
+        ),
     ]
 }
 
@@ -448,6 +529,12 @@ mod tests {
             "json-parse",
             "udp-echo",
             "connect-timeout",
+            "nbody",
+            "spectral-norm",
+            "fannkuch-redux",
+            "mandelbrot",
+            "fasta",
+            "binary-trees",
         ] {
             assert!(labels.contains(&required), "missing workload `{required}`");
         }
@@ -480,7 +567,8 @@ mod tests {
         // (ADR-0008 Tier 1), the hash-map map-lookup workload (ADR-0011),
         // the OS-boundary file-io workload (ADR-0013), the socket networking
         // workload (ADR-0014), the channel workload (ADR-0015), and the
-        // ADR-0017 udp-echo / connect-timeout pair — every named workload.
+        // ADR-0017 udp-echo / connect-timeout pair, and every Benchmarks Game
+        // program but binary-trees (which needs native `Box` values).
         assert_eq!(
             supported,
             vec![
@@ -502,8 +590,38 @@ mod tests {
                 "wire-decode".to_string(),
                 "udp-echo".to_string(),
                 "connect-timeout".to_string(),
+                "nbody".to_string(),
+                "spectral-norm".to_string(),
+                "fannkuch-redux".to_string(),
+                "mandelbrot".to_string(),
+                "fasta".to_string(),
             ]
         );
+    }
+
+    #[test]
+    fn the_benchmarks_game_set_is_in_the_catalog_and_binary_trees_waits_on_box() {
+        let all = workloads();
+        for label in BENCHMARKS_GAME {
+            assert!(
+                all.iter().any(|w| w.label == *label),
+                "Benchmarks Game workload `{label}` is not in the catalog"
+            );
+        }
+        let binary_trees = all
+            .iter()
+            .find(|w| w.label == "binary-trees")
+            .expect("binary-trees is catalogued");
+        match &binary_trees.support {
+            Support::Unsupported { reason } => assert!(
+                reason.contains("Box"),
+                "binary-trees must name the missing primitive"
+            ),
+            Support::Supported { .. } => panic!(
+                "binary-trees became supported: update BENCHMARKS_GAME's peers and the \
+                 speed table, and delete this assertion"
+            ),
+        }
     }
 
     /// A fake runner that "runs" a program by returning a fixed status, letting
@@ -522,7 +640,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 18, "exactly the supported workloads run");
+        assert_eq!(results.len(), 23, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

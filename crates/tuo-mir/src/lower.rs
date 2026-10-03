@@ -1807,6 +1807,19 @@ impl FnLower<'_> {
         let dest = self.temp(ret_ty, expr.span);
         let dest_place = Place::local(dest);
         let statement = match builtin {
+            Builtin::FloatSqrt => {
+                let operand = operands
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| "std::float::sqrt takes one operand".to_owned())?;
+                Statement::Assign {
+                    place: dest_place.clone(),
+                    rvalue: Rvalue::Unary {
+                        op: UnOp::Sqrt,
+                        operand,
+                    },
+                }
+            }
             Builtin::StrLen | Builtin::StrByteAt | Builtin::StrSlice => {
                 let op = match builtin {
                     Builtin::StrLen => StrOp::Len,

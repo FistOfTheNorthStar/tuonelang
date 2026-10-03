@@ -1413,6 +1413,9 @@ impl<'a> Lowering<'a> {
                 // too) and never traps — exactly the interpreter's `-v`.
                 Ok(self.builder.ins().fneg(value))
             }
+            // ADR-0029: Cranelift's `sqrt` is the IEEE 754 correctly-rounded
+            // square root (the hardware instruction), the interpreter's value.
+            UnOp::Sqrt => Ok(self.builder.ins().sqrt(value)),
             UnOp::Neg => {
                 let kind = self.operand_int_kind(operand)?;
                 // Integer negation traps on MIN (two's complement, §24).

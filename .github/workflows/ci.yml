@@ -64,5 +64,13 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The Computer Language Benchmarks Game speed table: each workload built
+      # by `tuo build --release` and by the C, Rust, and Go peers, timed, and
+      # reported as a ratio to C. It fails only if a program computes the
+      # wrong answer — shared runners are too noisy for a timing gate — so its
+      # job is to put the current numbers in the log of every run.
+      - name: Benchmarks Game speed table
+        run: cargo test -p tuo-cli --test lab_command benchmarks_game_speed_table -- --ignored --nocapture
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings

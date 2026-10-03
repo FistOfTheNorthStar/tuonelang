@@ -1,0 +1,24 @@
+// ADR-0029: `std::float::sqrt` is IEEE 754's correctly-rounded square root on
+// every engine — the interpreter's `f64::sqrt`, Cranelift's `sqrt`, and LLVM's
+// `llvm.sqrt` — so each case below holds bit for bit. A Newton iteration (what
+// `std::math::sqrt` used to be) misses several: it is not correctly rounded on
+// subnormals, returns NaN for +inf, and loses the sign of -0.0.
+fn exactly(take x: Float, take expected: Float) -> Int {
+    if std::float::sqrt(x) == expected { 1 } else { 0 }
+}
+
+fn main() -> Int {
+    var score = 0;
+    score = score + exactly(4.0, 2.0);
+    score = score + exactly(2.0, 1.4142135623730951);
+    score = score + exactly(1e300, 1e150);
+    // A subnormal input; its root is a normal number.
+    score = score + exactly(1e-310, 9.999999999999986e-156);
+    let inf = 1e308 * 10.0;
+    score = score + exactly(inf, inf);
+    let nan = std::float::sqrt(-1.0);
+    score = score + (if nan != nan { 1 } else { 0 });
+    // sqrt(-0.0) is -0.0, whose reciprocal is -inf.
+    score = score + (if 1.0 / std::float::sqrt(-0.0) == -inf { 1 } else { 0 });
+    score
+}

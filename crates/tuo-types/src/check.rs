@@ -277,6 +277,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         struct_shapes,
         enum_shapes,
         effectful,
+        constant_time,
     }
 }
 
@@ -403,6 +404,7 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::MapRemove => (vec![int_map(), Ty::int()], Ty::Option(Box::new(Ty::int()))),
         Builtin::MapLen => (vec![int_map()], Ty::int()),
         Builtin::MapKeys => (vec![int_map()], Ty::Array(Box::new(Ty::int()))),
+        Builtin::FloatSqrt => (vec![Ty::float()], Ty::float()),
     }
 }
 

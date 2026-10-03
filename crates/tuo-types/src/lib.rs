@@ -79,6 +79,7 @@ pub struct TypeckResult {
     pub(crate) struct_shapes: HashMap<SymbolId, StructShape>,
     pub(crate) enum_shapes: HashMap<SymbolId, EnumShape>,
     pub(crate) effectful: BTreeSet<SymbolId>,
+    pub(crate) constant_time: BTreeSet<SymbolId>,
 }
 
 impl TypeckResult {
@@ -134,6 +135,16 @@ impl TypeckResult {
     #[must_use]
     pub fn is_effectful(&self, symbol: SymbolId) -> bool {
         self.effectful.contains(&symbol)
+    }
+
+    /// Whether `symbol` is a function marked `#[constant_time]` (ADR-0020
+    /// Stage C) — one whose body the checker verified free of data-dependent
+    /// control flow. A backend keeps such a function out of line, so the
+    /// code that runs is the body that was checked rather than a copy the
+    /// optimizer merged into a caller.
+    #[must_use]
+    pub fn is_constant_time(&self, symbol: SymbolId) -> bool {
+        self.constant_time.contains(&symbol)
     }
 
     /// Every effectful function symbol (see [`Self::is_effectful`]), in

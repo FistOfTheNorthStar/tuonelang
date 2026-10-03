@@ -74,11 +74,13 @@
 // THE ARRAY SCANS ARE WEAKER, AND THE DIFFERENCE MATTERS. The scalar functions
 // above compile to straight-line code with no branch at all. `select_array`
 // and `bytes_eq` cannot: they contain a loop, which is a backward branch by
-// construction, and — measured, not assumed — tuonelang's array indexing emits
-// a **bounds check** that the optimizer does not eliminate even for the
-// canonical `while i < len(xs)` loop whose index is trivially in range. So
-// each iteration carries a comparison and a conditional branch to the trap
-// handler.
+// construction, and their array indexing is **bounds-checked**. Whether that
+// check survives into the emitted code is the backend's call, not this
+// module's: the unoptimizing debug build keeps it on every iteration — a
+// comparison and a conditional branch to the trap handler — and the release
+// build drops it from a canonical `while i < len(xs)` loop over a borrowed
+// array (measured; pinned by
+// `canonical_loop_bounds_check_survives_only_the_unoptimizing_backend`).
 //
 // What this does and does not cost is worth being exact about. The bounds
 // check's branch depends on the *index* and the array's *length*, both of
@@ -88,9 +90,11 @@
 // are **not branch-free**, so the claim they carry is the weaker one: their
 // control flow depends only on array lengths, never on array contents. That is
 // the property a tag comparison actually needs, and it is what the tests pin.
-// A branch-free scan needs unchecked indexing or a bounds-check elimination
-// tuonelang does not have today, and inventing a claim of one here would be
-// exactly the dishonesty this module is trying to avoid.
+// The claim does not lean on the release build's bounds-check elimination,
+// which is an optimization rather than a guarantee: a scan is promised to be
+// length-dependent only, on every backend, and inventing a stronger claim from
+// what one optimizer happens to do would be exactly the dishonesty this module
+// is trying to avoid.
 //
 // THE SCANS ARE THEREFORE NOT MARKED `#[constant_time]`, AND THAT IS VISIBLE.
 // Every scalar function above carries the attribute and is checked by the

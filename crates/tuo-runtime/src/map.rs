@@ -237,6 +237,39 @@ extern void tuo_rt_dealloc(void *ptr, size_t size, size_t align);
 
 #define TUO_MAP_TOMB UINT64_MAX
 
+/* Copy or clear `n` bytes of an entry part. Values are a word (`Int`,   */
+/* `Bool`, `Float`) or two (`Str`) and entries two to four words, so    */
+/* those sizes are copied as explicit word loads and stores. A          */
+/* `memcpy` whose size is known only at run time is a libc call per map */
+/* operation (measured: ~40% of a lookup-heavy workload) — and so is a  */
+/* `switch` of fixed-size `memcpy`s, which the compiler folds back into */
+/* one variable-size call; word assignments it cannot fold. The         */
+/* `may_alias` type makes reading the entry bytes as words well-defined. */
+/* Every entry part is 8-byte aligned (the block is, and every stride   */
+/* and key size is a multiple of 8).                                    */
+typedef uint64_t __attribute__((may_alias)) tuo_map_word;
+
+static void tuo_map_copy(void *dst, const void *src, uint64_t n) {{
+    tuo_map_word *d = (tuo_map_word *)dst;
+    const tuo_map_word *s = (const tuo_map_word *)src;
+    switch (n) {{
+        case 8: d[0] = s[0]; return;
+        case 16: d[0] = s[0]; d[1] = s[1]; return;
+        case 24: d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; return;
+        case 32: d[0] = s[0]; d[1] = s[1]; d[2] = s[2]; d[3] = s[3]; return;
+        default: memcpy(dst, src, (size_t)n); return;
+    }}
+}}
+
+static void tuo_map_zero(void *dst, uint64_t n) {{
+    tuo_map_word *d = (tuo_map_word *)dst;
+    switch (n) {{
+        case 8: d[0] = 0; return;
+        case 16: d[0] = 0; d[1] = 0; return;
+        default: memset(dst, 0, (size_t)n); return;
+    }}
+}}
+
 static uint64_t tuo_map_hash_int(int64_t key) {{
     uint64_t x = (uint64_t)key;
     x ^= x >> 30; x *= 0xbf58476d1ce4e5b9ULL;
@@ -323,7 +356,7 @@ static unsigned char *tuo_map_rehome(long long *hdr, uint64_t new_cap,
         for (uint64_t i = 0; i < old_used; i++) {{
             if (!old_live[i]) continue;
             unsigned char *dst = entries + packed * stride;
-            memcpy(dst, old_entries + i * stride, (size_t)stride);
+            tuo_map_copy(dst, old_entries + i * stride, stride);
             live[packed] = 1;
             tuo_map_index_place(index, new_index_cap, tuo_map_key_hash(dst, is_str), packed);
             packed++;
@@ -352,8 +385,8 @@ static void tuo_map_append(long long *hdr, const void *key, uint64_t key_size,
     }}
     cap = (uint64_t)hdr[2];
     uint64_t used = tuo_map_used(entries);
-    memcpy(entries + used * stride, key, (size_t)key_size);
-    memcpy(entries + used * stride + key_size, v, (size_t)vs);
+    tuo_map_copy(entries + used * stride, key, key_size);
+    tuo_map_copy(entries + used * stride + key_size, v, vs);
     tuo_map_live(entries, cap)[used] = 1;
     tuo_map_index_place(tuo_map_index(entries, cap), tuo_map_index_cap(entries), hash, used);
     tuo_map_set_used(entries, used + 1);
@@ -418,7 +451,7 @@ static void tuo_map_remove_at(long long *hdr, uint64_t slot, uint64_t key_size,
     uint64_t *index = tuo_map_index(entries, cap);
     uint64_t dense = index[slot] - 1;
     out[0] = 1;
-    memcpy(&out[1], entries + dense * (key_size + vs) + key_size, (size_t)vs);
+    tuo_map_copy(&out[1], entries + dense * (key_size + vs) + key_size, vs);
     tuo_map_live(entries, cap)[dense] = 0;
     index[slot] = TUO_MAP_TOMB;
     hdr[1] = hdr[1] - 1;
@@ -438,7 +471,7 @@ static void tuo_map_keys(const long long *hdr, uint64_t key_size, uint64_t vs,
     uint64_t n = 0;
     for (uint64_t i = 0; i < used; i++) {{
         if (!live[i]) continue;
-        memcpy(buf + n * key_size, entries + i * stride, (size_t)key_size);
+        tuo_map_copy(buf + n * key_size, entries + i * stride, key_size);
         n++;
     }}
     out_hdr[0] = (long long)buf;
@@ -456,9 +489,9 @@ void tuo_rt_map_int_get(const long long *hdr, long long k, unsigned long long vs
                         long long *out) {{
     uint64_t stride = {int_key} + vs;
     uint64_t slot = tuo_map_find_int(hdr, k, stride);
-    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    if (slot == (uint64_t)-1) {{ out[0] = 0; tuo_map_zero(&out[1], vs); return; }}
     out[0] = 1;
-    memcpy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {int_key}, (size_t)vs);
+    tuo_map_copy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {int_key}, vs);
 }}
 
 void tuo_rt_map_int_insert(long long *hdr, long long k, const void *v,
@@ -467,12 +500,12 @@ void tuo_rt_map_int_insert(long long *hdr, long long k, const void *v,
     uint64_t slot = tuo_map_find_int(hdr, k, stride);
     if (slot != (uint64_t)-1) {{
         unsigned char *value = tuo_map_entry_at(hdr, slot, stride) + {int_key};
-        memcpy(&out[1], value, (size_t)vs);
+        tuo_map_copy(&out[1], value, vs);
         out[0] = 1;
-        memcpy(value, v, (size_t)vs);
+        tuo_map_copy(value, v, vs);
         return;
     }}
-    out[0] = 0; memset(&out[1], 0, (size_t)vs);
+    out[0] = 0; tuo_map_zero(&out[1], vs);
     tuo_map_append(hdr, &k, {int_key}, v, vs, tuo_map_hash_int(k), 0);
 }}
 
@@ -480,7 +513,7 @@ void tuo_rt_map_int_remove(long long *hdr, long long k, unsigned long long vs,
                            long long *out) {{
     uint64_t stride = {int_key} + vs;
     uint64_t slot = tuo_map_find_int(hdr, k, stride);
-    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    if (slot == (uint64_t)-1) {{ out[0] = 0; tuo_map_zero(&out[1], vs); return; }}
     tuo_map_remove_at(hdr, slot, {int_key}, vs, out);
 }}
 
@@ -492,9 +525,9 @@ void tuo_rt_map_str_get(const long long *hdr, const unsigned char *kp, unsigned 
                         unsigned long long vs, long long *out) {{
     uint64_t stride = {str_key} + vs;
     uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
-    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    if (slot == (uint64_t)-1) {{ out[0] = 0; tuo_map_zero(&out[1], vs); return; }}
     out[0] = 1;
-    memcpy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {str_key}, (size_t)vs);
+    tuo_map_copy(&out[1], tuo_map_entry_at(hdr, slot, stride) + {str_key}, vs);
 }}
 
 void tuo_rt_map_str_insert(long long *hdr, const unsigned char *kp, unsigned long long kn,
@@ -503,12 +536,12 @@ void tuo_rt_map_str_insert(long long *hdr, const unsigned char *kp, unsigned lon
     uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
     if (slot != (uint64_t)-1) {{
         unsigned char *value = tuo_map_entry_at(hdr, slot, stride) + {str_key};
-        memcpy(&out[1], value, (size_t)vs);
+        tuo_map_copy(&out[1], value, vs);
         out[0] = 1;
-        memcpy(value, v, (size_t)vs);
+        tuo_map_copy(value, v, vs);
         return;
     }}
-    out[0] = 0; memset(&out[1], 0, (size_t)vs);
+    out[0] = 0; tuo_map_zero(&out[1], vs);
     unsigned char key[{str_key}];
     memcpy(key, &kp, 8);
     memcpy(key + 8, &kn, 8);
@@ -519,7 +552,7 @@ void tuo_rt_map_str_remove(long long *hdr, const unsigned char *kp, unsigned lon
                            unsigned long long vs, long long *out) {{
     uint64_t stride = {str_key} + vs;
     uint64_t slot = tuo_map_find_str(hdr, kp, kn, stride);
-    if (slot == (uint64_t)-1) {{ out[0] = 0; memset(&out[1], 0, (size_t)vs); return; }}
+    if (slot == (uint64_t)-1) {{ out[0] = 0; tuo_map_zero(&out[1], vs); return; }}
     tuo_map_remove_at(hdr, slot, {str_key}, vs, out);
 }}
 
@@ -609,7 +642,10 @@ mod tests {
         // the shim stays type-agnostic. A hardcoded 8-byte value copy would be
         // the Stage B regression this pins against.
         assert!(source.contains("unsigned long long vs"));
-        assert!(source.contains("(size_t)vs"));
+        assert!(source.contains("tuo_map_copy(&out[1]"));
+        // ...and the copies take a fixed-size path for the common sizes
+        // rather than a libc call per operation.
+        assert!(source.contains("case 8: d[0] = s[0]; return;"));
         // Allocation flows through the existing boundary only.
         assert!(source.contains("tuo_rt_alloc"));
         assert!(source.contains("tuo_rt_dealloc"));
