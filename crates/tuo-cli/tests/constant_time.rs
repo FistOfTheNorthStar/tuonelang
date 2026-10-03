@@ -507,10 +507,24 @@ fn constant_time_functions_stay_out_of_line_under_llvm() {
         matches!(op.as_str(), "bl" | "b" | "call" | "callq" | "jmp")
             && line.contains(&format!("<{select}>"))
     });
+    let mentions: Vec<&str> = disassembly
+        .lines()
+        .filter(|line| line.contains(select.trim_start_matches('_')))
+        .collect();
+    let main_body: Vec<&str> = disassembly
+        .lines()
+        .skip_while(|line| {
+            !line.trim_end().ends_with("<main>:") && !line.trim_end().ends_with("<_main>:")
+        })
+        .take_while(|line| !line.trim().is_empty())
+        .collect();
     assert!(
         called,
         "`{select}` (std::ct::select) is never called: it was inlined into its caller, so \
-         the code that runs is not the body the branch-freedom checks verify"
+         the code that runs is not the body the branch-freedom checks verify.\n\
+         lines mentioning it:\n{}\nmain:\n{}",
+        mentions.join("\n"),
+        main_body.join("\n")
     );
 }
 
