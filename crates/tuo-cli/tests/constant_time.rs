@@ -164,16 +164,28 @@ fn tuonelang_functions(disassembly: &str) -> Vec<(String, Vec<String>)> {
 
 /// The mnemonic of one disassembled instruction line.
 ///
-/// `objdump` emits `<address>: <encoding>\t<mnemonic>\t<operands>`, so
-/// splitting on tabs puts the address and encoding first and the mnemonic
-/// second. Taking the wrong field here silently defeats every assertion built
-/// on it — the mnemonic becomes an operand, which never looks like a branch —
-/// so `mnemonic_parsing_finds_real_branches` pins it against real output.
+/// The two disassemblers lay a line out differently. LLVM's `objdump` (macOS)
+/// writes `<address>: <encoding>\t<mnemonic>\t<operands>`, with the address
+/// and encoding in one tab-separated field; GNU `objdump` (Linux) writes
+/// `<address>:\t<encoding>\t<mnemonic> <operands>`, with the encoding in a
+/// field of its own and the operands space-separated. So the mnemonic is the
+/// first word of the first field that is neither the address nor raw
+/// instruction bytes. Taking the wrong field silently defeats every assertion
+/// built on it — the mnemonic becomes hex, which never looks like a branch, so
+/// every branch-freedom check passes having checked nothing (which is what
+/// happened on Linux until this parser learned GNU's layout) — so
+/// `mnemonic_parsing_finds_real_branches` pins it against both.
 fn mnemonic(line: &str) -> String {
+    let is_encoding = |field: &str| {
+        field.split_whitespace().all(|token| {
+            matches!(token.len(), 2 | 4 | 8) && token.chars().all(|c| c.is_ascii_hexdigit())
+        })
+    };
     line.split('\t')
         .map(str::trim)
         .filter(|field| !field.is_empty())
-        .nth(1)
+        .filter(|field| !field.ends_with(':') && !is_encoding(field))
+        .find(|field| !field.contains(": "))
         .unwrap_or("")
         .split_whitespace()
         .next()
@@ -618,6 +630,23 @@ fn mnemonic_parsing_finds_real_branches() {
     let call = "1000005fc: 94000024    \tbl\t0x10000068c <_tuo_rt_trap>";
     assert_eq!(mnemonic(call), "bl");
     assert!(!is_conditional_branch(&mnemonic(call)));
+
+    // x86-64 as GNU objdump prints it on Linux: the encoding is a tab field
+    // of its own, and the operands follow the mnemonic after spaces. These
+    // are real lines from the CI runner's disassembly.
+    let gnu_call = "    29e3:\te8 38 fa ff ff       \tcall   2420 <tuo_fn_75>";
+    assert_eq!(mnemonic(gnu_call), "call");
+    let gnu_jump = "    250a:\te9 11 ff ff ff       \tjmp    2420 <tuo_fn_75>";
+    assert_eq!(mnemonic(gnu_jump), "jmp");
+    assert!(!is_conditional_branch(&mnemonic(gnu_jump)));
+    let gnu_branch = "    2433:\t74 0b                \tje     2440 <tuo_fn_75+0x20>";
+    assert_eq!(mnemonic(gnu_branch), "je");
+    assert!(is_conditional_branch(&mnemonic(gnu_branch)));
+    let gnu_move = "    29d6:\tbe 0a 00 00 00       \tmov    $0xa,%esi";
+    assert_eq!(mnemonic(gnu_move), "mov");
+    // ...and without raw bytes (`--no-show-raw-insn`), on either tool.
+    assert_eq!(mnemonic("    2923:\tcall   2420 <tuo_fn_75>"), "call");
+    assert_eq!(mnemonic("1000006a8:     \tadds\tx0, x0, x10"), "adds");
 
     for name in [
         "cbz", "cbnz", "tbz", "tbnz", "b.lt", "b.ne", "je", "jne", "jl",
