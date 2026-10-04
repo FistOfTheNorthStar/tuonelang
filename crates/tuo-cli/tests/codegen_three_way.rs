@@ -301,6 +301,23 @@ fn borrow_mode_calls_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0030 scratch buffers: indexed assignment (fixed, growable, through a
+/// `mut` parameter, into a struct field, nested) and `std::array::filled` over
+/// each element kind agree on all three engines — and so do their traps: an
+/// out-of-range write (`IndexOutOfBounds`) and a negative length
+/// (`IntegerOverflow`).
+#[test]
+fn scratch_buffers_agree_across_all_three_engines() {
+    for name in [
+        "arr_index_write.tuo",
+        "arr_filled.tuo",
+        "arr_index_write_trap_oob.tuo",
+        "arr_filled_trap_negative.tuo",
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// An out-of-bounds index traps identically on all three engines: the
 /// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
 /// runtime's fixed trap status (the bounds `Assert` is lowered before the

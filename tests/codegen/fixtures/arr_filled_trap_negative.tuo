@@ -1,0 +1,7 @@
+// ADR-0030: `std::array::filled` with a negative length traps
+// `IntegerOverflow` (an unsatisfiable size) on every engine, before allocating.
+fn main() -> Int {
+    let n = 0 - 3;
+    let xs = std::array::filled(n, 1);
+    std::array::len(xs)
+}

@@ -3444,6 +3444,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         args: &[Operand],
     ) -> Result<(), CodegenError> {
         match op {
+            HeapOp::ArrayFilled => self.lower_array_filled(dest, args),
             HeapOp::StringEmpty | HeapOp::ArrayEmpty | HeapOp::MapEmpty => {
                 // Refuse a wrapper-containing array element up front (wrapper
                 // values are not lowered anywhere) so no native path
@@ -4608,6 +4609,113 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         Ok(())
     }
 
+    /// `std::array::filled(n, value)` (ADR-0030) into `dest`: an empty header,
+    /// one `ensure_capacity` for all `n` elements (a single allocation), `n`
+    /// stores of the `Copy` value, then `len = n` — matching the interpreter's
+    /// `vec![value; n]` and the Cranelift backend. A negative `n`, or one whose
+    /// byte size would overflow, traps `IntegerOverflow` before allocating.
+    fn lower_array_filled(&mut self, dest: &Place, args: &[Operand]) -> Result<(), CodegenError> {
+        let element = self.array_element_ty(dest)?;
+        require_native_array_element(&element, self.types)?;
+        let stride = self.heap_stride(dest)?;
+        let align = self.heap_align(dest)?;
+        let [count, value] = args else {
+            return Err(CodegenError::backend("filled takes a count and a value"));
+        };
+        let i64_ty = self.ctx.i64_type();
+
+        let base = self.aggregate_dest_address(dest)?;
+        let sentinel = self.zero_size_sentinel()?;
+        let zero = i64_ty.const_zero();
+        self.store_header(base, sentinel, zero, zero)?;
+
+        let n = self.lower_operand(count)?.into_int_value();
+        let negative = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, n, zero, "filled_negative")
+            .map_err(builder_err("checking filled's count"))?;
+        self.guard(negative, TrapCode::IntegerOverflow)?;
+        let limit = i64_ty.const_int(i64::MAX.unsigned_abs() / stride.max(1), false);
+        let too_large = self
+            .builder
+            .build_int_compare(IntPredicate::SGT, n, limit, "filled_too_large")
+            .map_err(builder_err("checking filled's byte size"))?;
+        self.guard(too_large, TrapCode::IntegerOverflow)?;
+        let buf = self.ensure_capacity(dest, n, stride, align)?;
+
+        // The value is evaluated once: a scalar into a register, an aggregate
+        // as the address its bytes are copied from on every iteration.
+        let scalar = scalar_type_is_some(&element);
+        let scalar_value = if scalar {
+            Some(self.lower_operand(value)?)
+        } else {
+            None
+        };
+        let source = if scalar {
+            None
+        } else {
+            Some(self.operand_aggregate_address(value)?)
+        };
+        let layout = self.layout(&element)?;
+
+        let entry = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| CodegenError::backend("filled outside a block"))?;
+        let header = self.ctx.append_basic_block(self.value, "filled_header");
+        let body = self.ctx.append_basic_block(self.value, "filled_body");
+        let exit = self.ctx.append_basic_block(self.value, "filled_exit");
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(builder_err("entering the fill loop"))?;
+        self.builder.position_at_end(header);
+        let phi = self
+            .builder
+            .build_phi(i64_ty, "filled_idx")
+            .map_err(builder_err("merging the fill index"))?;
+        phi.add_incoming(&[(&zero, entry)]);
+        let index = phi.as_basic_value().into_int_value();
+        let done = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, index, n, "filled_done")
+            .map_err(builder_err("comparing the fill index"))?;
+        self.builder
+            .build_conditional_branch(done, exit, body)
+            .map_err(builder_err("branching on the fill index"))?;
+
+        self.builder.position_at_end(body);
+        let addr = self.dynamic_byte_gep(buf, index, stride)?;
+        match (scalar_value, source) {
+            (Some(v), _) => {
+                self.builder
+                    .build_store(addr, v)
+                    .map_err(builder_err("storing a filled element"))?;
+            }
+            (None, Some(src)) => self.emit_memcpy(addr, src, layout)?,
+            (None, None) => unreachable!("filled's value is a scalar or an aggregate"),
+        }
+        let next = self
+            .builder
+            .build_int_add(index, i64_ty.const_int(1, false), "filled_next")
+            .map_err(builder_err("incrementing the fill index"))?;
+        let body_end = self
+            .builder
+            .get_insert_block()
+            .ok_or_else(|| CodegenError::backend("fill loop body lost its block"))?;
+        self.builder
+            .build_unconditional_branch(header)
+            .map_err(builder_err("closing the fill loop"))?;
+        phi.add_incoming(&[(&next, body_end)]);
+
+        self.builder.position_at_end(exit);
+        let header_addr = self.header_address(dest)?;
+        let len_addr = self.byte_gep(header_addr, HDR_LEN_OFFSET)?;
+        self.builder
+            .build_store(len_addr, n)
+            .map_err(builder_err("storing filled's length"))?;
+        Ok(())
+    }
+
     /// Free a heap buffer of `cap × stride` bytes at `ptr`, guarded on
     /// `cap != 0` (an empty sentinel is never freed).
     fn emit_buffer_free(
@@ -5133,6 +5241,7 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
             | HeapOp::StringSlice
             | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
+            | HeapOp::ArrayFilled
             | HeapOp::MapEmpty
             | HeapOp::MapGet
             | HeapOp::MapKeys

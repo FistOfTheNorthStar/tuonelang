@@ -731,7 +731,6 @@ fails to lower, because v0 has no method dispatch. Write the free function.
   fn f() -> Int { true }         fn f() -> Bool { true }
   if a < b < c                   if a < b && b < c
   xs.len()                       std::array::len(xs)
-  xs[i] = v;                     std::array::set(mut xs, i, v);
 
 Further traps, in the order they usually bite:
 
@@ -745,6 +744,12 @@ Further traps, in the order they usually bite:
     comparing structs or enums directly.
   * Literal positions (array lengths) need a non-negative literal; `-5` is
     unary minus applied to `5`, which is an expression, not a literal.
+  * Indexing takes a `Usize`: `xs[i as Usize]`. An indexed write `xs[i] = v`
+    works on a `var` array (fixed or growable) when the element is `Copy`
+    (Int, Float, Bool, Str); for a `String` or other owning element, use
+    `std::array::set(xs, i, v)`. A buffer of known size is
+    `std::array::filled(n, value)` (one allocation) or `[value; N]` (on the
+    stack), not `n` pushes onto `std::array::empty()`.
 
 --------------------------------------------------------------------------------
 5. A COMPLETE PROGRAM

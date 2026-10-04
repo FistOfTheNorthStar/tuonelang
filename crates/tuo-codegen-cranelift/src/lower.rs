@@ -3022,6 +3022,7 @@ impl<'a> Lowering<'a> {
         args: &[Operand],
     ) -> Result<(), CodegenError> {
         match op {
+            HeapOp::ArrayFilled => self.lower_array_filled(dest, args),
             HeapOp::StringEmpty | HeapOp::ArrayEmpty | HeapOp::MapEmpty => {
                 // `{ptr = sentinel, len = 0, cap = 0}` — never dereferenced,
                 // never freed. For an array, refuse a wrapper-containing
@@ -4123,6 +4124,85 @@ impl<'a> Lowering<'a> {
         Ok(())
     }
 
+    /// `std::array::filled(n, value)` (ADR-0030) into `dest`: an empty header,
+    /// one `ensure_capacity` for all `n` elements (a single allocation), `n`
+    /// stores of the `Copy` value, then `len = n` — matching the interpreter's
+    /// `vec![value; n]`. A negative `n`, or one whose byte size would
+    /// overflow, traps `IntegerOverflow` before anything is allocated.
+    fn lower_array_filled(&mut self, dest: &Place, args: &[Operand]) -> Result<(), CodegenError> {
+        let element = self.array_element_ty(dest)?;
+        require_native_array_element(&element, self.types)?;
+        let stride = self.heap_stride(dest)?;
+        let align = self.heap_align(dest)?;
+        let [count, value] = args else {
+            return Err(CodegenError::backend("filled takes a count and a value"));
+        };
+
+        let base = self.aggregate_dest_address(dest)?;
+        let sentinel = self.zero_size_sentinel();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.store_header(base, sentinel, zero, zero);
+
+        let n = self.lower_operand(count)?;
+        let negative = self.builder.ins().icmp_imm(IntCC::SignedLessThan, n, 0);
+        self.guard(negative, TrapCode::IntegerOverflow);
+        let too_large =
+            self.builder
+                .ins()
+                .icmp_imm(IntCC::SignedGreaterThan, n, i64::MAX / stride.max(1));
+        self.guard(too_large, TrapCode::IntegerOverflow);
+        let buf = self.ensure_capacity(dest, n, stride, align)?;
+
+        // The value is evaluated once: a scalar into a register, an aggregate
+        // as the address its bytes are copied from on every iteration.
+        let scalar = scalar_type(&element).is_some();
+        let source = if scalar {
+            self.lower_operand(value)?
+        } else {
+            self.operand_aggregate_address(value)?
+        };
+        let layout = self.layout(&element)?;
+
+        let header_block = self.builder.create_block();
+        self.builder.append_block_param(header_block, types::I64);
+        let body_block = self.builder.create_block();
+        let exit_block = self.builder.create_block();
+        self.builder.ins().jump(header_block, &[zero.into()]);
+
+        self.builder.switch_to_block(header_block);
+        let index = self.builder.block_params(header_block)[0];
+        let done = self
+            .builder
+            .ins()
+            .icmp(IntCC::SignedGreaterThanOrEqual, index, n);
+        self.builder
+            .ins()
+            .brif(done, exit_block, &[], body_block, &[]);
+
+        self.builder.switch_to_block(body_block);
+        self.builder.seal_block(body_block);
+        let offset = self.builder.ins().imul_imm(index, stride);
+        let element_addr = self.builder.ins().iadd(buf, offset);
+        if scalar {
+            self.builder
+                .ins()
+                .store(MemFlags::trusted(), source, element_addr, 0);
+        } else {
+            self.emit_memcpy(element_addr, source, layout);
+        }
+        let next = self.builder.ins().iadd_imm(index, 1);
+        self.builder.ins().jump(header_block, &[next.into()]);
+        self.builder.seal_block(header_block);
+
+        self.builder.switch_to_block(exit_block);
+        self.builder.seal_block(exit_block);
+        let header = self.header_address(dest)?;
+        self.builder
+            .ins()
+            .store(MemFlags::trusted(), n, header, HDR_LEN_OFFSET);
+        Ok(())
+    }
+
     /// A counted loop applying `glue` to each of the `len` elements of type
     /// `element` in the buffer at `buf` (`stride` bytes apart) — the one place
     /// codegen emits a genuine back-edge. The loop header's induction index is
@@ -4583,6 +4663,7 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
             | HeapOp::StringSlice
             | HeapOp::StringAsStr
             | HeapOp::ArrayEmpty
+            | HeapOp::ArrayFilled
             | HeapOp::MapEmpty
             | HeapOp::MapGet
             | HeapOp::MapKeys

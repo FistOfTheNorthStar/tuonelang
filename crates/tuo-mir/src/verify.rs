@@ -1003,6 +1003,7 @@ impl Verifier<'_> {
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
             | HeapOp::ArrayEmpty
+            | HeapOp::ArrayFilled
             | HeapOp::MapEmpty => None,
         };
         let operand_tys: Vec<Ty> = match op {
@@ -1019,6 +1020,14 @@ impl Verifier<'_> {
             HeapOp::StringByteAt | HeapOp::ArrayGet => vec![Ty::int()],
             HeapOp::StringSlice => vec![Ty::int(), Ty::int()],
             HeapOp::MapGet | HeapOp::MapContainsKey => vec![subject_kv().0],
+            // `filled(n, value)`: the count, then a value of the element
+            // type the destination array carries.
+            HeapOp::ArrayFilled => vec![
+                Ty::int(),
+                self.place_ty(dest)
+                    .and_then(|ty| array_element(&ty))
+                    .unwrap_or_else(Ty::int),
+            ],
         };
         let result: Ty = match op {
             HeapOp::StringEmpty
@@ -1031,8 +1040,9 @@ impl Verifier<'_> {
             }
             // `get` returns the element type, read from the subject array.
             HeapOp::ArrayGet => subject_elem(),
-            // `empty` produces `Array[T]`; the element is read from the dest.
-            HeapOp::ArrayEmpty => Ty::Array(Box::new(
+            // `empty`/`filled` produce `Array[T]`; the element is read from
+            // the dest.
+            HeapOp::ArrayEmpty | HeapOp::ArrayFilled => Ty::Array(Box::new(
                 self.place_ty(dest)
                     .and_then(|ty| array_element(&ty))
                     .unwrap_or_else(Ty::int),

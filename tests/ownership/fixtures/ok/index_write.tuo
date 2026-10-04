@@ -1,0 +1,26 @@
+// ADR-0030 — indexed writes the ownership checker accepts: a `var` fixed or
+// growable array, a `mut` parameter, a field of a `var` struct, a nested
+// array, and `std::array::filled` of a `Copy` value.
+
+struct Buf {
+    data: [Int; 4],
+}
+
+fn fill(mut xs: [Int; 4]) {
+    xs[0 as Usize] = 1;
+}
+
+fn case_writes() -> Int {
+    var w = [0; 4];
+    w[1 as Usize] = 2;
+    var g = std::array::filled(3, 0);
+    g[2 as Usize] = 5;
+    var b = Buf { data: [0; 4] };
+    fill(b.data);
+    b.data[3 as Usize] = 4;
+    var m = [[0; 2]; 2];
+    m[1 as Usize][1 as Usize] = 9;
+    var s = std::array::filled(2, "x");
+    s[0 as Usize] = "y";
+    w[1 as Usize] + std::array::get(g, 2) + b.data[3 as Usize] + m[1 as Usize][1 as Usize]
+}

@@ -1273,6 +1273,46 @@ impl Machine<'_, '_> {
                 }
             }
             HeapOp::ArrayEmpty => Ok(Value::Array(Vec::new())),
+            // ADR-0030: `n` copies of a `Copy` value. A negative length is
+            // unsatisfiable and traps `IntegerOverflow`, as the native
+            // allocator reports an unsatisfiable size; the live-value budget is
+            // checked *before* the array is built, so a huge `n` is the
+            // sandbox's `MemoryBudget` trap rather than a host allocation.
+            HeapOp::ArrayFilled => {
+                let n = int_at(0, self)?;
+                let Some(value) = values.get(1).cloned() else {
+                    return Err(self.type_bug(
+                        function,
+                        "filled is missing its value",
+                        &Value::Unit,
+                    ));
+                };
+                if n < 0 {
+                    return Err(self.abort(
+                        TrapKind::IntegerOverflow,
+                        format!("std::array::filled was asked for a negative length, {n}"),
+                        function.span,
+                    ));
+                }
+                let per = value_cost(&value).max(1);
+                let need = u64::try_from(n).unwrap_or(u64::MAX).saturating_mul(per);
+                if self.live_values.saturating_add(need) > self.interp.limits.max_live_values {
+                    return Err(self.abort(
+                        TrapKind::MemoryBudget,
+                        format!(
+                            "live-value budget of {} exceeded",
+                            self.interp.limits.max_live_values
+                        ),
+                        function.span,
+                    ));
+                }
+                #[expect(
+                    clippy::cast_sign_loss,
+                    reason = "non-negative and within the live-value budget, which bounds it"
+                )]
+                let count = n as usize;
+                Ok(Value::Array(vec![value; count]))
+            }
             HeapOp::ArrayLen | HeapOp::ArrayGet => {
                 let elements = match subject {
                     Some(Value::Array(elements)) => elements,

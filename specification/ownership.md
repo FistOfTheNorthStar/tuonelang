@@ -50,7 +50,13 @@ ever required.
     (it owns a heap buffer), while `[T; N]` owns no heap and inherits its
     element's `Copy`-ness. A non-`Copy` `[T; N]` moves as one whole value,
     exactly like a struct; element-wise partial moves do not exist because
-    index expressions are not places (`O0007`, §below). Dropping a `[T; N]`
+    index expressions are not places to move from or borrow (`O0007`,
+    §below). Since ADR-0030 an index expression is an assignment target:
+    `xs[i] = v` writes one element of a fixed or growable array, checked as a
+    mutation of the array place underneath (which must be usable and mutable,
+    `O0001`/`O0004`, exactly as for a `mut` argument) and allowed only for a
+    `Copy` element (`O0012`). The same ADR's `std::array::filled(n, v)`
+    duplicates `v` and so requires a `Copy` value (`O0010`). Dropping a `[T; N]`
     drops elements front to back and frees nothing (the storage is inline);
     a `Copy` fixed array's drop is a no-op. The repeat literal `[x; N]`
     duplicates its operand `N` times and therefore requires a `Copy`
@@ -482,6 +488,7 @@ the negative fixture corpus:
 | `O0009` | Use of a partially moved value. |
 | `O0010` | Repeat array literal `[x; N]` of a non-`Copy` element (ADR-0004 Stage 2). |
 | `O0011` | A `String` is moved, mutated, dropped, or overwritten while a `Str` view of it (from `std::string::as_str`) is still live, or such a view escapes its frame (ADR-0010, §13). |
+| `O0012` | An indexed write `xs[i] = v` whose element type is not `Copy`: the write overwrites the element in place and nothing would drop the value it replaces — use `std::array::set`, which does (ADR-0030). |
 
 Every diagnostic names the place, the earlier action that produced the state
 (the move site, the borrow, the conflicting argument), and — where one
