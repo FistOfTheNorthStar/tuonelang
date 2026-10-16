@@ -349,3 +349,32 @@ fn an_empty_generic_parameter_list_is_diagnosed_on_a_struct_too() {
         );
     }
 }
+
+#[test]
+fn a_mode_written_at_a_call_site_is_one_targeted_error_with_a_removal_fix() {
+    // `f(mut y)` once fell into statement-level recovery ("skipped N tokens"),
+    // and the dropped call then surfaced as an unrelated type error. It is one
+    // targeted `P0001` at the keyword, with an edit deleting it, and the call
+    // still parses — its argument is the plain `y`.
+    let text = "fn main() -> Int {\n    var y = 1;\n    bump(mut y);\n    y\n}\n";
+    let result = parse_str(text);
+    let diagnostics = result.all_diagnostics();
+    let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(
+        codes,
+        vec!["P0001".to_owned()],
+        "exactly one targeted error"
+    );
+    let diagnostic = &diagnostics[0];
+    assert!(
+        diagnostic.message.contains("`mut` is a parameter mode"),
+        "the message names the keyword: {}",
+        diagnostic.message
+    );
+    let at = text.find("mut y").expect("marker exists");
+    assert_eq!(diagnostic.primary_span.range().start().as_usize(), at);
+    let edit = &diagnostic.suggestions[0].edits[0];
+    let removed = &text[edit.span.range().start().as_usize()..edit.span.range().end().as_usize()];
+    assert_eq!(removed, "mut ", "the fix deletes the keyword and its space");
+    assert_eq!(count(&result, SyntaxKind::CallExpr), 1, "the call survives");
+}
