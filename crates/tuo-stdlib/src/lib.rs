@@ -152,7 +152,12 @@ pub const ED25519: Module = Module {
 /// live **OpenSSL** client (`tls_server_completes_handshake_with_openssl`).
 /// Every reader is **total** — a ClientHello arrives unauthenticated, and
 /// tuonelang traps on overflow and out-of-bounds indexing, so a parser that
-/// can trap is a remote denial of service. Supports X25519 + Ed25519 +
+/// can trap is a remote denial of service. The client's Finished is verified
+/// against the transcript before the switch to application keys (RFC 8446
+/// §4.4.4) and a small-order X25519 key share is refused (§7.4.2), each
+/// pinned natively by a test that sends the forbidden input
+/// (`tls_server_verifies_the_client_finished`,
+/// `tls_rejects_small_order_key_shares`). Supports X25519 + Ed25519 +
 /// ChaCha20-Poly1305 only; no resumption, 0-RTT, client certificates,
 /// HelloRetryRequest, or X.509 chain validation.
 pub const TLS: Module = Module {

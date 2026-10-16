@@ -26,6 +26,16 @@
 //   * the transcript hash, and the `CertificateVerify` signature content
 //   * record protection: per-record nonces, the inner content type, and the
 //     AEAD seal/open
+//   * the two checks RFC 8446 makes mandatory on what the client sends:
+//     its Finished is verified against the transcript before the switch to
+//     application keys (§4.4.4) — a mismatch ends the connection with a
+//     fatal `decrypt_error`, and application data in place of the Finished
+//     with `unexpected_message` — and a small-order X25519 key share, whose
+//     shared secret is all zeros, is refused (§7.4.2, RFC 7748 §6.1). Both
+//     were missing until ADR-0036's review found them; each is pinned by a
+//     native test that sends the forbidden input
+//     (`tls_server_verifies_the_client_finished`,
+//     `tls_rejects_small_order_key_shares`) and its predicate by a spec.
 //
 // WHAT IS DELIBERATELY NOT. No session resumption or PSK, no 0-RTT, no client
 // certificates, no HelloRetryRequest, no key update, no RSA or P-256, and no
@@ -1058,8 +1068,9 @@ pub fn server_application_secret(
 /// Everything a completed server handshake produces: the flight to send, and
 /// the four application-traffic values the connection then uses.
 ///
-/// `ok` is false when the ClientHello was unacceptable — the caller must
-/// check it and send an alert rather than transmitting the (empty) flight.
+/// `ok` is false when the ClientHello was unacceptable or its key share was
+/// of small order — the caller must check it and send an alert rather than
+/// transmitting the (empty) flight.
 struct Handshake {
     ok: Bool,
     flight: Array[Int],
@@ -1075,6 +1086,10 @@ struct Handshake {
     client_handshake_key: Array[Int],
     /// The client's handshake traffic IV, paired with the key above.
     client_handshake_iv: Array[Int],
+    /// The `verify_data` the client's Finished must carry: HMAC under the
+    /// client handshake secret's `finished` key over the transcript through
+    /// the server's Finished (RFC 8446 §4.4.4). `fill` refuses any other.
+    client_finished: Array[Int],
 }
 
 /// A handshake that could not be completed.
@@ -1094,6 +1109,7 @@ pub fn failed_handshake() -> Handshake {
         server_iv: std::array::empty(),
         client_handshake_key: std::array::empty(),
         client_handshake_iv: std::array::empty(),
+        client_finished: std::array::empty(),
     }
 }
 
@@ -1102,7 +1118,13 @@ pub fn failed_handshake() -> Handshake {
 /// Takes the client's ClientHello body, the server's X25519 private key, its
 /// certificate, a signature callback's output over the CertificateVerify
 /// content, and randomness for the ServerHello. Returns the complete flight
-/// to write and the application keys to use afterwards.
+/// to write and the application keys to use afterwards, plus the
+/// `verify_data` the client's Finished must carry, which `fill` checks.
+///
+/// Refused (`ok` false) when the ClientHello is unacceptable, and when the
+/// client's key share is a small-order point: X25519 then yields the
+/// all-zero secret whatever the server's key, and RFC 8446 §7.4.2 requires
+/// aborting rather than deriving keys from a value anyone can compute.
 ///
 /// The signature is passed *in* rather than computed here: signing needs the
 /// certificate's private key, and `std::ed25519` deliberately ships no
@@ -1130,6 +1152,13 @@ pub fn server_handshake(
         return failed_handshake();
     }
     let shared = std::x25519::scalar_mult(server_private, peer_share);
+    if shared_secret_is_zero(shared) {
+        // A small-order public key forces the all-zero output whatever the
+        // server's scalar, so the "shared" secret would be one the peer (and
+        // anyone watching) already knows. RFC 8446 §7.4.2 and RFC 7748 §6.1:
+        // the server MUST abort rather than derive keys from it.
+        return failed_handshake();
+    }
     let server_share = std::x25519::public_key(server_private);
     let hello = server_hello(client_hello, server_share, server_random);
 
@@ -1180,7 +1209,37 @@ pub fn server_handshake(
         server_iv: std::hkdf::traffic_iv(server_app),
         client_handshake_key: std::hkdf::traffic_key(client_secret),
         client_handshake_iv: std::hkdf::traffic_iv(client_secret),
+        // The client's Finished covers the same transcript the application
+        // secrets are derived from: everything through the server's Finished.
+        client_finished: finished_data(client_secret, finished_hash),
     }
+}
+
+/// Whether an X25519 output is all zeros — the value every small-order peer
+/// point produces (RFC 7748 §6.1).
+///
+/// The test goes through `std::ct::bytes_eq`, so its time depends only on the
+/// length and not on where (or whether) a non-zero byte appears: the shared
+/// secret is the one value in the handshake that must not leak. Only the
+/// single resulting bit — abort or continue — is branched on.
+fn shared_secret_is_zero(in shared: Array[Int]) -> Bool {
+    std::ct::bytes_eq(shared, std::array::filled(32, 0)) == 1
+}
+
+/// Whether `payload` — the decrypted body of the client's first
+/// handshake-epoch record — is exactly the Finished message carrying
+/// `expected` as its `verify_data` (RFC 8446 §4.4.4).
+///
+/// The comparison is the constant-time `std::crypto::verify` over the whole
+/// message, header included, so a forger learns nothing from *where* a guess
+/// went wrong. Anything else — a different message type, a wrong length,
+/// trailing bytes, or an `expected` that is not a SHA-256-sized MAC (a failed
+/// handshake's) — is refused.
+fn client_finished_matches(in expected: Array[Int], in payload: Array[Int]) -> Bool {
+    if std::array::len(expected) != std::hkdf::hash_len() {
+        return false;
+    }
+    std::crypto::verify(wrap_handshake(handshake_finished(), expected), payload)
 }
 
 /// The transcript hash a server must sign, given a ClientHello and the
@@ -3134,7 +3193,83 @@ spec server_handshake {
         zeros32(),
     ).ok;
     // The full handshake against a live OpenSSL client is pinned by
-    // `tls_server_completes_handshake_with_openssl`.
+    // `tls_server_completes_handshake_with_openssl`. Refusing a small-order
+    // peer key (the all-zero shared secret) needs a full `scalar_mult`, past
+    // the sandbox's fuel, so it is pinned natively by
+    // `tls_rejects_small_order_key_shares`; the predicate itself is spec'd
+    // below.
+}
+
+spec shared_secret_is_zero {
+    // The value every small-order point yields is refused…
+    then shared_secret_is_zero(zeros32());
+    // …and a single non-zero bit anywhere — first byte or last — is not
+    // mistaken for it.
+    then !shared_secret_is_zero(zeros_but(0, 1));
+    then !shared_secret_is_zero(zeros_but(31, 128));
+    then !shared_secret_is_zero(std::x25519::base_point());
+    // A wrong-length value is not "all zeros" by accident of a short scan.
+    then !shared_secret_is_zero(std::array::empty());
+    then !shared_secret_is_zero(zeros12());
+}
+
+/// 32 zero bytes except `value` at `index`, for the specs above.
+fn zeros_but(take index: Int, take value: Int) -> Array[Int] {
+    var a = zeros32();
+    std::array::set(a, index, value);
+    a
+}
+
+spec client_finished_matches {
+    // The honest Finished is accepted. This is also the shape a live OpenSSL
+    // client's Finished must match, pinned by `tls_serves_a_real_https_request`.
+    then client_finished_matches(sample_verify_data(), tampered_finished(0 - 1));
+    // One flipped bit anywhere — the message type, the length, the first or
+    // last MAC byte — is refused. A check that compared only a prefix, or
+    // only the header, would accept some of these.
+    then !client_finished_matches(sample_verify_data(), tampered_finished(0));
+    then !client_finished_matches(sample_verify_data(), tampered_finished(3));
+    then !client_finished_matches(sample_verify_data(), tampered_finished(4));
+    then !client_finished_matches(sample_verify_data(), tampered_finished(35));
+    // A MAC over a DIFFERENT transcript is refused: that is the whole point.
+    then !client_finished_matches(
+        sample_verify_data(),
+        wrap_handshake(handshake_finished(), finished_data(zeros32(), zeros12())),
+    );
+    // Truncated, extended, and empty payloads are refused, not padded out.
+    then !client_finished_matches(sample_verify_data(), slice(tampered_finished(0 - 1), 0, 35));
+    then !client_finished_matches(sample_verify_data(), finished_with_trailing_byte());
+    then !client_finished_matches(sample_verify_data(), std::array::empty());
+    // A failed handshake's empty expectation matches NOTHING — not even a
+    // Finished with an empty body, which a bare comparison would accept.
+    then !client_finished_matches(
+        std::array::empty(),
+        wrap_handshake(handshake_finished(), std::array::empty()),
+    );
+}
+
+/// A real Finished `verify_data`, for the specs above: the RFC 8446 §4.4.4
+/// derivation over an all-zero secret and transcript hash.
+fn sample_verify_data() -> Array[Int] {
+    finished_data(zeros32(), zeros32())
+}
+
+/// The Finished message carrying `sample_verify_data()`, with the byte at
+/// `index` XORed with 1 — or untouched when `index` is -1.
+fn tampered_finished(take index: Int) -> Array[Int] {
+    var message = wrap_handshake(handshake_finished(), sample_verify_data());
+    if index >= 0 {
+        let flipped = std::array::get(message, index) ^ 1;
+        std::array::set(message, index, flipped);
+    }
+    message
+}
+
+/// The honest Finished message with one extra byte after it.
+fn finished_with_trailing_byte() -> Array[Int] {
+    var message = tampered_finished(0 - 1);
+    std::array::push(message, 0);
+    message
 }
 
 spec signing_content {
@@ -3179,6 +3314,9 @@ struct Connection {
     client_application_iv: Array[Int],
     /// Whether reads are still in the handshake epoch.
     client_epoch_is_handshake: Bool,
+    /// The `verify_data` the client's Finished must carry, checked before
+    /// the epoch switch.
+    client_finished: Array[Int],
     read_sequence: Int,
     write_sequence: Int,
     pending: Array[Int],
@@ -3209,6 +3347,7 @@ pub fn connect(take socket: Int, in handshake: Handshake) -> Connection {
         client_application_key: copy_bytes(handshake.client_key),
         client_application_iv: copy_bytes(handshake.client_iv),
         client_epoch_is_handshake: true,
+        client_finished: copy_bytes(handshake.client_finished),
         read_sequence: 0,
         write_sequence: 0,
         pending: std::array::empty(),
@@ -3264,7 +3403,14 @@ pub fn opened_or_empty(
 /// EFFECT: read and decrypt the next record into the connection's buffer.
 ///
 /// Returns the inner content type, or -1 when the peer closed, the record
-/// failed to authenticate, or it was malformed. A `change_cipher_spec` record
+/// failed to authenticate, or it was malformed.
+///
+/// The first record of the client's handshake epoch must be its Finished,
+/// and its `verify_data` is checked against the transcript (RFC 8446
+/// §4.4.4) before the switch to application keys: a wrong one ends the
+/// connection with a fatal `decrypt_error` alert and -1, and any record
+/// other than a Finished or an alert in that epoch ends it with
+/// `unexpected_message`. A `change_cipher_spec` record
 /// is skipped rather than surfaced: TLS 1.3 does not use it, but clients send
 /// one purely to look like TLS 1.2 to middleboxes, and a server that treats it
 /// as data or as an error rejects perfectly ordinary clients.
@@ -3345,17 +3491,37 @@ pub fn fill(mut connection: Connection, take timeout_ms: Int) -> Int {
             connection.pending_offset = 0;
             scanning = false;
             if connection.client_epoch_is_handshake && kind == content_handshake() {
-                // That was the client's Finished. Everything after it comes
-                // under the application key, with the record sequence
-                // RESTARTING at zero — each epoch counts separately, and
-                // carrying the count across would derive the wrong nonce for
-                // every subsequent record.
+                // That should be the client's Finished, and it is CHECKED
+                // before anything else happens (RFC 8446 §4.4.4). The record
+                // authenticating under the client handshake key only says
+                // who could have produced it; the verify_data is what says
+                // the client saw the same transcript — the same ServerHello,
+                // certificate and signature — that the server sent.
+                if !client_finished_matches(connection.client_finished, connection.pending) {
+                    refuse(connection, alert_decrypt_error());
+                    return 0 - 1;
+                }
+                // Everything after it comes under the application key, with
+                // the record sequence RESTARTING at zero — each epoch counts
+                // separately, and carrying the count across would derive the
+                // wrong nonce for every subsequent record.
                 connection.client_key = copy_bytes(connection.client_application_key);
                 connection.client_iv = copy_bytes(connection.client_application_iv);
                 connection.client_epoch_is_handshake = false;
                 connection.read_sequence = 0;
-                // The Finished carries no application data, so keep reading.
+                // The Finished carries no application data: drop it from the
+                // buffer, so a later read cannot hand its bytes out as data,
+                // and keep reading.
+                connection.pending = std::array::empty();
+                connection.pending_offset = 0;
                 scanning = true;
+            } else if connection.client_epoch_is_handshake && kind != content_alert() {
+                // Anything but a Finished or an alert in the handshake epoch
+                // — application data above all — would be served WITHOUT the
+                // Finished ever being checked: a client could simply skip it.
+                // RFC 8446 §5.1 makes that an `unexpected_message`.
+                refuse(connection, alert_unexpected_message());
+                return 0 - 1;
             }
         }
     }
@@ -3386,8 +3552,12 @@ pub fn read_byte(mut connection: Connection, take timeout_ms: Int) -> Int {
             } else {
                 if kind == content_alert() {
                     // An alert ends the stream. `close_notify` is the
-                    // ordinary one; any other is a peer giving up.
+                    // ordinary one; any other is a peer giving up. Its two
+                    // bytes are not data, so they are dropped rather than
+                    // left for the next read to return.
                     connection.live = false;
+                    connection.pending = std::array::empty();
+                    connection.pending_offset = 0;
                     looking = false;
                 }
                 // A handshake record after the handshake (a session ticket,
@@ -3474,10 +3644,47 @@ pub fn close_notify(mut connection: Connection) -> Int {
     if !connection.live {
         return 0;
     }
-    var alert = std::array::empty();
     // warning(1), close_notify(0).
-    std::array::push(alert, 1);
-    std::array::push(alert, 0);
+    send_alert(connection, 1, 0);
+    0
+}
+
+/// The `unexpected_message` alert description (10, RFC 8446 §6).
+fn alert_unexpected_message() -> Int {
+    10
+}
+
+/// The `decrypt_error` alert description (51, RFC 8446 §6): what a peer's
+/// Finished that fails verification must be answered with (§4.4.4).
+fn alert_decrypt_error() -> Int {
+    51
+}
+
+/// End the connection over a record that must not be accepted: drop the
+/// record from the buffer, then send a fatal alert with `description`.
+///
+/// The drop is not tidiness. `read_byte` hands out buffered bytes before it
+/// asks `fill` for more, so a refused record left in the buffer would be
+/// returned as data on the very next read — the refusal undone one call
+/// later (`tls_server_verifies_the_client_finished` reads twice to pin it).
+fn refuse(mut connection: Connection, take description: Int) -> Int {
+    connection.pending = std::array::empty();
+    connection.pending_offset = 0;
+    // fatal(2).
+    send_alert(connection, 2, description)
+}
+
+/// Send one alert record under the server's current write key, then mark the
+/// connection dead: every alert this module sends ends the connection, the
+/// ordinary `close_notify` included.
+///
+/// The server has already sent its Finished whenever a `Connection` exists,
+/// so its write epoch is the application one — which is the key the client
+/// expects an alert under, in either direction of failure.
+fn send_alert(mut connection: Connection, take level: Int, take description: Int) -> Int {
+    var alert = std::array::empty();
+    std::array::push(alert, level & 255);
+    std::array::push(alert, description & 255);
     let record = seal_record(
         connection.server_key,
         connection.server_iv,
@@ -3537,4 +3744,8 @@ spec connect {
     then connect(0, failed_handshake()).client_epoch_is_handshake;
     then connect(0, failed_handshake()).read_sequence == 0;
     then connect(0, failed_handshake()).write_sequence == 0;
+    // A failed handshake carries no Finished expectation, and
+    // `client_finished_matches` refuses an empty one, so even a connection
+    // built from it by mistake could never switch to application keys.
+    then std::array::len(connect(0, failed_handshake()).client_finished) == 0;
 }

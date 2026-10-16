@@ -3055,6 +3055,489 @@ fn tls_serves_a_real_https_request() {
     }
 }
 
+/// The modules every `std::tls` program below is built with: `std::tls` and
+/// its declared dependencies, nothing else (no signer is needed, since these
+/// tests pass the server opaque placeholder certificate and signature bytes).
+const TLS_MODULES: &[tuo_stdlib::Module] = &[
+    tuo_stdlib::BITS,
+    tuo_stdlib::CT,
+    tuo_stdlib::BIGNUM,
+    tuo_stdlib::CRYPTO,
+    tuo_stdlib::CHACHA,
+    tuo_stdlib::HKDF,
+    tuo_stdlib::X25519,
+    tuo_stdlib::TLS,
+];
+
+/// The program `tls_server_verifies_the_client_finished` runs: one process
+/// playing both ends of three loopback connections.
+const TLS_FINISHED_SOURCE: &str = r###"module caller;
+
+import std::tls;
+import std::x25519;
+import std::hkdf;
+import std::crypto;
+
+/// 32 bytes counting up from `start` — fixed keys and randoms, so the test
+/// is deterministic.
+fn counting(take start: Int) -> Array[Int] {
+    var a = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(a, start + i);
+        i = i + 1;
+    }
+    a
+}
+
+/// A minimal TLS 1.3 ClientHello offering exactly what `std::tls` accepts:
+/// TLS_CHACHA20_POLY1305_SHA256, `supported_versions` = TLS 1.3, and one
+/// X25519 key share carrying `share`.
+fn client_hello(in share: Array[Int]) -> Array[Int] {
+    var body = std::array::empty();
+    std::tls::push_u16(body, 771);
+    std::tls::push_bytes(body, counting(150));
+    // An empty legacy session id.
+    std::array::push(body, 0);
+    std::tls::push_u16(body, 2);
+    std::tls::push_u16(body, std::tls::cipher_suite());
+    // One compression method: null.
+    std::array::push(body, 1);
+    std::array::push(body, 0);
+    var extensions = std::array::empty();
+    std::tls::push_u16(extensions, std::tls::extension_supported_versions());
+    std::tls::push_u16(extensions, 3);
+    std::array::push(extensions, 2);
+    std::tls::push_u16(extensions, std::tls::version_tls13());
+    std::tls::push_u16(extensions, std::tls::extension_key_share());
+    std::tls::push_u16(extensions, 6 + std::array::len(share));
+    std::tls::push_u16(extensions, 4 + std::array::len(share));
+    std::tls::push_u16(extensions, std::tls::group_x25519());
+    std::tls::push_u16(extensions, std::array::len(share));
+    std::tls::push_bytes(extensions, share);
+    std::tls::push_u16(body, std::array::len(extensions));
+    std::tls::push_bytes(body, extensions);
+    std::tls::wrap_handshake(std::tls::handshake_client_hello(), body)
+}
+
+/// Bytes as a `Str` for `std::rt::write`.
+fn send(take fd: Int, in bytes: Array[Int]) -> Int {
+    std::rt::write(fd, std::string::as_str(std::crypto::str_of_bytes(bytes)))
+}
+
+/// Read one whole record off `fd`: its 5-byte header followed by its body,
+/// or an empty array when the stream ends first.
+fn read_record(take fd: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 5 {
+        let b = std::rt::read_byte_timeout(fd, 5000);
+        if b < 0 {
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        i = i + 1;
+    }
+    let length = std::tls::u16_at(out, 3);
+    var j = 0;
+    while j < length {
+        let b = std::rt::read_byte_timeout(fd, 5000);
+        if b < 0 {
+            return std::array::empty();
+        }
+        std::array::push(out, b);
+        j = j + 1;
+    }
+    out
+}
+
+/// One connection, played from both ends over loopback. The CLIENT half is
+/// computed independently of the server's state: it re-derives every secret
+/// from its own private key and the bytes of the server's flight, as a real
+/// client does, then sends its Finished — honest when `mode` is 0, with one
+/// verify_data bit flipped when 1, and omitted altogether (application data
+/// sent straight under the handshake key) when 2 — followed by one byte of
+/// application data, `G`.
+///
+/// Returns the byte the SERVER read back through `std::tls::read_byte` (71
+/// when it accepted the Finished, -1 when it refused), or, on a refusal, 1000
+/// plus the description of the fatal alert the client decrypted from the
+/// server, or a code from 900 up naming a step that failed in the harness.
+fn run_case(take mode: Int) -> Int {
+    let listener = std::rt::listen(0);
+    if listener < 0 {
+        return 900;
+    }
+    let port = std::rt::bound_port(listener);
+    let client = std::rt::connect("127.0.0.1", port);
+    let server = std::rt::accept_timeout(listener, 5000);
+    if client < 0 || server < 0 {
+        return 901;
+    }
+
+    let client_private = counting(7);
+    let hello = client_hello(std::x25519::public_key(client_private));
+    // A placeholder certificate and signature: nothing on the client side of
+    // this test checks them, and the server treats both as opaque bytes.
+    let result = std::tls::server_handshake(
+        hello,
+        counting(40),
+        counting(200),
+        std::array::filled(64, 7),
+        counting(90),
+    );
+    if !result.ok {
+        return 902;
+    }
+
+    // --- The client's side: everything from its own key and the flight. ---
+    let flight = std::tls::copy_bytes(result.flight);
+    let hello_length = std::tls::u16_at(flight, 3);
+    let server_hello = std::tls::slice(flight, 5, hello_length);
+    // The ServerHello's last extension is its key share, so its final 32
+    // bytes are the server's public value.
+    let server_share = std::tls::slice(server_hello, std::array::len(server_hello) - 32, 32);
+    let shared = std::x25519::scalar_mult(client_private, server_share);
+    var transcript = std::array::empty();
+    std::tls::push_bytes(transcript, hello);
+    std::tls::push_bytes(transcript, server_hello);
+    let hello_hash = std::tls::transcript_hash(transcript);
+    let server_hs = std::tls::server_handshake_secret(shared, hello_hash);
+    let client_hs = std::tls::client_handshake_secret(shared, hello_hash);
+    let protected_at = 5 + hello_length;
+    let protected_length = std::tls::u16_at(flight, protected_at + 3);
+    let opened = std::tls::opened_or_empty(
+        std::hkdf::traffic_key(server_hs),
+        std::hkdf::traffic_iv(server_hs),
+        0,
+        std::tls::slice(flight, protected_at, 5),
+        std::tls::slice(flight, protected_at + 5, protected_length),
+    );
+    if std::array::len(opened) == 0 {
+        return 903;
+    }
+    std::tls::push_bytes(transcript, std::tls::inner_payload(opened));
+    let finished_hash = std::tls::transcript_hash(transcript);
+    let client_app = std::tls::client_application_secret(shared, finished_hash);
+    let server_app = std::tls::server_application_secret(shared, finished_hash);
+
+    var verify_data = std::tls::finished_data(client_hs, finished_hash);
+    if mode == 1 {
+        let flipped = std::array::get(verify_data, 31) ^ 1;
+        std::array::set(verify_data, 31, flipped);
+    }
+    var request = std::array::empty();
+    std::array::push(request, 71);
+    var wire = std::array::empty();
+    if mode == 2 {
+        // No Finished at all: the request goes straight out under the
+        // client HANDSHAKE key, where the Finished should have been.
+        std::tls::push_bytes(
+            wire,
+            std::tls::seal_record(
+                std::hkdf::traffic_key(client_hs),
+                std::hkdf::traffic_iv(client_hs),
+                0,
+                std::tls::content_application_data(),
+                request,
+            ),
+        );
+    } else {
+        std::tls::push_bytes(
+            wire,
+            std::tls::seal_record(
+                std::hkdf::traffic_key(client_hs),
+                std::hkdf::traffic_iv(client_hs),
+                0,
+                std::tls::content_handshake(),
+                std::tls::wrap_handshake(std::tls::handshake_finished(), verify_data),
+            ),
+        );
+        std::tls::push_bytes(
+            wire,
+            std::tls::seal_record(
+                std::hkdf::traffic_key(client_app),
+                std::hkdf::traffic_iv(client_app),
+                0,
+                std::tls::content_application_data(),
+                request,
+            ),
+        );
+    }
+    send(client, wire);
+
+    // --- The server's side: the real stream layer reads it. ---
+    var tls = std::tls::connect(server, result);
+    let got = std::tls::read_byte(tls, 5000);
+    if got >= 0 {
+        std::rt::close(server);
+        std::rt::close(client);
+        std::rt::close(listener);
+        return got;
+    }
+
+    // Refused, and refused for good: a second read must not hand out the
+    // bytes of the record that was refused, still sitting in the buffer.
+    if std::tls::read_byte(tls, 100) >= 0 {
+        return 907;
+    }
+
+    // The client must find a fatal alert under the server's application
+    // key, which is the key a server past its own Finished writes with.
+    let record = read_record(client);
+    std::rt::close(server);
+    std::rt::close(client);
+    std::rt::close(listener);
+    if std::array::len(record) < 5 {
+        return 904;
+    }
+    let alert = std::tls::opened_or_empty(
+        std::hkdf::traffic_key(server_app),
+        std::hkdf::traffic_iv(server_app),
+        0,
+        std::tls::slice(record, 0, 5),
+        std::tls::slice(record, 5, std::array::len(record) - 5),
+    );
+    if std::tls::inner_content_type(alert) != std::tls::content_alert() {
+        return 905;
+    }
+    let payload = std::tls::inner_payload(alert);
+    if std::tls::byte_at(payload, 0) != 2 {
+        return 906;
+    }
+    1000 + std::tls::byte_at(payload, 1)
+}
+
+/// 0 only when the honest Finished is accepted (the server reads `G`, 71),
+/// the tampered one is refused with `decrypt_error` (51), and the skipped one
+/// with `unexpected_message` (10). Otherwise a distinct code per case.
+fn main() -> Int {
+    let honest = run_case(0);
+    if honest != 71 {
+        return 10;
+    }
+    let tampered = run_case(1);
+    if tampered != 1051 {
+        return 20;
+    }
+    let skipped = run_case(2);
+    if skipped != 1010 {
+        return 30;
+    }
+    0
+}
+"###;
+
+/// `std::tls` **verifies the client's Finished** (RFC 8446 §4.4.4) before it
+/// switches to application keys, and refuses one that does not match.
+///
+/// The client half is written out in the test program: it derives every
+/// secret from its own X25519 key and the bytes of the server's flight, the
+/// way a real client does, and seals its records itself. That is what lets
+/// the test send a Finished no conforming client would — one whose record
+/// still authenticates under the client handshake key (so the AEAD cannot be
+/// what refuses it) but whose `verify_data` has one bit flipped. Three cases,
+/// one connection each, all served by the real `std::tls::connect` /
+/// `read_byte` / `fill` path:
+///
+/// - the honest Finished: the server must read the request byte `G` back;
+/// - a tampered Finished: refused, with a fatal `decrypt_error` alert the
+///   client decrypts under the server's application key;
+/// - no Finished at all, the request sent under the handshake key in its
+///   place: refused with `unexpected_message` — otherwise a client could skip
+///   the check simply by not sending the message it checks.
+///
+/// In both refusals the server is read from a second time, and must still
+/// return nothing: the refused record used to stay in the read buffer, where
+/// the next `read_byte` would have handed its bytes out as data.
+///
+/// Before the check existed the second and third cases were *served*: `fill`
+/// treated any handshake record as the Finished, and returned application
+/// data from the handshake epoch as data. The honest case against a real
+/// client is `tls_serves_a_real_https_request`.
+#[test]
+fn tls_server_verifies_the_client_finished() {
+    let dir = native_workspace("tls_client_finished");
+    for release in [false, true] {
+        let output = run_with_modules(&dir, TLS_MODULES, TLS_FINISHED_SOURCE, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: the server must accept an honest client Finished (else \
+             exit 10), refuse one with a flipped verify_data bit with a \
+             decrypt_error alert (else 20), and refuse application data sent \
+             in place of the Finished with unexpected_message (else 30). \
+             stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// The program `tls_rejects_small_order_key_shares` runs.
+const TLS_LOW_ORDER_SOURCE: &str = r###"module caller;
+
+import std::tls;
+import std::x25519;
+
+/// 32 bytes counting up from `start`.
+fn counting(take start: Int) -> Array[Int] {
+    var a = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(a, start + i);
+        i = i + 1;
+    }
+    a
+}
+
+/// The value of one hexadecimal digit.
+fn nibble(take c: Int) -> Int {
+    if c >= 97 {
+        c - 87
+    } else {
+        c - 48
+    }
+}
+
+/// Lower-case hex to bytes.
+fn hex(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i + 1 < std::str::len(text) {
+        let high = nibble(std::str::byte_at(text, i));
+        let low = nibble(std::str::byte_at(text, i + 1));
+        std::array::push(out, high * 16 + low);
+        i = i + 2;
+    }
+    out
+}
+
+/// The RFC 7748 §6.1 small-order u-coordinates, little-endian, as the
+/// well-known X25519 blocklists spell them: 0, 1, the two points of order 8,
+/// p - 1, p, p + 1 (non-canonical, so equal to 0 and 1 mod p), and 0 with the
+/// ignored high bit set.
+fn low_order_point(take which: Int) -> Array[Int] {
+    if which == 0 {
+        hex("0000000000000000000000000000000000000000000000000000000000000000")
+    } else if which == 1 {
+        hex("0100000000000000000000000000000000000000000000000000000000000000")
+    } else if which == 2 {
+        hex("e0eb7a7c3b41b8ae1656e3faf19fc46ada098deb9c32b1fd866205165f49b800")
+    } else if which == 3 {
+        hex("5f9c95bca3508c24b1d0b1559c83ef5b04445cc4581c8e86d8224eddd09f1157")
+    } else if which == 4 {
+        hex("ecffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+    } else if which == 5 {
+        hex("edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+    } else if which == 6 {
+        hex("eeffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7f")
+    } else {
+        hex("0000000000000000000000000000000000000000000000000000000000000080")
+    }
+}
+
+/// A minimal TLS 1.3 ClientHello carrying `share` as its X25519 key share.
+fn client_hello(in share: Array[Int]) -> Array[Int] {
+    var body = std::array::empty();
+    std::tls::push_u16(body, 771);
+    std::tls::push_bytes(body, counting(150));
+    std::array::push(body, 0);
+    std::tls::push_u16(body, 2);
+    std::tls::push_u16(body, std::tls::cipher_suite());
+    std::array::push(body, 1);
+    std::array::push(body, 0);
+    var extensions = std::array::empty();
+    std::tls::push_u16(extensions, std::tls::extension_supported_versions());
+    std::tls::push_u16(extensions, 3);
+    std::array::push(extensions, 2);
+    std::tls::push_u16(extensions, std::tls::version_tls13());
+    std::tls::push_u16(extensions, std::tls::extension_key_share());
+    std::tls::push_u16(extensions, 6 + std::array::len(share));
+    std::tls::push_u16(extensions, 4 + std::array::len(share));
+    std::tls::push_u16(extensions, std::tls::group_x25519());
+    std::tls::push_u16(extensions, std::array::len(share));
+    std::tls::push_bytes(extensions, share);
+    std::tls::push_u16(body, std::array::len(extensions));
+    std::tls::push_bytes(body, extensions);
+    std::tls::wrap_handshake(std::tls::handshake_client_hello(), body)
+}
+
+/// Whether `server_handshake` completes for a ClientHello carrying `share`.
+fn accepted(in share: Array[Int]) -> Bool {
+    std::tls::server_handshake(
+        client_hello(share),
+        counting(40),
+        counting(200),
+        std::array::filled(64, 7),
+        counting(90),
+    ).ok
+}
+
+/// Whether X25519 of the server's key with `point` is all zeros — so a
+/// refusal below is the zero check firing, not some other parse failure.
+fn yields_zero(in point: Array[Int]) -> Bool {
+    let shared = std::x25519::scalar_mult(counting(40), point);
+    var any = 0;
+    var i = 0;
+    while i < 32 {
+        any = any | std::array::get(shared, i);
+        i = i + 1;
+    }
+    any == 0
+}
+
+/// 0 only when an honest key share completes the handshake and every
+/// small-order one is refused. Otherwise: 1 when the honest share fails,
+/// 10 + n when point n does not even produce the zero secret (a broken
+/// fixture, not a broken check), 20 + n when point n is ACCEPTED.
+fn main() -> Int {
+    if !accepted(std::x25519::public_key(counting(7))) {
+        return 1;
+    }
+    var which = 0;
+    while which < 8 {
+        let point = low_order_point(which);
+        if !yields_zero(point) {
+            return 10 + which;
+        }
+        if accepted(point) {
+            return 20 + which;
+        }
+        which = which + 1;
+    }
+    0
+}
+"###;
+
+/// `std::tls::server_handshake` **refuses a small-order X25519 key share**
+/// (RFC 8446 §7.4.2, RFC 7748 §6.1): every such point forces the all-zero
+/// shared secret whatever the server's private key, so the keys derived
+/// from it would be known to anyone.
+///
+/// The program checks, for each of the eight blocklisted encodings (0, 1,
+/// the two order-8 points, p − 1, p, p + 1, and 0 with the ignored high bit
+/// set), that X25519 really yields zero — so the refusal is the check firing,
+/// not a parse failure — and that the handshake is refused. An honest key
+/// share must still complete, or a check that refused everything would pass.
+#[test]
+fn tls_rejects_small_order_key_shares() {
+    let dir = native_workspace("tls_low_order");
+    for release in [false, true] {
+        let output = run_with_modules(&dir, TLS_MODULES, TLS_LOW_ORDER_SOURCE, release);
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: an honest key share must complete the handshake (else \
+             exit 1) and every small-order one must be refused (exit 20 + n \
+             names an accepted point n; 10 + n a fixture that does not \
+             produce the zero secret). stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 /// The test certificate in PEM form, so the OpenSSL client can trust it.
 const CERT_PEM: &str = r###"-----BEGIN CERTIFICATE-----
 MIIBPDCB76ADAgECAhRK4kv/wlSxvUQCw4mnlEQmyzeI4zAFBgMrZXAwFDESMBAG
