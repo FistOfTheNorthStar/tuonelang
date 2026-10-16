@@ -294,7 +294,13 @@ fn target_machine(target: &TargetSpec, opt: OptLevel) -> Result<TargetMachine, C
         Target::initialize_all(&InitializationConfig::default());
     }
 
-    let triple = TargetTriple::create(&target.triple);
+    // An Apple triple needs an OS version: Cargo's `aarch64-apple-darwin`
+    // carries none, and without one LLVM writes no platform load command, so
+    // every link warned "no platform load command found … assuming: macOS".
+    // The version is a *minimum* deployment target, chosen as Rust chooses
+    // it: `MACOSX_DEPLOYMENT_TARGET` when set, else the oldest macOS for the
+    // architecture, so the object never claims a newer OS than the link.
+    let triple = TargetTriple::create(&apple_versioned_triple(&target.triple));
     let llvm_target = Target::from_triple(&triple).map_err(|error| {
         CodegenError::unsupported(format!("no LLVM target for `{}`: {error}", target.triple))
     })?;
@@ -325,6 +331,23 @@ fn target_machine(target: &TargetSpec, opt: OptLevel) -> Result<TargetMachine, C
             CodeModel::Default,
         )
         .ok_or_else(|| CodegenError::backend("could not create the LLVM target machine"))
+}
+
+/// `triple` with a macOS deployment version when it is an unversioned Apple
+/// `…-apple-darwin` triple (see `target_machine`); any other triple unchanged.
+fn apple_versioned_triple(triple: &str) -> String {
+    let Some(arch) = triple.strip_suffix("-apple-darwin") else {
+        return triple.to_owned();
+    };
+    let (arch, oldest) = match arch {
+        "aarch64" | "arm64" => ("arm64", "11.0"),
+        other => (other, "10.12"),
+    };
+    let version = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+        .ok()
+        .filter(|version| !version.is_empty())
+        .unwrap_or_else(|| oldest.to_owned());
+    format!("{arch}-apple-macosx{version}")
 }
 
 /// Emit a native `main` that calls the entry function and returns its value as
@@ -428,6 +451,26 @@ mod tests {
         assert!(
             !error.is_unsupported(),
             "a missing entry is a distinct error, not `unsupported`"
+        );
+    }
+
+    #[test]
+    fn apple_triples_gain_a_minimum_os_version_and_others_are_unchanged() {
+        // An unversioned Apple triple makes LLVM omit the platform load
+        // command, which every macOS link then warned about.
+        if std::env::var_os("MACOSX_DEPLOYMENT_TARGET").is_none() {
+            assert_eq!(
+                super::apple_versioned_triple("aarch64-apple-darwin"),
+                "arm64-apple-macosx11.0"
+            );
+            assert_eq!(
+                super::apple_versioned_triple("x86_64-apple-darwin"),
+                "x86_64-apple-macosx10.12"
+            );
+        }
+        assert_eq!(
+            super::apple_versioned_triple("x86_64-unknown-linux-gnu"),
+            "x86_64-unknown-linux-gnu"
         );
     }
 }
