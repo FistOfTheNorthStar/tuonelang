@@ -150,7 +150,10 @@ Monomorphization keeps one layout rule, one calling convention, and the existing
 
 ### Scope: generic `fn` only
 
-`impl` is **out of scope**, and stays a `P0002` parse refusal. Method dispatch is
+`impl` is **out of scope**, and stays a `P0002` parse refusal. *(Correction,
+2026-10-16: only `impl T { … }` without `for` is a `P0002`; `impl I for T` parses
+and type-checks, as ADR-0032 found, and since ADR-0032 Stage A it draws the
+`T0026` warning because it lowers to nothing.)* Method dispatch is
 not lowered in v0 (`tuo-mir/src/lower.rs`: "method calls are not lowered in v0
 (pending the trait system)"), and generic `impl` blocks would drag in the trait
 system, which is a larger decision with its own ADR to come. Generic `struct`

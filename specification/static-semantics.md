@@ -264,13 +264,16 @@ the trait system will own.
 | `T0016` | Recursive type without a heap-wrapper indirection (ADR-0016, §3.7): a struct/enum reaches itself through its own fields/payloads. Only `Box`/`Shared`/`Weak` break a cycle. |
 | `T0017` | Data-dependent control flow in a `#[constant_time]` function (ADR-0020 Stage C, §3.10): `if`, `match`, `while`, `loop`, or `for`. |
 | `T0018` | Array indexing in a `#[constant_time]` function (§3.10): the bounds check is a conditional branch on the index. |
-| `T0019` | Trapping arithmetic (`+ - * / %`) in a `#[constant_time]` function (§3.10): the overflow check is a conditional branch on the operands. |
+| `T0019` | Trapping arithmetic (`+ - * / %`) in a `#[constant_time]` function (§3.10): the overflow check is a conditional branch on the operands. Also a shift (`<<`/`>>`) whose amount is not an integer literal: a shift traps when its amount leaves the type's width, so a variable amount is a branch on that amount. |
 | `T0020` | A `#[constant_time]` function calls a function that is not marked (§3.10), so the callee carries no checked guarantee. |
 | `T0021` | Unknown attribute (§3.10). v0 defines exactly one, `#[constant_time]`; an unrecognized name is an error, never a silently-ignored annotation. |
-| `T0022` | **Warning, not an error** — the runnable-core advisory. A heap-wrapper (`Box`/`Shared`/`Weak`) **value** in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
+| `T0022` | **Warning, not an error** — the runnable-core advisory. A `Shared`/`Weak` heap-wrapper **value** (or a `Box` inside an `Array`/`Map` type — a `Box` value itself lowers since ADR-0028 Stage B) in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
 | `T0023` | **Warning, not an error** — the generic-declaration advisory (ADR-0027 Stage A). A generic `fn` is accepted here and executes on the reference interpreter, but `Ty::Param` has no layout until monomorphized, so no native backend lowers it and `tuo build`/`tuo run` refuse it. Reported once per **declaration**, at the span of the generic parameter list, never per call site. |
+| `T0024` | A method call `receiver.name(args)` (ADR-0032 Stage A). tuonelang has free functions only and no engine executes a method call; it was silently accepted (as poison) before. When exactly one function of that name takes the receiver's type first and is callable by a path from here, the diagnostic carries a **machine-applicable** rewrite to the free call (`xs.len()` → `std::array::len(xs)`); otherwise it lists the candidates. |
+| `T0025` | A qualified interface-member call (`Area::area(p)`, ADR-0032 Stage A): interfaces lower to nothing until ADR-0032 Stage B, so no engine executes the member. |
+| `T0026` | **Warning, not an error** — an `interface` or `impl` declaration (ADR-0032 Stage A) type-checks but lowers to nothing, so none of its members runs. A program declaring one runs today, so refusing it would break it for no gain. |
 
-`T0022` and `T0023` are the table's only warnings: each reports a program the
+`T0022`, `T0023`, and `T0026` are the table's only warnings: each reports a program the
 static semantics **accepts**. They exist because `tuo check` deliberately
 accepts a larger language than the native backends lower, and that gap should
 be visible at the offending construct rather than surfacing later as a
@@ -408,6 +411,25 @@ per-element drop glue matching the interpreter's clone/drop semantics
 refused natively — and the wrapper is already outside the type-level set, so
 the refusal is unreachable from checked code.
 
+**Box builtins (`std::boxed`, ADR-0028 Stage B)** — generic over the pointee
+`T`, witnessed by the argument, like the `std::array` builtins. There is no
+`Box::new` (there are no associated functions) and no dereference operator:
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn new(take v: T) -> Box[T]` | Moves `v` into a fresh heap allocation the box uniquely owns. Never traps. |
+| `fn get(in b: Box[T]) -> T` | A copy of the pointee — a deep copy when `T` owns heap, as `std::array::get` copies an element. Never traps. |
+| `fn into(take b: Box[T]) -> T` | Moves the pointee out and frees the allocation. Never traps. |
+
+A `Box[T]` value runs on the interpreter and both native backends as a local,
+parameter, return, field, or `Option`/enum payload. It stays outside the
+growable-`Array` element set and the map value set. A boxed structure is read
+by borrow (ADR-0037): a match on a value reached through an `in` parameter
+lends its non-`Copy` parts to the arms, and `get(b)` passed straight to an
+`in` parameter lends the pointee rather than copying it (the copy is
+unobservable there, so it is elided; it is kept when another argument of the
+call is `mut` or a non-`Copy` `take`).
+
 **The recursion boundary (`T0016`, ADR-0016).** A struct or enum that reaches
 itself through its own fields or variant payloads — by value, or through any
 chain of `Array`/`Map` elements, `Option`/`Result` payloads, tuple or
@@ -417,9 +439,10 @@ size, and a container cycle would recurse the native backends' inline
 clone/drop glue emission without bound. The one legal indirection is a heap
 wrapper (`Box`/`Shared`/`Weak`): its layout is a bare pointer, so a
 wrapper-broken cycle (the `Weak` back-edge shapes) declares fine. The
-diagnostic points at the wrapper escape hatch and at the index-arena pattern
-(`std::json`'s tree). A successor ADR that gives the backends
-runtime-recursive glue functions relaxes this boundary.
+diagnostic points at `Box` — whose values build natively since ADR-0028
+Stage B, the backends emitting drop and deep-copy glue for a boxed pointee as
+**out-of-line** functions so a recursive type's glue calls itself rather than
+expanding forever — and at the index-arena pattern (`std::json`'s tree).
 
 **String equality.** `==`/`!=` on two `String` operands is **byte-wise content
 equality**, the same contract as `Str == Str` (§3.4); the comparison consumes

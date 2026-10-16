@@ -98,7 +98,8 @@ the callee never drops it. A `Value` parameter is owned by the callee.
 A **place** ([`Place`]) is a `local` plus a list of **projections** applied left
 to right. **Places are the only way MIR names memory.** There is no address-of,
 no pointer arithmetic, and no dereference operator; aliasing exists **solely**
-through borrow-mode parameters (§2).
+through borrow-mode parameters (§2) — and, within one function, through the
+places a lent pattern binding names (ADR-0037), which are read-only.
 
 Projections ([`Projection`]):
 
@@ -112,6 +113,12 @@ Projections ([`Projection`]):
   `[T; N]`)** at the `Usize` value held by local `i`. Defined **only for
   in-bounds values**; lowering emits an explicit bounds-check
   [`Assert`](#6-terminators) before every use.
+- **`Deref`** (ADR-0037) — the pointee of a `Box[T]` place, rendered `.*`. It is
+  the only way MIR reaches *through* a box, and lowering emits it only to lend a
+  pointee to an `in` call argument — never to move out of or write through — so
+  a backend may treat it as a read-only load of the box's pointer. A lent
+  pattern binding (ADR-0037 D1) needs no projection of its own: it is lowered as
+  the place it aliases.
 
 ### Operands
 
@@ -503,6 +510,9 @@ verified (§7.1, `M0012`). Let `len(x)` be the byte/element length:
 | `MapContainsKey` (ADR-0011) | `Map[K, V]` | `k: K` | `Bool` | Is `k` present? Never traps. |
 | `MapLen` (ADR-0011) | `Map[K, V]` | — | `I64` | The entry count. Never traps. |
 | `MapKeys` (ADR-0011) | `Map[K, V]` | — | `Array[K]` | A new array of the keys in **insertion order** (a removed key's successors keep their relative order — the deterministic order ADR-0011 fixes). Never traps. |
+| `BoxNew` (ADR-0028) | — | `v: T` | `Box[T]` | `v`, moved into a fresh allocation of `T`'s layout that the box uniquely owns. Never traps (beyond an allocation's out-of-memory trap). |
+| `BoxGet` (ADR-0028) | `Box[T]` | — | `T` | A copy of the pointee — a **deep copy** when `T` owns heap, exactly as `ArrayGet` copies an element. The subject stays initialized. Never traps. |
+| `BoxInto` (ADR-0028) | — | `b: Box[T]` | `T` | The pointee, moved out of the (moved) box; the allocation is freed without dropping what was moved out. Never traps. |
 
 Like `StrOp`, the traps are *statement-level* deterministic aborts (§5.6's
 rationale applies unchanged), and like `String` itself the operations are
@@ -681,7 +691,7 @@ deterministic given the same limits:
 | Trap | Meaning |
 |------|---------|
 | `OutOfFuel` | The instruction-fuel budget was exhausted. |
-| `RecursionLimit` | The call stack exceeded the configured recursion depth. |
+| `RecursionLimit` | The call stack exceeded the configured recursion depth. Natively the counterpart is the runtime's stack-overflow trap (`abi.md`, ABI 14), which fires at the stack's size instead. |
 | `MemoryBudget` | The live-value budget (a proxy for memory) was exceeded. |
 
 **Internal error** — one variant, `Internal`, guards the interpreter against MIR

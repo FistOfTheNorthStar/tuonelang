@@ -292,6 +292,18 @@ fn broken(take p: Pair, take q: Pair) -> Pair {
   at runtime is irrelevant). A match whose arms bind only `Copy` data (or
   nothing) merely reads the scrutinee. Arm guards may only read; a guard
   cannot move.
+- **Lending (ADR-0037).** The exception: when the scrutinee is a place
+  reached through an `in` parameter — the parameter, a field of it, or a
+  binding already lent from one — the match **lends** instead of moving. Each
+  non-`Copy` binding is a read-only alias of its matched part: it may be read,
+  passed to an `in` parameter, and matched again (lending in turn), and moving
+  it — `take`, a return, storing it — is **O0003** at the move. It owns
+  nothing and is never dropped. A `mut` parameter is not lent (an arm could
+  assign under the alias), so moving out of one stays O0003.
+- **Lending a box pointee (ADR-0037).** `std::boxed::get(b)` passed straight to
+  an `in` parameter lends `b`'s pointee instead of copying it — the callee can
+  only read, so the copy is unobservable — unless another argument of the same
+  call is `mut` or a non-`Copy` `take`, which could free the pointee mid-call.
 - **Joins.** Initialization state is tracked per path through `if`/`else`,
   `match`, and loops, and merged at join points: a place is initialized
   after a join iff it is initialized on **every** arriving path. Using a

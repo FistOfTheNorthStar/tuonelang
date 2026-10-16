@@ -164,7 +164,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   idempotent, zero configuration), `tuo build [-o <path>] [--release] <files>` and
   `tuo run [--release] <files>` (compile the accepted program to verified MIR, run the
   tuonelang-native MIR optimization passes over it, and then to native code, linking the
-  runtime trap shim into an executable — the default debug build uses the Cranelift
+  runtime shims into an executable (the shims are C, compiled once when `tuo` itself is
+  built — `tuo-cli/build.rs` — and embedded as objects, so a trivial build is ~30 ms
+  rather than ~140 ms; a cross-built `tuo` falls back to compiling them per build) — the default debug build uses the Cranelift
   backend, `--release` uses the optimizing LLVM backend; `run` additionally executes it
   and exits with the program's own status, the integer its nullary `main` returns; both
   backends lower the **v0 runnable core** — the scalar control-flow core plus the
@@ -240,17 +242,36 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   on a fixed or growable array in a mutable place (bounds-checked like a
   read; `Copy` elements only, `O0012` otherwise) and
   `std::array::filled(n, v)` (one allocation; `HeapOp::ArrayFilled`), which
-  took the `sha256-hash` workload and `std::crypto`'s digests 1.5x faster
-  — and *refuse* — never
-  mis-compile — anything outside it (the `Box`/`Shared`/`Weak` heap-wrapper
-  **values**, array elements containing one, and **capturing closures** — Tier
-  2, deferred), refusing at storage-classification time with a message naming
+  took the `sha256-hash` workload and `std::crypto`'s digests 1.5x faster;
+  and — since ADR-0028 Stage B — **`Box[T]` values**: `std::boxed::new`/`get`
+  (a copy, deep for a heap-owning pointee)/`into` (`HeapOp::BoxNew`/`BoxGet`/
+  `BoxInto`), a box being one pointer-width scalar whose drop and deep-copy
+  glue is emitted **out of line**, one function per pointee type, so a
+  recursive type (`next: Option[Box[Node]]`) gets finite glue that calls
+  itself; its depth is then bounded by the native stack (a 10^6-node list's
+  drop overflows it, which is the runtime's **stack-overflow trap** —
+  `TrapCode::StackOverflow`, ABI 14: a guard-page `SIGSEGV`/`SIGBUS` handler
+  on an alternate signal stack, armed on the main thread before `main` and on
+  every `par_map` worker as it starts, prints `tuo: trap: stack overflow` and
+  aborts like any trap, while any other fault still crashes as before;
+  workers also get an 8 MiB stack, pinned by `tuo-cli/tests/stack_overflow.rs`);
+  and — since ADR-0037 — **reading through borrows**: a `match` on a place
+  reached through an `in` parameter *lends* its non-`Copy` parts (read-only
+  aliases, lowered as the matched place; moving one is `O0003`), and
+  `std::boxed::get(b)` passed straight to an `in` parameter lends the pointee
+  through MIR's `Projection::Deref` instead of copying it (kept a copy when
+  another argument is `mut` or a non-`Copy` `take`), so a boxed tree is walked
+  by borrow in O(n) — and *refuse* — never
+  mis-compile — anything outside it (the `Shared`/`Weak` heap-wrapper
+  **values**, a `Box` as a growable-array element or map value, and
+  **capturing closures** — Tier 2, deferred), refusing at storage-classification time with a message naming
   the type and pointing the user back to the interpreter as the
   reference — and, since the runnable-core advisory landed, **saying so at
   `check` time rather than only at `build` time**: `tuo check` emits a
   located `T0022` *warning* (`tuo-compiler`'s `native_core`, pinned by
   `crates/tuo-compiler/tests/native_core.rs`) at the span of any
-  heap-wrapper **value** in a parameter, return, or `let`/`var` position, so
+  `Shared`/`Weak` **value** (or a `Box` inside an `Array`/`Map` type) in a
+  parameter, return, or `let`/`var` position, so
   the gap between what `check` accepts and what `build`/`run` lower is
   visible where it is written instead of surfacing later as a spanless
   whole-program refusal; a wrapper in a struct field or enum payload is
@@ -386,7 +407,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   a caller must type (`Ty::render` would normalize `Int` to `I64` and drop the
   names); the runnable-core section states what `tuo check` accepts versus what
   `run`/`build` execute, including what is deliberately absent (capturing
-  closures, `Box`/`Shared`/`Weak` values, detached spawn, method calls) so a
+  closures, `Shared`/`Weak` values, detached spawn, method calls) so a
   model does not invent it; and the anti-pattern table is the forward reading of
   `training/breaks.py` — one list, two consumers, so the generator's error model
   and the brief's advice cannot drift apart. A committed copy lives at
@@ -476,13 +497,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   stays as the documented re-entry path for any future workload.
   The catalog's second half is the **Computer Language Benchmarks Game**
   (`lab::runtime::BENCHMARKS_GAME`): `nbody`, `spectral-norm`,
-  `fannkuch-redux`, `mandelbrot`, and `fasta` are supported, each the
+  `fannkuch-redux`, `mandelbrot`, `fasta`, and — since ADR-0028 Stage B's
+  native `Box` — `binary-trees` are all supported, each the
   benchmark's own algorithm with its output folded into the exit byte, and
   each carrying **C, Go, and Rust** peers (`PeerLanguage::Rust`, `rustc -O`,
   for this set only; C is built with `-ffp-contract=off` and the Go peers
   wrap products in `float64` so all four languages round identically);
-  `binary-trees` is the one `Unsupported` entry, waiting on native `Box`
-  values. `tuo-cli/tests/lab_command.rs`'s `#[ignore]`d
+  no entry is `Unsupported`. `tuo-cli/tests/lab_command.rs`'s `#[ignore]`d
   `benchmarks_game_speed_table` builds each with `tuo build --release` and
   every peer, times them (fastest of five after a warm-up), and prints the
   ratio to each peer — asserting correctness only, never a ratio; CI runs it
@@ -768,7 +789,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   validate a chain) — each pinned to its RFC's published vectors, the key
   schedule to RFC 8448's, and the whole stack by a real handshake against
   OpenSSL's `s_client` plus a served HTTPS request
-  (`tuo-cli/tests/stdlib.rs`). Every reader of hostile input is total
+  (`tuo-cli/tests/stdlib.rs`). The handshake enforces RFC 8446's two
+  mandatory peer checks: the client's Finished is verified against the
+  transcript in constant time (`std::crypto::verify`) before the switch to
+  application keys — a mismatch is a fatal `decrypt_error`, and application
+  data in its place an `unexpected_message` — and a small-order X25519 key
+  share (all-zero shared secret, §7.4.2) is refused. Both were gaps
+  ADR-0036's review found; they are pinned by
+  `tls_server_verifies_the_client_finished` and
+  `tls_rejects_small_order_key_shares`, each confirmed by sabotage to fail
+  without its check. Every reader of hostile input is total
   (a failure value, never a trap, since a trap kills the process). Its
   header states the limitation that matters most: it is **not constant
   time** — key exchange and signing route through the variable-time
@@ -780,11 +810,24 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   workspace resolves to a byte-identical lock wherever it is checked out
   (finding D-6, fixed); the `examples/**/tdg.lock` files remain gitignored
   because the dogfooding tests regenerate them, not because they are
-  unportable. The heap-wrapper gap every refusal message defers to "a later
-  ADR" is now `ADR-0028` (**proposed**), which records two findings the
-  documentation had not: no program can *construct* a wrapper value, since
-  the types have no constructor, and a struct holding one in a field can be
-  declared and borrowed but not held by value.
+  unportable. The heap-wrapper gap every refusal message deferred to "a later
+  ADR" is `ADR-0028`, which recorded two findings the documentation had
+  not — no program could *construct* a wrapper value, and a struct holding one
+  could be declared and borrowed but not held by value — and whose **Stages A
+  and B have landed** (`Box[T]` values natively, `binary-trees` measured,
+  `T0016`'s advice now true); Stage C (`Shared`/`Weak`) waits on Q-0005, which
+  `ADR-0034` proposes to settle. ADRs 0031–0036 record the next round of
+  decisions: wrapping arithmetic and rotation (0031), interfaces as bounds
+  without method syntax (0032), function-valued array elements (0033), what
+  may cross threads (0034), the integer index operand (0035), — after the
+  fact — admitting TLS into the standard library (0036), and reading through
+  borrows (0037, accepted and landed). Their first stages landed with them:
+  ADR-0031 Stage A (a `#[constant_time]` shift by a non-literal amount is
+  `T0019`, since the amount's range check is a branch), ADR-0032 Stage A (a
+  method call is the error `T0024`, with a machine-applicable rewrite to the
+  free function when exactly one fits; a qualified interface-member call is
+  `T0025`; an `interface`/`impl` declaration draws the `T0026` warning because
+  it lowers to nothing), and ADR-0034's worker-stack items.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
@@ -1079,8 +1122,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Its claim is deliberately narrow and *pinned* at two levels: the ten
   scalar primitives carry **`#[constant_time]`** (ADR-0020 Stage C) so the
   **compiler** verifies the source contains no data-dependent construct
-  (`T0017`–`T0021` — branches, indexing, trapping arithmetic, and calls to
-  unmarked functions are all refused), and
+  (`T0017`–`T0021` — branches, indexing, trapping arithmetic, shifts by a
+  non-literal amount, and calls to unmarked functions are all refused), and
   `tuo-cli/tests/constant_time.rs` disassembles the native binary on
   **both** backends to check the *emitted* code is branchless too, since an
   optimizer may rewrite a branchless idiom into a conditional. Whether those
