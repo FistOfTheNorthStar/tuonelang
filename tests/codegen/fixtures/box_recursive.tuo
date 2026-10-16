@@ -1,0 +1,60 @@
+// ADR-0028 Stage B: recursive types through `Box`, whose drop and deep-copy
+// glue is out-of-line — a linked list of owned strings built, deep-copied by
+// `std::boxed::get`, walked by consuming it, and dropped whole; and a binary
+// tree built and counted. Exit 114.
+struct Cell {
+    label: String,
+    next: Option[Box[Cell]],
+}
+
+struct Node {
+    left: Option[Box[Node]],
+    right: Option[Box[Node]],
+}
+
+fn chain(take n: Int) -> Cell {
+    var cell = Cell { label: std::string::from_str("tail"), next: None };
+    var i = 0;
+    while i < n {
+        cell = Cell { label: std::string::from_str("link"), next: Some { value: std::boxed::new(cell) } };
+        i = i + 1;
+    }
+    cell
+}
+
+fn length(take cell: Cell) -> Int {
+    match cell.next {
+        Some { value } => 1 + length(std::boxed::into(value)),
+        None => std::string::len(cell.label),
+    }
+}
+
+fn tree(take depth: Int) -> Node {
+    if depth == 0 {
+        return Node { left: None, right: None };
+    }
+    Node {
+        left: Some { value: std::boxed::new(tree(depth - 1)) },
+        right: Some { value: std::boxed::new(tree(depth - 1)) },
+    }
+}
+
+fn count(take node: Node) -> Int {
+    let left = match node.left {
+        Some { value } => count(std::boxed::into(value)),
+        None => 0,
+    };
+    let right = match node.right {
+        Some { value } => count(std::boxed::into(value)),
+        None => 0,
+    };
+    1 + left + right
+}
+
+fn main() -> Int {
+    let boxed = std::boxed::new(chain(6));
+    let copied = std::boxed::get(boxed);
+    let dropped = chain(4);
+    let a = length(copied) + length(std::boxed::into(boxed));
+    a + count(tree(5)) + count(tree(4)) + 0 * length(chain(1))
+}

@@ -151,12 +151,11 @@ module router;
 //     (the shape deployed behind a load balancer), and not a concurrent one.
 //     `serve_pool` still takes a budget, and that boundary is real.
 //
-// What remains genuinely absent is TLS, and it is absent by decision rather
-// than oversight: ADR-0017 excludes it because it needs X.509 parsing, a
-// certificate store, and AEAD ciphers on top of the handshake — a dependency
-// this workspace avoids, in which even SHA-256 is hand-rolled. `std::crypto`
-// having landed SHA-256/HMAC in tuonelang weakens but does not overturn that,
-// so an HTTPS server is a future ADR, not a gap to paper over here.
+// What remains absent here is TLS. The language can now express it —
+// `std::tls` is a TLS 1.3 server handshake and record layer written in
+// tuonelang (ADR-0036), pinned by a live handshake against OpenSSL — but it is
+// not constant time and so not deployable, and this router stays plain HTTP
+// rather than serve over a stack whose own header says not to.
 //
 // It compiles with `tuo check`, its specs run under `tuo test`, and it runs
 // natively with `tuo run` — serving its six sample requests over a real

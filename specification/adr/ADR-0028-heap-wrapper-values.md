@@ -1,6 +1,6 @@
 # ADR-0028: Heap-wrapper values — giving `Box[T]` a constructor, and recursive types a runtime
 
-- **Status:** proposed
+- **Status:** proposed (Stages A and B **landed** 2026-10-14; Stage C open — see Resolution)
 - **Date:** 2026-09-28
 
 ## Context
@@ -261,3 +261,142 @@ A garbage collector, a dereference operator, `Box` of a trait object (there are
 no traits), or interior mutability. `Shared[T]` is reference-counted shared
 *ownership* of an immutable value, as `abi.md` already specifies, and nothing
 here widens that.
+
+## Resolution (2026-10-14) — Stages A and B landed, Stage C open
+
+**Stage B landed as proposed**, and with it most of Stage A became moot rather
+than separately necessary.
+
+- **The constructor is `std::boxed`**: `new(take v: T) -> Box[T]`,
+  `get(in b: Box[T]) -> T` (a copy — deep for a heap-owning pointee, as
+  `std::array::get` copies an element), and `into(take b: Box[T]) -> T`.
+  Three builtins, receiver-witnessed and generic over the pointee; no grammar
+  change, no dereference operator. MIR gained `HeapOp::BoxNew`/`BoxGet`/
+  `BoxInto` (`mir.md` §5.7); the interpreter models a box as a one-field
+  aggregate, so Rust ownership of the value tree *is* the unique ownership.
+- **Both backends lower it.** A box is a pointer-width scalar. Drop and deep
+  copy of a boxed pointee are emitted **out of line**, one function per
+  pointee type, declared before its body so a recursive type's glue calls
+  itself instead of expanding forever (LLVM defines the function on the spot;
+  Cranelift declares on first call and defines after the program's functions).
+  Non-boxed types keep their inline glue, so no shipped program's code
+  changed. Pinned three-way by `box_values` and `box_recursive` (a list of
+  owned strings deep-copied and consumed, a binary tree built and counted);
+  20,000 rounds of build/copy/drop report **zero leaks** under macOS `leaks`
+  on both backends.
+- **ABI version 14.** `layout_of` already gave `Box` its one-pointer layout
+  (`abi.md` "Box"), so the lowering alone changed no layout; the bump to 14
+  landed with the stack-overflow trap (a new trap code and runtime symbols),
+  and records code relying on the `Box` layout in the same version.
+- **`T0016`'s advice is true**: it names `Box[Name]` and `std::boxed::new`,
+  and no longer `Shared`/`Weak`. **`T0022`** looks through `Box` and warns
+  only for `Shared`/`Weak`, or a `Box` inside an `Array`/`Map` type (still
+  refused natively). Stage A's item 1 — driving `T0022` from inferred types —
+  was not done: with `Box` lowered, the remaining unlowered wrappers cannot be
+  constructed at all, so an inferred binding of one can only come from a
+  parameter that is itself already warned about. The brief now teaches
+  `std::boxed` and says plainly that `Shared`/`Weak` values do not exist.
+
+**Measured** (release, fastest of five after a warm-up, Apple M4): the
+Benchmarks Game **`binary-trees`** (maximum depth 16, every node its own `Box`,
+each freed as the walk counts it) — **173.6 ms** against C 149.0 ms (1.16x),
+Rust 169.1 ms (1.03x), Go 130.5 ms (1.33x; its collector frees in bulk, the
+different cost shape this ADR predicted). All four agree on exit byte 174.
+It was the lab's last `Unsupported` entry; the catalog has none now.
+
+**What did not land, stated plainly:**
+
+- **The borrowing accessor** was a language-wide gap rather than a `Box`
+  one — a match binding always moved its payload, so nothing could be read
+  out of an `in` value's enum payload. **Resolved (2026-10-16) by ADR-0037**
+  without an accessor: a match on an `in`-rooted place lends its non-`Copy`
+  parts, and `get(b)` passed to an `in` parameter lends the pointee instead
+  of copying it, so a tree is walked by borrow in O(n).
+- **The stack.** Out-of-line glue recurses once per node, so its depth is a
+  run-time quantity: a 1,000,000-node list's drop overflows the 8 MB main
+  stack. It first **segfaulted (exit 139)**; since 2026-10-16 it is the
+  defined trap this ADR promised — the runtime's guard-page handler reports
+  `tuo: trap: stack overflow` and aborts with the trap status, on the main
+  thread and on `par_map` workers alike (`TrapCode::StackOverflow`, ABI 14,
+  pinned by `tuo-cli/tests/stack_overflow.rs`). An iterative drop for the list
+  shape is still not promised.
+- **`arena-vs-box`**, the **`std::json` oracle**, and the **differential
+  generator** were not done when Stage B landed; they have since been done
+  (below).
+- **Stage C** (`Shared`/`Weak`) waits on Q-0005, which ADR-0034 proposes to
+  settle as atomic-only.
+
+### The three Stage B follow-ups (2026-10-16)
+
+**The differential generator builds boxes.** Every generated program now
+carries a fixed prelude (`BOX_PRELUDE` in
+`crates/tuo-cli/tests/differential/generator.rs`), and a new expression form
+draws on it: boxed scalars and structs through `new`/`get`/`into`, a box in a
+struct field behind `Option` opened by a partial move, a box in a box, a box as
+an `Option[Box[Int]]` payload, boxes as fixed-array elements, a `var` box
+overwritten, a box passed to and returned from a call and borrowed by an `in`
+parameter, and two recursive types through `Option[Box[Self]]` — a binary tree
+of depth 0–4 and a list of up to six cells owning `String`s — built,
+deep-copied with `get`, consumed whole or in part, and dropped unopened. The
+operands are generated expressions, so a trap can fire with live boxes in
+scope. 68% of the generator's programs use a `Box` form and 48% build a
+recursive one (`the_corpus_exercises_boxes_and_recursive_box_types` keeps both
+above a floor). The committed sweeps (150 seeds on Cranelift, 60 on LLVM) pass,
+as did a one-off wider sweep of 2,000 further seeds on Cranelift and 1,000 on
+LLVM: **no cross-engine mismatch**. That sweep did surface one harness false
+positive, unrelated to `Box`: a program returning `-378` exits with byte 134,
+the trap status, and the harness called it a trap. It now also requires the
+runtime's `tuo: trap:` line on stderr, pinned by
+`a_return_of_the_trap_status_byte_is_not_a_trap`.
+
+**`arena-vs-box`, measured** (`arena_vs_box_timing` in
+`crates/tuo-cli/tests/lab_command.rs`; programs
+`benchmarks/runtime/programs/tuo/arena-vs-box-{arena,box}.tuo`). A balanced
+tree of depth 20 (2,097,151 nodes), four rounds of build, sum by recursive
+descent, and drop, both built with `tuo build --release`, best of five after a
+warm-up, Apple M4, three runs of the table: **arena 52.6–53.2 ms, box
+130.8–136.0 ms, box/arena 2.46–2.59x**. Both reach the same checksum. The two
+programs do not do identical work, and the difference is the language's, not
+the benchmark's: the arena grows three `Array[Int]` columns by doubling and
+frees them once, while the box tree makes one allocation per node, and its
+walk must consume the tree (a match binding moves its payload), so each node
+is freed as it is summed. The arena is the faster representation by this
+measure. Per the benchmark plan, the case for `Box` therefore rests on what
+the compiler can check — a child is a typed, owned value rather than an `Int`
+any other `Int` can be confused with — and not on speed.
+
+**The `std::json` oracle holds.** `tests/codegen/oracles/box_json.tuo` defines a
+`Value` enum whose containers hold `Option[Box[Item]]` / `Option[Box[Member]]`
+lists, converts `std::json`'s arena into it node by node, and renders it. For
+all 27 documents (every document `std::json`'s specs parse, plus the
+json-parse workload's) the `Box` tree renders **byte-identically** to
+`std::json::render`, both directly and through a deep copy taken with
+`std::boxed::get`; and `std::json`'s spec questions (kinds, numbers, decoded
+strings, node and child counts, element order, member lookup, nesting) asked
+of the `Box` tree get `std::json`'s answers. `crates/tuo-cli/tests/box_json_oracle.rs`
+compiles it with the unmodified catalog `std::json` and runs it on all three
+engines: 22 specs pass on the interpreter (`std::json`'s ten and the oracle's
+twelve) and `main` returns 27 on the interpreter, Cranelift, and LLVM.
+`std::json` was not changed. Two costs showed up and are written into the
+oracle's header: every reader takes its tree by value, so asking a document a
+second question means converting it again or deep-copying it first; and
+`std::json`'s scalar formatting is private, so the oracle carries a copy of it
+and the comparison pins the tree's structure rather than two independent
+number formatters. Nothing the oracle needed was inexpressible.
+
+**One gap found on the way, not `Box`-specific:** a `for` loop over a fixed
+array of non-`Copy` elements (`[Box[Int]; 2]`, and equally `[String; 2]`) is
+accepted by `tuo check`, but MIR lowering skips the enclosing function
+(`debug mir`: "iterating a fixed `[T; N]` of non-`Copy` elements is not
+lowered in v0"), and `tuo run` then fails with the misleading "the program has
+no function named `main` to compile". Indexed reads of such an array work, and
+that is what the generator uses.
+
+*Note (2026-10-16, after ADR-0037).* The two measurements above consume their
+trees because, when they were written, a match binding could only move its
+payload. ADR-0037 has since landed: a match on an `in`-rooted place lends its
+parts, and `std::boxed::get(b)` passed to an `in` parameter lends the pointee,
+so a boxed tree can now be read by borrow, any number of times, without a
+copy. The `arena-vs-box` figures stand as a build-sum-drop comparison (the
+consuming walk *is* the drop); the oracle's "every reader takes its tree by
+value" cost is now a choice of that file rather than a limit of the language.

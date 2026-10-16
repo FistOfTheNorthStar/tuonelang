@@ -304,7 +304,9 @@ fn impl_bodies_type_self_as_the_target() {
              }\n\
          }\n",
     );
-    assert_clean(&result);
+    // `self.count` types against the target (no `T0001`); the only reports are
+    // ADR-0032 Stage A's two `T0026` warnings — the declarations lower to nothing.
+    assert_eq!(codes(&result), vec!["T0026".to_owned(), "T0026".to_owned()]);
 }
 
 #[test]

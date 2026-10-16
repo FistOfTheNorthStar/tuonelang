@@ -318,6 +318,25 @@ fn scratch_buffers_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0028 Stage B: `Box[T]` values — `std::boxed::new`/`get`/`into` over
+/// scalar, owned, struct, and nested pointees, boxes in fields and `Option`
+/// payloads, and recursive types whose out-of-line drop and deep-copy glue
+/// frees and copies every node — agree on all three engines.
+#[test]
+fn boxes_agree_across_all_three_engines() {
+    for name in ["box_values.tuo", "box_recursive.tuo"] {
+        assert_three_way_agreement(name);
+    }
+}
+
+/// ADR-0037: lent pattern bindings under an `in` scrutinee and a box pointee
+/// lent to an `in` parameter (the `Deref` projection) agree on all three
+/// engines — including the copy kept when another argument is `mut`.
+#[test]
+fn lending_agrees_across_all_three_engines() {
+    assert_three_way_agreement("lend_bindings.tuo");
+}
+
 /// An out-of-bounds index traps identically on all three engines: the
 /// interpreter aborts with `IndexOutOfBounds`, and both backends abort with the
 /// runtime's fixed trap status (the bounds `Assert` is lowered before the
@@ -468,7 +487,7 @@ fn function_values_agree_across_all_three_engines() {
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
     // A program still outside the native subset (a function with a heap-wrapper
-    // `Box[T]` parameter, which awaits a later ADR — the owned
+    // `Shared[T]` parameter, which awaits ADR-0028 Stage C — the owned
     // `String`/`Array[Int]` are lowered since ADR-0009 Stage B, `Str` since
     // ADR-0006 Stage B) must be *refused* by both backends with a failure exit
     // and an explanatory message, never silently mis-compiled. The interpreter

@@ -4,7 +4,7 @@
 // `Int`, runs through the reference interpreter, and every spec below proves
 // it. It exists because ADR-0019 gave the language bitwise operators, and the
 // operations built *on* them — masking to a width, rotating, and assembling or
-// splitting a big-endian integer — are needed identically by every binary
+// splitting a big- or little-endian integer — are needed identically by every binary
 // protocol and every hash function. Writing them once here is the difference
 // between one audited implementation and one per caller.
 //
@@ -257,6 +257,51 @@ pub fn byte_of_be16(take value: Int, take index: Int) -> Int {
     ((value & 65535) >> ((1 - index) * 8)) & 255
 }
 
+// Little-endian — the layout of file formats and in-memory structures read
+// straight into registers (GGUF, ELF, PE, most of what x86 and ARM write), the
+// mirror of the network byte order above. There is deliberately no `le64`: a
+// 64-bit field with its top bit set has no `Int` (`I64`) representation, and a
+// reader must decide what to do with one; `examples/gguf-reader` refuses it
+// rather than let it wrap negative, and that decision is the caller's.
+
+/// The four bytes `b0 b1 b2 b3` read as one little-endian 32-bit integer.
+///
+/// `b0` is the *least* significant byte — the mirror of [`be32`]. Each byte is
+/// masked to `0 ..= 255`, so an out-of-range value cannot reach a neighbour.
+///
+/// # Example
+/// ```tuo
+/// let n = std::bits::le32(2, 1, 0, 0); // 258
+/// ```
+pub fn le32(take b0: Int, take b1: Int, take b2: Int, take b3: Int) -> Int {
+    (b0 & 255) | ((b1 & 255) << 8) | ((b2 & 255) << 16) | ((b3 & 255) << 24)
+}
+
+/// The two bytes `b0 b1` read as one little-endian 16-bit integer (`b0` low).
+///
+/// # Example
+/// ```tuo
+/// let n = std::bits::le16(2, 1); // 258
+/// ```
+pub fn le16(take b0: Int, take b1: Int) -> Int {
+    (b0 & 255) | ((b1 & 255) << 8)
+}
+
+/// Byte `index` of `value` in little-endian order, where index `0` is the
+/// *least* significant of the four — the inverse of [`le32`]. An `index`
+/// outside `0 ..= 3` yields `0` rather than trapping, as [`byte_of_be32`] does.
+///
+/// # Example
+/// ```tuo
+/// let low = std::bits::byte_of_le32(258, 0); // 2
+/// ```
+pub fn byte_of_le32(take value: Int, take index: Int) -> Int {
+    if index < 0 || index > 3 {
+        return 0;
+    }
+    ((value & 4294967295) >> (index * 8)) & 255
+}
+
 // ----------------------------------------------------------------------------
 // Bit inspection.
 // ----------------------------------------------------------------------------
@@ -409,6 +454,43 @@ spec byte_of_be16 {
     then byte_of_be16(258, 1) == 2;
     then byte_of_be16(258, 2) == 0;
     then be16(byte_of_be16(65535, 0), byte_of_be16(65535, 1)) == 65535;
+}
+
+spec le32 {
+    then le32(2, 1, 0, 0) == 258;
+    then le32(255, 0, 0, 0) == 255;
+    then le32(0, 0, 0, 1) == 16777216;
+    then le32(255, 255, 255, 255) == 4294967295;
+    // 0x12345678, stored least significant byte first.
+    then le32(120, 86, 52, 18) == 305419896;
+    // The same bytes read in the other order are the big-endian value.
+    then le32(18, 52, 86, 120) == be32(120, 86, 52, 18);
+    // An out-of-range byte is masked, not carried into the next field.
+    then le32(256, 0, 0, 0) == 0;
+}
+
+spec le16 {
+    then le16(2, 1) == 258;
+    then le16(255, 255) == 65535;
+    then le16(0, 0) == 0;
+    then le16(1, 2) == be16(2, 1);
+}
+
+spec byte_of_le32 {
+    then byte_of_le32(305419896, 0) == 120;
+    then byte_of_le32(305419896, 1) == 86;
+    then byte_of_le32(305419896, 2) == 52;
+    then byte_of_le32(305419896, 3) == 18;
+    // Out of range yields 0 rather than trapping.
+    then byte_of_le32(305419896, 4) == 0;
+    then byte_of_le32(305419896, 0 - 1) == 0;
+    // Round-trip: splitting and reassembling is the identity.
+    then le32(
+        byte_of_le32(305419896, 0),
+        byte_of_le32(305419896, 1),
+        byte_of_le32(305419896, 2),
+        byte_of_le32(305419896, 3),
+    ) == 305419896;
 }
 
 spec test_bit {

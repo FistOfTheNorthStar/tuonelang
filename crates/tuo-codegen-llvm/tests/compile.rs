@@ -190,8 +190,8 @@ fn main_with_local(ty: Ty) -> Program {
 
 #[test]
 fn heap_wrapper_types_are_refused_at_classification_time_with_a_clean_message() {
-    // The heap *wrappers* (`Box`/`Shared`/`Weak`) still have an ABI layout but
-    // no lowering, so the gate must refuse them up front, naming the concrete
+    // The shared heap *wrappers* (`Shared`/`Weak`) still have an ABI layout but
+    // no lowering (`Box` lowers since ADR-0028 Stage B), so the gate must refuse them up front, naming the concrete
     // type and the road back to the interpreter — with the same wording as the
     // Cranelift backend (bar the backend name). (`Str` is no longer refused
     // since ADR-0006 Stage B; the owned `String` and growable `Array[Int]` are
@@ -199,10 +199,6 @@ fn heap_wrapper_types_are_refused_at_classification_time_with_a_clean_message() 
     // pinned by the positive tests below and the differential suites.)
     use tuo_types::WrapperKind;
     for (ty, marker) in [
-        (
-            Ty::Wrapper(WrapperKind::Box, Box::new(Ty::int())),
-            "`Box[T]` heap wrapper",
-        ),
         (
             Ty::Wrapper(WrapperKind::Shared, Box::new(Ty::int())),
             "`Shared[T]` heap wrapper",

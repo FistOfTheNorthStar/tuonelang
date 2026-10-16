@@ -1,5 +1,5 @@
-//! A deterministic generator of small, well-typed programs in the backend's
-//! scalar subset.
+//! A deterministic generator of small, well-typed programs in the backends'
+//! shared subset.
 //!
 //! Random differential testing is only useful if every generated program is one
 //! both engines are *obliged* to run: accepted by the front end and inside the
@@ -12,9 +12,16 @@
 //! (float arithmetic never traps, and the cast is total — NaN → 0), and
 //! (ADR-0004 Stage 2) fixed-capacity `[Int; N]` arrays: literal and repeat
 //! construction, constant in-bounds indexing, and `for` folds — including a
-//! wide flat literal and the zero-length repeat form. It never emits a string,
-//! a growable `Array[T]`, or anything else the backend refuses, so a
-//! divergence is always a real correctness finding and never a rejected
+//! wide flat literal and the zero-length repeat form — and (ADR-0028 Stage B)
+//! `Box[T]` values: boxed scalars and structs through
+//! `std::boxed::new`/`get`/`into`, boxes in struct fields, `Option` payloads,
+//! and fixed arrays, a box passed to and returned from a call and borrowed by
+//! an `in` parameter, and two bounded-depth recursive types through
+//! `Option[Box[Self]]` (a binary tree and a list of owned `String`s) built,
+//! deep-copied with `get`, consumed whole or in part, and dropped unopened
+//! (see [`BOX_PRELUDE`] and `box_form`). It never emits a growable
+//! `Array[T]`, a `Shared`/`Weak` value, or anything else a backend refuses, so
+//! a divergence is always a real correctness finding and never a rejected
 //! program.
 //!
 //! # Determinism
@@ -30,7 +37,10 @@
 //! graph is a DAG and no recursion is possible — every program halts well within
 //! the interpreter's default fuel. (Recursion is exercised by the hand-written
 //! `codegen_differential` fixtures, which can bound their own depth; the random
-//! corpus trades it away for a guarantee of termination.)
+//! corpus trades it away for a guarantee of termination.) The one exception is
+//! the fixed [`BOX_PRELUDE`], whose builders and walkers recurse on a literal
+//! depth or length the generator draws from `0..=4` / `0..=5` and on the
+//! structure that depth built, so they terminate too.
 
 // Test-support module reached via `#[path]`; `pub` is the intended visibility.
 #![allow(unreachable_pub)]
@@ -123,6 +133,8 @@ pub fn program(seed: u64) -> String {
     // `mut` argument, and read the written-back value — pinning the borrow
     // write-back path on every program that uses the form (see `expr`).
     writeln!(out, "fn bump(mut a: Int, take b: Int) {{ a = a + b; }}").expect("string write");
+    // The fixed `Box` vocabulary (ADR-0028 Stage B) that `box_form` draws on.
+    out.push_str(BOX_PRELUDE);
 
     // Helpers next, each able to call the ones before it (a DAG → terminates).
     // Each entry carries the helper's name, arity, and its uniform parameter
@@ -178,9 +190,13 @@ fn expr(
     if depth == 0 {
         return leaf(rng, scope);
     }
-    match rng.below(9) {
+    match rng.below(10) {
         // Leaf: literal or an in-scope name.
         0 => leaf(rng, scope),
+        // A `Box` form (ADR-0028 Stage B): boxed scalars and structs, boxes in
+        // fields, `Option` payloads, and fixed arrays, and the bounded-depth
+        // recursive types of [`BOX_PRELUDE`].
+        9 => box_form(rng, scope, callable, depth),
         // A fixed-array form (construct + index or construct + fold).
         6 => array_form(rng, scope, callable, depth),
         // A float subexpression folded back to `Int` by the saturating cast.
@@ -311,6 +327,197 @@ fn array_form(
                 .collect::<Vec<_>>()
                 .join(", ");
             format!("{{ let a{id}: [Int; {n}] = [{elements}]; a{id}[{k}] }}")
+        }
+    }
+}
+
+/// The fixed `Box[T]` vocabulary every program carries (ADR-0028 Stage B),
+/// one declaration per line so the shrinker's line-oriented reductions apply.
+///
+/// * `BPair` is a plain `Copy`-field struct to box; `BHolder` holds one behind
+///   an `Option[Box[_]]` field, and `bopen` opens it by a partial move (the
+///   match moves `h.inner` out and then reads `h.tag`).
+/// * `BTree` is a recursive type through `Option[Box[Self]]`: `btree` builds a
+///   perfect tree of the given depth, `bsum` consumes it in a shape- and
+///   order-sensitive fold (`value + 2 * left - right`), `bleft` consumes only
+///   the left subtree and drops the right one *unopened* along with the rest
+///   of the node, `bpeek` deep-copies one out of an `in`-borrowed box, and
+///   `bswap` passes and returns a box across a call boundary.
+/// * `BCell` is a recursive list whose cells own a `String`, so its
+///   out-of-line drop and deep-copy glue frees and copies heap memory at
+///   every level.
+///
+/// Termination is guarded against the shrinker as well as the generator:
+/// `btree`'s base case is an `if … { return … }` with no `else` (which
+/// `collapse_if` cannot remove), every recursive call's argument list holds an
+/// operator (so `replace_parenthesized` can only turn it into a call of an
+/// unknown name, which the oracle rejects), and `bchain`'s loop bound is its
+/// parameter. Depths and lengths are literals the generator chooses from
+/// `0..=4` and `0..=5`, so a tree has at most 31 nodes and a list 6 cells.
+const BOX_PRELUDE: &str = "\
+struct BPair { left: Int, right: Int }
+struct BHolder { tag: Int, inner: Option[Box[BPair]] }
+struct BTree { value: Int, left: Option[Box[BTree]], right: Option[Box[BTree]] }
+struct BCell { label: String, value: Int, next: Option[Box[BCell]] }
+fn bopen(take h: BHolder) -> Int { match h.inner { Some { value } => h.tag + std::boxed::get(value).left * 3 + std::boxed::into(value).right, None => h.tag - 7 } }
+fn btree(take depth: Int, take seed: Int) -> BTree { if depth <= 0 { return BTree { value: seed, left: None, right: None }; } BTree { value: seed, left: Some { value: std::boxed::new(btree(depth - 1, seed + 1)) }, right: Some { value: std::boxed::new(btree(depth - 1, seed - depth)) } } }
+fn bsum(take t: BTree) -> Int { let l = match t.left { Some { value } => bsum(std::boxed::into(value)), None => 0 }; let r = match t.right { Some { value } => bsum(std::boxed::into(value)), None => 0 }; t.value + l * 2 - r }
+fn bleft(take t: BTree) -> Int { match t.left { Some { value } => t.value + bsum(std::boxed::into(value)), None => t.value } }
+fn bpeek(in b: Box[BTree]) -> Int { bsum(std::boxed::get(b)) }
+fn bswap(take b: Box[BPair]) -> Box[BPair] { let p = std::boxed::into(b); std::boxed::new(BPair { left: p.right, right: p.left }) }
+fn bchain(take n: Int, take v: Int) -> BCell { var cell = BCell { label: std::string::from_str(\"end\"), value: v, next: None }; var i = 0; while i < n { cell = BCell { label: std::string::from_str(\"link\"), value: v + i, next: Some { value: std::boxed::new(cell) } }; i = i + 1; } cell }
+fn blen(take c: BCell) -> Int { match c.next { Some { value } => c.value + std::string::len(c.label) + blen(std::boxed::into(value)), None => c.value - std::string::len(c.label) } }
+";
+
+/// An `Int`-typed `Box` form (ADR-0028 Stage B) over [`BOX_PRELUDE`]. Every
+/// form builds its boxes from recursively generated `Int` expressions, so box
+/// construction, copying, moving out, and dropping nest inside arithmetic,
+/// `if` arms, and helper bodies — and a trap in an operand fires with live
+/// boxes in scope. Bindings use a `b`-prefixed fresh name and never enter
+/// `scope.names` (they are not `Int`-typed). Some forms deliberately drop a
+/// box, a deep copy, or a whole recursive structure without opening it, so the
+/// drop glue runs on values nothing reads.
+fn box_form(
+    rng: &mut Rng,
+    scope: &mut Scope,
+    callable: &[(String, u32, &'static str)],
+    depth: u32,
+) -> String {
+    let id = scope.fresh;
+    scope.fresh += 1;
+    let sub = |rng: &mut Rng, scope: &mut Scope| expr(rng, scope, callable, depth - 1);
+    match rng.below(12) {
+        // A boxed scalar moved straight back out.
+        0 => {
+            let e = sub(rng, scope);
+            format!("std::boxed::into(std::boxed::new({e}))")
+        }
+        // A boxed scalar read by copy, then moved out, combined by an operator
+        // that may trap (`x / x` and `x % x` trap exactly when `x == 0`).
+        1 => {
+            let op = ["+", "-", "*", "/", "%"][rng.below(5) as usize];
+            let e = sub(rng, scope);
+            format!(
+                "{{ let bs{id} = std::boxed::new({e}); \
+                 std::boxed::get(bs{id}) {op} std::boxed::into(bs{id}) }}"
+            )
+        }
+        // A boxed struct: one field read through a copy, the other through
+        // the moved-out pointee.
+        2 => {
+            let op = ["+", "-", "*"][rng.below(3) as usize];
+            let l = sub(rng, scope);
+            let r = sub(rng, scope);
+            format!(
+                "{{ let bp{id} = std::boxed::new(BPair {{ left: {l}, right: {r} }}); \
+                 std::boxed::get(bp{id}).left {op} std::boxed::into(bp{id}).right }}"
+            )
+        }
+        // A box in a struct field behind `Option`, opened by a partial move —
+        // or an empty holder.
+        3 => {
+            let tag = sub(rng, scope);
+            if rng.below(3) == 0 {
+                format!("bopen(BHolder {{ tag: {tag}, inner: None }})")
+            } else {
+                let l = sub(rng, scope);
+                let r = sub(rng, scope);
+                format!(
+                    "bopen(BHolder {{ tag: {tag}, inner: Some {{ value: \
+                     std::boxed::new(BPair {{ left: {l}, right: {r} }}) }} }})"
+                )
+            }
+        }
+        // A box inside a box, unwrapped twice.
+        4 => {
+            let e = sub(rng, scope);
+            format!("std::boxed::into(std::boxed::into(std::boxed::new(std::boxed::new({e}))))")
+        }
+        // A box as an `Option` payload, matched out (or the `None` arm taken).
+        5 => {
+            let e = sub(rng, scope);
+            let w = sub(rng, scope);
+            let payload = if rng.below(4) == 0 {
+                "None".to_owned()
+            } else {
+                format!("Some {{ value: std::boxed::new({e}) }}")
+            };
+            format!(
+                "{{ let bo{id}: Option[Box[Int]] = {payload}; let bw{id}: Int = {w}; \
+                 match bo{id} {{ Some {{ value }} => std::boxed::into(value) - bw{id}, \
+                 None => bw{id} }} }}"
+            )
+        }
+        // A recursive tree built and consumed whole, or only its left half.
+        6 => {
+            let d = rng.below(5);
+            let e = sub(rng, scope);
+            let walk = if rng.below(2) == 0 { "bsum" } else { "bleft" };
+            format!("{walk}(btree({d}, {e}))")
+        }
+        // A boxed recursive tree deep-copied twice (through `get` and through
+        // an `in`-borrowed box parameter), then consumed.
+        7 => {
+            let d = rng.below(5);
+            let e = sub(rng, scope);
+            format!(
+                "{{ let bt{id} = std::boxed::new(btree({d}, {e})); \
+                 bpeek(bt{id}) - bsum(std::boxed::get(bt{id})) * 2 + \
+                 bleft(std::boxed::into(bt{id})) }}"
+            )
+        }
+        // Recursive structures and a deep copy dropped without ever being
+        // opened; the value is an unrelated expression.
+        8 => {
+            let d1 = rng.below(5);
+            let d2 = rng.below(5);
+            let n = rng.below(6);
+            let e1 = sub(rng, scope);
+            let e2 = sub(rng, scope);
+            let body = sub(rng, scope);
+            format!(
+                "{{ let bt{id} = btree({d1}, {e1}); \
+                 let bu{id} = std::boxed::new(btree({d2}, {e2})); \
+                 let bc{id} = std::boxed::get(bu{id}); \
+                 let bl{id} = bchain({n}, 1); {body} }}"
+            )
+        }
+        // A recursive list of owned strings, deep-copied and consumed.
+        9 => {
+            let n = rng.below(6);
+            let e = sub(rng, scope);
+            format!(
+                "{{ let bl{id} = std::boxed::new(bchain({n}, {e})); \
+                 blen(std::boxed::get(bl{id})) - blen(std::boxed::into(bl{id})) * 2 }}"
+            )
+        }
+        // A `var` box overwritten (the old pointee is dropped on assignment),
+        // and a box passed into and returned from a call.
+        10 => {
+            let n1 = rng.below(6);
+            let n2 = rng.below(6);
+            let e = sub(rng, scope);
+            let l = sub(rng, scope);
+            let r = sub(rng, scope);
+            format!(
+                "{{ var bv{id} = std::boxed::new(bchain({n1}, {e})); \
+                 bv{id} = std::boxed::new(bchain({n2}, 2)); \
+                 blen(std::boxed::into(bv{id})) + std::boxed::into(bswap(std::boxed::new(\
+                 BPair {{ left: {l}, right: {r} }}))).left }}"
+            )
+        }
+        // Boxes as fixed-array elements: one read by copy at a constant
+        // in-bounds index, the array (and every box in it) dropped after.
+        _ => {
+            let n = 1 + rng.below(3); // 1..=3 elements
+            let k = rng.below(n);
+            let elements = (0..n)
+                .map(|_| format!("std::boxed::new({})", sub(rng, scope)))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "{{ let ba{id}: [Box[Int]; {n}] = [{elements}]; std::boxed::get(ba{id}[{k}]) }}"
+            )
         }
     }
 }

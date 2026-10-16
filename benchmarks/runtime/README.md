@@ -14,9 +14,10 @@ The catalog (`tuo_bench::lab::runtime::workloads`) has two halves:
   constant-time comparison, wire decoding, UDP, bounded connects). Each was
   added with the ADR that made it expressible.
 - **The Computer Language Benchmarks Game** (`BENCHMARKS_GAME`): `nbody`,
-  `spectral-norm`, `fannkuch-redux`, `mandelbrot`, and `fasta`, plus
-  `binary-trees`, which is recorded **unsupported**: its tree of individually
-  allocated nodes needs native `Box` values, which v0 refuses at build time.
+  `spectral-norm`, `fannkuch-redux`, `mandelbrot`, `fasta`, and
+  `binary-trees` — the last recorded **unsupported** until ADR-0028 Stage B
+  gave `Box` values a native lowering, since its tree of individually
+  allocated nodes cannot be written without one.
   These are the established cross-language programs, so a statement about
   tuonelang's speed rests on benchmarks other languages are measured by,
   not on microbenchmarks chosen here. Each runs the benchmark's own algorithm
@@ -47,6 +48,29 @@ The floating-point peers are written so all four languages perform the same
 roundings: C is built with `-ffp-contract=off`, Go products are wrapped in
 explicit `float64` conversions (which the Go spec forbids fusing), and neither
 rustc nor tuonelang's LLVM pipeline contracts a multiply-add on its own.
+
+## arena-vs-box
+
+ADR-0028's benchmark plan asks how a recursive structure written with `Box`
+compares with the index arena `std::json` uses, both in tuonelang.
+[`programs/tuo/arena-vs-box-arena.tuo`](programs/tuo/arena-vs-box-arena.tuo)
+and [`programs/tuo/arena-vs-box-box.tuo`](programs/tuo/arena-vs-box-box.tuo)
+build the same balanced tree (depth 20, 2,097,151 nodes), sum it by recursive
+descent, and drop it, four rounds each, to the same checksum byte. They are not
+in the lab catalog (they have no C or Go peer; the comparison is tuonelang
+against itself).
+
+```bash
+cargo test -p tuo-cli --test lab_command arena_vs_box_timing -- --ignored --nocapture
+```
+
+builds both with `tuo build --release` and prints both times (best of five
+after a warm-up) and their ratio; `arena_vs_box_programs_compute_the_same_tree`
+runs both to the checksum on every ordinary test run. The programs differ where
+the language makes them differ: the arena grows three `Array[Int]` columns and
+frees them once, while the box tree allocates every node, and its walk consumes
+the tree (a match binding moves its payload), freeing each node as it is
+summed. The figures as measured are recorded in ADR-0028's Resolution.
 
 ## Comparison against established languages
 

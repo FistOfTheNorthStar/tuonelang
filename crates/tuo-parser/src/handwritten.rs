@@ -28,7 +28,7 @@ use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
 use crate::grammar::ITEM_START;
-use crate::parse::{byte_span, code, depth_guard};
+use crate::parse::{byte_span, call_arg_mode, code, depth_guard};
 use crate::stream::{Tok, kind_name, parse_stream};
 
 /// Parse one immutable source snapshot with the handwritten engine.
@@ -1169,9 +1169,51 @@ impl Parser<'_> {
     fn call_args(&mut self) -> R {
         let mut els = Els::new();
         self.expect(K::OpenParen, &mut els)?;
-        self.comma_list(&mut els, false, |p| p.expr(false))?;
+        // A comma list whose items are one argument each, optionally preceded
+        // by a misplaced mode keyword kept as an `Error` node (so the tree
+        // stays lossless and the argument itself still parses).
+        let mark = self.mark();
+        let first = match self.call_arg() {
+            Ok(arg) => {
+                els.extend(arg);
+                true
+            }
+            Err(Fail) => {
+                self.rollback(mark);
+                false
+            }
+        };
+        while first && self.at(K::Comma) {
+            let mark = self.mark();
+            let comma = self.bump();
+            match self.call_arg() {
+                Ok(arg) => {
+                    els.push(comma);
+                    els.extend(arg);
+                }
+                Err(Fail) => {
+                    self.rollback(mark);
+                    els.push(self.bump());
+                    break;
+                }
+            }
+        }
         self.expect(K::CloseParen, &mut els)?;
         Ok(node(SyntaxKind::CallArgs, els))
+    }
+
+    /// One call argument. A parameter mode written in front of it (`f(mut x)`)
+    /// is reported by [`call_arg_mode`] and kept in an `Error` node, and the
+    /// argument parses as if it were absent.
+    fn call_arg(&mut self) -> R<Els> {
+        let mut els = Els::new();
+        if matches!(self.peek(), K::KwMut | K::KwIn | K::KwTake) {
+            let primary = byte_span(self.pos, self.toks, self.lex, self.source);
+            self.diagnostics.push(call_arg_mode(primary, self.source));
+            els.push(node(SyntaxKind::Error, vec![self.bump()]));
+        }
+        els.push(self.expr(false)?);
+        Ok(els)
     }
 
     fn primary(&mut self, ns: bool) -> R {

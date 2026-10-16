@@ -78,6 +78,9 @@ call chain that can fail is a chain of `match`. This is real friction and is
 accepted deliberately — `std::core`'s error chains exist to make it tolerable.
 **A `?`-style propagation operator is not precluded by this ADR** and would be a
 reasonable later increment; it is sugar over `Result`, not an exception.
+*(Correction, 2026-10-16: the claim above was already false when written — `?`
+exists and type-checks with exact-match error types, as ADR-0032's probe
+found. ADR-0032 D7 proposes keeping that exact-match rule for Q-0003.)*
 
 *For translation from exception-based languages* (`py2tuo` and any successor):
 `try`/`except`/`raise` are refused with a diagnostic naming `Result[T, E]`. This

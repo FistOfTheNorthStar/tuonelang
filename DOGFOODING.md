@@ -680,7 +680,9 @@ site* (`push_le(mut out, …)`) produces the same coarse recovery — "skipped 1
 tokens" — rather than a targeted "`mut` is a parameter mode, not a call-site
 annotation". Two independent programs reaching the same rough edge from
 different directions is what promotes a backlog diagnostics item over a
-one-off. The other three were exemplary: one carried its own fix (`"an
+one-off. (**Fixed 2026-10-14**: a mode at a call site is now one targeted
+`P0001` at the keyword with a machine-applicable edit deleting it, and the
+call still parses, so no type error cascades from it.) The other three were exemplary: one carried its own fix (`"an
 identifier-named spec targets a module-level function; use a string name for a
 free-standing spec"`), one named the absent symbol precisely (`R0002: no `eq` in
 `std::str``), and one was caught by the ownership checker before any backend saw
@@ -690,7 +692,9 @@ On *stdlib gaps*, the honest one is real but narrow: `std::bits` is
 big-endian-only, so the little-endian readers had to be written in the example.
 That is a plausible future `std::bits` addition —
 `le32`/`le64` alongside `be32`/`be16` — and it is a *library* change, needing no
-ADR at all.
+ADR at all. (**Landed 2026-10-14** as `le32`/`le16`/`byte_of_le32`; `le64` is
+deliberately absent, since what to do with a top bit `Int` cannot hold is the
+caller's decision, as this example's own refusal shows.)
 
 **What it deliberately does not do.** No tensor data is read and nothing is
 dequantized. A descriptor table is pure structure over bytes and is exactly what

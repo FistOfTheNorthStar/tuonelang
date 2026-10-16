@@ -32,8 +32,9 @@
 //! than on microbenchmarks chosen here. Each is the benchmark's own algorithm
 //! with its output folded into the exit byte, and each carries C, Go, **and
 //! Rust** peers (Rust being the safe, AOT-native peer at the top of that
-//! suite). `binary-trees` is recorded **unsupported**: it allocates a tree of
-//! individually boxed nodes, and `Box` values do not lower natively yet.
+//! suite). `binary-trees`, a tree of individually boxed nodes, was recorded
+//! **unsupported** until ADR-0028 Stage B gave `Box[T]` values a constructor
+//! and a native lowering; it was the set's last entry to flip.
 //!
 //! The prompt's final rule governs this directly: *never publish unsupported
 //! claims; make the repository capable of proving them.* So every workload is a
@@ -103,8 +104,14 @@ impl RuntimeWorkload {
     ///
     /// A workload whose primitive is missing enters through here, with a
     /// reason and no number, never through a faked `supported`. ADR-0014
-    /// flipped the last of the original entries (networking); `binary-trees`
-    /// is the current one.
+    /// flipped the last of the original entries (networking), and ADR-0028
+    /// Stage B the last Benchmarks Game one (`binary-trees`), so none is
+    /// unsupported today; this stays the documented re-entry path.
+    #[allow(
+        dead_code,
+        reason = "the documented re-entry path for a workload whose primitive is missing; \
+                  no workload needs it today"
+    )]
     fn unsupported(label: &str, description: &str, reason: &str) -> Self {
         Self {
             label: label.to_string(),
@@ -432,18 +439,15 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // The folded byte-stream checksum % 256.
             175,
         ),
-        RuntimeWorkload::unsupported(
+        RuntimeWorkload::supported(
             "binary-trees",
             "the Benchmarks Game's binary-trees: allocate, walk, and free many \
              perfect binary trees of individually allocated nodes — the \
-             allocator and pointer-chasing benchmark",
-            "a tree of individually allocated nodes needs a recursive type \
-             through a heap wrapper (`Box[Node]`), and `Box`/`Shared`/`Weak` \
-             values are refused at build time (the T0022 runnable-core \
-             advisory): the interpreter runs such a program, native code does \
-             not yet. An index arena in an `Array` would compute the same \
-             checksum but would measure a different program, which the \
-             benchmark's rules exclude.",
+             allocator and pointer-chasing benchmark, each node behind a \
+             `Box` (ADR-0028 Stage B) and freed as the walk counts it",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/binary-trees.tuo"),
+            // The summed node counts % 256 at a maximum depth of 16.
+            174,
         ),
     ]
 }
@@ -568,7 +572,7 @@ mod tests {
         // the OS-boundary file-io workload (ADR-0013), the socket networking
         // workload (ADR-0014), the channel workload (ADR-0015), and the
         // ADR-0017 udp-echo / connect-timeout pair, and every Benchmarks Game
-        // program but binary-trees (which needs native `Box` values).
+        // program (binary-trees since ADR-0028 Stage B's native `Box`).
         assert_eq!(
             supported,
             vec![
@@ -595,32 +599,22 @@ mod tests {
                 "fannkuch-redux".to_string(),
                 "mandelbrot".to_string(),
                 "fasta".to_string(),
+                "binary-trees".to_string(),
             ]
         );
     }
 
     #[test]
-    fn the_benchmarks_game_set_is_in_the_catalog_and_binary_trees_waits_on_box() {
+    fn the_benchmarks_game_set_is_in_the_catalog_and_all_supported() {
         let all = workloads();
         for label in BENCHMARKS_GAME {
+            let workload = all.iter().find(|w| w.label == *label).unwrap_or_else(|| {
+                panic!("Benchmarks Game workload `{label}` is not in the catalog")
+            });
             assert!(
-                all.iter().any(|w| w.label == *label),
-                "Benchmarks Game workload `{label}` is not in the catalog"
+                workload.is_supported(),
+                "Benchmarks Game workload `{label}` is not supported"
             );
-        }
-        let binary_trees = all
-            .iter()
-            .find(|w| w.label == "binary-trees")
-            .expect("binary-trees is catalogued");
-        match &binary_trees.support {
-            Support::Unsupported { reason } => assert!(
-                reason.contains("Box"),
-                "binary-trees must name the missing primitive"
-            ),
-            Support::Supported { .. } => panic!(
-                "binary-trees became supported: update BENCHMARKS_GAME's peers and the \
-                 speed table, and delete this assertion"
-            ),
         }
     }
 
@@ -640,7 +634,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 23, "exactly the supported workloads run");
+        assert_eq!(results.len(), 24, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

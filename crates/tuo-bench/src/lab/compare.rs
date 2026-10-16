@@ -205,6 +205,7 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         }
         "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/c/mandelbrot.c"),
         "fasta" => include_str!("../../../../benchmarks/runtime/programs/c/fasta.c"),
+        "binary-trees" => include_str!("../../../../benchmarks/runtime/programs/c/binary-trees.c"),
         _ => return None,
     })
 }
@@ -258,6 +259,9 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
         }
         "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/go/mandelbrot.go"),
         "fasta" => include_str!("../../../../benchmarks/runtime/programs/go/fasta.go"),
+        "binary-trees" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/binary-trees.go")
+        }
         _ => return None,
     })
 }
@@ -279,6 +283,9 @@ fn rust_equivalent(label: &str) -> Option<&'static str> {
         }
         "mandelbrot" => include_str!("../../../../benchmarks/runtime/programs/rust/mandelbrot.rs"),
         "fasta" => include_str!("../../../../benchmarks/runtime/programs/rust/fasta.rs"),
+        "binary-trees" => {
+            include_str!("../../../../benchmarks/runtime/programs/rust/binary-trees.rs")
+        }
         _ => return None,
     })
 }

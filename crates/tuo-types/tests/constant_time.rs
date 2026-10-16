@@ -117,6 +117,33 @@ fn trapping_arithmetic_is_rejected() {
     }
 }
 
+/// A shift by a *variable* amount is rejected: a shift traps when its amount
+/// leaves `0..width`, and that check compiles to a compare-and-branch on the
+/// amount (`cmp w1, #0x40; b.hs <trap>`), which is a data-dependent branch.
+/// The shift itself is fine — only the amount matters — so a literal amount,
+/// parenthesized or not, stays accepted.
+#[test]
+fn a_shift_by_a_variable_amount_is_rejected() {
+    for body in ["a << b", "a >> b", "a << (b)", "(a >> 1) << b"] {
+        let source =
+            format!("#[constant_time]\nfn f(take a: Int, take b: Int) -> Int {{ {body} }}\n");
+        assert!(
+            codes(&source).contains(&"T0019".to_string()),
+            "expected T0019 for `{body}`, got {:?}",
+            codes(&source)
+        );
+    }
+    for body in ["a << 3", "a >> (63)", "(a << 63) >> 63"] {
+        let source =
+            format!("#[constant_time]\nfn f(take a: Int, take b: Int) -> Int {{ {body} }}\n");
+        assert!(
+            codes(&source).is_empty(),
+            "a literal shift amount is branchless; `{body}` got {:?}",
+            codes(&source)
+        );
+    }
+}
+
 /// Shifts and bitwise operators are *not* rejected, which is what makes the
 /// subset usable at all.
 ///

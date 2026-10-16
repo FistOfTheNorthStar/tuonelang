@@ -66,6 +66,12 @@ enum Origin {
     MutParam,
     /// A `take` parameter: mutable, owned.
     TakeParam,
+    /// A non-`Copy` pattern binding of a match whose scrutinee is reached
+    /// through an `in` parameter (ADR-0037): not a copy and not a move, but
+    /// a read-only alias of the matched part — borrowed exactly as the
+    /// parameter it is lent from, so it may be read and lent onward and
+    /// never moved.
+    LentBinding,
 }
 
 impl Origin {
@@ -76,7 +82,7 @@ impl Origin {
     /// The borrow mode keyword when the root is a borrowed parameter.
     fn borrow_mode(self) -> Option<&'static str> {
         match self {
-            Self::InParam => Some("in"),
+            Self::InParam | Self::LentBinding => Some("in"),
             Self::MutParam => Some("mut"),
             _ => None,
         }
@@ -90,6 +96,7 @@ impl Origin {
             Self::InParam => "an `in` parameter",
             Self::MutParam => "a `mut` parameter",
             Self::TakeParam => "a `take` parameter",
+            Self::LentBinding => "a binding lent from an `in` parameter",
         }
     }
 }
@@ -601,6 +608,26 @@ impl<'a> Body<'a> {
         let root = &self.roots[&place.root];
         let root_name = root.name.clone();
         let decl = root.decl;
+        if root.origin == Origin::LentBinding {
+            self.report(
+                Diagnostic::error(
+                    code(3),
+                    format!("cannot move `{name}`: it is lent from a borrowed value"),
+                    span,
+                )
+                .with_primary_label("a binding lent from an `in` parameter cannot be moved")
+                .with_secondary_label(
+                    decl,
+                    format!("`{root_name}` borrows part of the matched value here"),
+                )
+                .with_help(
+                    "read it, or pass it to an `in` parameter; to own a copy, take a `Copy` \
+                     field, use `std::boxed::get` on a box, or declare the matched parameter \
+                     `take`",
+                ),
+            );
+            return;
+        }
         let what = if place.path.is_empty() {
             format!("cannot move out of `{mode} {root_name}`")
         } else {
@@ -1496,9 +1523,23 @@ impl<'a> Body<'a> {
                 }
             }
         }
+        // ADR-0037: a scrutinee reached through an `in` parameter (or through a
+        // binding already lent from one) is *lent* to the arms, not moved —
+        // its non-`Copy` bindings alias the matched parts read-only. An `in`
+        // root cannot change during the call, so an alias can never observe
+        // a mutation. A `mut` parameter still may not be moved out of (O0003).
+        let lent = match_expr
+            .scrutinee()
+            .and_then(|scrutinee| self.place_of(scrutinee))
+            .is_some_and(|place| {
+                self.roots.get(&place.root).is_some_and(|root| {
+                    matches!(root.origin, Origin::InParam | Origin::LentBinding)
+                })
+            });
         if let Some(scrutinee) = match_expr.scrutinee() {
             let span = self.at(scrutinee.span());
             match (self.place_of(scrutinee), noncopy_binding) {
+                (Some(place), Some(_)) if lent => self.read_place(&place, span),
                 (Some(place), Some(binding)) => {
                     if let Some(mode) = self
                         .roots
@@ -1529,7 +1570,17 @@ impl<'a> Body<'a> {
             if let Some(pattern) = arm.pattern() {
                 for name in collect_bindings(pattern) {
                     if let Some(&symbol) = self.cx.decls.get(&name.span) {
-                        self.register(symbol, name, Origin::PatternBinding, true);
+                        let is_copy = self
+                            .cx
+                            .types
+                            .type_of(symbol)
+                            .is_none_or(|ty| self.cx.env.is_copy(ty));
+                        let origin = if lent && !is_copy {
+                            Origin::LentBinding
+                        } else {
+                            Origin::PatternBinding
+                        };
+                        self.register(symbol, name, origin, true);
                     }
                 }
             }

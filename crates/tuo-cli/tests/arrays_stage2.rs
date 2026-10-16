@@ -245,14 +245,15 @@ fn borrow_mode_parameters_now_run_natively() {
 
 #[test]
 fn native_backends_still_refuse_the_unsupported_loudly() {
-    // The heap *wrappers* (`Box`/`Shared`/`Weak`) stay outside the native
-    // subset (`Str` is lowered since ADR-0006 Stage B, and the owned `String`
-    // and growable `Array[Int]` since ADR-0009 Stage B): the program checks
+    // The shared heap *wrappers* (`Shared`/`Weak`) stay outside the native
+    // subset (`Str` is lowered since ADR-0006 Stage B, the owned `String`
+    // and growable `Array[Int]` since ADR-0009 Stage B, and `Box` since
+    // ADR-0028 Stage B): the program checks
     // clean, and both backends refuse it loudly at classification time —
     // naming the concrete type — instead of mis-compiling it.
     let path = write(
         "heap.tuo",
-        "fn keep(take b: Box[Int]) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
+        "fn keep(take b: Shared[Int]) -> Int {\n    1\n}\n\nfn main() -> Int {\n    7\n}\n",
     );
     let check = run(&["check", &path]);
     assert!(check.status.success(), "the front end accepts: {check:?}");
@@ -262,7 +263,7 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
     // is visible where it is written rather than only at build time.
     let check_stderr = String::from_utf8(check.stderr).expect("utf-8");
     assert!(
-        check_stderr.contains("T0022") && check_stderr.contains("Box[Int]"),
+        check_stderr.contains("T0022") && check_stderr.contains("Shared[Int]"),
         "`tuo check` must warn about the unlowerable type: {check_stderr}"
     );
     for args in [
@@ -277,7 +278,7 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         );
         let stderr = String::from_utf8(build.stderr).expect("utf-8");
         assert!(
-            stderr.contains("`Box[T]` heap wrapper") && stderr.contains("does not lower yet"),
+            stderr.contains("`Shared[T]` heap wrapper") && stderr.contains("does not lower yet"),
             "the refusal names the unsupported type: {stderr}"
         );
         assert!(
@@ -288,7 +289,7 @@ fn native_backends_still_refuse_the_unsupported_loudly() {
         // the function but not the span. The located advisory is rendered
         // alongside it, so the build failure points at the real cause.
         assert!(
-            stderr.contains("T0022") && stderr.contains("Box[Int]"),
+            stderr.contains("T0022") && stderr.contains("Shared[Int]"),
             "the refusal carries the located advisory: {stderr}"
         );
     }

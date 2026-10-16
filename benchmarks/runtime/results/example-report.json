@@ -32,9 +32,9 @@
       "label": "edit-function-body",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym75)",
-        "fn_body(sym76)",
-        "fn_body(sym77)",
+        "fn_body(sym79)",
+        "fn_body(sym80)",
+        "fn_body(sym81)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -46,17 +46,17 @@
       "label": "edit-function-signature",
       "command": "tuo check <package> (re-run after edit)",
       "reexecuted": [
-        "fn_body(sym75)",
-        "fn_body(sym76)",
-        "fn_body(sym77)",
+        "fn_body(sym79)",
+        "fn_body(sym80)",
+        "fn_body(sym81)",
         "interface(file#0)",
-        "mir_of(sym75)",
+        "mir_of(sym79)",
         "parse(file#0)",
         "resolution()",
         "spec_graph()",
-        "type_of(sym75)",
-        "type_of(sym76)",
-        "type_of(sym77)"
+        "type_of(sym79)",
+        "type_of(sym80)",
+        "type_of(sym81)"
       ],
       "reexecuted_count": 11
     },
@@ -64,9 +64,9 @@
       "label": "edit-single-spec",
       "command": "tuo verify <package> (re-run after spec edit)",
       "reexecuted": [
-        "fn_body(sym75)",
-        "fn_body(sym76)",
-        "fn_body(sym77)",
+        "fn_body(sym79)",
+        "fn_body(sym80)",
+        "fn_body(sym81)",
         "interface(file#0)",
         "parse(file#0)",
         "resolution()",
@@ -78,7 +78,7 @@
       "label": "affected-spec-verify",
       "command": "tuo verify --affected-by <file> <package>",
       "reexecuted": [
-        "spec:78"
+        "spec:82"
       ],
       "reexecuted_count": 1
     }
@@ -293,10 +293,11 @@
     },
     {
       "label": "binary-trees",
-      "description": "the Benchmarks Game's binary-trees: allocate, walk, and free many perfect binary trees of individually allocated nodes — the allocator and pointer-chasing benchmark",
+      "description": "the Benchmarks Game's binary-trees: allocate, walk, and free many perfect binary trees of individually allocated nodes — the allocator and pointer-chasing benchmark, each node behind a `Box` (ADR-0028 Stage B) and freed as the walk counts it",
       "support": {
-        "support": "unsupported",
-        "reason": "a tree of individually allocated nodes needs a recursive type through a heap wrapper (`Box[Node]`), and `Box`/`Shared`/`Weak` values are refused at build time (the T0022 runnable-core advisory): the interpreter runs such a program, native code does not yet. An index arena in an `Array` would compute the same checksum but would measure a different program, which the benchmark's rules exclude."
+        "support": "supported",
+        "source": "// The binary-trees workload — the Benchmarks Game's binary-trees: allocate a\n// \"stretch\" tree of depth MAX + 1, then a long-lived tree of depth MAX, then\n// for each depth d from 4 to MAX in steps of 2, build and walk 2^(MAX - d + 4)\n// perfect binary trees of depth d, and finally walk the long-lived tree. Every\n// node is its own heap allocation behind a `Box` (ADR-0028 Stage B), so this is\n// the allocator and pointer-chasing benchmark. A walk counts a tree's nodes\n// and consumes it — each node is freed as it is counted — and the C, Rust, and\n// Go peers walk the same way (Go's collector frees instead). The node counts\n// are summed and the exit byte is that sum % 256.\n\nstruct Node {\n    left: Option[Box[Node]],\n    right: Option[Box[Node]],\n}\n\nfn make(take depth: Int) -> Node {\n    if depth == 0 {\n        return Node { left: None, right: None };\n    }\n    Node {\n        left: Some { value: std::boxed::new(make(depth - 1)) },\n        right: Some { value: std::boxed::new(make(depth - 1)) },\n    }\n}\n\nfn check(take node: Node) -> Int {\n    let left = match node.left {\n        Some { value } => check(std::boxed::into(value)),\n        None => 0,\n    };\n    let right = match node.right {\n        Some { value } => check(std::boxed::into(value)),\n        None => 0,\n    };\n    1 + left + right\n}\n\nfn main() -> Int {\n    let min_depth = 4;\n    let max_depth = 16;\n    var total = check(make(max_depth + 1));\n    let long_lived = make(max_depth);\n    var depth = min_depth;\n    while depth <= max_depth {\n        let iterations = 1 << (max_depth - depth + min_depth);\n        var i = 0;\n        while i < iterations {\n            total = total + check(make(depth));\n            i = i + 1;\n        }\n        depth = depth + 2;\n    }\n    total = total + check(long_lived);\n    total % 256\n}\n",
+        "expected_exit": 174
       }
     }
   ],
@@ -959,6 +960,45 @@
         "expected_exit": 175
       },
       "tuonelang_exit": 175,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "binary-trees",
+        "peer": "c",
+        "peer_source": "/* binary-trees — the equivalent-semantics C peer for the tuonelang\n * binary-trees workload (the Benchmarks Game's binary-trees): a stretch tree\n * of depth MAX + 1, a long-lived tree of depth MAX, and 2^(MAX - d + 4) trees\n * of each depth d = 4, 6, ..., MAX. Every node is its own malloc; a walk counts\n * a tree's nodes and frees each one as it is counted, exactly as the tuonelang\n * walk consumes its boxes. Exit byte: the summed node counts % 256. */\n#include <stdlib.h>\n\n#define MIN_DEPTH 4\n#define MAX_DEPTH 16\n\ntypedef struct Node {\n    struct Node *left;\n    struct Node *right;\n} Node;\n\nstatic Node *make(long long depth) {\n    Node *node = malloc(sizeof(Node));\n    if (depth == 0) {\n        node->left = NULL;\n        node->right = NULL;\n    } else {\n        node->left = make(depth - 1);\n        node->right = make(depth - 1);\n    }\n    return node;\n}\n\nstatic long long check(Node *node) {\n    long long left = node->left ? check(node->left) : 0;\n    long long right = node->right ? check(node->right) : 0;\n    free(node);\n    return 1 + left + right;\n}\n\nint main(void) {\n    long long total = check(make(MAX_DEPTH + 1));\n    Node *long_lived = make(MAX_DEPTH);\n    for (long long depth = MIN_DEPTH; depth <= MAX_DEPTH; depth += 2) {\n        long long iterations = 1LL << (MAX_DEPTH - depth + MIN_DEPTH);\n        for (long long i = 0; i < iterations; i++) total += check(make(depth));\n    }\n    total += check(long_lived);\n    return (int)(total % 256);\n}\n",
+        "expected_exit": 174
+      },
+      "tuonelang_exit": 174,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "binary-trees",
+        "peer": "go",
+        "peer_source": "// binary-trees — the equivalent-semantics Go peer for the tuonelang\n// binary-trees workload (the Benchmarks Game's binary-trees): a stretch tree\n// of depth MAX + 1, a long-lived tree of depth MAX, and 2^(MAX - d + 4) trees\n// of each depth d = 4, 6, ..., MAX, every node its own allocation. A walk\n// counts a tree's nodes; Go's collector, not the walk, frees them — the\n// honest comparison, and a different cost shape. Exit byte: the summed node\n// counts % 256.\npackage main\n\nimport \"os\"\n\nconst minDepth = 4\nconst maxDepth = 16\n\ntype Node struct {\n\tleft, right *Node\n}\n\nfunc make_(depth int64) *Node {\n\tif depth == 0 {\n\t\treturn &Node{}\n\t}\n\treturn &Node{left: make_(depth - 1), right: make_(depth - 1)}\n}\n\nfunc check(node *Node) int64 {\n\tvar left, right int64\n\tif node.left != nil {\n\t\tleft = check(node.left)\n\t}\n\tif node.right != nil {\n\t\tright = check(node.right)\n\t}\n\treturn 1 + left + right\n}\n\nfunc main() {\n\ttotal := check(make_(maxDepth + 1))\n\tlongLived := make_(maxDepth)\n\tfor depth := int64(minDepth); depth <= maxDepth; depth += 2 {\n\t\titerations := int64(1) << (maxDepth - depth + minDepth)\n\t\tfor i := int64(0); i < iterations; i++ {\n\t\t\ttotal += check(make_(depth))\n\t\t}\n\t}\n\ttotal += check(longLived)\n\tos.Exit(int(total % 256))\n}\n",
+        "expected_exit": 174
+      },
+      "tuonelang_exit": 174,
+      "peer": {
+        "verdict": "skipped",
+        "reason": "example report: no live toolchain; run the lab locally to measure"
+      }
+    },
+    {
+      "workload": {
+        "label": "binary-trees",
+        "peer": "rust",
+        "peer_source": "//! binary-trees — the equivalent-semantics Rust peer for the tuonelang\n//! binary-trees workload (the Benchmarks Game's binary-trees): a stretch tree\n//! of depth MAX + 1, a long-lived tree of depth MAX, and 2^(MAX - d + 4) trees\n//! of each depth d = 4, 6, ..., MAX, every node its own `Box`. A walk counts a\n//! tree's nodes and consumes it, freeing each node as it is counted, exactly\n//! as the tuonelang walk does. Exit byte: the summed node counts % 256.\n\nconst MIN_DEPTH: i64 = 4;\nconst MAX_DEPTH: i64 = 16;\n\nstruct Node {\n    left: Option<Box<Node>>,\n    right: Option<Box<Node>>,\n}\n\nfn make(depth: i64) -> Node {\n    if depth == 0 {\n        return Node { left: None, right: None };\n    }\n    Node {\n        left: Some(Box::new(make(depth - 1))),\n        right: Some(Box::new(make(depth - 1))),\n    }\n}\n\nfn check(node: Node) -> i64 {\n    let left = node.left.map_or(0, |b| check(*b));\n    let right = node.right.map_or(0, |b| check(*b));\n    1 + left + right\n}\n\nfn main() {\n    let mut total = check(make(MAX_DEPTH + 1));\n    let long_lived = make(MAX_DEPTH);\n    let mut depth = MIN_DEPTH;\n    while depth <= MAX_DEPTH {\n        let iterations = 1i64 << (MAX_DEPTH - depth + MIN_DEPTH);\n        for _ in 0..iterations {\n            total += check(make(depth));\n        }\n        depth += 2;\n    }\n    total += check(long_lived);\n    std::process::exit((total % 256) as i32);\n}\n",
+        "expected_exit": 174
+      },
+      "tuonelang_exit": 174,
       "peer": {
         "verdict": "skipped",
         "reason": "example report: no live toolchain; run the lab locally to measure"

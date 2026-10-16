@@ -19,14 +19,20 @@
 //!   C `main` return becomes the exit code), and
 //! * **deterministic traps** — a divide-by-zero or integer overflow aborts the
 //!   interpreter and, natively, terminates with the runtime's fixed trap status
-//!   ([`tuo_runtime::TRAP_EXIT_STATUS`]); the two must agree on *which* happens.
+//!   ([`tuo_runtime::TRAP_EXIT_STATUS`]) after printing its `tuo: trap: …` line
+//!   to stderr; the two must agree on *which* happens. The status alone is not
+//!   enough to call a native run a trap, since a normal return whose exit byte
+//!   is 134 exits with the same status; the stderr line is what tells them
+//!   apart.
 //!
 //! Two further behaviors named by the differential charter — **stdout** and
 //! **observable destruction** — are not exercised here: the generator emits
 //! only *pure* programs, because the reference interpreter's sandbox performs
 //! no I/O (an effectful program cannot run through the interpreter side of the
 //! comparison — native effect behavior is pinned separately by
-//! `effects_native.rs`), and the backend lowers no type with a destructor.
+//! `effects_native.rs`), and a drop runs no user code (the drop glue of a
+//! generated `Box` or `String` executes, but has no effect a program can
+//! observe and return).
 //! [`Outcome`] carries an explicit place for stdout so the comparison extends
 //! if an interpreter-observable output model ever lands, and the design note
 //! in the suite root records why destruction is out of reach for now. The
@@ -45,6 +51,11 @@ use tuo_mir_interp::{Interpreter, RuntimeError, Value};
 
 /// The runtime's fixed trap exit status (mirrors [`tuo_runtime::TRAP_EXIT_STATUS`]).
 pub const TRAP_EXIT_STATUS: i32 = tuo_runtime::TRAP_EXIT_STATUS;
+
+/// The prefix every runtime trap message carries on stderr (see
+/// `tuo_runtime::TrapCode::message`), which tells a trap apart from a normal
+/// return whose exit byte happens to equal [`TRAP_EXIT_STATUS`].
+pub const TRAP_MESSAGE_PREFIX: &str = "tuo: trap: ";
 
 /// The complete observable result of running a program through one engine.
 ///
@@ -243,7 +254,12 @@ pub fn run_native_with(path: &Path, backend: Backend) -> Outcome {
         .code()
         .expect("the native process exits with a code, not a signal");
 
-    if code == TRAP_EXIT_STATUS {
+    // The trap status alone does not identify a trap: a program whose `main`
+    // returns a value whose low byte is 134 (`-378`, say) exits with the same
+    // status. A real trap is the runtime's abort, which first prints its
+    // stable `tuo: trap: …` line to stderr, so both must be present.
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if code == TRAP_EXIT_STATUS && stderr.contains(TRAP_MESSAGE_PREFIX) {
         return Outcome::Trapped { label: None };
     }
     // A `tuo run` that neither returns a program value nor traps did not actually
@@ -255,7 +271,6 @@ pub fn run_native_with(path: &Path, backend: Backend) -> Outcome {
     // "subset"/"does not lower" marker on stderr (the same signal
     // `codegen_differential` checks), not by the exit code, which a program is
     // free to return deliberately.
-    let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         !stderr.contains("subset") && !stderr.contains("does not lower"),
         "the {} backend refused the program as outside the backend subset (exit {code}); \

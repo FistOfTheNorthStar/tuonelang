@@ -413,11 +413,21 @@ pub fn effect_runtime_c_source() -> String {
          \x20   long long worker;\n\
          }} tuo_rt_par_ctx;\n\
          \n\
-         static void *tuo_rt_par_worker(void *arg) {{\n\
-         \x20   tuo_rt_par_ctx *ctx = (tuo_rt_par_ctx *)arg;\n\
+         static void tuo_rt_par_run(tuo_rt_par_ctx *ctx) {{\n\
          \x20   for (long long i = ctx->worker; i < ctx->count; i += ctx->workers) {{\n\
          \x20       ctx->results[i] = ctx->task(ctx->tasks[i]);\n\
          \x20   }}\n\
+         }}\n\
+         \n\
+         extern void *tuo_rt_thread_guard(void);\n\
+         extern void tuo_rt_thread_unguard(void *token);\n\
+         \n\
+         /* A spawned worker arms the stack-overflow trap for its own stack\n\
+            first, so deep recursion on it traps rather than crashing. */\n\
+         static void *tuo_rt_par_worker(void *arg) {{\n\
+         \x20   void *guard = tuo_rt_thread_guard();\n\
+         \x20   tuo_rt_par_run((tuo_rt_par_ctx *)arg);\n\
+         \x20   tuo_rt_thread_unguard(guard);\n\
          \x20   return 0;\n\
          }}\n\
          \n\
@@ -445,16 +455,24 @@ pub fn effect_runtime_c_source() -> String {
          \x20       ctx[w].workers = workers;\n\
          \x20       ctx[w].worker = w;\n\
          \x20   }}\n\
+         \x20   /* Workers get the main thread's stack size (8 MiB) rather than\n\
+         \x20      the platform's thread default (512 KiB on macOS), so recursion\n\
+         \x20      that returns on the main thread returns on a worker too. */\n\
+         \x20   pthread_attr_t attr;\n\
+         \x20   int have_attr = pthread_attr_init(&attr) == 0;\n\
+         \x20   if (have_attr) pthread_attr_setstacksize(&attr, (size_t)8 << 20);\n\
          \x20   for (long long w = 1; w < workers; w++) {{\n\
-         \x20       started[w] = pthread_create(&threads[w], 0, tuo_rt_par_worker, &ctx[w]) == 0;\n\
+         \x20       started[w] = pthread_create(&threads[w], have_attr ? &attr : 0,\n\
+         \x20                                   tuo_rt_par_worker, &ctx[w]) == 0;\n\
          \x20       if (!started[w]) {{\n\
          \x20           /* Could not start a thread: run that partition inline\n\
          \x20              instead — the result is identical, only less\n\
          \x20              parallel. */\n\
-         \x20           tuo_rt_par_worker(&ctx[w]);\n\
+         \x20           tuo_rt_par_run(&ctx[w]);\n\
          \x20       }}\n\
          \x20   }}\n\
-         \x20   tuo_rt_par_worker(&ctx[0]);\n\
+         \x20   if (have_attr) pthread_attr_destroy(&attr);\n\
+         \x20   tuo_rt_par_run(&ctx[0]);\n\
          \x20   for (long long w = 1; w < workers; w++) {{\n\
          \x20       if (started[w]) pthread_join(threads[w], 0);\n\
          \x20   }}\n\

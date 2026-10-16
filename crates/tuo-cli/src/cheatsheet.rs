@@ -300,6 +300,13 @@ Runs everywhere (check, interpreter, and native):
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly
+  * `Box[T]`, the one heap wrapper with values: `std::boxed::new(v)` boxes,
+    `std::boxed::get(b)` copies the pointee out, `std::boxed::into(b)` moves it
+    out. A recursive type holds itself behind one: `next: Option[Box[Node]]`.
+    Matching a value reached through an `in` parameter LENDS its non-Copy
+    parts (read them, pass them `in`, never move them); `get(b)` passed to an
+    `in` parameter lends the pointee without copying. So a tree is walked as
+    `fn walk(in n: Node)` with `walk(std::boxed::get(child))`
 
 Native only — NOT available inside a spec (the spec sandbox is pure, and a
 spec that touches an effect is refused with R0007):
@@ -312,9 +319,13 @@ spec that touches an effect is refused with R0007):
 
 DOES NOT EXIST — do not write these, they are refused, never mis-compiled:
   * capturing closures (function values must capture nothing)
-  * `Box` / `Shared` / `Weak` heap-wrapper VALUES
+  * `Shared` / `Weak` heap-wrapper VALUES, and `Box` as a growable `Array`
+    element or map value (a `Box` field, local, or `Option` payload is fine)
+  * `Box::new(x)`, `box x`, `*b` — the constructor is `std::boxed::new(x)` and
+    there is no dereference operator
   * method-call syntax: there are FREE FUNCTIONS only. Write `len(s)`, never
-    `s.len()`. `impl` bodies parse but are not lowered.
+    `s.len()` (refused with T0024, which offers the free call). `interface` /
+    `impl` declarations type-check but lower to nothing (warned with T0026).
   * detached / unstructured thread spawn — concurrency is fork-join only
   * recursive struct/enum types without an indirection (refused with T0016)
 
@@ -336,9 +347,9 @@ const ANTI_PATTERNS: &str = r#"-------------------------------------------------
 --------------------------------------------------------------------------------
 
 These are the mistakes models actually make writing tuonelang, each with the
-form that compiles. Most left-hand forms are rejected outright; method-call
-syntax is the exception worth knowing — `xs.len()` PARSES and type-checks, then
-fails to lower, because v0 has no method dispatch. Write the free function.
+form that compiles. Every left-hand form is rejected outright — including
+method-call syntax, which still PARSES, so the error (T0024) can point at the
+free function to call instead. Write the free function.
 
   WRONG                          RIGHT
   ---------------------------    ---------------------------------------------

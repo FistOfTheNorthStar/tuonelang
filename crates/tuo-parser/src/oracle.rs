@@ -94,6 +94,9 @@ fn targeted_recovery(message: &str, primary: Span, source: &SourceText) -> Optio
                 )),
         );
     }
+    if kind == "call-arg-mode" {
+        return Some(crate::parse::call_arg_mode(primary, source));
+    }
     if kind != "param-missing-mode" {
         return None;
     }

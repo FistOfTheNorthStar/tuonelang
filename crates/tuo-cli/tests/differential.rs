@@ -7,7 +7,9 @@
 //! programs rather than a handful of hand-written fixtures:
 //!
 //! 1. it **generates** small, well-typed programs inside the backends' shared
-//!    scalar subset ([`generator`]) from a fixed, deterministic range of seeds;
+//!    subset — scalars, fixed arrays, function values, and `Box` values
+//!    including bounded-depth recursive types ([`generator`]) — from a fixed,
+//!    deterministic range of seeds;
 //! 2. it runs each through the interpreter and a native backend and compares the
 //!    full observable outcome — return value and deterministic traps
 //!    ([`harness`]); and
@@ -31,9 +33,12 @@
 //! The two behaviors the differential charter names but the language cannot yet
 //! express — **stdout** and **observable destruction** — are handled honestly:
 //! [`harness::Outcome`] reserves a slot for stdout so the comparison extends the
-//! day an I/O facility exists, and no drop-observable program is generated
-//! because the backend lowers no type with a destructor. The suite never claims
-//! coverage the compiler cannot back.
+//! day an I/O facility exists. Since ADR-0028 Stage B the generator does emit
+//! values with compiler-generated drop glue (`Box`, and the `String`s inside a
+//! boxed list), so that glue runs on every engine — but a drop has no
+//! observable effect a program can return (there are no user destructors), so
+//! what is compared is still the return value or trap that follows it. The
+//! suite never claims coverage the compiler cannot back.
 
 #[path = "differential/harness.rs"]
 mod harness;
@@ -241,4 +246,62 @@ fn main() -> Int {
         report.exists(),
         "the saved repro report should exist on disk"
     );
+}
+
+/// The corpus really exercises `Box` (ADR-0028 Stage B): a substantial share of
+/// programs build boxes in their own code (not just the fixed prelude every
+/// program carries), and a substantial share of those build the bounded-depth
+/// recursive types, whose drop and deep-copy glue is out-of-line. Without this
+/// a generator change could silently stop emitting the forms and the sweeps
+/// would still pass.
+#[test]
+fn the_corpus_exercises_boxes_and_recursive_box_types() {
+    let mut boxed = 0u32;
+    let mut recursive = 0u32;
+    for seed in CORPUS_RANGE {
+        let source = generator::program(seed);
+        // Only the generated functions — the prelude is the same every time.
+        let generated: String = source
+            .lines()
+            .filter(|line| line.starts_with("fn f") || line.starts_with("fn main("))
+            .collect();
+        if generated.contains("std::boxed::") || generated.contains("bopen(") {
+            boxed += 1;
+        }
+        if generated.contains("btree(") || generated.contains("bchain(") {
+            recursive += 1;
+        }
+    }
+    let total = u32::try_from(CORPUS_RANGE.end - CORPUS_RANGE.start).expect("small range");
+    assert!(
+        boxed * 2 > total,
+        "most generated programs should use a Box form; {boxed} of {total} do"
+    );
+    assert!(
+        recursive * 4 > total,
+        "a quarter or more should build a recursive Box type; {recursive} of {total} do"
+    );
+}
+
+/// A program that *returns* a value whose low byte equals the runtime's trap
+/// status (here `-378`, whose exit byte is 134) is a return, not a trap, on
+/// both backends. Before the harness required the runtime's `tuo: trap:` line
+/// alongside the status, it reported such a program as a cross-engine
+/// divergence (interpreter "returned 134", native "trapped") — a false
+/// positive the wider sweeps hit at seed 197.
+#[test]
+fn a_return_of_the_trap_status_byte_is_not_a_trap() {
+    let source = "fn main() -> Int { 0 - 378 }\n";
+    let dir = scratch_dir("trap-status-byte");
+    let scratch = dir.join("candidate.tuo");
+    assert_eq!(
+        harness::interpret(source),
+        harness::interpret("fn main() -> Int { 134 }\n"),
+        "the program returns exit byte 134"
+    );
+    for backend in [Backend::Cranelift, Backend::Llvm] {
+        if let Some(divergence) = diff_program_with(source, &scratch, backend) {
+            panic!("{}: {}", backend.label(), divergence.report());
+        }
+    }
 }

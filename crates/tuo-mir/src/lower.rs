@@ -35,7 +35,7 @@ use tuo_hir::{
 };
 use tuo_resolve::{Builtin, Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
-use tuo_types::{FnTy, IntKind, Ty, TypeckResult};
+use tuo_types::{FnTy, IntKind, Ty, TypeckResult, WrapperKind};
 
 use crate::mir::{
     AggregateKind, Arg, BasicBlock, BinOp, BlockId, Callee, CastKind, Const, EffectOp, Function,
@@ -446,6 +446,14 @@ struct FnLower<'a> {
     moved: BTreeSet<(LocalId, Vec<Projection>)>,
     /// Borrow-mode parameter locals: aliases, never dropped here.
     borrowed_params: BTreeSet<LocalId>,
+    /// The `in` parameters among `borrowed_params`: a place rooted at one
+    /// cannot change during the call, so a match on it lends its non-`Copy`
+    /// parts to the arms instead of moving them (ADR-0037).
+    in_params: BTreeSet<LocalId>,
+    /// Pattern bindings lent from an `in`-rooted scrutinee (ADR-0037): each
+    /// names a place inside the parameter and is lowered as that place — no
+    /// local, no move, no drop.
+    lent: HashMap<SymbolId, Place>,
     /// Block-local literal `const`s seen so far.
     local_consts: HashMap<SymbolId, Const>,
     ret: Ty,
@@ -477,6 +485,8 @@ impl<'a> FnLower<'a> {
             uninit: BTreeSet::new(),
             moved: BTreeSet::new(),
             borrowed_params: BTreeSet::new(),
+            in_params: BTreeSet::new(),
+            lent: HashMap::new(),
             local_consts: HashMap::new(),
             ret: Ty::Unit,
             fn_span: function.span,
@@ -502,6 +512,8 @@ impl<'a> FnLower<'a> {
             uninit: BTreeSet::new(),
             moved: BTreeSet::new(),
             borrowed_params: BTreeSet::new(),
+            in_params: BTreeSet::new(),
+            lent: HashMap::new(),
             local_consts: HashMap::new(),
             ret: Ty::Unit,
             fn_span: span,
@@ -579,6 +591,9 @@ impl<'a> FnLower<'a> {
             };
             if !matches!(mode, PassMode::Value) {
                 self.borrowed_params.insert(local);
+            }
+            if matches!(mode, PassMode::Borrow) {
+                self.in_params.insert(local);
             }
             // Parameters arrive initialized.
             self.uninit.remove(&local);
@@ -787,6 +802,10 @@ impl<'a> FnLower<'a> {
             },
             Projection::Index(_) => match ty {
                 Ty::Array(item) | Ty::FixedArray(item, _) => Ok((**item).clone()),
+                _ => Err(missing()),
+            },
+            Projection::Deref => match ty {
+                Ty::Wrapper(WrapperKind::Box, pointee) => Ok((**pointee).clone()),
                 _ => Err(missing()),
             },
         }
@@ -1292,6 +1311,9 @@ impl FnLower<'_> {
         };
         match self.cx.resolution.symbol(*symbol).kind {
             SymbolKind::Param | SymbolKind::Local => {
+                if let Some(place) = self.lent.get(symbol) {
+                    return Ok(Some(Value::Place(place.clone())));
+                }
                 let local = self.local_for(*symbol, expr.span)?;
                 Ok(Some(Value::Place(Place::local(local))))
             }
@@ -1685,6 +1707,45 @@ impl FnLower<'_> {
             .collect())
     }
 
+    /// The box argument of `arg` when `arg` is `std::boxed::get(place)` over a
+    /// place expression (a local, parameter, or lent binding, or a field of
+    /// one) — the shape whose pointee an `in` argument can be lent.
+    fn box_get_of_place<'e>(&self, arg: &'e Expr) -> Option<&'e Expr> {
+        let ExprKind::Call { callee, args } = &arg.kind else {
+            return None;
+        };
+        let ExprKind::Path {
+            res: Res::Symbol(symbol),
+            ..
+        } = &callee.kind
+        else {
+            return None;
+        };
+        if self.cx.resolution.builtin(*symbol) != Some(Builtin::BoxGet) {
+            return None;
+        }
+        let [boxed] = args.as_slice() else {
+            return None;
+        };
+        let mut cursor = boxed;
+        loop {
+            match &cursor.kind {
+                ExprKind::Path {
+                    res: Res::Symbol(symbol),
+                    ..
+                } if matches!(
+                    self.cx.resolution.symbol(*symbol).kind,
+                    SymbolKind::Param | SymbolKind::Local
+                ) =>
+                {
+                    return Some(boxed);
+                }
+                ExprKind::Field { receiver, .. } => cursor = receiver,
+                _ => return None,
+            }
+        }
+    }
+
     /// Lower a call's arguments under the given per-argument modes, shared by
     /// direct and indirect calls. Returns `None` when an argument diverges.
     fn lower_call_args(
@@ -1693,8 +1754,38 @@ impl FnLower<'_> {
         modes: &[PassMode],
     ) -> Result<Option<Vec<Arg>>, String> {
         let mut lowered_args = Vec::new();
+        // ADR-0037: `std::boxed::get(b)` as an `in` argument lends the
+        // pointee instead of copying it — the callee can only read, so the
+        // copy is unobservable. Only when no other argument could drop or
+        // replace the box during the call (every other one is an `in` borrow
+        // or a `Copy` value), so the lent pointee outlives the call.
+        let others_cannot_touch_a_box = |this: &Self, skip: usize| -> Result<bool, Skip> {
+            for (index, (other, mode)) in args.iter().zip(modes.iter()).enumerate() {
+                if index == skip {
+                    continue;
+                }
+                let safe = match mode {
+                    PassMode::Borrow => true,
+                    PassMode::Value => this.is_copy(&this.expr_ty(other)?),
+                    PassMode::BorrowMut => false,
+                };
+                if !safe {
+                    return Ok(false);
+                }
+            }
+            Ok(true)
+        };
         for (position, (arg, mode)) in args.iter().zip(modes.iter()).enumerate() {
             let arg_ty = self.expr_ty(arg)?;
+            if matches!(mode, PassMode::Borrow)
+                && let Some(boxed) = self.box_get_of_place(arg)
+                && others_cannot_touch_a_box(self, position)?
+            {
+                let mut place = self.lower_place(boxed)?;
+                place.projection.push(Projection::Deref);
+                lowered_args.push(Arg::Borrow(place));
+                continue;
+            }
             match mode {
                 PassMode::Value => {
                     let Some(value) = self.expr(arg)? else {
@@ -1927,7 +2018,10 @@ impl FnLower<'_> {
             | Builtin::MapGet
             | Builtin::MapContainsKey
             | Builtin::MapLen
-            | Builtin::MapKeys => {
+            | Builtin::MapKeys
+            | Builtin::BoxNew
+            | Builtin::BoxGet
+            | Builtin::BoxInto => {
                 let op = match builtin {
                     Builtin::StringEmpty => HeapOp::StringEmpty,
                     Builtin::StringFromStr => HeapOp::StringFromStr,
@@ -1944,6 +2038,9 @@ impl FnLower<'_> {
                     Builtin::MapContainsKey => HeapOp::MapContainsKey,
                     Builtin::MapLen => HeapOp::MapLen,
                     Builtin::MapKeys => HeapOp::MapKeys,
+                    Builtin::BoxNew => HeapOp::BoxNew,
+                    Builtin::BoxGet => HeapOp::BoxGet,
+                    Builtin::BoxInto => HeapOp::BoxInto,
                     _ => HeapOp::ArrayGet,
                 };
                 Statement::Assign {
@@ -2757,9 +2854,17 @@ impl FnLower<'_> {
     fn match_expr(&mut self, expr: &Expr, scrutinee: &Expr, arms: &[Arm]) -> Lowered {
         let ty = self.expr_ty(expr)?;
         let scrut_ty = self.expr_ty(scrutinee)?;
+        let Some(value) = self.expr(scrutinee)? else {
+            return Ok(None);
+        };
+        // ADR-0037: a scrutinee rooted at an `in` parameter is lent, not
+        // moved — its non-`Copy` bindings alias the matched parts — exactly
+        // the ownership checker's rule.
+        let lending =
+            matches!(&value, Value::Place(place) if self.in_params.contains(&place.local));
         let mut moves = false;
         for arm in arms {
-            if arm.guard.is_some() && self.pattern_moves(&arm.pat, &scrut_ty)? {
+            if !lending && arm.guard.is_some() && self.pattern_moves(&arm.pat, &scrut_ty)? {
                 return Err(
                     "match guards on arms that bind non-`Copy` values are not lowered in v0"
                         .to_owned(),
@@ -2767,13 +2872,10 @@ impl FnLower<'_> {
             }
             moves = moves || self.pattern_moves(&arm.pat, &scrut_ty)?;
         }
-        let Some(value) = self.expr(scrutinee)? else {
-            return Ok(None);
-        };
         // The scrutinee is consumed exactly when some arm binds a
-        // non-`Copy` value (the ownership model's rule); otherwise it is
-        // read in place.
-        let owned = moves && !self.is_copy(&scrut_ty);
+        // non-`Copy` value (the ownership model's rule) and it is not lent;
+        // otherwise it is read in place.
+        let owned = moves && !lending && !self.is_copy(&scrut_ty);
         let subject = if owned {
             let operand = self.use_value(value, &scrut_ty);
             let local = self.temp(scrut_ty.clone(), scrutinee.span);
@@ -2869,6 +2971,9 @@ impl FnLower<'_> {
                 SymbolKind::Param | SymbolKind::Local
             ) =>
             {
+                if let Some(place) = self.lent.get(symbol) {
+                    return Ok(place.clone());
+                }
                 let local = self.local_for(*symbol, expr.span)?;
                 Ok(Place::local(local))
             }
@@ -3254,6 +3359,11 @@ impl FnLower<'_> {
                     // A payload-less variant path binds nothing.
                     return Ok(());
                 };
+                if !self.is_copy(ty) && !owned && self.in_params.contains(&place.local) {
+                    // Lent (ADR-0037): the binding *is* the matched place.
+                    self.lent.insert(symbol, place.clone());
+                    return Ok(());
+                }
                 let local = self.local_for(symbol, pat.span)?;
                 let operand = if self.is_copy(ty) {
                     Operand::Copy(place.clone())

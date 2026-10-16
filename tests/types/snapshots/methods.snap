@@ -1,0 +1,5 @@
+T0026@482..531 an `interface` declaration type-checks but lowers to nothing | actual name `interface`
+T0026@533..615 an `impl` declaration type-checks but lowers to nothing | actual name `impl`
+T0024@763..771 `.len(…)` is a method call, and tuonelang has no methods | actual name `len`
+T0024@814..836 `.no_such_method(…)` is a method call, and tuonelang has no methods | actual name `no_such_method`
+T0025@885..900 `Reset::reset` calls an interface member, which no engine executes yet | actual name `Reset::reset`

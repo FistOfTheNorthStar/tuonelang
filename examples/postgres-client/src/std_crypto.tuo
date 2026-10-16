@@ -35,11 +35,12 @@
 //
 // WHAT THIS MODULE IS NOT. It is a hashing library, not a TLS stack and not a
 // general cryptography toolkit. There is no symmetric cipher, no public-key
-// operation, and no certificate handling here, and adding them is a decision
-// for a future ADR rather than an incremental commit. In particular: this
-// module lets a program *authenticate* (prove it knows a password) but does
-// not let it *encrypt*, so a protocol built on it alone is readable by anyone
-// on the wire.
+// operation, and no certificate handling here: those live in their own
+// modules (`std::chacha`, `std::x25519`, `std::ed25519`, `std::der`) under
+// `std::tls`, admitted by ADR-0036, and none of them is constant time. On its
+// own this module lets a program *authenticate* (prove it knows a password)
+// but not *encrypt*, so a protocol built on it alone is readable by anyone on
+// the wire.
 
 module std::crypto;
 

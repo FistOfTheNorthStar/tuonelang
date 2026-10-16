@@ -35,7 +35,17 @@ fn lower_to_text(name: &str, text: &str) -> String {
         "{name}: fixture has resolution errors"
     );
     let types = tuo_types::check(&asts, &resolution);
-    assert_eq!(types.diagnostics(), &[], "{name}: fixture has type errors");
+    // Warnings are allowed (an `impl` draws `T0026`, ADR-0032 Stage A, and
+    // still lowers to nothing); only an error disqualifies a fixture.
+    let errors: Vec<_> = types
+        .diagnostics()
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == tuo_diagnostics::Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "{name}: fixture has type errors: {errors:?}"
+    );
     let ownership = tuo_ownership::check(&asts, &resolution, &types);
     assert_eq!(
         ownership.diagnostics(),

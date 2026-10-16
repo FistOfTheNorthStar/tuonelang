@@ -1,6 +1,6 @@
 //! The public parse entry point and the helpers both engines share.
 
-use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
+use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace};
 use tuo_lexer::LexResult;
 use tuo_source::{ByteOffset, SourceText, Span, TextRange};
 use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
@@ -191,4 +191,51 @@ pub(crate) fn byte_span(pos: usize, toks: &[Tok], lex: &LexResult, source: &Sour
             tuo_lexer::Token::range,
         );
     Span::new(source.source(), range)
+}
+
+/// The targeted diagnostic for a parameter mode written at a call site —
+/// `f(mut x)` — where `primary` spans the `in`/`mut`/`take` keyword.
+///
+/// Before it, the keyword sent the statement into generic recovery ("skipped
+/// N tokens") and the dropped call then surfaced as an unrelated type error.
+/// A mode belongs to the callee's parameter, and a borrow is taken at the
+/// call because the signature says so, so the fix is always to delete the
+/// keyword: a machine-applicable edit removing it and the whitespace after it.
+/// Both engines build the diagnostic here, so they cannot drift.
+pub(crate) fn call_arg_mode(primary: Span, source: &SourceText) -> Diagnostic {
+    let text = source.text();
+    let range = primary.range();
+    let start = range.start().as_usize();
+    let keyword = &text[start..range.end().as_usize()];
+    let mut end = range.end().as_usize();
+    while text
+        .as_bytes()
+        .get(end)
+        .is_some_and(u8::is_ascii_whitespace)
+    {
+        end += 1;
+    }
+    let removal = TextRange::new(
+        ByteOffset::new(u32::try_from(start).unwrap_or(u32::MAX)),
+        ByteOffset::new(u32::try_from(end).unwrap_or(u32::MAX)),
+    )
+    .map_or(primary, |range| Span::new(primary.source(), range));
+    Diagnostic::error(
+        code(1),
+        format!("`{keyword}` is a parameter mode, not part of a call argument"),
+        primary,
+    )
+    .with_primary_label(format!("remove `{keyword}` here"))
+    .with_help(
+        "modes are written once, on the callee's parameters; a call passes the \
+         argument plainly and the signature decides whether it is borrowed or moved",
+    )
+    .with_suggestion(
+        format!("remove `{keyword}`"),
+        vec![Edit {
+            span: removal,
+            replacement: String::new(),
+        }],
+        Confidence::MachineApplicable,
+    )
 }

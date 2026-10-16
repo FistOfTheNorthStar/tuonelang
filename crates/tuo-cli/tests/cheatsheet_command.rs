@@ -417,6 +417,11 @@ const ANTI_PATTERNS: &[(&str, &str)] = &[
         "fn f(take a: Int, take b: Int, take c: Int) -> Bool { a < b < c }",
         "fn f(take a: Int, take b: Int, take c: Int) -> Bool { a < b && b < c }",
     ),
+    // Rejected since ADR-0032 Stage A (`T0024`); it once type-checked silently.
+    (
+        "fn f(in xs: Array[Int]) -> Int { xs.len() }",
+        "fn f(in xs: Array[Int]) -> Int { std::array::len(xs) }",
+    ),
 ];
 
 /// Wrap a fragment into a complete module.

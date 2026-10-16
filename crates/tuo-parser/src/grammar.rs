@@ -485,10 +485,35 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         Index(SyntaxElement, SyntaxElement, SyntaxElement),
         Cast(SyntaxElement, SyntaxElement),
     }
+    // One call argument, optionally preceded by a misplaced parameter mode
+    // (`f(mut x)`): the keyword is kept in an `Error` node and reported with
+    // a targeted marker (`parse::call_arg_mode` builds the diagnostic for
+    // both engines), and the argument parses as if it were absent.
+    let arg_mode = choice((tok(K::KwMut), tok(K::KwIn), tok(K::KwTake)))
+        .map(|keyword| make(SyntaxKind::Error, keyword))
+        .validate(|node, extra, emitter| {
+            emitter.emit(Rich::custom(
+                extra.span(),
+                format!("{}call-arg-mode", crate::oracle::TARGETED),
+            ));
+            node
+        });
+    let call_arg = arg_mode.or_not().then(expr_b.clone());
     let call_args = node!(
         SyntaxKind::CallArgs,
         tok(K::OpenParen)
-            .then(comma_list(expr_b.clone()))
+            .then(
+                call_arg
+                    .clone()
+                    .then(
+                        tok(K::Comma)
+                            .then(call_arg)
+                            .repeated()
+                            .collect::<Vec<_>>()
+                            .then(tok(K::Comma).or_not()),
+                    )
+                    .or_not(),
+            )
             .then(tok(K::CloseParen)),
     )
     .boxed();

@@ -160,7 +160,8 @@ let wide: I64 = small as I64;
 | `String` | Owned, growable, heap-backed byte buffer (`std::string`; runnable since ADR-0009) |
 | `Array[T]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009, element-generic since ADR-0012). Supported elements: `Int`, `Float` (since ADR-0016), `Bool`, `Str`, `String`, and structs/enums built from them |
 | `Map[K, V]` | Owned, heap-backed hash map (`std::map`; since ADR-0011). The v0 operation surface is `Map[Int, Int]` and `Map[Str, Int]` |
-| `Box[T]`, `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; construction not in the runnable core) |
+| `Box[T]` | A unique, owning heap pointer: `std::boxed::new(v)`, `get(b)` (a copy), `into(b)` (move out). Native since ADR-0028 Stage B |
+| `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; no constructor, not in the runnable core) |
 | `()` | Unit |
 
 There is **no reference type** (`&T` does not exist). Borrowing happens only
@@ -360,8 +361,9 @@ let sh = Shape::Circle { r: 4 };
   through any chain of by-value fields, array/map elements, `Option`/`Result`
   payloads, or tuple/fixed-array components. That is a type error at the
   declaration (`T0016`, since ADR-0016), *unless* every cycle passes through a
-  `Box`/`Shared`/`Weak` indirection. Recursive data in v0 uses the index-arena
-  pattern instead (the way `std::json` does).
+  `Box`/`Shared`/`Weak` indirection. Recursive data holds itself behind a
+  `Box` (`next: Option[Box[Node]]`, built with `std::boxed::new`), or uses the
+  index-arena pattern (the way `std::json` does).
 
 ---
 
@@ -482,11 +484,11 @@ interpreter's memory budget:
 spec build { then std::string::len(std::string::concat("ab", "cd")) == 4; }
 ```
 
-Still on the heap roadmap: the `Box`/`Shared`/`Weak` wrapper *values* (declared,
-still refused natively), **capturing closures** (ADR-0008 Tier 2), and
-**recursive nominal types** — a struct/enum that reaches itself is refused at
-the declaration (`T0016`) until a successor ADR gives the backends
-runtime-recursive clone/drop glue.
+Still on the heap roadmap: the `Shared`/`Weak` wrapper *values* (declared, no
+constructor, refused natively — ADR-0028 Stage C) and **capturing closures**
+(ADR-0008 Tier 2). `Box[T]` values run natively since ADR-0028 Stage B, and a
+recursive type through a `Box` gets out-of-line clone/drop glue; a type that
+reaches itself *by value* is still refused at the declaration (`T0016`).
 
 ---
 
@@ -885,7 +887,8 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | `std::rt::listen6`/`peer_family` (ADR-0017: IPv6; `connect` infers the family from a numeric address) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `std::rt::udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port` (ADR-0017: UDP datagrams) | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::net::listen`/`bound_port`/`accept`/`connect`/`close`/`accept_timeout`/`connect_timeout`/`read_byte_timeout`/`listen6`/`peer_family`/`udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port`, `std::sync::par_map`/`channel`/`send`/`recv`/`close`/`mutex`/`lock`/`unlock` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
-| Capturing closures (Tier 2), `Box`/`Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
+| `Box[T]` values (`std::boxed::new`/`get`/`into`), recursive types through `Box` (ADR-0028 Stage B) | ✅ | ✅ | ✅ |
+| Capturing closures (Tier 2), `Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
 | Method calls, `impl` bodies | parse | not lowered | not lowered |
 | Recursive nominal types (a struct/enum reaching itself without a `Box`/`Shared`/`Weak` indirection) | ❌ refused (`T0016`) | ❌ | ❌ |
 

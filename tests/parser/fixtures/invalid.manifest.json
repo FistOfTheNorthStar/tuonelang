@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "kind": "invalid",
-  "count": 114,
+  "count": 115,
   "fixtures": [
     {
       "file": "001-tab-indentation.tuo",
@@ -572,6 +572,11 @@
       "file": "114-keyword-self-as-binding.tuo",
       "stage": "syntax",
       "reason": "reserved word `Self` used as a binding pattern; a pattern wants an IDENT (\u00a74)"
+    },
+    {
+      "file": "115-call-arg-mode.tuo",
+      "stage": "syntax",
+      "reason": "a parameter mode (`mut`) written at a call site; modes belong to the callee's parameters"
     }
   ]
 }

@@ -1,0 +1,20 @@
+// ownership.md, ADR-0028 Stage B — a `Box[T]` is an owned, non-`Copy` value:
+// `std::boxed::new` moves its argument in, `std::boxed::into` moves the box
+// itself, and `std::boxed::get` only borrows it. A moved box or a moved
+// pointee is unusable afterwards.
+
+fn case_use_after_into() -> Int {
+    let b = std::boxed::new(1);
+    let n = std::boxed::into(b);
+    n + std::boxed::get(b) // ERROR: O0001 `b` was moved by `into`
+}
+
+fn case_use_after_new(take s: String) -> Int {
+    let b = std::boxed::new(s);
+    std::string::len(s) // ERROR: O0001 `s` was moved into the box
+}
+
+fn case_into_twice() -> Int {
+    let b = std::boxed::new(2);
+    std::boxed::into(b) + std::boxed::into(b) // ERROR: O0001 `b` was already moved
+}

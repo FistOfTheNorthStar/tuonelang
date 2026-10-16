@@ -1,0 +1,38 @@
+// ADR-0032 Stage A: tuonelang has free functions only, and nothing an
+// `interface` or `impl` declares is executed by any engine. The declarations
+// type-check and draw a `T0026` warning; a method call (`T0024`, with the free
+// call offered when exactly one function fits) and a qualified interface-member
+// call (`T0025`) are errors. Before Stage A all of this checked silently and
+// failed later at `run`/`spec` with unrelated messages.
+
+struct Counter {
+    count: Int,
+}
+
+interface Reset {
+    fn reset(in self) -> Int;
+}
+
+impl Reset for Counter {
+    fn reset(in self) -> Int {
+        self.count
+    }
+}
+
+const START: Int = 10;
+
+fn fresh() -> Counter {
+    Counter { count: START }
+}
+
+fn total(in c: Counter, in xs: Array[Int]) -> Int {
+    c.count + xs.len()
+}
+
+fn unknown(in c: Counter) -> Int {
+    c.no_such_method(1, 2)
+}
+
+fn via_interface(in c: Counter) -> Int {
+    Reset::reset(c)
+}

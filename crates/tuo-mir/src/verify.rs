@@ -57,7 +57,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace};
-use tuo_types::{Ty, TypeckResult};
+use tuo_types::{Ty, TypeckResult, WrapperKind};
 
 use crate::mir::{
     AggregateKind, Arg, BinOp, BlockId, Callee, EffectOp, Function, HeapMutOp, HeapOp, LocalId,
@@ -308,6 +308,10 @@ impl Verifier<'_> {
             }
             Projection::Index(_) => match ty {
                 Ty::Array(item) | Ty::FixedArray(item, _) => Some((**item).clone()),
+                _ => None,
+            },
+            Projection::Deref => match ty {
+                Ty::Wrapper(WrapperKind::Box, pointee) => Some((**pointee).clone()),
                 _ => None,
             },
         }
@@ -989,6 +993,15 @@ impl Verifier<'_> {
                 .and_then(|ty| map_pair(&ty))
                 .unwrap_or_else(|| (Ty::int(), Ty::int()))
         };
+        // A box's pointee (ADR-0028 Stage B): read from the subject for
+        // `get`, from the destination box for `new`.
+        let boxed = |pointee: Ty| Ty::Wrapper(WrapperKind::Box, Box::new(pointee));
+        let pointee_of = |ty: Option<Ty>| match ty {
+            Some(Ty::Wrapper(WrapperKind::Box, pointee)) => *pointee,
+            _ => Ty::int(),
+        };
+        let subject_pointee = || pointee_of(subject.and_then(|place| self.place_ty(place)));
+        let dest_pointee = || pointee_of(self.place_ty(dest));
         let subject_ty: Option<Ty> = match op {
             HeapOp::StringLen
             | HeapOp::StringByteAt
@@ -999,12 +1012,15 @@ impl Verifier<'_> {
                 let (key, value) = subject_kv();
                 Some(Ty::Map(Box::new(key), Box::new(value)))
             }
+            HeapOp::BoxGet => Some(boxed(subject_pointee())),
             HeapOp::StringEmpty
             | HeapOp::StringFromStr
             | HeapOp::StringConcat
             | HeapOp::ArrayEmpty
             | HeapOp::ArrayFilled
-            | HeapOp::MapEmpty => None,
+            | HeapOp::MapEmpty
+            | HeapOp::BoxNew
+            | HeapOp::BoxInto => None,
         };
         let operand_tys: Vec<Ty> = match op {
             HeapOp::StringEmpty
@@ -1014,7 +1030,12 @@ impl Verifier<'_> {
             | HeapOp::ArrayLen
             | HeapOp::MapEmpty
             | HeapOp::MapLen
-            | HeapOp::MapKeys => Vec::new(),
+            | HeapOp::MapKeys
+            | HeapOp::BoxGet => Vec::new(),
+            // `new(value)`: a value of the pointee the destination box holds.
+            HeapOp::BoxNew => vec![dest_pointee()],
+            // `into(box)`: a box of the destination's type.
+            HeapOp::BoxInto => vec![boxed(self.place_ty(dest).unwrap_or_else(Ty::int))],
             HeapOp::StringFromStr => vec![Ty::Str],
             HeapOp::StringConcat => vec![Ty::Str, Ty::Str],
             HeapOp::StringByteAt | HeapOp::ArrayGet => vec![Ty::int()],
@@ -1058,6 +1079,9 @@ impl Verifier<'_> {
             HeapOp::MapGet => Ty::Option(Box::new(subject_kv().1)),
             HeapOp::MapContainsKey => Ty::Bool,
             HeapOp::MapKeys => Ty::Array(Box::new(subject_kv().0)),
+            HeapOp::BoxNew => boxed(dest_pointee()),
+            HeapOp::BoxGet => subject_pointee(),
+            HeapOp::BoxInto => self.place_ty(dest).unwrap_or_else(Ty::int),
         };
         match (subject, &subject_ty) {
             (None, None) => {}

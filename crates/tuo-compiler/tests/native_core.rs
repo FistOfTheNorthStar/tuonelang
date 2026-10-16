@@ -97,7 +97,7 @@ fn accepted_with(result: &CheckResult, want: &str, expected: usize) {
 
 #[test]
 fn a_wrapper_parameter_warns_at_the_type_span() {
-    let source = "fn keep(take b: Box[Int]) -> Int {\n    1\n}\n";
+    let source = "fn keep(take b: Shared[Int]) -> Int {\n    1\n}\n";
     let result = check(source);
     is_accepted_with_warnings(&result, 1);
 
@@ -105,13 +105,26 @@ fn a_wrapper_parameter_warns_at_the_type_span() {
     let (start, end, message) = &found[0];
     assert_eq!(
         &source[*start..*end],
-        "Box[Int]",
+        "Shared[Int]",
         "the advisory must point at the written type, not the function"
     );
     assert!(
         message.contains("parameter"),
         "the message must name the storage position, got: {message}"
     );
+}
+
+#[test]
+fn a_box_value_is_not_warned_about_since_it_lowers() {
+    // ADR-0028 Stage B: `Box[T]` values lower natively as a parameter, a
+    // return, a local, or inside an `Option` — the advisory looks through them
+    // and would otherwise tell the author to avoid something that works.
+    let result = check(
+        "fn keep(take b: Box[Int]) -> Option[Box[Int]] {\n    \
+         let c: Box[Box[Int]] = std::boxed::new(b);\n    \
+         Some { value: std::boxed::into(c) }\n}\n",
+    );
+    is_accepted_with_warnings(&result, 0);
 }
 
 #[test]

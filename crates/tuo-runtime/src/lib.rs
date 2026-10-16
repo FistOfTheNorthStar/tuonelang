@@ -100,6 +100,14 @@ pub enum TrapCode {
     /// (`BinOp::Shl`/`Shr`, ADR-0019). Appended to the taxonomy, which is
     /// append-only.
     InvalidShift = 5,
+    /// A thread ran out of native stack — deep recursion, including the
+    /// out-of-line drop glue of a long `Box` chain (ADR-0028). Raised by the
+    /// runtime's guard-page handler rather than by generated code, so it
+    /// covers every function, glue included. The interpreter's analogue is its
+    /// recursion limit (`TrapKind::RecursionLimit`): a *resource* limit whose
+    /// depth differs between the engines, so it is never compared
+    /// differentially. Appended to the taxonomy, which is append-only.
+    StackOverflow = 6,
 }
 
 impl TrapCode {
@@ -114,6 +122,7 @@ impl TrapCode {
         Self::Unreachable,
         Self::InvalidByte,
         Self::InvalidShift,
+        Self::StackOverflow,
     ];
 
     /// The stable integer a backend passes to [`TRAP_SYMBOL`].
@@ -132,6 +141,7 @@ impl TrapCode {
             3 => Some(Self::Unreachable),
             4 => Some(Self::InvalidByte),
             5 => Some(Self::InvalidShift),
+            6 => Some(Self::StackOverflow),
             _ => None,
         }
     }
@@ -146,6 +156,7 @@ impl TrapCode {
             Self::Unreachable => "tuo: trap: reached unreachable code",
             Self::InvalidByte => "tuo: trap: byte value out of range",
             Self::InvalidShift => "tuo: trap: shift amount out of range",
+            Self::StackOverflow => "tuo: trap: stack overflow",
         }
     }
 }
@@ -173,15 +184,23 @@ pub fn report_trap(code: i32) -> ! {
 /// behavior of [`report_trap`]: a stable stderr message keyed by [`TrapCode`],
 /// then `abort()` (whose status is [`TRAP_EXIT_STATUS`] on the supported hosts).
 ///
-/// It is intentionally freestanding C — only `<stdio.h>` and `<stdlib.h>` — so
-/// it compiles anywhere the platform `cc` runs and drags no Rust runtime into
-/// the target binary.
+/// It is plain POSIX C — no Rust runtime is dragged into the target binary.
+///
+/// It also owns the **stack-overflow trap** ([`TrapCode::StackOverflow`]). A
+/// constructor installs a `SIGSEGV`/`SIGBUS` handler that runs on an
+/// alternate signal stack, and records the main thread's stack bounds; each
+/// `par_map` worker records its own through [`THREAD_GUARD_SYMBOL`]. A fault
+/// whose address lies in the guard region just below the faulting thread's
+/// stack is reported as the trap (message, then `abort()`, the same status as
+/// every trap). Any other fault restores the default action and re-faults, so
+/// a genuine runtime bug is never disguised as a stack overflow.
 #[must_use]
 pub fn trap_runtime_c_source() -> String {
     // Keep the messages here byte-identical to `TrapCode::message`, and the
     // codes identical to `TrapCode`'s discriminants; the native test below
     // guards the Rust side, and this string is its C mirror.
     let mut source = String::new();
+    source.push_str("#define _GNU_SOURCE\n");
     source.push_str("#include <stdio.h>\n");
     source.push_str("#include <stdlib.h>\n\n");
     source.push_str("void tuo_rt_trap(int code) {\n");
@@ -199,7 +218,115 @@ pub fn trap_runtime_c_source() -> String {
     source.push_str("    fprintf(stderr, \"%s\\n\", message);\n");
     source.push_str("    abort();\n");
     source.push_str("}\n");
+    source.push_str(&stack_guard_c_source());
     source
+}
+
+/// The C symbol a newly started runtime thread calls to arm the stack-overflow
+/// trap for itself (an alternate signal stack, and its own stack bounds); it
+/// returns a token the thread passes to [`THREAD_UNGUARD_SYMBOL`] on exit.
+pub const THREAD_GUARD_SYMBOL: &str = "tuo_rt_thread_guard";
+
+/// The C symbol a runtime thread calls before exiting to release what
+/// [`THREAD_GUARD_SYMBOL`] armed.
+pub const THREAD_UNGUARD_SYMBOL: &str = "tuo_rt_thread_unguard";
+
+/// The guard-page handler behind [`TrapCode::StackOverflow`] (see
+/// [`trap_runtime_c_source`]).
+fn stack_guard_c_source() -> String {
+    let code = TrapCode::StackOverflow.as_i32();
+    let message = TrapCode::StackOverflow.message();
+    format!(
+        "\n\
+         /* The stack-overflow trap (TrapCode {code}). */\n\
+         #include <pthread.h>\n\
+         #include <signal.h>\n\
+         #include <stdint.h>\n\
+         #include <string.h>\n\
+         #include <unistd.h>\n\
+         \n\
+         #define TUO_RT_ALTSTACK_SIZE 65536\n\
+         /* How far below the stack's lowest address a fault still counts as\n\
+            an overflow: a frame larger than the guard page can skip past it. */\n\
+         #define TUO_RT_GUARD_REACH (1u << 20)\n\
+         \n\
+         static _Thread_local uintptr_t tuo_rt_stack_low;\n\
+         \n\
+         static void tuo_rt_record_stack(void) {{\n\
+         #if defined(__APPLE__)\n\
+         \x20   pthread_t self = pthread_self();\n\
+         \x20   tuo_rt_stack_low = (uintptr_t)pthread_get_stackaddr_np(self)\n\
+         \x20       - pthread_get_stacksize_np(self);\n\
+         #else\n\
+         \x20   pthread_attr_t attr;\n\
+         \x20   void *addr;\n\
+         \x20   size_t size;\n\
+         \x20   if (pthread_getattr_np(pthread_self(), &attr) == 0) {{\n\
+         \x20       if (pthread_attr_getstack(&attr, &addr, &size) == 0)\n\
+         \x20           tuo_rt_stack_low = (uintptr_t)addr;\n\
+         \x20       pthread_attr_destroy(&attr);\n\
+         \x20   }}\n\
+         #endif\n\
+         }}\n\
+         \n\
+         static void tuo_rt_on_fault(int sig, siginfo_t *info, void *context) {{\n\
+         \x20   (void)context;\n\
+         \x20   uintptr_t fault = (uintptr_t)info->si_addr;\n\
+         \x20   uintptr_t low = tuo_rt_stack_low;\n\
+         \x20   if (low != 0 && fault < low + 4096 && fault + TUO_RT_GUARD_REACH >= low) {{\n\
+         \x20       static const char text[] = \"{message}\\n\";\n\
+         \x20       ssize_t ignored = write(2, text, sizeof text - 1);\n\
+         \x20       (void)ignored;\n\
+         \x20       abort();\n\
+         \x20   }}\n\
+         \x20   /* Not an overflow: crash exactly as without this handler. */\n\
+         \x20   signal(sig, SIG_DFL);\n\
+         }}\n\
+         \n\
+         /* Arm the calling thread: its alternate signal stack, and its own\n\
+            stack bounds. Returns 0 if the alternate stack was refused. */\n\
+         static int tuo_rt_arm(void *altstack) {{\n\
+         \x20   stack_t alt;\n\
+         \x20   alt.ss_sp = altstack;\n\
+         \x20   alt.ss_size = TUO_RT_ALTSTACK_SIZE;\n\
+         \x20   alt.ss_flags = 0;\n\
+         \x20   int armed = altstack != 0 && sigaltstack(&alt, 0) == 0;\n\
+         \x20   tuo_rt_record_stack();\n\
+         \x20   return armed;\n\
+         }}\n\
+         \n\
+         void *{THREAD_GUARD_SYMBOL}(void) {{\n\
+         \x20   void *altstack = malloc(TUO_RT_ALTSTACK_SIZE);\n\
+         \x20   if (!tuo_rt_arm(altstack)) {{\n\
+         \x20       free(altstack);\n\
+         \x20       return 0;\n\
+         \x20   }}\n\
+         \x20   return altstack;\n\
+         }}\n\
+         \n\
+         void {THREAD_UNGUARD_SYMBOL}(void *token) {{\n\
+         \x20   if (token == 0) return;\n\
+         \x20   stack_t off;\n\
+         \x20   memset(&off, 0, sizeof off);\n\
+         \x20   off.ss_flags = SS_DISABLE;\n\
+         \x20   sigaltstack(&off, 0);\n\
+         \x20   free(token);\n\
+         }}\n\
+         \n\
+         __attribute__((constructor)) static void tuo_rt_install_stack_guard(void) {{\n\
+         \x20   struct sigaction action;\n\
+         \x20   memset(&action, 0, sizeof action);\n\
+         \x20   action.sa_sigaction = tuo_rt_on_fault;\n\
+         \x20   action.sa_flags = SA_SIGINFO | SA_ONSTACK;\n\
+         \x20   sigemptyset(&action.sa_mask);\n\
+         \x20   sigaction(SIGSEGV, &action, 0);\n\
+         \x20   sigaction(SIGBUS, &action, 0);\n\
+         \x20   /* The main thread's alternate stack lives as long as the process,\n\
+         \x20      so it is static rather than an allocation never freed. */\n\
+         \x20   static char main_altstack[TUO_RT_ALTSTACK_SIZE];\n\
+         \x20   (void)tuo_rt_arm(main_altstack);\n\
+         }}\n"
+    )
 }
 
 #[cfg(test)]

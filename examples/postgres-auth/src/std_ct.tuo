@@ -46,9 +46,11 @@
 // The textbook way to build an all-ones mask is `0 - bit`, and negation traps
 // on `i64::MIN`, so it emits a branch-on-overflow into what was supposed to be
 // branchless code. `mask` therefore uses the sign-smearing shift
-// `(bit << 63) >> 63`, which cannot trap because no shift can. This is why the
-// module reads oddly compared to the same algorithms in C, and the oddness is
-// load-bearing rather than stylistic.
+// `(bit << 63) >> 63`, which cannot trap: a shift traps only when its amount
+// leaves the type's width, and a literal amount never depends on the data (the
+// `#[constant_time]` gate refuses a shift by a variable amount, `T0019`). This
+// is why the module reads oddly compared to the same algorithms in C, and the
+// oddness is load-bearing rather than stylistic.
 //
 // One place uses arithmetic, and it is stated rather than hidden, because
 // "this module contains no `+`" would be a false claim a reader could check:

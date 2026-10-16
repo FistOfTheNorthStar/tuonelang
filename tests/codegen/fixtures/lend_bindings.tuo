@@ -1,0 +1,74 @@
+// ADR-0037: reading through borrows. A match on a place reached through an
+// `in` parameter lends its non-`Copy` parts to the arms instead of moving
+// them, and `std::boxed::get(b)` passed to an `in` parameter lends the pointee
+// instead of copying it — so a boxed tree is walked without consuming or
+// copying it, any number of times. The last call passes the box `mut` as well,
+// so its pointee is copied rather than lent (a `mut` argument could replace
+// it mid-call). Exit 119.
+struct Node {
+    label: String,
+    left: Option[Box[Node]],
+    right: Option[Box[Node]],
+}
+
+struct Pair {
+    name: Option[String],
+    count: Int,
+}
+
+fn make(take depth: Int) -> Node {
+    if depth == 0 {
+        return Node { label: std::string::from_str("leaf"), left: None, right: None };
+    }
+    Node {
+        label: std::string::from_str("in"),
+        left: Some { value: std::boxed::new(make(depth - 1)) },
+        right: Some { value: std::boxed::new(make(depth - 1)) },
+    }
+}
+
+fn weight(in node: Node) -> Int {
+    let left = match node.left {
+        Some { value } => weight(std::boxed::get(value)),
+        None => 0,
+    };
+    let right = match node.right {
+        Some { value } => weight(std::boxed::get(value)),
+        None => 0,
+    };
+    std::string::len(node.label) + left + right
+}
+
+fn name_len(in p: Pair) -> Int {
+    match p.name {
+        Some { value } => std::string::len(value) + p.count,
+        None => p.count,
+    }
+}
+
+fn nested(in o: Option[Option[String]]) -> Int {
+    match o {
+        Some { value } => match value {
+            Some { value } => std::string::len(value),
+            None => 1,
+        },
+        None => 0,
+    }
+}
+
+fn swap_in(in node: Node, mut slot: Box[Node]) -> Int {
+    let before = weight(node);
+    slot = std::boxed::new(make(0));
+    before + weight(std::boxed::get(slot))
+}
+
+fn main() -> Int {
+    let tree = make(3);
+    let a = weight(tree) + weight(tree);
+    let p = Pair { name: Some { value: std::string::from_str("abcde") }, count: 2 };
+    let b = name_len(p) + name_len(Pair { name: None, count: 3 });
+    let c = nested(Some { value: Some { value: std::string::from_str("xyz") } });
+    var boxed = std::boxed::new(make(1));
+    let d = swap_in(std::boxed::get(boxed), boxed);
+    a + b + c + d
+}

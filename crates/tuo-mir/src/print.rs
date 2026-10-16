@@ -265,6 +265,7 @@ fn render_place(place: &Place) -> String {
             Projection::Index(local) => {
                 let _ = write!(out, "[_{}]", local.0);
             }
+            Projection::Deref => out.push_str(".*"),
         }
     }
     out

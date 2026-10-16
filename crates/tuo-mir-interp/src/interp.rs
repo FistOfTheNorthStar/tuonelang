@@ -1202,6 +1202,27 @@ impl Machine<'_, '_> {
             }
         };
         match op {
+            // ADR-0028 Stage B: a box is modelled as a one-field aggregate
+            // holding its pointee. Rust ownership of the `Value` tree is the
+            // unique ownership the box denotes, so dropping the box drops the
+            // pointee, and a clone is the deep copy `get` performs.
+            HeapOp::BoxNew => Ok(Value::Aggregate(vec![
+                values.first().cloned().unwrap_or(Value::Unit),
+            ])),
+            HeapOp::BoxGet | HeapOp::BoxInto => {
+                let boxed = if op == HeapOp::BoxGet {
+                    subject
+                } else {
+                    values.first()
+                };
+                match boxed {
+                    Some(Value::Aggregate(fields)) if fields.len() == 1 => Ok(fields[0].clone()),
+                    other => {
+                        let value = other.cloned().unwrap_or(Value::Unit);
+                        Err(self.type_bug(function, "box op operand is not a box", &value))
+                    }
+                }
+            }
             HeapOp::StringEmpty => Ok(Value::Str(Vec::new())),
             HeapOp::StringFromStr => Ok(Value::Str(str_at(0, self)?)),
             HeapOp::StringConcat => {
@@ -1487,6 +1508,12 @@ impl Machine<'_, '_> {
                         )
                     })?
                 }
+                // ADR-0037: a box is a one-field aggregate (see `BoxNew`), so
+                // its pointee is that field.
+                (Projection::Deref, Value::Aggregate(fields)) if fields.len() == 1 => {
+                    let mut fields = fields;
+                    fields.swap_remove(0)
+                }
                 (Projection::Index(index_local), Value::Array(elements)) => {
                     let index = locals.get(*index_local).and_then(Value::as_int);
                     let Some((raw, _)) = index else {
@@ -1738,6 +1765,17 @@ fn write_projected(
                 }
                 target = slot;
             }
+            Projection::Deref => match target {
+                Value::Aggregate(fields) if fields.len() == 1 => {
+                    let slot = &mut fields[0];
+                    if last {
+                        *slot = value;
+                        return Ok(());
+                    }
+                    target = slot;
+                }
+                _ => return Err(internal("deref projection on a non-box".to_owned())),
+            },
             Projection::VariantField { field, .. } => match target {
                 Value::Variant { fields, .. } => {
                     let slot = fields

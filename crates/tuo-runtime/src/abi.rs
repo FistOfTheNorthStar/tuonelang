@@ -93,7 +93,16 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `Str` value (a two-word view, [`crate::map::STR_VALUE_STRIDE`]) alongside
 /// the word-sized `Copy` scalars. A changed entry layout *and* a changed
 /// runtime-symbol signature are both layout-affecting, so the version bumps.
-pub const ABI_VERSION: u32 = 13;
+///
+/// `14` — `Box[T]` values lower (ADR-0028 Stage B): a box is passed as a
+/// pointer-width scalar, and its pointee's drop/deep-copy glue is an
+/// out-of-line function per pointee type. The `Box` *layout* is the one this
+/// document already specified; what changed is that code now relies on it.
+/// The runtime also gains the stack-overflow trap ([`crate::TrapCode`]
+/// `StackOverflow`, code `6`) and the `tuo_rt_thread_guard`/`unguard`
+/// symbols every runtime thread arms it with, and `par_map` workers get an
+/// 8 MiB stack.
+pub const ABI_VERSION: u32 = 14;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -507,7 +516,7 @@ mod tests {
         // channel and mutex symbols. Version 13 made the map's value slot a
         // caller-supplied stride and its value a by-pointer argument
         // (ADR-0023 Stage B2), so every `tuo_rt_map_*` signature changed.
-        assert_eq!(ABI_VERSION, 13);
+        assert_eq!(ABI_VERSION, 14);
     }
 
     #[test]

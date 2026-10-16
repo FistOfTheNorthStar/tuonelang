@@ -9,7 +9,9 @@
 //! allocator shim (compiled from [`tuo_runtime::alloc::alloc_runtime_c_source`],
 //! ADR-0009 Stage B), and map shim (compiled from
 //! [`tuo_runtime::map::map_runtime_c_source`], ADR-0011 Stage B) into a native
-//! executable using the platform `cc`.
+//! executable using the platform `cc`. The shims are compiled once, when `tuo`
+//! itself is built (`build.rs`), and linked as objects; only a compiler that
+//! could not precompile them compiles them per build.
 //!
 //! Which backend runs is a `--release` choice, and the *only* thing it changes
 //! is speed: the default debug build uses the [Cranelift
@@ -46,6 +48,9 @@ use tuo_compiler::source::{SourceId, SourceMap};
 use tuo_compiler::{diagnostics, hir, mir, parser, types};
 
 use crate::output::OutputMode;
+
+// `PRECOMPILED_RUNTIME`: the C runtime shims compiled once by `build.rs`.
+include!(concat!(env!("OUT_DIR"), "/runtime_objects.rs"));
 use crate::protocol::{self, Emitter, Event, ProtocolCommand, Status};
 
 /// The entry function a built program starts at.
@@ -485,41 +490,51 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
     std::fs::write(&object_path, &artifact.bytes)
         .map_err(|error| format!("writing the object file: {error}"))?;
 
-    // Write the runtime trap and effect shims as C, so the linker resolves
+    // The runtime shims: the objects `build.rs` precompiled when `tuo` was
+    // built, or — when it could not (a cross-built compiler, no `cc` at build
+    // time) — their C sources, compiled here. Either way the linker resolves
     // the runtime symbols without dragging in a Rust runtime.
-    let runtime_c = dir.join(format!("{stem}.tuo_rt.c"));
-    std::fs::write(&runtime_c, tuo_runtime::trap_runtime_c_source())
-        .map_err(|error| format!("writing the runtime shim: {error}"))?;
-    let effect_c = dir.join(format!("{stem}.tuo_rt_effect.c"));
-    std::fs::write(&effect_c, tuo_runtime::effect::effect_runtime_c_source())
-        .map_err(|error| format!("writing the effect runtime shim: {error}"))?;
-    let alloc_c = dir.join(format!("{stem}.tuo_rt_alloc.c"));
-    std::fs::write(&alloc_c, tuo_runtime::alloc::alloc_runtime_c_source())
-        .map_err(|error| format!("writing the allocator runtime shim: {error}"))?;
-    let map_c = dir.join(format!("{stem}.tuo_rt_map.c"));
-    std::fs::write(&map_c, tuo_runtime::map::map_runtime_c_source())
-        .map_err(|error| format!("writing the map runtime shim: {error}"))?;
+    let mut shims = Vec::new();
+    match PRECOMPILED_RUNTIME {
+        Some(objects) => {
+            for (name, bytes) in objects {
+                let path = dir.join(format!("{stem}.tuo_rt_{name}.o"));
+                std::fs::write(&path, bytes)
+                    .map_err(|error| format!("writing the {name} runtime object: {error}"))?;
+                shims.push(path);
+            }
+        }
+        None => {
+            let sources = [
+                ("trap", tuo_runtime::trap_runtime_c_source()),
+                ("effect", tuo_runtime::effect::effect_runtime_c_source()),
+                ("alloc", tuo_runtime::alloc::alloc_runtime_c_source()),
+                ("map", tuo_runtime::map::map_runtime_c_source()),
+            ];
+            for (name, source) in sources {
+                let path = dir.join(format!("{stem}.tuo_rt_{name}.c"));
+                std::fs::write(&path, source)
+                    .map_err(|error| format!("writing the {name} runtime shim: {error}"))?;
+                shims.push(path);
+            }
+        }
+    }
 
-    // `cc object runtime.c effect.c alloc.c -lm -o exe` — the platform driver
-    // picks the linker and the correct startup files, so the produced binary
-    // has a real `main` entry point and a working C ABI on every supported
-    // host. `-lm` resolves the C math library's `fmod`/`fmodf`, which the
-    // Cranelift backend calls for float remainder (Cranelift has no `frem`
-    // instruction) — harmless on macOS (libm is part of libSystem), required on
-    // Linux. `-O2` optimizes the C runtime shims — the map table, the
-    // allocator, the effect wrappers — in every build, the way a language's
-    // runtime library ships optimized even under a debug profile: the
-    // debug/release choice governs the *program's* code, which the backend
-    // has already compiled into the object, and `cc` hands that object to the
-    // linker untouched. It costs link time (the shims are recompiled on every
-    // build), which is the accepted trade: running speed comes first.
+    // `cc object shims… -lm -o exe` — the platform driver picks the linker and
+    // the correct startup files, so the produced binary has a real `main`
+    // entry point and a working C ABI on every supported host. `-lm` resolves
+    // the C math library's `fmod`/`fmodf`, which the Cranelift backend calls
+    // for float remainder (Cranelift has no `frem` instruction) — harmless on
+    // macOS (libm is part of libSystem), required on Linux. The shims are
+    // optimized (`-O2`, in `build.rs` or here) in every build, the way a
+    // language's runtime library ships optimized even under a debug profile:
+    // the debug/release choice governs the *program's* code, which the
+    // backend has already compiled into the object, and `cc` hands that
+    // object to the linker untouched.
     let status = Command::new("cc")
         .arg("-O2")
         .arg(&object_path)
-        .arg(&runtime_c)
-        .arg(&effect_c)
-        .arg(&alloc_c)
-        .arg(&map_c)
+        .args(&shims)
         .arg("-lm")
         .arg("-pthread")
         .arg("-o")
@@ -529,10 +544,9 @@ fn link(artifact: &ObjectArtifact, exe_path: &Path) -> Result<(), String> {
 
     // Clean up the intermediates regardless of link outcome.
     let _ = std::fs::remove_file(&object_path);
-    let _ = std::fs::remove_file(&runtime_c);
-    let _ = std::fs::remove_file(&effect_c);
-    let _ = std::fs::remove_file(&alloc_c);
-    let _ = std::fs::remove_file(&map_c);
+    for shim in &shims {
+        let _ = std::fs::remove_file(shim);
+    }
 
     if status.success() {
         Ok(())

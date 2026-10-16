@@ -1,7 +1,7 @@
 # The tuonelang runtime ABI (v0)
 
 - **Status:** accepted (unstable — versioned, not yet frozen)
-- **ABI version:** `12` (see `tuo_runtime::abi::ABI_VERSION`)
+- **ABI version:** `14` (see `tuo_runtime::abi::ABI_VERSION`)
 - **Companion crate:** [`tuo-runtime`](../crates/tuo-runtime), which is the
   single normative *implementation* of this document. Where prose and crate
   disagree, the crate's `abi` module — and the tests that pin it — win, and
@@ -335,6 +335,13 @@ struct tuo_box { T *ptr; }   // == a single non-null pointer
   uninitialized (the checker guarantees no double-drop). There is no reference
   count.
 - Dropping a `Box[T]` drops the pointee `T`, then frees the allocation.
+- Lowered natively since ADR-0028 Stage B, with no layout change (this section
+  predates it). A backend passes a `Box` as a pointer-width scalar. Its drop
+  and deep-copy glue for the pointee is one **out-of-line** function per
+  pointee type, called rather than inlined: a recursive type reaches itself
+  only through a box (`T0016`), so calling is what keeps its glue finite. The
+  recursion depth of that glue is then a run-time quantity, bounded by the
+  native stack; an iterative drop is not promised.
 
 ## Shared
 
@@ -417,6 +424,19 @@ runtime symbol `tuo_rt_trap(i32 code)` with a stable `TrapCode`. The runtime:
 
 `tuo_rt_trap` never returns. The codes and messages are the shared `TrapCode`
 taxonomy (`tuo_runtime::TrapCode`), stable and append-only.
+
+**Stack overflow** (`TrapCode` `6`, ABI 14) is the one trap generated code never
+raises itself: a thread that exhausts its native stack touches the guard page
+below it. The runtime installs a `SIGSEGV`/`SIGBUS` handler on an alternate
+signal stack before `main` and records each runtime thread's stack bounds (the
+main thread's in that initializer, a `par_map` worker's through
+`tuo_rt_thread_guard` when it starts). A fault within the guard region below
+the faulting thread's stack prints `tuo: trap: stack overflow` and aborts
+exactly as `tuo_rt_trap` does; any other fault restores the default action and
+crashes as before, so a genuine bug is never reported as an overflow. The
+interpreter's counterpart is its `RecursionLimit` resource abort, which fires
+at a configured depth rather than at a stack size, so the two are never
+compared differentially.
 
 ## Process startup
 
@@ -832,7 +852,7 @@ drop point — there are no runtime drop flags.
 
 ## Versioning
 
-`ABI_VERSION` is `12`. Any change that alters a layout, an offset, a
+`ABI_VERSION` is `14`. Any change that alters a layout, an offset, a
 discriminant numbering, a calling-convention rule, or the meaning of a runtime
 symbol **must** increment it, in the same commit that changes the tests pinning
 the affected layout. Additive, non-layout-affecting clarifications do not bump
@@ -871,5 +891,14 @@ append-only, so no existing code is reinterpreted — the version bumps because
 the set of integers `tuo_rt_trap` accepts, and therefore the meaning a backend
 may give a runtime symbol's argument, grew. Version `12` (ADR-0019 Stage B)
 added the entropy symbol `tuo_rt_random_byte`, which reads the platform
-CSPRNG (`getentropy`) and returns one byte or `-1`; no layout changed. The version is asserted by the crate's
-tests so a silent reinterpretation of bytes is impossible.
+CSPRNG (`getentropy`) and returns one byte or `-1`; no layout changed. Version
+`13` (ADR-0023 Stage B2) made the map's value slot a caller-supplied stride and
+its value a by-pointer argument, changing every `tuo_rt_map_*` signature.
+Version `14` (ADR-0028 Stage B) made code rely on the `Box[T]` layout this
+document already specified — a pointer-width scalar whose pointee glue is one
+out-of-line function per pointee type — and added the stack-overflow trap
+(`TrapCode` `6`, raised by the runtime's guard-page handler, see "Panic / trap
+behavior") with the `tuo_rt_thread_guard`/`tuo_rt_thread_unguard` symbols
+every runtime thread arms it with; `par_map` workers also get an 8 MiB stack.
+The version is asserted by the crate's tests so a silent reinterpretation of
+bytes is impossible.
