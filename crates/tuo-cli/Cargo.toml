@@ -58,6 +58,12 @@ tuo-stdlib.workspace = true
 # LLM); the CLI loads the run + pinned task set and renders the reports.
 tuo-codegen-bench.workspace = true
 
+[build-dependencies]
+# `build.rs` precompiles the C runtime shims `tuo-runtime` emits, once, when
+# `tuo` itself is built, so `tuo build` links objects instead of recompiling
+# the same C on every build (it falls back to compiling them when it cannot).
+tuo-runtime.workspace = true
+
 [dev-dependencies]
 # The end-to-end differential tests compute the reference result with the MIR
 # interpreter and compare it against the native executable `tuo run` produces.
