@@ -35,8 +35,9 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is a heap **wrapper** (`Box`/`Shared`/`Weak`) still makes
-//! the whole function unsupported (they await a later ADR). The owned `String`
+//! A `Box[T]` is a pointer-width scalar whose pointee glue is out of line
+//! (ADR-0028 Stage B); a local whose type is a `Shared`/`Weak` **wrapper**
+//! still makes the whole function unsupported (ADR-0028 Stage C). The owned `String`
 //! and the growable `Array[Int]`, by contrast, are lowered since ADR-0009 Stage
 //! B: their three-word `{ptr, len, cap}` header is an ordinary aggregate held in
 //! a slot (moved by memcpy of the header, passed by-pointer, returned by sret),
@@ -143,7 +144,7 @@ use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
-use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult, WrapperKind};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 use crate::{CodegenCtx, FUNCTION_LINKAGE};
@@ -259,9 +260,9 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
 /// (`Box`/`Shared`/`Weak`) remain refused, awaiting a later ADR.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     match ty {
-        Ty::Wrapper(kind, _) => Some(format!(
+        Ty::Wrapper(kind, _) if *kind != WrapperKind::Box => Some(format!(
             "`{context}` uses a `{}[T]` heap wrapper, which the Cranelift backend does not \
-             lower yet (heap wrappers await a later ADR); the interpreter \
+             lower yet (`Shared`/`Weak` await ADR-0028 Stage C); the interpreter \
              (`tuo spec`/`tuo verify`) remains the reference",
             kind.name()
         )),
@@ -456,6 +457,7 @@ pub(crate) fn lower_program(
     let mut ctx = CodegenCtx::new(module);
     let mut builder_ctx = FunctionBuilderContext::new();
     let mut str_data: HashMap<Vec<u8>, DataId> = HashMap::new();
+    let mut glue = GlueTable::default();
     for function in &program.functions {
         define_function(
             module,
@@ -466,9 +468,73 @@ pub(crate) fn lower_program(
             &program.functions,
             types,
             &mut str_data,
+            &mut glue,
         )?;
     }
+    // Box glue (ADR-0028 Stage B) is declared where it is first called and
+    // defined here, after every program function; defining one may request
+    // another (a box inside a box), so drain until nothing is pending.
+    while let Some((id, ty, kind)) = glue.pending.pop() {
+        let Some(first) = program.functions.first() else {
+            break;
+        };
+        // Glue lowers no MIR: it runs `emit_heap_glue` over its one pointer
+        // argument, so its `Function` is an empty frame borrowing a real
+        // function's identity only for diagnostics.
+        let frame = Function {
+            symbol: first.symbol,
+            name: format!("box glue for {ty:?}"),
+            params: Vec::new(),
+            locals: Vec::new(),
+            blocks: Vec::new(),
+            ret: Ty::Unit,
+            span: first.span,
+        };
+        let mut signature = Signature::new(module.isa().default_call_conv());
+        signature
+            .params
+            .push(AbiParam::new(module.isa().pointer_type()));
+        ctx.context_mut().func.signature = signature;
+        let mut lowering = Lowering::new(
+            module,
+            ctx.context_mut(),
+            &mut builder_ctx,
+            &ids,
+            &frame,
+            &program.functions,
+            types,
+            &mut str_data,
+            &mut glue,
+        )?;
+        lowering.emit_glue_body(&ty, kind)?;
+        lowering.finish();
+        module
+            .define_function(id, ctx.context_mut())
+            .map_err(|error| CodegenError::backend(format!("defining box glue: {error}")))?;
+        ctx.clear(module);
+    }
     Ok(ids)
+}
+
+/// A layout's size as the `i64` an `iconst` takes.
+fn layout_size(layout: Layout) -> Result<i64, CodegenError> {
+    i64::try_from(layout.size).map_err(|_| CodegenError::backend("a layout size exceeds i64"))
+}
+
+/// A layout's alignment as the `i64` the allocator calls take.
+fn layout_align(layout: Layout) -> Result<i64, CodegenError> {
+    i64::try_from(layout.align).map_err(|_| CodegenError::backend("a layout alignment exceeds i64"))
+}
+
+/// The out-of-line `Box` glue functions of one module (ADR-0028 Stage B):
+/// each `(pointee type, glue)` pair is declared once, on first call, and its
+/// body defined after the program's functions.
+#[derive(Default)]
+struct GlueTable {
+    /// The declared glue function for each `(type, glue)` key.
+    declared: HashMap<String, FuncId>,
+    /// Declared glue whose body is not yet defined.
+    pending: Vec<(FuncId, Ty, HeapGlue)>,
 }
 
 /// The Cranelift signature of a MIR function (v0 ABI, Stage-1 aggregates).
@@ -609,6 +675,7 @@ fn define_function(
     functions: &[Function],
     types: &TypeckResult,
     str_data: &mut HashMap<Vec<u8>, DataId>,
+    glue: &mut GlueTable,
 ) -> Result<(), CodegenError> {
     let signature = function_signature(module, function, types)?;
     let self_id = ids[&function.symbol];
@@ -623,6 +690,7 @@ fn define_function(
         functions,
         types,
         str_data,
+        glue,
     )?;
     lowering.run()?;
     lowering.finish();
@@ -657,6 +725,8 @@ struct Lowering<'a> {
     /// for each distinct literal's bytes, shared across function bodies so
     /// identical literals dedupe (ADR-0006 Stage B).
     str_data: &'a mut HashMap<Vec<u8>, DataId>,
+    /// The module's out-of-line `Box` glue (ADR-0028 Stage B).
+    glue: &'a mut GlueTable,
 }
 
 impl<'a> Lowering<'a> {
@@ -674,6 +744,7 @@ impl<'a> Lowering<'a> {
         functions: &'a [Function],
         types: &'a TypeckResult,
         str_data: &'a mut HashMap<Vec<u8>, DataId>,
+        glue: &'a mut GlueTable,
     ) -> Result<Self, CodegenError> {
         // Classify every local up front so an unsupported (Stage-2) type fails
         // before any IR is built. The concrete slots/variables are created in
@@ -697,7 +768,145 @@ impl<'a> Lowering<'a> {
             blocks: Vec::new(),
             kinds: Vec::new(),
             str_data,
+            glue,
         })
+    }
+
+    /// Emit the body of an out-of-line `Box` glue function: apply `glue` to the
+    /// `ty` value its one pointer argument addresses, and return.
+    fn emit_glue_body(&mut self, ty: &Ty, glue: HeapGlue) -> Result<(), CodegenError> {
+        let entry = self.builder.create_block();
+        self.builder.append_block_params_for_function_params(entry);
+        self.builder.switch_to_block(entry);
+        let addr = self.builder.block_params(entry)[0];
+        self.emit_heap_glue(ty, addr, glue)?;
+        self.builder.ins().return_(&[]);
+        self.builder.seal_all_blocks();
+        Ok(())
+    }
+
+    /// Call the out-of-line glue applying `glue` to the `ty` value at `addr`,
+    /// declaring it on first use. Calling rather than inlining is what keeps a
+    /// recursive type's glue finite: it reaches itself only through a box
+    /// (`T0016`), whose glue calls this same function.
+    fn call_box_glue(
+        &mut self,
+        ty: &Ty,
+        glue: HeapGlue,
+        addr: ClifValue,
+    ) -> Result<(), CodegenError> {
+        let kind = match glue {
+            HeapGlue::DropInPlace => "drop",
+            HeapGlue::DeepFixup => "copy",
+        };
+        let key = format!("{kind}:{ty:?}");
+        let id = if let Some(id) = self.glue.declared.get(&key) {
+            *id
+        } else {
+            let mut signature = Signature::new(self.module.isa().default_call_conv());
+            signature.params.push(AbiParam::new(self.pointer_type));
+            let name = format!("tuo_glue_{kind}_{}", self.glue.declared.len());
+            let id = self
+                .module
+                .declare_function(&name, Linkage::Local, &signature)
+                .map_err(|error| CodegenError::backend(format!("declaring box glue: {error}")))?;
+            self.glue.declared.insert(key, id);
+            self.glue.pending.push((id, ty.clone(), glue));
+            id
+        };
+        let func_ref = self.module.declare_func_in_func(id, self.builder.func);
+        self.builder.ins().call(func_ref, &[addr]);
+        Ok(())
+    }
+
+    /// Drop the box whose pointer is `ptr`: the pointee's glue, then free its
+    /// allocation (ADR-0028 Stage B).
+    fn drop_box(&mut self, pointee: &Ty, ptr: ClifValue) -> Result<(), CodegenError> {
+        if ty_owns_heap(pointee, self.types) {
+            self.call_box_glue(pointee, HeapGlue::DropInPlace, ptr)?;
+        }
+        let layout = self.layout(pointee)?;
+        let bytes = self
+            .builder
+            .ins()
+            .iconst(self.pointer_type, layout_size(layout)?);
+        self.rt_dealloc(ptr, bytes, layout_align(layout)?);
+        Ok(())
+    }
+
+    /// Lower a `std::boxed` operation (ADR-0028 Stage B) into `dest`: `new`
+    /// allocates the pointee's layout and moves the operand in; `get` copies
+    /// the pointee out (a deep copy of a heap-owning one); `into` moves it out
+    /// and frees the allocation without dropping what it moved.
+    fn lower_box_op(
+        &mut self,
+        dest: &Place,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<(), CodegenError> {
+        let pointee_of = |ty: Ty| match ty {
+            Ty::Wrapper(WrapperKind::Box, pointee) => Ok(*pointee),
+            other => Err(CodegenError::backend(format!(
+                "a box operation on a non-box type: {other:?}"
+            ))),
+        };
+        if op == HeapOp::BoxNew {
+            let value = args
+                .first()
+                .ok_or_else(|| CodegenError::backend("box_new is missing its operand"))?;
+            let pointee = pointee_of(self.place_type(dest))?;
+            let layout = self.layout(&pointee)?;
+            let bytes = self
+                .builder
+                .ins()
+                .iconst(self.pointer_type, layout_size(layout)?);
+            let ptr = self.rt_alloc(bytes, layout_align(layout)?);
+            if scalar_type(&pointee).is_some() {
+                let scalar = self.lower_operand(value)?;
+                self.builder
+                    .ins()
+                    .store(MemFlags::trusted(), scalar, ptr, 0);
+            } else if layout.size > 0 {
+                let src = self.operand_aggregate_address(value)?;
+                self.emit_memcpy(ptr, src, layout);
+            }
+            return self.write_place(dest, ptr);
+        }
+        let (ptr, pointee) = if op == HeapOp::BoxGet {
+            let subject =
+                subject.ok_or_else(|| CodegenError::backend("box_get is missing its subject"))?;
+            let pointee = pointee_of(self.place_type(subject))?;
+            (self.read_place(subject)?, pointee)
+        } else {
+            let boxed = args
+                .first()
+                .ok_or_else(|| CodegenError::backend("box_into is missing its operand"))?;
+            let pointee = self
+                .operand_ty(boxed)
+                .map(pointee_of)
+                .ok_or_else(|| CodegenError::backend("box_into of an untyped operand"))??;
+            (self.lower_operand(boxed)?, pointee)
+        };
+        let layout = self.layout(&pointee)?;
+        if let Some(scalar) = scalar_type(&pointee) {
+            let value = self.builder.ins().load(scalar, MemFlags::trusted(), ptr, 0);
+            self.write_place(dest, value)?;
+        } else if layout.size > 0 {
+            let dest_addr = self.aggregate_dest_address(dest)?;
+            self.emit_memcpy(dest_addr, ptr, layout);
+            if op == HeapOp::BoxGet {
+                self.emit_heap_glue(&pointee, dest_addr, HeapGlue::DeepFixup)?;
+            }
+        }
+        if op == HeapOp::BoxInto {
+            let bytes = self
+                .builder
+                .ins()
+                .iconst(self.pointer_type, layout_size(layout)?);
+            self.rt_dealloc(ptr, bytes, layout_align(layout)?);
+        }
+        Ok(())
     }
 
     /// Lower the whole body.
@@ -912,6 +1121,11 @@ impl<'a> Lowering<'a> {
             // three-word header) is materialized in place into the
             // destination's header storage (ADR-0009 Stage B); the scalar-valued
             // reads (`len`/`byte_at`/`get`) take the scalar rvalue path below.
+            Rvalue::HeapOp {
+                op: op @ (HeapOp::BoxNew | HeapOp::BoxGet | HeapOp::BoxInto),
+                subject,
+                args,
+            } => self.lower_box_op(place, *op, subject.as_ref(), args),
             Rvalue::HeapOp { op, subject, args } if heap_op_produces_aggregate(*op) => {
                 self.lower_heap_op_aggregate(place, *op, subject.as_ref(), args)
             }
@@ -1843,7 +2057,23 @@ impl<'a> Lowering<'a> {
     /// operations compute a field address, so the two code paths cannot diverge.
     fn place_address(&mut self, place: &Place) -> Result<(ClifValue, Ty), CodegenError> {
         let local = place.local.0 as usize;
-        let (mut addr, mut cur_ty) = match &self.kinds[local] {
+        // A `Box` local is a scalar pointer, held in a variable or a slot. A
+        // place through it starts with `Deref` (ADR-0037), and the pointer
+        // value *is* the pointee's address, so that first step is consumed
+        // here rather than by the walk below.
+        let mut steps = place.projection.as_slice();
+        if let (Some(Projection::Deref), LocalKind::Scalar(..) | LocalKind::ScalarSlot(..)) =
+            (steps.first(), &self.kinds[local])
+        {
+            let pointer = self.read_place(&Place::local(place.local))?;
+            let pointee = match &self.function.locals[local].ty {
+                Ty::Wrapper(WrapperKind::Box, pointee) => (**pointee).clone(),
+                _ => return Err(CodegenError::backend("deref of a local that is not a box")),
+            };
+            steps = &steps[1..];
+            return self.walk_projections(pointer, pointee, steps);
+        }
+        let (addr, cur_ty) = match &self.kinds[local] {
             LocalKind::Aggregate { slot, ty } => {
                 let base = self.builder.ins().stack_addr(self.pointer_type, *slot, 0);
                 (base, ty.clone())
@@ -1877,8 +2107,18 @@ impl<'a> Lowering<'a> {
                 return Err(CodegenError::backend("projection on a non-aggregate local"));
             }
         };
+        self.walk_projections(addr, cur_ty, steps)
+    }
 
-        for step in &place.projection {
+    /// Advance `(addr, cur_ty)` through `steps` — the body of
+    /// [`Self::place_address`].
+    fn walk_projections(
+        &mut self,
+        mut addr: ClifValue,
+        mut cur_ty: Ty,
+        steps: &[Projection],
+    ) -> Result<(ClifValue, Ty), CodegenError> {
+        for step in steps {
             match step {
                 Projection::Field(index) => {
                     let offsets = struct_field_offsets(&cur_ty, self.types)
@@ -1949,6 +2189,19 @@ impl<'a> Lowering<'a> {
                     let scaled = self.builder.ins().imul_imm(index_value, stride);
                     addr = self.builder.ins().iadd(addr, scaled);
                     cur_ty = element;
+                }
+                // The pointee of the box stored at `addr` (ADR-0037): load the
+                // pointer; the pointee is what it addresses.
+                Projection::Deref => {
+                    let Ty::Wrapper(WrapperKind::Box, pointee) = &cur_ty else {
+                        return Err(CodegenError::backend("deref of a place that is not a box"));
+                    };
+                    let pointee = (**pointee).clone();
+                    addr = self
+                        .builder
+                        .ins()
+                        .load(self.pointer_type, MemFlags::trusted(), addr, 0);
+                    cur_ty = pointee;
                 }
             }
         }
@@ -3881,6 +4134,12 @@ impl<'a> Lowering<'a> {
             // Scalars, Str, plain aggregates, fixed arrays: no heap to free.
             return Ok(());
         }
+        // A box is a scalar pointer, held in a variable when it is a local:
+        // drop it by value rather than through an address it may not have.
+        if let Ty::Wrapper(WrapperKind::Box, pointee) = &ty {
+            let ptr = self.read_place(place)?;
+            return self.drop_box(pointee, ptr);
+        }
         let base = self.header_address(place)?;
         self.emit_heap_glue(&ty, base, HeapGlue::DropInPlace)
     }
@@ -3991,9 +4250,32 @@ impl<'a> Lowering<'a> {
                 }
                 Ok(())
             }
+            Ty::Wrapper(WrapperKind::Box, pointee) => {
+                let ptr = self
+                    .builder
+                    .ins()
+                    .load(self.pointer_type, MemFlags::trusted(), addr, 0);
+                match glue {
+                    HeapGlue::DropInPlace => self.drop_box(pointee, ptr),
+                    HeapGlue::DeepFixup => {
+                        let layout = self.layout(pointee)?;
+                        let bytes = self
+                            .builder
+                            .ins()
+                            .iconst(self.pointer_type, layout_size(layout)?);
+                        let copy = self.rt_alloc(bytes, layout_align(layout)?);
+                        self.emit_memcpy(copy, ptr, layout);
+                        self.builder.ins().store(MemFlags::trusted(), copy, addr, 0);
+                        if ty_owns_heap(pointee, self.types) {
+                            self.call_box_glue(pointee, HeapGlue::DeepFixup, copy)?;
+                        }
+                        Ok(())
+                    }
+                }
+            }
             Ty::Wrapper(kind, _) => Err(CodegenError::unsupported(format!(
                 "the native backend does not lower a `{}[T]` heap wrapper value \
-                 (heap wrappers await a later ADR); the interpreter remains the reference",
+                 (`Shared`/`Weak` await ADR-0028 Stage C); the interpreter remains the reference",
                 kind.name()
             ))),
             other => Err(CodegenError::backend(format!(
@@ -4384,6 +4666,10 @@ impl<'a> Lowering<'a> {
                 // the fixed `[T; N]` is lowered, but the type walk is total).
                 Projection::Index(_) => match cur {
                     Ty::Array(element) | Ty::FixedArray(element, _) => (*element).clone(),
+                    _ => Ty::Error,
+                },
+                Projection::Deref => match cur {
+                    Ty::Wrapper(WrapperKind::Box, pointee) => *pointee,
                     _ => Ty::Error,
                 },
             };

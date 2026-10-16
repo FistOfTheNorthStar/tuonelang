@@ -310,6 +310,17 @@ pub enum Builtin {
     /// on a negative `n` or one whose byte size overflows — an unsatisfiable
     /// length, the class an allocation failure already reports. (ADR-0030.)
     ArrayFilled,
+    /// `std::boxed::new(take value: T) -> Box[T]` — move `value` into a fresh
+    /// heap allocation the returned box uniquely owns. Pure (an allocation is
+    /// not an observable effect, as for `String`/`Array`). (ADR-0028 Stage B.)
+    BoxNew,
+    /// `std::boxed::get(in b: Box[T]) -> T` — a copy of the boxed value: a
+    /// plain copy for a `Copy` `T`, a deep copy for a heap-owning one, as
+    /// `std::array::get` copies an element. Pure. (ADR-0028 Stage B.)
+    BoxGet,
+    /// `std::boxed::into(take b: Box[T]) -> T` — move the value out of the box
+    /// and free the allocation. Pure. (ADR-0028 Stage B.)
+    BoxInto,
 }
 
 /// How one builtin parameter receives its argument (the surface
@@ -328,7 +339,7 @@ pub enum BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 60] = [
+    pub const ALL: [Self; 63] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -389,6 +400,9 @@ impl Builtin {
         Self::MapKeys,
         Self::FloatSqrt,
         Self::ArrayFilled,
+        Self::BoxNew,
+        Self::BoxGet,
+        Self::BoxInto,
     ];
 
     /// The path of the module the builtin lives in.
@@ -453,6 +467,7 @@ impl Builtin {
             | Self::MapLen
             | Self::MapKeys => &["std", "map"],
             Self::FloatSqrt => &["std", "float"],
+            Self::BoxNew | Self::BoxGet | Self::BoxInto => &["std", "boxed"],
         }
     }
 
@@ -512,6 +527,9 @@ impl Builtin {
             Self::MapKeys => "keys",
             Self::FloatSqrt => "sqrt",
             Self::ArrayFilled => "filled",
+            Self::BoxNew => "new",
+            Self::BoxGet => "get",
+            Self::BoxInto => "into",
         }
     }
 
@@ -579,6 +597,9 @@ impl Builtin {
             Self::MapKeys => "std::map::keys",
             Self::FloatSqrt => "std::float::sqrt",
             Self::ArrayFilled => "std::array::filled",
+            Self::BoxNew => "std::boxed::new",
+            Self::BoxGet => "std::boxed::get",
+            Self::BoxInto => "std::boxed::into",
         }
     }
 
@@ -678,6 +699,8 @@ impl Builtin {
             Self::MapLen | Self::MapKeys => &[In],
             Self::FloatSqrt => &[Take],
             Self::ArrayFilled => &[Take, Take],
+            Self::BoxNew | Self::BoxInto => &[Take],
+            Self::BoxGet => &[In],
         }
     }
 }

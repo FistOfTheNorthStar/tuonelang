@@ -36,8 +36,9 @@
 //! - a **borrow-mode (`in`/`mut`) parameter** is a pointer to caller-owned
 //!   memory; reads and writes go through the pointer directly.
 //!
-//! A local whose type is a heap **wrapper** (`Box`/`Shared`/`Weak`) still makes
-//! the whole function unsupported (they await a later ADR). The owned `String`
+//! A `Box[T]` is a pointer-width scalar whose pointee glue is out of line
+//! (ADR-0028 Stage B); a local whose type is a `Shared`/`Weak` **wrapper**
+//! still makes the whole function unsupported (ADR-0028 Stage C). The owned `String`
 //! and the growable `Array[Int]`, by contrast, are lowered since ADR-0009 Stage
 //! B: their three-word `{ptr, len, cap}` header is an ordinary aggregate held in
 //! an alloca (moved by memcpy of the header, passed by-pointer, returned by
@@ -142,7 +143,7 @@ use tuo_runtime::abi::{
     Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
-use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult};
+use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult, WrapperKind};
 
 use crate::abi::{float_type, int_type, int_width_bits, is_signed, scalar_type};
 
@@ -240,9 +241,9 @@ fn classify_storage(ty: &Ty, types: &TypeckResult, context: &str) -> Result<Stor
 /// refused, awaiting a later ADR.
 fn heap_type_refusal(ty: &Ty, context: &str) -> Option<String> {
     match ty {
-        Ty::Wrapper(kind, _) => Some(format!(
+        Ty::Wrapper(kind, _) if *kind != WrapperKind::Box => Some(format!(
             "`{context}` uses a `{}[T]` heap wrapper, which the LLVM backend does not \
-             lower yet (heap wrappers await a later ADR); the interpreter \
+             lower yet (`Shared`/`Weak` await ADR-0028 Stage C); the interpreter \
              (`tuo spec`/`tuo verify`) remains the reference",
             kind.name()
         )),
@@ -411,7 +412,12 @@ enum HeapGlue {
 fn scalar_type_is_some(ty: &Ty) -> bool {
     matches!(
         ty,
-        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Float(_) | Ty::Fn(_)
+        Ty::Bool
+            | Ty::Char
+            | Ty::Int(_)
+            | Ty::Float(_)
+            | Ty::Fn(_)
+            | Ty::Wrapper(WrapperKind::Box, _)
     )
 }
 
@@ -588,6 +594,22 @@ fn mark_borrows_noalias<'ctx>(
         }
         if *mode != PassMode::Value {
             value.add_attribute(AttributeLoc::Param(native), noalias);
+            // A borrow is a pointer to the caller's live place, so the whole
+            // value is readable for the call's duration. Saying so lets LLVM
+            // hoist a load through it — a borrowed array's buffer pointer —
+            // out of a loop whose body may trap before reaching the load.
+            let layout = layout_of(&function.locals[index].ty, types)
+                .map_err(|error| CodegenError::backend(format!("{error:?}")))?;
+            if layout.size > 0 {
+                let dereferenceable = ctx.create_enum_attribute(
+                    Attribute::get_named_enum_kind_id("dereferenceable"),
+                    layout.size,
+                );
+                value.add_attribute(AttributeLoc::Param(native), dereferenceable);
+            }
+            let align =
+                ctx.create_enum_attribute(Attribute::get_named_enum_kind_id("align"), layout.align);
+            value.add_attribute(AttributeLoc::Param(native), align);
         }
         native += 1;
     }
@@ -978,6 +1000,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             // three-word header) is materialized in place into the
             // destination's header storage (ADR-0009 Stage B); the scalar-valued
             // reads take the scalar rvalue path below.
+            Rvalue::HeapOp {
+                op: op @ (HeapOp::BoxNew | HeapOp::BoxGet | HeapOp::BoxInto),
+                subject,
+                args,
+            } => self.lower_box_op(place, *op, subject.as_ref(), args),
             Rvalue::HeapOp { op, subject, args } if heap_op_produces_aggregate(*op) => {
                 self.lower_heap_op_aggregate(place, *op, subject.as_ref(), args)
             }
@@ -1378,6 +1405,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             Rvalue::Len(place) => {
                 let header = self.header_address(place)?;
                 let (_ptr, len, _cap) = self.load_header(header)?;
+                self.bound_len(len, self.heap_stride(place)?)?;
                 Ok(len.into())
             }
         }
@@ -2090,6 +2118,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 self.ptr_ty.const_null(),
                 self.function.locals[local].ty.clone(),
             ),
+            // A `Box` local is a scalar pointer slot; its pointee is reached by
+            // a leading `Deref` (ADR-0037), which loads the pointer from it.
+            LocalKind::Scalar(ptr, _) if place.projection.first() == Some(&Projection::Deref) => {
+                (*ptr, self.function.locals[local].ty.clone())
+            }
             _ => {
                 return Err(CodegenError::backend("projection on a non-aggregate local"));
             }
@@ -2159,6 +2192,20 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     };
                     addr = self.dynamic_byte_gep(addr, index_value, stride)?;
                     cur_ty = element;
+                }
+                // The pointee of the box stored at `addr` (ADR-0037): load the
+                // pointer; the pointee is what it addresses.
+                Projection::Deref => {
+                    let Ty::Wrapper(WrapperKind::Box, pointee) = &cur_ty else {
+                        return Err(CodegenError::backend("deref of a place that is not a box"));
+                    };
+                    let pointee = (**pointee).clone();
+                    addr = self
+                        .builder
+                        .build_load(self.ptr_ty, addr, "box_ptr")
+                        .map_err(builder_err("loading a box pointer"))?
+                        .into_pointer_value();
+                    cur_ty = pointee;
                 }
             }
         }
@@ -3318,6 +3365,32 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         Ok((ptr, len, cap))
     }
 
+    /// Tell LLVM the range a loaded header `len` can hold: `[0, i64::MAX /
+    /// stride]`, as `!range` metadata on its load.
+    ///
+    /// The bound is an invariant of every live heap value, not an assumption:
+    /// `len <= cap`, and a buffer of `cap * stride` bytes was really obtained
+    /// from `tuo_rt_alloc` (which traps rather than return an unsatisfiable
+    /// size), so `len * stride` fits in an `i64`. It is what lets LLVM prove
+    /// that index arithmetic over a counted loop — `i + j` with `i, j <
+    /// len(v)` of an `Array[Float]` — cannot overflow, and drop those
+    /// overflow checks: `spectral-norm`'s inner loop carried five, of which
+    /// the additions were measurably most of its gap to C.
+    fn bound_len(&self, len: IntValue<'ctx>, stride: u64) -> Result<(), CodegenError> {
+        let Some(load) = len.as_instruction_value() else {
+            return Ok(());
+        };
+        let max = u64::try_from(i64::MAX).unwrap_or(u64::MAX) / stride.max(1);
+        let i64_ty = self.ctx.i64_type();
+        // `!range` is half-open: `[lo, hi)`.
+        let range = self.ctx.metadata_node(&[
+            i64_ty.const_zero().into(),
+            i64_ty.const_int(max + 1, false).into(),
+        ]);
+        load.set_metadata(range, self.ctx.get_kind_id("range"))
+            .map_err(|_| CodegenError::backend("attaching `!range` to a header length load"))
+    }
+
     /// Store the `{ptr, len, cap}` words of a header at `base`.
     fn store_header(
         &mut self,
@@ -3794,6 +3867,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .ok_or_else(|| CodegenError::backend("a heap read is missing its subject place"))?;
         let header = self.header_address(subject)?;
         let (ptr, len, _cap) = self.load_header(header)?;
+        self.bound_len(len, self.heap_stride(subject)?)?;
         match op {
             HeapOp::StringLen | HeapOp::ArrayLen | HeapOp::MapLen => Ok(len.into()),
             HeapOp::MapContainsKey => {
@@ -4313,8 +4387,20 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             // Scalars, Str, plain aggregates, fixed arrays: no heap to free.
             return Ok(());
         }
-        let base = self.header_address(place)?;
+        let base = self.value_address(place)?;
         self.emit_heap_glue(&ty, base, HeapGlue::DropInPlace)
+    }
+
+    /// The address of the whole value at `place`: an aggregate's storage, or —
+    /// for a scalar local such as a `Box[T]` pointer (ADR-0028 Stage B) — its
+    /// stack slot.
+    fn value_address(&mut self, place: &Place) -> Result<PointerValue<'ctx>, CodegenError> {
+        if place.projection.is_empty()
+            && let LocalKind::Scalar(ptr, _) = &self.kinds[place.local.0 as usize]
+        {
+            return Ok(*ptr);
+        }
+        self.aggregate_dest_address(place)
     }
 
     /// Walk the heap-owning parts of the value of type `ty` at `addr`, applying
@@ -4416,14 +4502,186 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 }
                 Ok(())
             }
+            Ty::Wrapper(WrapperKind::Box, pointee) => self.emit_box_glue(pointee, addr, glue),
             Ty::Wrapper(kind, _) => Err(CodegenError::unsupported(format!(
                 "the native backend does not lower a `{}[T]` heap wrapper value \
-                 (heap wrappers await a later ADR); the interpreter remains the reference",
+                 (`Shared`/`Weak` await ADR-0028 Stage C); the interpreter remains the reference",
                 kind.name()
             ))),
             other => Err(CodegenError::backend(format!(
                 "heap glue reached a type that cannot own heap: {other:?}"
             ))),
+        }
+    }
+
+    /// Glue for the `Box[pointee]` pointer stored at `addr` (ADR-0028 Stage B).
+    ///
+    /// Drop: the pointee's own glue, then free its allocation. Deep copy: a
+    /// fresh allocation holding a bytewise copy of the pointee, stored back at
+    /// `addr`, then the pointee's own deep-copy fixup on the copy. The
+    /// pointee's glue is an out-of-line call ([`Self::box_glue_function`]),
+    /// never inlined: a recursive type reaches itself only through a box
+    /// (`T0016`), so calling here is what keeps its glue finite.
+    fn emit_box_glue(
+        &mut self,
+        pointee: &Ty,
+        addr: PointerValue<'ctx>,
+        glue: HeapGlue,
+    ) -> Result<(), CodegenError> {
+        let layout = self.layout(pointee)?;
+        let ptr = self
+            .builder
+            .build_load(self.ptr_ty, addr, "box_ptr")
+            .map_err(builder_err("loading a box pointer"))?
+            .into_pointer_value();
+        let bytes = self.ctx.i64_type().const_int(layout.size, false);
+        let target = match glue {
+            HeapGlue::DropInPlace => ptr,
+            HeapGlue::DeepFixup => {
+                let copy = self.rt_alloc(bytes, layout.align)?;
+                self.emit_memcpy(copy, ptr, layout)?;
+                self.builder
+                    .build_store(addr, copy)
+                    .map_err(builder_err("storing a copied box pointer"))?;
+                copy
+            }
+        };
+        if ty_owns_heap(pointee, self.types) {
+            let function = self.box_glue_function(pointee, glue)?;
+            self.builder
+                .build_call(function, &[target.into()], "")
+                .map_err(builder_err("calling box glue"))?;
+        }
+        if matches!(glue, HeapGlue::DropInPlace) {
+            self.rt_dealloc(ptr, bytes, layout.align)?;
+        }
+        Ok(())
+    }
+
+    /// The out-of-line function applying `glue` to a `ty` value at its one
+    /// pointer argument, defined on first request and shared module-wide.
+    ///
+    /// It is declared *before* its body is emitted, so a recursive type's glue,
+    /// reaching its own box, finds and calls the function being defined
+    /// instead of expanding again.
+    fn box_glue_function(
+        &mut self,
+        ty: &Ty,
+        glue: HeapGlue,
+    ) -> Result<FunctionValue<'ctx>, CodegenError> {
+        let kind = match glue {
+            HeapGlue::DropInPlace => "drop",
+            HeapGlue::DeepFixup => "copy",
+        };
+        let name = format!("tuo.glue.{kind}.{ty:?}");
+        if let Some(function) = self.module.get_function(&name) {
+            return Ok(function);
+        }
+        let fn_type = self.ctx.void_type().fn_type(&[self.ptr_ty.into()], false);
+        let function = self
+            .module
+            .add_function(&name, fn_type, Some(Linkage::Internal));
+        let saved_value = self.value;
+        let saved_block = self.builder.get_insert_block();
+        self.value = function;
+        let entry = self.ctx.append_basic_block(function, "entry");
+        self.builder.position_at_end(entry);
+        let arg = function
+            .get_nth_param(0)
+            .ok_or_else(|| CodegenError::backend("box glue is missing its argument"))?
+            .into_pointer_value();
+        let body = self.emit_heap_glue(ty, arg, glue).and_then(|()| {
+            self.builder
+                .build_return(None)
+                .map(|_| ())
+                .map_err(builder_err("returning from box glue"))
+        });
+        self.value = saved_value;
+        if let Some(block) = saved_block {
+            self.builder.position_at_end(block);
+        }
+        body.map(|()| function)
+    }
+
+    /// Lower a `std::boxed` operation (ADR-0028 Stage B) into `dest`.
+    ///
+    /// `new` allocates the pointee's layout and moves the operand in; `get`
+    /// copies the pointee out (deep-copying a heap-owning one, as
+    /// `array::get` copies an element); `into` moves the pointee out and frees
+    /// the allocation without dropping what it moved.
+    fn lower_box_op(
+        &mut self,
+        dest: &Place,
+        op: HeapOp,
+        subject: Option<&Place>,
+        args: &[Operand],
+    ) -> Result<(), CodegenError> {
+        let pointee_of = |ty: Ty| match ty {
+            Ty::Wrapper(WrapperKind::Box, pointee) => Ok(*pointee),
+            other => Err(CodegenError::backend(format!(
+                "a box operation on a non-box type: {other:?}"
+            ))),
+        };
+        match op {
+            HeapOp::BoxNew => {
+                let value = args
+                    .first()
+                    .ok_or_else(|| CodegenError::backend("box_new is missing its operand"))?;
+                let pointee = pointee_of(self.place_type(dest))?;
+                let layout = self.layout(&pointee)?;
+                let bytes = self.ctx.i64_type().const_int(layout.size, false);
+                let ptr = self.rt_alloc(bytes, layout.align)?;
+                if scalar_type_is_some(&pointee) {
+                    let scalar = self.lower_operand(value)?;
+                    self.builder
+                        .build_store(ptr, scalar)
+                        .map_err(builder_err("storing a boxed scalar"))?;
+                } else if layout.size > 0 {
+                    let src = self.operand_aggregate_address(value)?;
+                    self.emit_memcpy(ptr, src, layout)?;
+                }
+                self.write_place(dest, ptr.into())
+            }
+            HeapOp::BoxGet | HeapOp::BoxInto => {
+                let (ptr, pointee) = if op == HeapOp::BoxGet {
+                    let subject = subject
+                        .ok_or_else(|| CodegenError::backend("box_get is missing its subject"))?;
+                    let pointee = pointee_of(self.place_type(subject))?;
+                    let ptr = self.lower_operand(&Operand::Copy(subject.clone()))?;
+                    (ptr.into_pointer_value(), pointee)
+                } else {
+                    let boxed = args
+                        .first()
+                        .ok_or_else(|| CodegenError::backend("box_into is missing its operand"))?;
+                    let pointee = self
+                        .operand_ty(boxed)
+                        .map(pointee_of)
+                        .ok_or_else(|| CodegenError::backend("box_into of an untyped operand"))??;
+                    (self.lower_operand(boxed)?.into_pointer_value(), pointee)
+                };
+                let layout = self.layout(&pointee)?;
+                if let Some(scalar) = scalar_type(self.ctx, &pointee) {
+                    let value = self
+                        .builder
+                        .build_load(scalar, ptr, "unboxed")
+                        .map_err(builder_err("loading a boxed scalar"))?;
+                    self.write_place(dest, value)?;
+                } else if layout.size > 0 {
+                    let dest_addr = self.aggregate_dest_address(dest)?;
+                    self.emit_memcpy(dest_addr, ptr, layout)?;
+                    if op == HeapOp::BoxGet {
+                        self.emit_heap_glue(&pointee, dest_addr, HeapGlue::DeepFixup)?;
+                    }
+                }
+                if op == HeapOp::BoxInto {
+                    let bytes = self.ctx.i64_type().const_int(layout.size, false);
+                    self.rt_dealloc(ptr, bytes, layout.align)?;
+                }
+                Ok(())
+            }
+            _ => Err(CodegenError::backend(
+                "a non-box heap op reached lower_box_op",
+            )),
         }
     }
 
@@ -4889,6 +5147,10 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 // the fixed `[T; N]` is lowered, but the type walk is total).
                 Projection::Index(_) => match cur {
                     Ty::Array(element) | Ty::FixedArray(element, _) => (*element).clone(),
+                    _ => Ty::Error,
+                },
+                Projection::Deref => match cur {
+                    Ty::Wrapper(WrapperKind::Box, pointee) => *pointee,
                     _ => Ty::Error,
                 },
             };

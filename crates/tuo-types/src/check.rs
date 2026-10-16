@@ -17,7 +17,7 @@ use tuo_ast::{
     ArrayLiteralExpr, ArrayLiteralKind, Ast, BindingStmt, Block, ElseBranch, Expr, FnDecl, Item,
     LiteralPat, Name, Pattern, SpecDecl, SpecStatement, Statement, StructLiteralExpr, TypeRef,
 };
-use tuo_diagnostics::{Diagnostic, DiagnosticCode, Namespace, StructuredValue};
+use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace, StructuredValue};
 use tuo_lexer::TokenKind;
 use tuo_resolve::{Builtin, BuiltinParamMode, Resolution, SymbolId, SymbolKind};
 use tuo_source::Span;
@@ -55,7 +55,8 @@ use crate::ty::{
 ///   breaks a cycle (ADR-0016).
 /// - `T0017`–`T0021` — the constant-time gate (ADR-0020 Stage C): inside a
 ///   `#[constant_time]` function, data-dependent control flow (`T0017`),
-///   array indexing (`T0018`), trapping arithmetic (`T0019`), and calls to
+///   array indexing (`T0018`), trapping arithmetic and variable-amount
+///   shifts (`T0019`), and calls to
 ///   unmarked functions (`T0020`) are all refused; `T0021` reports an
 ///   attribute this compiler does not recognize.
 /// - `T0022` — **warning**, not an error: the runnable-core advisory. A
@@ -76,6 +77,13 @@ use crate::ty::{
 ///   monomorphized (`tuo_runtime::abi::layout_of`), so no native backend
 ///   lowers it. Emitted from the same `native_core` seam as `T0022`, once
 ///   per declaration at the span of the generic parameter list.
+/// - `T0024` — a method call (ADR-0032 Stage A): free functions only, and no
+///   engine executes one. Carries a machine-applicable rewrite to the free
+///   call when exactly one function fits.
+/// - `T0025` — a qualified interface-member call (`Area::area(p)`), which no
+///   engine executes until ADR-0032 Stage B.
+/// - `T0026` — **warning**: an `interface`/`impl` declaration type-checks but
+///   lowers to nothing.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -312,6 +320,7 @@ fn builtin_first_param_accepts(candidate: Builtin, actual: &Ty) -> bool {
 
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
     let int_array = || Ty::Array(Box::new(Ty::int()));
+    let int_box = || Ty::Wrapper(WrapperKind::Box, Box::new(Ty::int()));
     let int_map = || Ty::Map(Box::new(Ty::int()), Box::new(Ty::int()));
     match builtin {
         Builtin::RtWrite => (vec![Ty::int(), Ty::Str], Ty::int()),
@@ -406,6 +415,10 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         Builtin::MapLen => (vec![int_map()], Ty::int()),
         Builtin::MapKeys => (vec![int_map()], Ty::Array(Box::new(Ty::int()))),
         Builtin::FloatSqrt => (vec![Ty::float()], Ty::float()),
+        // Generic over the pointee; checked by `check_box_builtin_call`, so
+        // these `Int` shapes are only the installed seed (as for `Array`).
+        Builtin::BoxNew => (vec![Ty::int()], int_box()),
+        Builtin::BoxGet | Builtin::BoxInto => (vec![int_box()], Ty::int()),
     }
 }
 
@@ -417,6 +430,39 @@ fn node_span(ast: Ast<'_>, node: &::tuo_syntax::SyntaxNode) -> Option<Span> {
 }
 
 /// The operator token of a `BinaryExpr` or `UnaryExpr`, as written.
+/// Is the right operand of the binary expression `node` an integer literal
+/// (through any parentheses)? The constant-time gate's test for a shift whose
+/// range check cannot depend on data.
+fn shift_amount_is_literal(ast: Ast<'_>, node: &::tuo_syntax::SyntaxNode) -> bool {
+    let Some(Expr::Binary(binary)) = Expr::cast(ast, node) else {
+        return false;
+    };
+    let mut amount = binary.rhs();
+    while let Some(Expr::Group(group)) = amount {
+        amount = group.inner();
+    }
+    matches!(amount, Some(Expr::Literal(literal)) if literal.token_kind() == Some(TokenKind::IntLiteral))
+}
+
+/// `path(receiver, args…)` — a method call rewritten as the free call ADR-0032
+/// D2's fix offers, built from the call's own source text so the receiver and
+/// arguments are reproduced exactly as written.
+fn free_call_text(call: tuo_ast::MethodCallExpr<'_>, path: &str) -> Option<String> {
+    let whole = call.text();
+    let base = call.span()?.range().start().as_usize();
+    let slice = |expr: Expr<'_>| -> Option<String> {
+        let range = expr.span()?.range();
+        whole
+            .get(range.start().as_usize() - base..range.end().as_usize() - base)
+            .map(str::to_owned)
+    };
+    let mut parts = vec![slice(call.receiver()?)?];
+    for arg in call.args() {
+        parts.push(slice(arg)?);
+    }
+    Some(format!("{path}({})", parts.join(", ")))
+}
+
 fn binary_or_unary_op<'a>(ast: Ast<'a>, node: &'a ::tuo_syntax::SyntaxNode) -> Option<&'a str> {
     use ::tuo_syntax::SyntaxKind as S;
     let expr = Expr::cast(ast, node)?;
@@ -626,13 +672,14 @@ impl<'a> Checker<'a> {
     /// * **array indexing** — `xs[i]` and `std::array::get`, whose bounds
     ///   check is a conditional branch on an index (`T0018`);
     /// * **trapping arithmetic** — `+`, `-`, `*`, `/`, `%`, and unary `-`,
-    ///   whose overflow check is a conditional branch on the operands
-    ///   (`T0019`);
+    ///   whose overflow check is a conditional branch on the operands, and a
+    ///   shift (`<<`/`>>`) by anything but an integer literal, whose amount
+    ///   range check is a branch on the amount (`T0019`);
     /// * **calls to unmarked functions** (`T0020`), since the callee could
     ///   contain any of the above.
     ///
-    /// What remains is exactly the branchless subset: shifts, bitwise
-    /// operators, comparisons used as values, `let` bindings, literals, and
+    /// What remains is exactly the branchless subset: shifts by a literal
+    /// amount, bitwise operators, comparisons used as values, `let` bindings, literals, and
     /// calls to other marked functions.
     ///
     /// Being syntactic, it is a *sufficient* condition rather than a
@@ -733,6 +780,34 @@ impl<'a> Checker<'a> {
                         .with_help(
                             "use the shift and bitwise operators, which cannot trap; a mask is \
                              `(bit << 63) >> 63` rather than `0 - bit`",
+                        )
+                        .with_actual(StructuredValue::Name(op.to_string())),
+                    );
+                }
+                // A shift traps when its amount is outside `0..width`, so a
+                // shift by a *variable* amount compiles to a compare-and-branch
+                // on that amount — `x << n` is a data-dependent branch. Only a
+                // literal amount, whose check the compiler resolves statically,
+                // is branchless.
+                if let Some(op @ ("<<" | ">>")) = binary_or_unary_op(ast, node)
+                    && !shift_amount_is_literal(ast, node)
+                {
+                    self.push(
+                        Diagnostic::error(
+                            code(19),
+                            format!(
+                                "`{op}` by a non-literal amount is not allowed in a \
+                                 `#[constant_time]` function: a shift traps when its amount \
+                                 is outside the type's width, and that check is a branch on \
+                                 the amount"
+                            ),
+                            span,
+                        )
+                        .with_primary_label("shift by a variable amount")
+                        .with_help(
+                            "shift by an integer literal, whose range check cannot depend on \
+                             the data; a data-dependent rotation must compute every amount and \
+                             combine them with `std::ct::select`",
                         )
                         .with_actual(StructuredValue::Name(op.to_string())),
                     );
@@ -1030,11 +1105,10 @@ impl<'a> Checker<'a> {
     /// and a cycle through `Array`/`Map` (heap-indirected but glue-walked)
     /// would recurse the native backends' inline clone/drop emission
     /// forever. Only `Box`/`Shared`/`Weak` break a cycle — their layout is
-    /// a bare pointer and the backends refuse their *values* cleanly — so
-    /// `Weak` back-edges (the shipped cyclic-shape declarations) stay
-    /// legal. A successor ADR that gives the backends runtime-recursive
-    /// glue relaxes this boundary; until then the check keeps an accepted
-    /// program from ever hanging the compiler.
+    /// a bare pointer — so `Weak` back-edges (the shipped cyclic-shape
+    /// declarations) stay legal, and a cycle through a `Box` builds natively
+    /// since ADR-0028 Stage B, whose glue for a boxed pointee is out of line
+    /// and so recursive at run time rather than at emission time.
     fn check_recursion_boundary(&mut self) {
         let mut aggregates: Vec<SymbolId> = self
             .structs
@@ -1064,8 +1138,9 @@ impl<'a> Checker<'a> {
                     format!(
                         "recursive type: `{name}` reaches itself through its own \
                          fields without a heap-wrapper indirection; v0 cannot \
-                         represent this — break the cycle with a `Box`/`Shared`/\
-                         `Weak` indirection, or flatten the recursion into an \
+                         represent this — break the cycle by holding it behind \
+                         a `Box` (`Box[{name}]`, made with `std::boxed::new`), \
+                         or flatten the recursion into an \
                          index arena (how `std::json` stores its tree)"
                     ),
                     span,
@@ -1414,10 +1489,14 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Fn(decl) => self.check_fn(decl, None),
                 Item::Impl(decl) => {
+                    self.declaration_lowers_to_nothing("impl", decl.span());
                     let target = decl.target().map(|ty| self.lower_type(ty));
                     for function in decl.functions() {
                         self.check_fn(function, target.clone());
                     }
+                }
+                Item::Interface(decl) => {
+                    self.declaration_lowers_to_nothing("interface", decl.span())
                 }
                 Item::Const(decl) => {
                     let Some(id) = self.declared_at(decl.name_ref()) else {
@@ -1439,6 +1518,27 @@ impl<'a> Checker<'a> {
                 _ => {}
             }
         }
+    }
+
+    /// The `T0026` warning on an `interface`/`impl` declaration (ADR-0032
+    /// Stage A): it type-checks and harms nothing, but it lowers to nothing, so
+    /// none of its members can run. A warning, not an error — a program that
+    /// declares one runs today, and refusing it would break it for no gain.
+    fn declaration_lowers_to_nothing(&mut self, keyword: &str, span: Option<Span>) {
+        let span = self.at(span);
+        self.push(
+            Diagnostic::warning(
+                code(26),
+                format!("an `{keyword}` declaration type-checks but lowers to nothing"),
+                span,
+            )
+            .with_primary_label(format!("no engine executes this `{keyword}`'s members"))
+            .with_help(
+                "interfaces and impls are inert until ADR-0032 Stage B; write free \
+                 functions, which every engine runs",
+            )
+            .with_actual(StructuredValue::Name(keyword.to_owned())),
+        );
     }
 
     fn begin_body(&mut self, ret: Ty, fallback: Span) {
@@ -2184,17 +2284,7 @@ impl<'a> Checker<'a> {
                 Ty::Unit
             }
             Expr::Call(call) => self.call(call, span),
-            Expr::MethodCall(call) => {
-                // Method dispatch needs impl resolution: check the receiver
-                // and arguments for their own errors, poison the result.
-                if let Some(receiver) = call.receiver() {
-                    self.expr(receiver);
-                }
-                for arg in call.args() {
-                    self.expr(arg);
-                }
-                Ty::Error
-            }
+            Expr::MethodCall(call) => self.method_call(call, span),
             Expr::Field(field) => {
                 let receiver = field.receiver().map_or(Ty::Error, |inner| self.expr(inner));
                 let Some(name) = field.name() else {
@@ -2951,6 +3041,30 @@ impl<'a> Checker<'a> {
     /// a `T0001` (an undetermined `empty()` is `T0011` "type annotation
     /// needed", reported by the ordinary unsolved-variable path). Returns
     /// `None` for non-map builtins.
+    /// Check a `std::boxed` builtin call (ADR-0028 Stage B), generic over the
+    /// pointee `T`, which is witnessed by the argument: `new(T) -> Box[T]`,
+    /// `get(Box[T]) -> T`, `into(Box[T]) -> T`. Returns `None` for any other
+    /// builtin.
+    fn check_box_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        args: &[Expr<'_>],
+        span: Span,
+    ) -> Option<Ty> {
+        let pointee = match builtin {
+            Builtin::BoxNew | Builtin::BoxGet | Builtin::BoxInto => self.fresh(span),
+            _ => return None,
+        };
+        let boxed = Ty::Wrapper(WrapperKind::Box, Box::new(pointee.clone()));
+        if builtin == Builtin::BoxNew {
+            self.check_args(&[pointee], args, span);
+            Some(boxed)
+        } else {
+            self.check_args(&[boxed], args, span);
+            Some(pointee)
+        }
+    }
+
     fn check_map_builtin_call(
         &mut self,
         builtin: Builtin,
@@ -3218,8 +3332,141 @@ impl<'a> Checker<'a> {
         )
     }
 
+    /// A method call `receiver.name(args)` (`T0024`, ADR-0032 Stage A).
+    ///
+    /// tuonelang has free functions only and no engine executes a method
+    /// call, so it is an error rather than the silent poison it used to be —
+    /// which accepted any name, arity, and result type and then failed at
+    /// `run`/`spec` with a message about a missing `main`. When exactly one
+    /// function of that name takes the receiver's type first, the diagnostic
+    /// rewrites the call to it (`xs.len()` → `std::array::len(xs)`).
+    fn method_call(&mut self, call: tuo_ast::MethodCallExpr<'_>, span: Span) -> Ty {
+        let receiver_ty = call
+            .receiver()
+            .map_or(Ty::Error, |receiver| self.expr(receiver));
+        for arg in call.args() {
+            self.expr(arg);
+        }
+        let name = call.name().unwrap_or("");
+        let receiver_ty = self.icx.apply(&receiver_ty);
+        let candidates = self.functions_taking_first(name, &receiver_ty);
+        let mut diagnostic = Diagnostic::error(
+            code(24),
+            format!("`.{name}(…)` is a method call, and tuonelang has no methods"),
+            span,
+        )
+        .with_primary_label("method calls are not executed by any engine")
+        .with_actual(StructuredValue::Name(name.to_owned()));
+        match candidates.as_slice() {
+            [(path, true)] => {
+                if let Some(replacement) = free_call_text(call, path) {
+                    diagnostic = diagnostic
+                        .with_help(format!(
+                            "call the free function, receiver first: `{replacement}`"
+                        ))
+                        .with_suggestion(
+                            format!("call `{path}`"),
+                            vec![Edit { span, replacement }],
+                            Confidence::MachineApplicable,
+                        );
+                }
+            }
+            [] => {
+                diagnostic = diagnostic.with_help(
+                    "write a free function call with the receiver as the first argument; \
+                     no function of this name takes this type first",
+                );
+            }
+            several => {
+                let listed: Vec<String> = several
+                    .iter()
+                    .map(|(path, _)| format!("`{path}`"))
+                    .collect();
+                diagnostic = diagnostic.with_help(format!(
+                    "write a free function call with the receiver first — candidates: {}",
+                    listed.join(", ")
+                ));
+            }
+        }
+        self.push(diagnostic);
+        Ty::Error
+    }
+
+    /// The functions named `name` whose first parameter accepts `first`, as
+    /// `(path to call it by, whether that path resolves from here)`: the
+    /// builtins (always spelled by their full path) and the program's own
+    /// non-generic functions (by bare name in the current module, qualified
+    /// otherwise — where an `import` may still be needed, so such a path is
+    /// listed but never offered as a machine-applicable edit).
+    fn functions_taking_first(&self, name: &str, first: &Ty) -> Vec<(String, bool)> {
+        if matches!(first, Ty::Error | Ty::Var(_)) || name.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<(String, bool)> = Builtin::ALL
+            .into_iter()
+            .filter(|builtin| {
+                builtin.name() == name && builtin_first_param_accepts(*builtin, first)
+            })
+            .map(|builtin| (builtin.qualified_name().to_owned(), true))
+            .collect();
+        let here = self
+            .current_fn
+            .map(|function| self.resolution.symbol(function).module);
+        let mut own: Vec<(String, bool)> = self
+            .fns
+            .iter()
+            .filter(|(symbol, sig)| {
+                self.resolution.builtin(**symbol).is_none()
+                    && sig.type_params.is_empty()
+                    && self.resolution.symbol(**symbol).name == name
+                    && sig.params.first() == Some(first)
+            })
+            .map(|(symbol, _)| {
+                let data = self.resolution.symbol(*symbol);
+                if Some(data.module) == here {
+                    (data.name.clone(), true)
+                } else {
+                    (qualified_name(self.resolution, *symbol), false)
+                }
+            })
+            .collect();
+        own.sort();
+        found.extend(own);
+        found
+    }
+
     fn call(&mut self, call: tuo_ast::CallExpr<'_>, span: Span) -> Ty {
         let args: Vec<Expr<'_>> = call.args().collect();
+        // A qualified interface-member call (`Area::area(p)`) names a member
+        // no engine executes: interfaces lower to nothing until ADR-0032
+        // Stage B, so it is an error rather than silent poison (`T0025`).
+        if let Some(Expr::Path(path)) = call.callee()
+            && let Some(first) = path.segment_names().next()
+            && path.segment_names().count() >= 2
+            && self
+                .symbol_at(Some(first))
+                .is_some_and(|symbol| self.resolution.symbol(symbol).kind == SymbolKind::Interface)
+        {
+            for arg in args {
+                self.expr(arg);
+            }
+            let written = path
+                .segment_names()
+                .map(|name| name.text)
+                .collect::<Vec<_>>()
+                .join("::");
+            self.push(
+                Diagnostic::error(
+                    code(25),
+                    format!("`{written}` calls an interface member, which no engine executes yet"),
+                    span,
+                )
+                .with_primary_label("interfaces lower to nothing until ADR-0032 Stage B")
+                .with_help("call a free function instead; an `impl` member is not callable in v0")
+                .with_actual(StructuredValue::Name(written)),
+            );
+            return Ty::Error;
+        }
         // Direct calls of a named function keep the callee out of
         // value position (no function-type detour, better diagnostics).
         if let Some(Expr::Path(path)) = call.callee() {
@@ -3241,7 +3488,9 @@ impl<'a> Checker<'a> {
                         // same way (ADR-0011).
                         let ret = match array {
                             Some(ret) => Some(ret),
-                            None => self.check_map_builtin_call(builtin, &args, span),
+                            None => self
+                                .check_map_builtin_call(builtin, &args, span)
+                                .or_else(|| self.check_box_builtin_call(builtin, &args, span)),
                         };
                         self.current_callee = outer;
                         if let Some(ret) = ret {

@@ -185,6 +185,14 @@ fn scratch_buffers_match_the_interpreter() {
 }
 
 #[test]
+fn boxes_match_the_interpreter() {
+    // ADR-0028 Stage B: `Box[T]` values and recursive types through them.
+    for name in ["box_values.tuo", "box_recursive.tuo", "lend_bindings.tuo"] {
+        assert_agrees(name);
+    }
+}
+
+#[test]
 fn borrow_mode_calls_match_the_interpreter() {
     // Borrow-mode (`in`/`mut`) call arguments: the caller passes the address
     // of its place, the callee reads/writes through the pointer (no copy-in,
@@ -339,7 +347,7 @@ fn a_trap_aborts_both_the_interpreter_and_the_native_binary() {
 #[test]
 fn a_program_outside_the_backend_subset_is_refused_not_miscompiled() {
     // A program the native backend does not lower yet (a function with a
-    // heap-wrapper `Box[T]` parameter, which awaits a later ADR — the owned
+    // heap-wrapper `Shared[T]` parameter, which awaits ADR-0028 Stage C — the owned
     // `String`/`Array[Int]` are lowered since ADR-0009 Stage B, `Str` since
     // ADR-0006 Stage B) must be *refused* with a failure exit, never silently
     // mis-compiled. The interpreter remains the reference; here we assert `tuo

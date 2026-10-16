@@ -18,7 +18,7 @@ The executable suite lives with the CLI (it drives the real `tuo` binary):
 |------|------|
 | `crates/tuo-cli/tests/differential.rs` | The suite entry point and the **CI gate** — generates programs, runs both engines, minimizes any failure. |
 | `crates/tuo-cli/tests/differential/harness.rs` | The reusable engine: interpret a program, run it natively, compare the full observable outcome. |
-| `crates/tuo-cli/tests/differential/generator.rs` | A deterministic generator of small, well-typed programs inside the backend's scalar subset. |
+| `crates/tuo-cli/tests/differential/generator.rs` | A deterministic generator of small, well-typed programs inside the backends' shared subset (scalars, fixed arrays, function values, `Box` values). |
 | `crates/tuo-cli/tests/differential/shrink.rs` | The minimized-reproduction workflow: reduce a failing program and save a repro. |
 | `crates/tuo-cli/tests/codegen_differential.rs` | Hand-written fixtures pinning specific shapes (recursion, traps, the refusal boundary). |
 
@@ -32,7 +32,10 @@ behavior the language makes **observable today**:
    return becomes the exit code).
 2. **Deterministic traps** — divide-by-zero and integer overflow abort the
    interpreter and, natively, terminate with the runtime's fixed trap status
-   (`tuo_runtime::TRAP_EXIT_STATUS`). The two must trap *together*.
+   (`tuo_runtime::TRAP_EXIT_STATUS`) after printing a `tuo: trap: …` line to
+   stderr. The two must trap *together*. The harness requires the stderr line
+   as well as the status, because a normal return whose exit byte is 134 (for
+   example `-378`) exits with the same status and is not a trap.
 
 Two behaviors named by the differential charter are **not yet expressible**, and
 the suite is honest about that rather than faking coverage:
@@ -40,10 +43,12 @@ the suite is honest about that rather than faking coverage:
 - **stdout** — the language has no I/O facility yet. `harness::Outcome` reserves
   a slot for stdout so the comparison extends automatically the day one lands;
   until then every program's stdout is empty on both sides.
-- **observable destruction** — the backend lowers no type with a destructor yet
-  (the scalar subset has nothing to drop), so no drop-observable program is
-  generated. This row of the charter opens when the backend lowers aggregates
-  with destructors.
+- **observable destruction** — drops run no user code (there are no user
+  destructors), so no drop is observable to a program. Since ADR-0028 Stage B
+  the generator does emit values with compiler-generated drop glue — `Box`
+  values and the owned `String`s in a boxed list — so the glue *executes* on
+  every engine, and a glue bug that corrupts memory surfaces as a wrong return
+  or a crash; but nothing compares a drop directly.
 
 ## Random generation
 
@@ -52,9 +57,18 @@ same program, on every host and every run. It uses a small SplitMix64 PRNG, not
 the `rand` crate or any wall-clock/entropy source, so a failing seed reproduces
 exactly. Every program it emits is **well-typed and inside the backend subset by
 construction** (integers, arithmetic, comparison, `if`/`else`, `let`, direct
-calls; a call graph that is a DAG, so every program terminates). It never emits
-a float, string, aggregate, or projection — anything the backend would refuse —
-so a divergence is always a real finding, never a rejected program.
+and indirect calls, `mut` write-back, floats folded back through `as Int`,
+fixed `[Int; N]` arrays; a call graph that is a DAG, so every program
+terminates). Since ADR-0028 Stage B it also emits `Box[T]` values: boxed
+scalars and structs through `std::boxed::new`/`get`/`into`, boxes in struct
+fields, `Option` payloads, and fixed arrays, a box across a call boundary and
+behind an `in` parameter, and two bounded-depth recursive types through
+`Option[Box[Self]]` — a binary tree of at most 31 nodes and a list of up to six
+cells owning `String`s — built, deep-copied with `get`, consumed whole or in
+part, and dropped unopened. These live in a fixed prelude every program
+carries, whose recursion is bounded by literal depths. It never emits a
+growable `Array[T]`, a `Shared`/`Weak` value, or anything else a backend would
+refuse, so a divergence is always a real finding, never a rejected program.
 
 The native gate sweeps a fixed seed range (each seed is a full native
 compile+link+run); a separate interpreter-only corpus check sweeps a far wider

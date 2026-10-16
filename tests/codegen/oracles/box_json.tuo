@@ -1,0 +1,580 @@
+// ADR-0028's `std::json` oracle: the tree `std::json` stores as an index arena,
+// re-expressed as a recursive type over `Box`, converted from the arena node
+// by node, and rendered by its own renderer. `std::json` itself is unchanged
+// and is compiled alongside this module.
+//
+// The oracle's claim is that the two representations carry the same document:
+// for every document in `std::json`'s own specs (and the json-parse
+// workload's document), the `Box` tree renders byte-identically to
+// `std::json::render`, and so does a deep copy of the tree taken with
+// `std::boxed::get`. The navigation specs re-ask `std::json`'s spec
+// questions of the `Box` tree and get `std::json`'s answers.
+//
+// What the re-expression costs, stated where it shows:
+//   * every reader CONSUMES its tree (`take v: Value`). A match binding moves
+//     its payload, so a boxed child cannot be read through an `in` borrow
+//     (O0003); asking a second question of one document means converting it
+//     again, or deep-copying it first with `std::boxed::get`;
+//   * the scalar formatting (`append_number`, `append_string_token`,
+//     `append_digits`) is copied from `std::json`, where it is private. The
+//     comparison therefore pins the tree's structure — kinds, nesting, order,
+//     keys — and not two independent number formatters.
+//
+// `main` exits 27 — the number of corpus documents — only when every one
+// renders identically twice over; a mismatch exits 100 + the document's index.
+
+module box_json;
+
+import std::json;
+
+/// A JSON value as a recursive type: a container holds its children as a
+/// singly linked list of boxed cells, in document order.
+enum Value {
+    Null,
+    False,
+    True,
+    Number { num: Float },
+    Text { text: String },
+    List { items: Option[Box[Item]] },
+    Object { members: Option[Box[Member]] },
+}
+
+/// One array element and the rest of the array.
+struct Item {
+    value: Value,
+    rest: Option[Box[Item]],
+}
+
+/// One object member, its key, and the rest of the object.
+struct Member {
+    key: String,
+    value: Value,
+    rest: Option[Box[Member]],
+}
+
+// ----------------------------------------------------------------------------
+// The converter: arena node -> Box tree.
+// ----------------------------------------------------------------------------
+
+/// The `Box` tree of the arena's subtree at `node`.
+fn convert(in d: std::json::Json, take node: Int) -> Value {
+    let kind = std::json::kind_of(d, node);
+    if kind == std::json::kind_null() {
+        return Value::Null;
+    }
+    if kind == std::json::kind_false() {
+        return Value::False;
+    }
+    if kind == std::json::kind_true() {
+        return Value::True;
+    }
+    if kind == std::json::kind_number() {
+        return Value::Number { num: std::json::num_of(d, node) };
+    }
+    if kind == std::json::kind_string() {
+        return Value::Text { text: std::json::text_of(d, node) };
+    }
+    if kind == std::json::kind_array() {
+        return Value::List { items: items_from(d, std::json::first_child(d, node)) };
+    }
+    Value::Object { members: members_from(d, std::json::first_child(d, node)) }
+}
+
+/// The array cells for `child` and its following siblings.
+fn items_from(in d: std::json::Json, take child: Int) -> Option[Box[Item]] {
+    if child < 0 {
+        return None;
+    }
+    let value = convert(d, child);
+    let rest = items_from(d, std::json::next_sibling(d, child));
+    Some { value: std::boxed::new(Item { value: value, rest: rest }) }
+}
+
+/// The object cells for `child` and its following siblings.
+fn members_from(in d: std::json::Json, take child: Int) -> Option[Box[Member]] {
+    if child < 0 {
+        return None;
+    }
+    let key = std::json::key_of(d, child);
+    let value = convert(d, child);
+    let rest = members_from(d, std::json::next_sibling(d, child));
+    Some { value: std::boxed::new(Member { key: key, value: value, rest: rest }) }
+}
+
+/// Parse `text` with `std::json` and convert the arena to a `Box` tree
+/// (`Null` for a document that does not parse).
+fn tree(in text: Str) -> Value {
+    match std::json::parse(text) {
+        Ok { value } => convert(value, std::json::root()),
+        Err { error } => Value::Null,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The renderer over the Box tree. The scalar formatting below is copied from
+// `std::json` (private there); the structure walk is this module's own.
+// ----------------------------------------------------------------------------
+
+fn append_digits(mut out: String, take n: Int) {
+    if n >= 10 {
+        append_digits(out, n / 10);
+    }
+    std::string::push_byte(out, 48 + n % 10);
+}
+
+fn append_string_token(mut out: String, in text: String) {
+    std::string::push_byte(out, 34);
+    var i = 0;
+    while i < std::string::len(text) {
+        let b = std::string::byte_at(text, i);
+        if b == 34 || b == 92 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, b);
+        } else if b == 10 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 110);
+        } else if b == 13 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 114);
+        } else if b == 9 {
+            std::string::push_byte(out, 92);
+            std::string::push_byte(out, 116);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    std::string::push_byte(out, 34);
+}
+
+fn append_number(mut out: String, take x: Float) {
+    if x != x || (x != 0.0 && x / 2.0 == x) {
+        std::string::append(out, "null");
+        return;
+    }
+    var v = x;
+    if v < 0.0 {
+        std::string::push_byte(out, 45);
+        v = 0.0 - v;
+    }
+    let whole = v as Int;
+    append_digits(out, whole);
+    var frac = v - (whole as Float);
+    if frac > 0.0 {
+        var scaled = ((frac * 1000000.0) + 0.5) as Int;
+        if scaled >= 1000000 {
+            scaled = 999999;
+        }
+        if scaled > 0 {
+            var digits = 6;
+            while digits > 0 && scaled % 10 == 0 {
+                scaled = scaled / 10;
+                digits = digits - 1;
+            }
+            std::string::push_byte(out, 46);
+            var place = 1;
+            var k = 1;
+            while k < digits {
+                place = place * 10;
+                k = k + 1;
+            }
+            while place > 0 {
+                std::string::push_byte(out, 48 + (scaled / place) % 10);
+                place = place / 10;
+            }
+        }
+    }
+}
+
+/// Append the rendering of `v` to `out`, consuming `v`.
+fn append_value(mut out: String, take v: Value) {
+    match v {
+        Value::Null => std::string::append(out, "null"),
+        Value::False => std::string::append(out, "false"),
+        Value::True => std::string::append(out, "true"),
+        Value::Number { num } => append_number(out, num),
+        Value::Text { text } => append_string_token(out, text),
+        Value::List { items } => {
+            std::string::push_byte(out, 91);
+            append_items(out, items, true);
+            std::string::push_byte(out, 93);
+        },
+        Value::Object { members } => {
+            std::string::push_byte(out, 123);
+            append_members(out, members, true);
+            std::string::push_byte(out, 125);
+        },
+    }
+}
+
+fn append_items(mut out: String, take items: Option[Box[Item]], take first: Bool) {
+    match items {
+        Some { value } => {
+            let item = std::boxed::into(value);
+            if !first {
+                std::string::push_byte(out, 44);
+            }
+            append_value(out, item.value);
+            append_items(out, item.rest, false);
+        },
+        None => {},
+    }
+}
+
+fn append_members(mut out: String, take members: Option[Box[Member]], take first: Bool) {
+    match members {
+        Some { value } => {
+            let member = std::boxed::into(value);
+            if !first {
+                std::string::push_byte(out, 44);
+            }
+            append_string_token(out, member.key);
+            std::string::push_byte(out, 58);
+            append_value(out, member.value);
+            append_members(out, member.rest, false);
+        },
+        None => {},
+    }
+}
+
+/// Render a `Box` tree as compact JSON text, consuming it.
+fn render(take v: Value) -> String {
+    var out = std::string::empty();
+    append_value(out, v);
+    out
+}
+
+// ----------------------------------------------------------------------------
+// Readers over the Box tree, for re-asking std::json's spec questions. Each
+// consumes its argument (see the header).
+// ----------------------------------------------------------------------------
+
+/// The `std::json` kind tag of `v`.
+fn kind(take v: Value) -> Int {
+    match v {
+        Value::Null => std::json::kind_null(),
+        Value::False => std::json::kind_false(),
+        Value::True => std::json::kind_true(),
+        Value::Number { num } => std::json::kind_number(),
+        Value::Text { text } => std::json::kind_string(),
+        Value::List { items } => std::json::kind_array(),
+        Value::Object { members } => std::json::kind_object(),
+    }
+}
+
+/// The number of a number value (0.0 otherwise).
+fn number(take v: Value) -> Float {
+    match v {
+        Value::Number { num } => num,
+        _ => 0.0,
+    }
+}
+
+/// The text of a string value ("" otherwise).
+fn text(take v: Value) -> String {
+    match v {
+        Value::Text { text } => text,
+        _ => std::string::empty(),
+    }
+}
+
+/// How many nodes the tree holds, counting `v` itself.
+fn node_count(take v: Value) -> Int {
+    match v {
+        Value::List { items } => 1 + items_nodes(items),
+        Value::Object { members } => 1 + members_nodes(members),
+        _ => 1,
+    }
+}
+
+fn items_nodes(take items: Option[Box[Item]]) -> Int {
+    match items {
+        Some { value } => {
+            let item = std::boxed::into(value);
+            node_count(item.value) + items_nodes(item.rest)
+        },
+        None => 0,
+    }
+}
+
+fn members_nodes(take members: Option[Box[Member]]) -> Int {
+    match members {
+        Some { value } => {
+            let member = std::boxed::into(value);
+            node_count(member.value) + members_nodes(member.rest)
+        },
+        None => 0,
+    }
+}
+
+/// How many direct children a container holds (0 for scalars).
+fn child_count(take v: Value) -> Int {
+    match v {
+        Value::List { items } => items_len(items),
+        Value::Object { members } => members_len(members),
+        _ => 0,
+    }
+}
+
+fn items_len(take items: Option[Box[Item]]) -> Int {
+    match items {
+        Some { value } => 1 + items_len(std::boxed::into(value).rest),
+        None => 0,
+    }
+}
+
+fn members_len(take members: Option[Box[Member]]) -> Int {
+    match members {
+        Some { value } => 1 + members_len(std::boxed::into(value).rest),
+        None => 0,
+    }
+}
+
+/// The element of an array at `index`, or `Null` when out of range or `v` is
+/// not an array.
+fn element(take v: Value, take index: Int) -> Value {
+    match v {
+        Value::List { items } => nth_item(items, index),
+        _ => Value::Null,
+    }
+}
+
+fn nth_item(take items: Option[Box[Item]], take index: Int) -> Value {
+    match items {
+        Some { value } => {
+            // The early return keeps both moves unconditional on their own
+            // path (O0008: no hidden drop flags).
+            let item = std::boxed::into(value);
+            if index == 0 {
+                return item.value;
+            }
+            nth_item(item.rest, index - 1)
+        },
+        None => Value::Null,
+    }
+}
+
+/// The key of an object's first member ("" when it has none or `v` is not an
+/// object).
+fn first_key(take v: Value) -> String {
+    match v {
+        Value::Object { members } => match members {
+            Some { value } => std::boxed::into(value).key,
+            None => std::string::empty(),
+        },
+        _ => std::string::empty(),
+    }
+}
+
+/// The value of an object member under `key` (the first, as `std::json`
+/// resolves duplicates), or `None` when absent or `v` is not an object.
+fn member(take v: Value, in key: Str) -> Option[Value] {
+    match v {
+        Value::Object { members } => find_member(members, key),
+        _ => None,
+    }
+}
+
+fn find_member(take members: Option[Box[Member]], in key: Str) -> Option[Value] {
+    match members {
+        Some { value } => {
+            let m = std::boxed::into(value);
+            if std::string::as_str(m.key) == key {
+                return Some { value: m.value };
+            }
+            find_member(m.rest, key)
+        },
+        None => None,
+    }
+}
+
+/// `member`, with `Null` for an absent member.
+fn member_or_null(take v: Value, in key: Str) -> Value {
+    match member(v, key) {
+        Some { value } => value,
+        None => Value::Null,
+    }
+}
+
+/// Whether `member` finds nothing under `key`.
+fn member_missing(take v: Value, in key: Str) -> Bool {
+    match member(v, key) {
+        Some { value } => false,
+        None => true,
+    }
+}
+
+// ----------------------------------------------------------------------------
+// The oracle.
+// ----------------------------------------------------------------------------
+
+/// What `std::json` renders for `text` (its error message if it does not
+/// parse).
+fn arena_render(in text: Str) -> String {
+    match std::json::parse(text) {
+        Ok { value } => std::json::render(value),
+        Err { error } => error,
+    }
+}
+
+/// Whether the `Box` tree of `text` renders byte-identically to `std::json`,
+/// both directly and through a deep copy taken with `std::boxed::get` (the
+/// copy is rendered first, then the original is moved out and rendered).
+fn renders_alike(in text: Str) -> Bool {
+    let expected = arena_render(text);
+    let boxed = std::boxed::new(tree(text));
+    let copied = render(std::boxed::get(boxed));
+    let original = render(std::boxed::into(boxed));
+    std::string::as_str(copied) == std::string::as_str(expected) && std::string::as_str(original) == std::string::as_str(expected)
+}
+
+/// The corpus: every document `std::json`'s specs parse successfully, and the
+/// json-parse workload's document.
+fn corpus() -> [Str; 27] {
+    [
+        "null",
+        "true",
+        "false",
+        "42",
+        "\"hi\"",
+        " [1] ",
+        "{}",
+        "-7",
+        "2.25",
+        "1e3",
+        "-1.5e2",
+        "\"a\\nb\"",
+        "\"q\\\"q\"",
+        "[1, 2, 3]",
+        "{\"a\": [true]}",
+        "[]",
+        "[7]",
+        "[[1], 2]",
+        "{\"id\": 7, \"n\": 2}",
+        "{\"id\": 7}",
+        "{\"xs\": [1, 2], \"o\": {\"y\": true}}",
+        "{\"xs\": [1, 2]}",
+        "{\"o\": {\"y\": true}}",
+        " [ ] ",
+        " [ 1 , 2 ] ",
+        "{\"a\": true, \"b\": [1.5, \"x\"]}",
+        "{\"id\":42,\"name\":\"tuonelang\",\"tags\":[\"fast\",\"safe\",\"native\"],\"metrics\":{\"stars\":128,\"forks\":32,\"score\":9.5},\"active\":true,\"refs\":[1,2,3,4,5,6,7,8]}",
+    ]
+}
+
+/// The number of corpus documents that render alike, or 100 + the index of the
+/// first that does not.
+fn check_corpus() -> Int {
+    var index = 0;
+    for doc in corpus() {
+        if !renders_alike(doc) {
+            return 100 + index;
+        }
+        index = index + 1;
+    }
+    index
+}
+
+spec "the Box tree renders every std::json spec document byte-identically" {
+    then renders_alike("null");
+    then renders_alike("true");
+    then renders_alike("false");
+    then renders_alike("42");
+    then renders_alike("\"hi\"");
+    then renders_alike(" [1] ");
+    then renders_alike("{}");
+    then renders_alike("-7");
+    then renders_alike("2.25");
+    then renders_alike("1e3");
+    then renders_alike("-1.5e2");
+    then renders_alike("\"a\\nb\"");
+    then renders_alike("\"q\\\"q\"");
+    then renders_alike("[1, 2, 3]");
+    then renders_alike("{\"a\": [true]}");
+    then renders_alike("[]");
+    then renders_alike("[7]");
+    then renders_alike("[[1], 2]");
+}
+
+spec "the Box tree renders the nested and object documents byte-identically" {
+    then renders_alike("{\"id\": 7, \"n\": 2}");
+    then renders_alike("{\"id\": 7}");
+    then renders_alike("{\"xs\": [1, 2], \"o\": {\"y\": true}}");
+    then renders_alike("{\"xs\": [1, 2]}");
+    then renders_alike("{\"o\": {\"y\": true}}");
+    then renders_alike(" [ ] ");
+    then renders_alike(" [ 1 , 2 ] ");
+    then renders_alike("{\"a\": true, \"b\": [1.5, \"x\"]}");
+    then std::string::as_str(render(tree("{\"a\": true, \"b\": [1.5, \"x\"]}"))) == "{\"a\":true,\"b\":[1.5,\"x\"]}";
+}
+
+spec "the Box tree renders the json-parse workload document byte-identically" {
+    then renders_alike("{\"id\":42,\"name\":\"tuonelang\",\"tags\":[\"fast\",\"safe\",\"native\"],\"metrics\":{\"stars\":128,\"forks\":32,\"score\":9.5},\"active\":true,\"refs\":[1,2,3,4,5,6,7,8]}");
+}
+
+spec "parse of the Box render is a fixed point" {
+    then std::string::as_str(render(tree(std::string::as_str(render(tree("{\"a\": [1, {\"b\": null}]}")))))) == "{\"a\":[1,{\"b\":null}]}";
+}
+
+// std::json's own spec questions, asked of the Box tree.
+
+spec "scalars convert to their kinds" {
+    then kind(tree("null")) == std::json::kind_null();
+    then kind(tree("true")) == std::json::kind_true();
+    then kind(tree("false")) == std::json::kind_false();
+    then kind(tree("42")) == std::json::kind_number();
+    then kind(tree("\"hi\"")) == std::json::kind_string();
+    then kind(tree(" [1] ")) == std::json::kind_array();
+    then kind(tree("{}")) == std::json::kind_object();
+}
+
+spec "numbers convert as Float" {
+    then number(tree("42")) == 42.0;
+    then number(tree("-7")) == 0.0 - 7.0;
+    then number(tree("2.25")) == 2.25;
+    then number(tree("1e3")) == 1000.0;
+    then number(tree("-1.5e2")) == 0.0 - 150.0;
+}
+
+spec "strings keep their decoded escapes" {
+    then std::string::as_str(text(tree("\"hi\""))) == "hi";
+    then std::string::len(text(tree("\"a\\nb\""))) == 3;
+    then std::string::byte_at(text(tree("\"a\\nb\"")), 1) == 10;
+    then std::string::as_str(text(tree("\"q\\\"q\""))) == "q\"q";
+}
+
+spec "the Box tree holds as many nodes as the arena" {
+    then node_count(tree("null")) == 1;
+    then node_count(tree("[1, 2, 3]")) == 4;
+    then node_count(tree("{\"a\": [true]}")) == 3;
+}
+
+spec "arrays keep their children in order" {
+    then child_count(tree("[1, 2, 3]")) == 3;
+    then child_count(tree("[]")) == 0;
+    then number(element(tree("[1, 2, 3]"), 0)) == 1.0;
+    then number(element(tree("[1, 2, 3]"), 1)) == 2.0;
+    then kind(element(tree("[7]"), 1)) == std::json::kind_null();
+    then kind(element(tree("[[1], 2]"), 0)) == std::json::kind_array();
+}
+
+spec "objects find members by key" {
+    then number(member_or_null(tree("{\"id\": 7, \"n\": 2}"), "id")) == 7.0;
+    then number(member_or_null(tree("{\"id\": 7, \"n\": 2}"), "n")) == 2.0;
+    then member_missing(tree("{\"id\": 7}"), "missing");
+    then std::string::as_str(first_key(tree("{\"id\": 7}"))) == "id";
+}
+
+spec "nesting navigates" {
+    then child_count(tree("{\"xs\": [1, 2], \"o\": {\"y\": true}}")) == 2;
+    then child_count(member_or_null(tree("{\"xs\": [1, 2]}"), "xs")) == 2;
+    then kind(member_or_null(member_or_null(tree("{\"o\": {\"y\": true}}"), "o"), "y")) == std::json::kind_true();
+}
+
+spec check_corpus {
+    then check_corpus() == 27;
+}
+
+fn main() -> Int {
+    check_corpus()
+}

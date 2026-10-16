@@ -1,0 +1,23 @@
+// ownership.md, ADR-0028 Stage B — `std::boxed::get` borrows its box (`in`),
+// so a box can be read any number of times before it is moved out with
+// `into` or simply dropped; a box moves like any owned value.
+
+fn case_read_twice() -> Int {
+    let b = std::boxed::new(20);
+    std::boxed::get(b) + std::boxed::get(b)
+}
+
+fn case_read_then_take() -> Int {
+    let b = std::boxed::new(std::string::from_str("abc"));
+    let copy = std::boxed::get(b);
+    std::string::len(copy) + std::string::len(std::boxed::into(b))
+}
+
+fn pass_on(take b: Box[Int]) -> Int {
+    std::boxed::into(b)
+}
+
+fn case_moved_into_a_call() -> Int {
+    let b = std::boxed::new(5);
+    pass_on(b)
+}

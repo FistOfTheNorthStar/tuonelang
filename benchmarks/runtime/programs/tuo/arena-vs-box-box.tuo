@@ -1,0 +1,57 @@
+// The arena-vs-box workload, box side (ADR-0028's benchmark plan): the same
+// balanced binary tree of depth DEPTH as `arena-vs-box-arena.tuo`, with every
+// node its own heap allocation behind a `Box` (ADR-0028 Stage B). Each round
+// builds the tree and sums it by recursive descent. The walk consumes the
+// tree — a match binding moves its payload, so a boxed child cannot be read
+// through an `in` borrow — and each node is therefore freed as it is summed:
+// the sum and the drop are one pass here, where the arena sums first and then
+// frees three columns. A node's value is its heap number `i` (root 1, children
+// `2i` and `2i + 1`) modulo 251, and the exit byte is the sum over every round
+// modulo 256, so both programs exit with the same byte.
+
+struct Node {
+    value: Int,
+    left: Option[Box[Node]],
+    right: Option[Box[Node]],
+}
+
+// The subtree of heap number `i` at `depth`.
+fn build(take depth: Int, take i: Int) -> Node {
+    if depth == 0 {
+        return Node { value: i % 251, left: None, right: None };
+    }
+    Node {
+        value: i % 251,
+        left: Some { value: std::boxed::new(build(depth - 1, 2 * i)) },
+        right: Some { value: std::boxed::new(build(depth - 1, 2 * i + 1)) },
+    }
+}
+
+// The sum of the subtree, by recursive descent; consumes it.
+fn sum(take node: Node) -> Int {
+    let left = match node.left {
+        Some { value } => sum(std::boxed::into(value)),
+        None => 0,
+    };
+    let right = match node.right {
+        Some { value } => sum(std::boxed::into(value)),
+        None => 0,
+    };
+    node.value + left + right
+}
+
+fn round(take depth: Int) -> Int {
+    sum(build(depth, 1))
+}
+
+fn main() -> Int {
+    let depth = 20;
+    let rounds = 4;
+    var total = 0;
+    var r = 0;
+    while r < rounds {
+        total = total + round(depth);
+        r = r + 1;
+    }
+    total % 256
+}

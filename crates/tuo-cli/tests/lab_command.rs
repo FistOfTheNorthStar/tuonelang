@@ -201,15 +201,15 @@ fn supported_workloads_run_natively_and_match() {
     let results = run_supported(&TuoRunNativeRunner);
     assert_eq!(
         results.len(),
-        23,
-        "exactly the twenty-three supported workloads run (the scalar core plus the \
+        24,
+        "exactly the twenty-four supported workloads run (the scalar core plus the \
          fixed-array collections workload, the borrowed-Str string-processing \
          workload, the allocator-core allocation workload, the function-value \
          indirect-calls workload, the hash-map map-lookup workload, the \
          OS-boundary file-io workload, the socket networking workload, the \
          channel workload, the json-parse workload, the ADR-0017 udp-echo and \
          connect-timeout pair, and the ADR-0019 sha256-hash and wire-decode \
-         pair, and five Computer Language Benchmarks Game programs)"
+         pair, and all six Computer Language Benchmarks Game programs)"
     );
     for (label, outcome) in results {
         let outcome = outcome.unwrap_or_else(|e| panic!("workload `{label}` failed to run: {e}"));
@@ -265,7 +265,7 @@ fn c_comparison_agrees_where_the_toolchain_exists() {
     }
     // Either the toolchain was present (comparisons measured) or it was not
     // (all skipped) — but every supported workload was accounted for.
-    assert_eq!(measured + skipped, 23);
+    assert_eq!(measured + skipped, 24);
     // On CI and dev machines `cc` is present, so we expect real measurements;
     // this documents the intent without failing a truly toolchain-less host.
     if measured == 0 {
@@ -320,7 +320,7 @@ fn go_comparison_agrees_where_the_toolchain_exists() {
             }
         }
     }
-    assert_eq!(measured + skipped, 23);
+    assert_eq!(measured + skipped, 24);
     if measured == 0 {
         eprintln!("note: no Go toolchain found; all Go comparisons recorded as skipped");
     }
@@ -420,7 +420,7 @@ fn rust_comparison_agrees_on_the_benchmarks_game() {
         }
     }
     assert_eq!(
-        measured, 5,
+        measured, 6,
         "every supported Benchmarks Game workload has a Rust peer"
     );
 }
@@ -733,7 +733,102 @@ fn benchmarks_game_speed_table() {
          so below 1.00x means tuonelang was faster)"
     );
     assert_eq!(
-        measured, 5,
+        measured, 6,
         "every supported Benchmarks Game workload was timed"
     );
+}
+
+/// ADR-0028's `arena-vs-box` workload, arena side: the balanced tree as an
+/// index arena of parallel `Array[Int]` columns, the `std::json` layout.
+const ARENA_VS_BOX_ARENA: &str =
+    include_str!("../../../benchmarks/runtime/programs/tuo/arena-vs-box-arena.tuo");
+
+/// ADR-0028's `arena-vs-box` workload, box side: the same tree with one `Box`
+/// per node.
+const ARENA_VS_BOX_BOX: &str =
+    include_str!("../../../benchmarks/runtime/programs/tuo/arena-vs-box-box.tuo");
+
+/// The tree depth and round count both `arena-vs-box` programs are written
+/// with; [`arena_vs_box_expected_exit`] derives the checksum from them, and
+/// [`arena_vs_box_programs_compute_the_same_tree`] pins that the committed
+/// sources still say so.
+const ARENA_VS_BOX_DEPTH: u32 = 20;
+/// The round count; see [`ARENA_VS_BOX_DEPTH`].
+const ARENA_VS_BOX_ROUNDS: u64 = 4;
+
+/// The exit byte both `arena-vs-box` programs must reach, computed here
+/// independently of either: every node's value is its heap number `i` (root
+/// 1, children `2i` and `2i + 1`) modulo 251, summed over the tree and over
+/// every round, modulo 256.
+fn arena_vs_box_expected_exit() -> i32 {
+    let nodes = (1u64 << (ARENA_VS_BOX_DEPTH + 1)) - 1;
+    let per_round: u64 = (1..=nodes).map(|i| i % 251).sum();
+    i32::try_from((per_round * ARENA_VS_BOX_ROUNDS) % 256).expect("a byte fits in i32")
+}
+
+/// The two `arena-vs-box` programs build the same tree, at the depth and round
+/// count the checksum is derived from, and both really run to that checksum on
+/// the default backend — so the timing table below compares two programs that
+/// compute the same answer, not two that merely share a name.
+#[test]
+fn arena_vs_box_programs_compute_the_same_tree() {
+    for (label, source) in [("arena", ARENA_VS_BOX_ARENA), ("box", ARENA_VS_BOX_BOX)] {
+        assert!(
+            source.contains(&format!("let depth = {ARENA_VS_BOX_DEPTH};"))
+                && source.contains(&format!("let rounds = {ARENA_VS_BOX_ROUNDS};")),
+            "both programs use the depth and round count the checksum assumes"
+        );
+        // Its own scratch file: `TuoRunNativeRunner`'s is shared with the
+        // tests that run beside this one.
+        let path = scratch(&format!("arena-vs-box-check-{label}"), "tuo");
+        std::fs::write(&path, source).expect("scratch source is writable");
+        let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
+            .arg("run")
+            .arg(&path)
+            .output()
+            .expect("the tuo binary runs");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(
+            output.status.code(),
+            Some(arena_vs_box_expected_exit()),
+            "arena-vs-box ({label}) runs to the checksum; stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// ADR-0028's `arena-vs-box` measurement: the same balanced binary tree
+/// (depth 20, four rounds of build, sum by recursive descent, drop) written as
+/// an index arena and as `Box`ed nodes, both built by `tuo build --release`
+/// and timed as the speed table above times its workloads (best of five runs
+/// after a warm-up). It prints both times and their ratio and asserts only
+/// that each run reached the checksum — never a ratio, since the ADR asks for
+/// the figure as measured and with no verdict.
+#[test]
+#[ignore = "a timing table; run with --ignored --nocapture"]
+#[expect(
+    clippy::print_stdout,
+    reason = "the timing table is this test's output"
+)]
+fn arena_vs_box_timing() {
+    const RUNS: usize = 5;
+    let expected = arena_vs_box_expected_exit();
+    let mut times = Vec::new();
+    for (label, source) in [("arena", ARENA_VS_BOX_ARENA), ("box", ARENA_VS_BOX_BOX)] {
+        let exe = build_for_speed(None, source, &format!("arena-vs-box-{label}"))
+            .unwrap_or_else(|e| panic!("arena-vs-box ({label}) must build: {e}"));
+        let ms =
+            best_of(&exe, RUNS, expected).unwrap_or_else(|e| panic!("arena-vs-box ({label}): {e}"));
+        let _ = std::fs::remove_file(&exe);
+        times.push(ms);
+    }
+    println!(
+        "arena-vs-box (depth {ARENA_VS_BOX_DEPTH}, {ARENA_VS_BOX_ROUNDS} rounds, \
+         {} nodes per tree)",
+        (1u64 << (ARENA_VS_BOX_DEPTH + 1)) - 1
+    );
+    println!("  arena {:>9.1}ms", times[0]);
+    println!("  box   {:>9.1}ms", times[1]);
+    println!("  box / arena = {:.2}x", times[1] / times[0]);
+    println!("(best of {RUNS} runs after a warm-up, both built with tuo build --release)");
 }

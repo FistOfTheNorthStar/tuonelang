@@ -1,0 +1,36 @@
+// ADR-0028 Stage B: `Box[T]` values through `std::boxed::new`/`get`/`into` —
+// a boxed scalar, a boxed owned `String` (deep-copied by `get`, moved out by
+// `into`), a boxed struct, a box inside a box, a box in a struct field and an
+// `Option` payload, and boxes dropped without ever being opened. Exit 101.
+struct Pair {
+    left: Int,
+    right: Int,
+}
+
+struct Holder {
+    tag: Int,
+    inner: Option[Box[Pair]],
+}
+
+fn sum_holder(take h: Holder) -> Int {
+    match h.inner {
+        Some { value } => h.tag + std::boxed::get(value).left + std::boxed::into(value).right,
+        None => h.tag,
+    }
+}
+
+fn main() -> Int {
+    let n = std::boxed::new(40);
+    let a = std::boxed::get(n) + std::boxed::get(n);
+    let words = std::boxed::new(std::string::from_str("abcd"));
+    let copy = std::boxed::get(words);
+    let moved = std::boxed::into(words);
+    let b = std::string::len(copy) + std::string::len(moved);
+    let nested = std::boxed::new(std::boxed::new(Pair { left: 3, right: 4 }));
+    let pair = std::boxed::into(std::boxed::into(nested));
+    let c = pair.left + pair.right;
+    let unopened = std::boxed::new(std::string::from_str("never read"));
+    let full = Holder { tag: 1, inner: Some { value: std::boxed::new(Pair { left: 2, right: 3 }) } };
+    let empty = Holder { tag: 2, inner: None };
+    a + b + c + sum_holder(full) + sum_holder(empty) - 2
+}

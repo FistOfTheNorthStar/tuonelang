@@ -166,11 +166,11 @@ fn honesty_rules_hold_over_the_catalog() {
     // operators landed, since SHA-256 is *defined* in rotations and shifts),
     // and the ADR-0020 constant-time workload (the one entry here measuring a
     // cost deliberately paid rather than a throughput to improve)
-    // all run, as do five of the six Computer Language Benchmarks Game
-    // programs. The one unsupported entry is binary-trees, which needs native
-    // `Box` values.
-    assert_eq!(supported, 23);
-    assert_eq!(unsupported, 1);
+    // all run, as do all six Computer Language Benchmarks Game programs —
+    // binary-trees, the last unsupported entry, since ADR-0028 Stage B gave
+    // `Box` values a native lowering.
+    assert_eq!(supported, 24);
+    assert_eq!(unsupported, 0);
 }
 
 /// (3, cont.) The human report never markets. No superlative may appear, and
@@ -195,11 +195,9 @@ fn human_report_carries_no_superlative() {
             "the human report must never contain the marketing phrase `{banned}`"
         );
     }
-    // binary-trees is the one unexpressible workload, so the reason line
-    // appears exactly once; a second would mean a silent regression of some
-    // other workload to unsupported.
-    assert_eq!(text.matches("not yet expressible").count(), 1);
-    assert!(text.contains("binary-trees         not yet expressible"));
+    // No workload is unexpressible today, so the reason line never appears;
+    // one would mean a silent regression of some workload to unsupported.
+    assert_eq!(text.matches("not yet expressible").count(), 0);
 }
 
 /// (4) The committed example report parses, round-trips, and matches a fresh
@@ -254,7 +252,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     let committed = LabReport::from_json(&read(&path)).expect("example report parses");
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 23);
+    assert_eq!(committed.supported_workload_count(), 24);
     assert_eq!(
         committed.edit_scenarios, fresh_edits,
         "example report's edit scenarios are stale; regenerate the example"
@@ -262,9 +260,9 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set:
-    // C and Go for all 23 supported workloads, Rust for the five supported
-    // Benchmarks Game programs — 23 × 2 + 5 = 51.
-    assert_eq!(committed.comparisons.len(), 51);
+    // C and Go for all 24 supported workloads, Rust for the six Benchmarks
+    // Game programs — 24 × 2 + 6 = 54.
+    assert_eq!(committed.comparisons.len(), 54);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -283,10 +281,10 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Rust)
         .count();
-    assert_eq!(c_count, 23, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 23, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 24, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 24, "every supported workload has a Go peer entry");
     assert_eq!(
-        rust_count, 5,
+        rust_count, 6,
         "every supported Benchmarks Game workload has a Rust peer"
     );
 

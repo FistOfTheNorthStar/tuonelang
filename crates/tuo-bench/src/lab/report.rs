@@ -260,7 +260,7 @@ mod tests {
         let report = LabReport::new(Environment::capture());
         assert_eq!(report.schema_version, SCHEMA_VERSION);
         assert_eq!(report.runtime_workloads.len(), 24);
-        assert_eq!(report.supported_workload_count(), 23);
+        assert_eq!(report.supported_workload_count(), 24);
     }
 
     #[test]
@@ -275,11 +275,10 @@ mod tests {
     fn human_render_names_unsupported_reasons_and_no_superlative() {
         let report = LabReport::new(Environment::capture());
         let text = render_human(&report);
-        // binary-trees is the catalog's one unsupported workload (it needs
-        // native `Box` values), so its reason line appears exactly once — a
-        // second would mean another workload silently regressed.
-        assert_eq!(text.matches("not yet expressible in v0").count(), 1);
-        assert!(text.contains("binary-trees         not yet expressible in v0 — "));
+        // No workload is unsupported today (binary-trees, the last, flipped
+        // with ADR-0028 Stage B), so no reason line appears — one would mean a
+        // workload silently regressed.
+        assert_eq!(text.matches("not yet expressible in v0").count(), 0);
         // No forbidden marketing language.
         let lowered = text.to_lowercase();
         for banned in ["blazing", "fastest", "blazingly", "lightning-fast"] {

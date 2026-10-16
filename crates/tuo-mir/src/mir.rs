@@ -153,6 +153,11 @@ pub enum Projection {
     /// only for in-bounds values; lowering emits an explicit
     /// [`Terminator::Assert`] bounds check before every use.
     Index(LocalId),
+    /// The pointee of a `Box[T]` place (ADR-0037): the `T` its pointer
+    /// addresses. Lowering emits it only to *lend* a boxed value — as an `in`
+    /// call argument — never to move out of or write through, so a backend
+    /// may treat it as a read-only load of the box's pointer.
+    Deref,
 }
 
 /// A value read: how an instruction obtains each input.
@@ -786,6 +791,17 @@ pub enum HeapOp {
     /// **insertion order** (the deterministic order ADR-0011 fixes; a
     /// removed key's successors keep their relative order). Never traps.
     MapKeys,
+    /// `new(value: T) -> Box[T]` — move `value` into a fresh allocation of
+    /// `T`'s layout that the box uniquely owns (ADR-0028 Stage B). Traps only
+    /// as an allocation can (out of memory).
+    BoxNew,
+    /// `get(subject: Box[T]) -> T` — a copy of the pointee: a deep copy when
+    /// `T` owns heap, exactly as `ArrayGet` copies an element. Never traps
+    /// (beyond an allocation of that deep copy).
+    BoxGet,
+    /// `into(b: Box[T]) -> T` — move the pointee out of the (moved) box and
+    /// free the allocation without dropping the pointee. Never traps.
+    BoxInto,
 }
 
 impl HeapOp {
@@ -810,6 +826,9 @@ impl HeapOp {
             Self::MapContainsKey => "map_contains_key",
             Self::MapLen => "map_len",
             Self::MapKeys => "map_keys",
+            Self::BoxNew => "box_new",
+            Self::BoxGet => "box_get",
+            Self::BoxInto => "box_into",
         }
     }
 
@@ -830,6 +849,7 @@ impl HeapOp {
                 | Self::MapContainsKey
                 | Self::MapLen
                 | Self::MapKeys
+                | Self::BoxGet
         )
     }
 
@@ -844,7 +864,9 @@ impl HeapOp {
             | Self::ArrayLen
             | Self::MapEmpty
             | Self::MapLen
-            | Self::MapKeys => 0,
+            | Self::MapKeys
+            | Self::BoxGet => 0,
+            Self::BoxNew | Self::BoxInto => 1,
             Self::StringFromStr
             | Self::StringByteAt
             | Self::ArrayGet

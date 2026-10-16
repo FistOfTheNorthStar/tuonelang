@@ -12,7 +12,7 @@
 use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::types::{BasicTypeEnum, FloatType, IntType};
-use tuo_types::{FloatKind, IntKind, Ty};
+use tuo_types::{FloatKind, IntKind, Ty, WrapperKind};
 
 /// The LLVM scalar type a supported scalar `ty` lowers to, or `None` if `ty`
 /// is outside the backend's v0 subset.
@@ -34,6 +34,8 @@ pub(crate) fn scalar_type<'ctx>(ctx: &'ctx Context, ty: &Ty) -> Option<BasicType
         Ty::Float(kind) => Some(float_type(ctx, *kind).into()),
         // A function value is a code pointer — the opaque pointer scalar.
         Ty::Fn(_) => Some(ctx.ptr_type(AddressSpace::default()).into()),
+        // A `Box[T]` is one non-null pointer to its pointee (ADR-0028 Stage B).
+        Ty::Wrapper(WrapperKind::Box, _) => Some(ctx.ptr_type(AddressSpace::default()).into()),
         _ => None,
     }
 }

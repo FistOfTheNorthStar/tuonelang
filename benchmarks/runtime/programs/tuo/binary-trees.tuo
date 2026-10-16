@@ -1,0 +1,55 @@
+// The binary-trees workload — the Benchmarks Game's binary-trees: allocate a
+// "stretch" tree of depth MAX + 1, then a long-lived tree of depth MAX, then
+// for each depth d from 4 to MAX in steps of 2, build and walk 2^(MAX - d + 4)
+// perfect binary trees of depth d, and finally walk the long-lived tree. Every
+// node is its own heap allocation behind a `Box` (ADR-0028 Stage B), so this is
+// the allocator and pointer-chasing benchmark. A walk counts a tree's nodes
+// and consumes it — each node is freed as it is counted — and the C, Rust, and
+// Go peers walk the same way (Go's collector frees instead). The node counts
+// are summed and the exit byte is that sum % 256.
+
+struct Node {
+    left: Option[Box[Node]],
+    right: Option[Box[Node]],
+}
+
+fn make(take depth: Int) -> Node {
+    if depth == 0 {
+        return Node { left: None, right: None };
+    }
+    Node {
+        left: Some { value: std::boxed::new(make(depth - 1)) },
+        right: Some { value: std::boxed::new(make(depth - 1)) },
+    }
+}
+
+fn check(take node: Node) -> Int {
+    let left = match node.left {
+        Some { value } => check(std::boxed::into(value)),
+        None => 0,
+    };
+    let right = match node.right {
+        Some { value } => check(std::boxed::into(value)),
+        None => 0,
+    };
+    1 + left + right
+}
+
+fn main() -> Int {
+    let min_depth = 4;
+    let max_depth = 16;
+    var total = check(make(max_depth + 1));
+    let long_lived = make(max_depth);
+    var depth = min_depth;
+    while depth <= max_depth {
+        let iterations = 1 << (max_depth - depth + min_depth);
+        var i = 0;
+        while i < iterations {
+            total = total + check(make(depth));
+            i = i + 1;
+        }
+        depth = depth + 2;
+    }
+    total = total + check(long_lived);
+    total % 256
+}

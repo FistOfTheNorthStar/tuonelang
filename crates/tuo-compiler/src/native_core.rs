@@ -182,7 +182,7 @@ fn report_block(block: Block<'_>, out: &mut Vec<Diagnostic>) {
 /// (`Array[Box[Int]]`, `Box[Box[Int]]`) is caught too — the backends refuse
 /// those at the same classification step.
 fn report_type(ty: TypeRef<'_>, position: &str, out: &mut Vec<Diagnostic>) {
-    let Some(wrapper) = first_wrapper(ty) else {
+    let Some(wrapper) = first_wrapper(ty, false) else {
         return;
     };
     let Some(span) = wrapper.span() else { return };
@@ -199,26 +199,42 @@ fn report_type(ty: TypeRef<'_>, position: &str, out: &mut Vec<Diagnostic>) {
         )
         .with_primary_label(format!("`{text}` is not lowered by any native backend"))
         .with_help(
-            "heap-wrapper *values* await a later ADR; `tuo spec`/`tuo verify` still run \
-             this program on the reference interpreter. A wrapper in a struct field or \
-             enum payload is fine — only parameter, return, and `let`/`var` positions \
-             are affected",
+            "`Box[T]` values lower natively (ADR-0028 Stage B), except as a growable \
+             `Array` element or map value; `Shared`/`Weak` values await ADR-0028 Stage C. \
+             `tuo spec`/`tuo verify` still run this program on the reference interpreter",
         )
         .with_actual(StructuredValue::Name(text.to_owned())),
     );
 }
 
-/// The first wrapper type at or under `ty`, in source order, or `None` if
-/// the written type contains none.
-fn first_wrapper<'a>(ty: TypeRef<'a>) -> Option<tuo_ast::WrapperType<'a>> {
+/// The first wrapper the native backends refuse at or under `ty`, in source
+/// order, or `None` if the written type contains none.
+///
+/// Since ADR-0028 Stage B a `Box[T]` lowers as a value — a local, a parameter,
+/// a return, a field — so a `Box` is looked *through*, not reported. It is
+/// still refused as a growable `Array` element or a `Map` value
+/// (`in_container`), and `Shared`/`Weak` are refused everywhere.
+fn first_wrapper(ty: TypeRef<'_>, in_container: bool) -> Option<tuo_ast::WrapperType<'_>> {
     match ty {
+        TypeRef::Wrapper(wrapper) if wrapper.wrapper() == Some("Box") && !in_container => wrapper
+            .args()
+            .and_then(|args| args.types().find_map(|arg| first_wrapper(arg, false))),
         TypeRef::Wrapper(wrapper) => Some(wrapper),
         // A generic path (`Array[Box[Int]]`, `Map[Str, Box[Int]]`) hides a
-        // wrapper in its arguments.
-        TypeRef::Path(path) => path
-            .args()
-            .and_then(|args| args.types().find_map(first_wrapper)),
-        TypeRef::FixedArray(array) => array.element().and_then(first_wrapper),
+        // wrapper in its arguments; a growable container's elements are where
+        // even a `Box` is still refused.
+        TypeRef::Path(path) => {
+            let container = in_container
+                || path
+                    .path()
+                    .and_then(|path| path.segment_names().last())
+                    .is_some_and(|name| matches!(name.text, "Array" | "Map"));
+            path.args()
+                .and_then(|args| args.types().find_map(|arg| first_wrapper(arg, container)))
+        }
+        TypeRef::FixedArray(array) => array
+            .element()
+            .and_then(|element| first_wrapper(element, in_container)),
         // A function *type* is a code pointer; its written parameter and
         // return types are the callee's storage positions, and the callee's
         // own declaration is where they are reported. Descending here would

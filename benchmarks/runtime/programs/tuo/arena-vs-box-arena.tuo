@@ -1,0 +1,58 @@
+// The arena-vs-box workload, arena side (ADR-0028's benchmark plan): a
+// balanced binary tree of depth DEPTH stored as an index arena — parallel
+// growable `Array[Int]` columns holding each node's value and its children's
+// indices, -1 for none, built in depth-first pre-order the way `std::json`
+// stores its tree. Each round builds the tree, sums it by recursive descent
+// over the indices, and drops it (three column frees at the end of the
+// round). Its twin `arena-vs-box-box.tuo` builds the identical tree with one
+// `Box` per node. A node's value is its heap number `i` (root 1, children
+// `2i` and `2i + 1`) modulo 251, and the exit byte is the sum over every
+// round modulo 256, so both programs exit with the same byte.
+
+struct Arena {
+    values: Array[Int],
+    lefts: Array[Int],
+    rights: Array[Int],
+}
+
+// Append the subtree of heap number `i` at `depth` to the arena, in
+// pre-order, and return its root's index.
+fn build(mut a: Arena, take depth: Int, take i: Int) -> Int {
+    let index = std::array::len(a.values);
+    std::array::push(a.values, i % 251);
+    std::array::push(a.lefts, 0 - 1);
+    std::array::push(a.rights, 0 - 1);
+    if depth > 0 {
+        let left = build(a, depth - 1, 2 * i);
+        let right = build(a, depth - 1, 2 * i + 1);
+        a.lefts[index as Usize] = left;
+        a.rights[index as Usize] = right;
+    }
+    index
+}
+
+// The sum of the subtree rooted at `node`, by recursive descent.
+fn sum(in a: Arena, take node: Int) -> Int {
+    if node < 0 {
+        return 0;
+    }
+    a.values[node as Usize] + sum(a, a.lefts[node as Usize]) + sum(a, a.rights[node as Usize])
+}
+
+fn round(take depth: Int) -> Int {
+    var a = Arena { values: std::array::empty(), lefts: std::array::empty(), rights: std::array::empty() };
+    let root = build(a, depth, 1);
+    sum(a, root)
+}
+
+fn main() -> Int {
+    let depth = 20;
+    let rounds = 4;
+    var total = 0;
+    var r = 0;
+    while r < rounds {
+        total = total + round(depth);
+        r = r + 1;
+    }
+    total % 256
+}

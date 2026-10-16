@@ -1,0 +1,36 @@
+// ownership.md, ADR-0037 — a binding lent from an `in` parameter aliases the
+// matched part, so it can never be moved: not into a `take` parameter, not
+// out as a result, not into a box. A `mut` parameter is not lent at all (an
+// arm could change it under the alias), so moving out of it stays O0003.
+
+fn keep(take s: String) -> Int {
+    std::string::len(s)
+}
+
+fn case_move_into_take(in o: Option[String]) -> Int {
+    match o {
+        Some { value } => keep(value), // ERROR: O0003 a lent binding cannot be moved
+        None => 0,
+    }
+}
+
+fn case_return_it(in o: Option[String]) -> String {
+    match o {
+        Some { value } => value, // ERROR: O0003 a lent binding cannot be moved
+        None => std::string::empty(),
+    }
+}
+
+fn case_box_it(in o: Option[String]) -> Int {
+    match o {
+        Some { value } => std::string::len(std::boxed::into(std::boxed::new(value))), // ERROR: O0003 moved into a box
+        None => 0,
+    }
+}
+
+fn case_mut_scrutinee(mut o: Option[String]) -> Int {
+    match o {
+        Some { value } => std::string::len(value), // ERROR: O0003 a `mut` parameter is not lent
+        None => 0,
+    }
+}

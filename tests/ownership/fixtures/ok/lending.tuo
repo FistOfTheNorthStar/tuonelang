@@ -1,0 +1,40 @@
+// ownership.md, ADR-0037 — a match on a place reached through an `in`
+// parameter lends its non-`Copy` parts to the arms: the bindings may be read,
+// passed to `in` parameters, and matched again, any number of times, and the
+// parameter is untouched afterwards.
+
+fn len_of(in s: String) -> Int {
+    std::string::len(s)
+}
+
+fn case_read_and_lend(in o: Option[String]) -> Int {
+    match o {
+        Some { value } => len_of(value) + std::string::len(value),
+        None => 0,
+    }
+}
+
+fn case_match_again(in o: Option[Option[String]]) -> Int {
+    match o {
+        Some { value } => match value {
+            Some { value } => len_of(value),
+            None => 0,
+        },
+        None => 0,
+    }
+}
+
+fn case_parameter_still_usable(in o: Option[String]) -> Int {
+    let first = match o {
+        Some { value } => len_of(value),
+        None => 0,
+    };
+    first + case_read_and_lend(o)
+}
+
+fn case_box_pointee_lent(in o: Option[Box[String]]) -> Int {
+    match o {
+        Some { value } => len_of(std::boxed::get(value)),
+        None => 0,
+    }
+}

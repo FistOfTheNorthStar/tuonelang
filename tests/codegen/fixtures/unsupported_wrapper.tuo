@@ -1,8 +1,8 @@
 // A program still outside the native backend's subset: a function with a
-// heap-wrapper (`Box[T]`) parameter, which awaits a later ADR. It type-checks
-// (the type exists), so `tuo build` must *refuse* it cleanly — never
-// mis-compile it — pointing back to the interpreter. Since ADR-0009 Stage B the
-// owned `String` and growable `Array[Int]` are lowered, so this is now the
-// standing "outside the subset" fixture; only `Box`/`Shared`/`Weak` remain.
-fn keep(take b: Box[Int]) -> Int { 0 }
+// heap-wrapper (`Shared[T]`) parameter, which awaits ADR-0028 Stage C. It
+// type-checks (the type exists), so `tuo build` must *refuse* it cleanly —
+// never mis-compile it — pointing back to the interpreter. Since ADR-0009
+// Stage B the owned `String` and growable `Array[Int]` are lowered, and since
+// ADR-0028 Stage B `Box[T]` is too, so only `Shared`/`Weak` remain.
+fn keep(take b: Shared[Int]) -> Int { 0 }
 fn main() -> Int { 7 }

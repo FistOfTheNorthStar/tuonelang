@@ -8,7 +8,7 @@
 //! the reference for the rejected cases.
 
 use cranelift_codegen::ir::{Type, types};
-use tuo_types::{FloatKind, IntKind, Ty};
+use tuo_types::{FloatKind, IntKind, Ty, WrapperKind};
 
 /// The Cranelift register type a supported scalar `ty` lowers to, or `None` if
 /// `ty` is outside the backend's v0 subset.
@@ -32,6 +32,8 @@ pub(crate) fn scalar_type(ty: &Ty) -> Option<Type> {
         // 64-bit (like `Isize`/`Usize`), so it maps to `I64` — the target's
         // pointer type on every supported platform.
         Ty::Fn(_) => Some(types::I64),
+        // A `Box[T]` is one non-null pointer to its pointee (ADR-0028 Stage B).
+        Ty::Wrapper(WrapperKind::Box, _) => Some(types::I64),
         _ => None,
     }
 }
