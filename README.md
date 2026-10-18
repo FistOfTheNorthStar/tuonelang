@@ -1,4 +1,4 @@
-<img width="1402" height="1122" alt="tuonelang" src="https://github.com/user-attachments/assets/586df834-9014-4ef6-937a-d32f4d46a935" />
+<img width="1774" height="887" alt="Tuonelang_ Moonlit Code Waters" src="https://github.com/user-attachments/assets/95e2e727-bd3e-4290-860e-60a36f2ca150" />
 
 # tuonelang
 
