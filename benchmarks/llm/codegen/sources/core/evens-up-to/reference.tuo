@@ -1,0 +1,11 @@
+module solution;
+
+pub fn evens_up_to(take n: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    var i = 0;
+    while i <= n {
+        std::array::push(xs, i);
+        i = i + 2;
+    }
+    xs
+}

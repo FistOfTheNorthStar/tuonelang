@@ -53,7 +53,14 @@ taste.
 tuo bench run tasks/starter-tasks.json --model qwen3:4b -o results/qwen3-4b.json
 tuo bench run tasks/starter-tasks.json --model qwen3:4b --prime -o results/qwen3-4b-primed.json
 tuo bench run tasks/starter-tasks.json --endpoint http://localhost:8000/v1 --model <served-name> -o results/<run>.json
+tuo bench run tasks/core-tasks.json --model gemma4:latest --prime --reasoning-effort none -o results/core/<run>.json
+tuo bench run tasks/core-tasks.json --model qwen3:4b --prime --max-tokens 8192 -o results/core/<run>.json
 ```
+
+`--reasoning-effort` (`none`/`low`/`medium`/`high`) and `--max-tokens` are sent
+in the request and recorded in the run's `ModelConfig`. A model may ignore the
+first: qwen3:4b on Ollama reasons regardless, so a token cap is the only bound
+(see `results/README.md`).
 
 `tuo bench run` drives every pinned task (and each syntax variant) through the
 real harness against any **OpenAI-compatible** `/v1/chat/completions` endpoint —
@@ -84,12 +91,27 @@ never from the recorded booleans — so a fabricated result cannot survive.
 ## Files
 
 ```
+sources/  AUTHORING: one directory per task (instruction, specs, held-out tests,
+          tags, variants, and a reference solution never shown to a model)
 tasks/    INPUT: pinned task sets — prompt + specs + held-out tests + variants (JSON)
 results/  OUTPUT: recorded benchmark runs — prompts, outputs, per-turn results (JSON)
 ```
 
-- [`tasks/starter-tasks.json`](tasks/starter-tasks.json) — a starter, pinned task
-  set (with syntax variants and held-out tests). Inputs only.
+- [`tasks/core-tasks.json`](tasks/core-tasks.json) — the **core set**: 53 tasks
+  over scalars and control flow, structs and enums, `Option`/`Result`, fixed and
+  growable arrays, maps, strings, function values, `Box`, whole programs,
+  spec-first prompts, and repair tasks (foreign syntax, `Some(x)`, a method
+  call, a use-after-move, missing modes, an off-by-one, a trailing `;`, a
+  trapping hash), tagged by area, difficulty `L1`–`L5`, and kind. `range-sum`
+  carries the `while-index` / `for-in` variants, the spelling question for a
+  borrowed `for` over a growable array. Generated from
+  [`sources/core/`](sources/core/) by
+  `crates/tuo-codegen-bench/tests/core_tasks.rs`, which also proves every task
+  solvable — its `reference.tuo` passes the specs and the held-out tests — and
+  regenerates the file with `TUO_BLESS=1`. The model sees only the instruction,
+  so each states the exact signature the specs call.
+- [`tasks/starter-tasks.json`](tasks/starter-tasks.json) — the two-task starter
+  set the first live runs used (with syntax variants and held-out tests).
 
 ## Status
 

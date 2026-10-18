@@ -1,0 +1,4 @@
+spec eval_rpn {
+    then eval_rpn([Token::Num { value: 10 }, Token::Num { value: 2 }, Token::Num { value: 3 }, Token::Mul, Token::Sub, Token::Num { value: 0 }, Token::Add]) == 4;
+    then eval_rpn([Token::Num { value: 1 }, Token::Num { value: 2 }, Token::Num { value: 3 }, Token::Num { value: 4 }, Token::Add, Token::Add, Token::Sub]) == 0 - 8;
+}

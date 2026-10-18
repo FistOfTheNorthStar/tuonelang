@@ -731,6 +731,16 @@ panic:
   divergence is a bug in the backend or in an optimization pass, never in the
   interpreter. This agreement is a mandatory CI gate — see the differential suites
   under `tests/differential/` and `crates/tuo-cli/tests/`.
+- **Only the library functions a program reaches are compiled** (ADR-0038).
+  Before optimizing, the native build path keeps every function the user wrote
+  plus whatever `main` and those functions reach through a direct call
+  (`Callee::Direct`) or by naming one as a value (`Const::Fn` — a named function
+  value may be called indirectly wherever it flows), and drops a loaded
+  standard-library module's other functions (`tuo_mir::retain_reachable`). No
+  execution can enter a dropped function, so nothing observable changes; what
+  changes is that an unused library function outside the native subset — the
+  generic `std::collections::pair` — no longer refuses a build the interpreter
+  would have run, while a user's own unsupported function still does.
 
 ---
 

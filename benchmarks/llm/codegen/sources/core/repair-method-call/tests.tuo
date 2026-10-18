@@ -1,0 +1,5 @@
+spec is_long {
+    then !is_long("");
+    then !is_long("12345");
+    then is_long("123456");
+}

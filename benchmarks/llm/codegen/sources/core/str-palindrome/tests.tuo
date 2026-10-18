@@ -1,0 +1,6 @@
+spec is_palindrome {
+    then is_palindrome("");
+    then is_palindrome("a");
+    then is_palindrome("abba");
+    then !is_palindrome("abca");
+}

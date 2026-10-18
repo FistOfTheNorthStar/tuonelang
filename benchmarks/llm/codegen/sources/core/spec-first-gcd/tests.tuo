@@ -1,0 +1,5 @@
+spec gcd {
+    then gcd(17, 5) == 1;
+    then gcd(100, 75) == 25;
+    then gcd(0, 0) == 0;
+}

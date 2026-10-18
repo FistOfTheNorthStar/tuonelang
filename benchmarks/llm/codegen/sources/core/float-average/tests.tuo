@@ -1,0 +1,4 @@
+spec average3 {
+    then average3(0.0, 0.0, 0.0) == 0.0;
+    then (average3(10.0, 20.0, 60.0)) as Int == 30;
+}

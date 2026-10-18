@@ -1,0 +1,4 @@
+spec reversed {
+    then std::array::get(digits(123), 0) == 1;
+    then std::array::get(reversed(digits(123)), 0) == 3;
+}

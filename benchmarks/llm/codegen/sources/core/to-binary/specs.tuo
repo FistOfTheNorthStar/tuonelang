@@ -1,0 +1,4 @@
+spec to_binary {
+    then std::string::as_str(to_binary(5)) == "101";
+    then std::string::as_str(to_binary(0)) == "0";
+}

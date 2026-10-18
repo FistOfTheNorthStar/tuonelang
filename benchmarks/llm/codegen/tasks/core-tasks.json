@@ -1,0 +1,991 @@
+{
+  "schema_version": 1,
+  "description": "The core code-generation tasks: single-module tuonelang programs across the language's feature areas and five difficulty levels, including repair tasks that hand the model a broken program. Generated from benchmarks/llm/codegen/sources/core/ by crates/tuo-codegen-bench/tests/core_tasks.rs; every task has a reference solution there that passes its specs and held-out tests.",
+  "tasks": [
+    {
+      "digest": "019e1a4d754a68cb",
+      "task": {
+        "id": "abs-diff",
+        "instruction": "Write `abs_diff(take a: Int, take b: Int) -> Int` returning the absolute difference between `a` and `b`.",
+        "specs": [
+          "spec abs_diff {\n    then abs_diff(7, 3) == 4;\n    then abs_diff(3, 7) == 4;\n}\n"
+        ],
+        "tests": [
+          "spec abs_diff {\n    then abs_diff(5, 5) == 0;\n    then abs_diff(0 - 4, 6) == 10;\n}\n"
+        ],
+        "tags": [
+          "scalars",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "1fcdd86d95c27cac",
+      "task": {
+        "id": "apply-twice",
+        "instruction": "Write `apply_twice(take f: fn(take Int) -> Int, take x: Int) -> Int` returning f(f(x)), and two functions to pass to it: `inc(take x: Int) -> Int` (adds 1) and `square(take x: Int) -> Int`.",
+        "specs": [
+          "spec apply_twice {\n    then apply_twice(inc, 3) == 5;\n    then apply_twice(square, 3) == 81;\n}\n"
+        ],
+        "tests": [
+          "spec apply_twice {\n    then apply_twice(inc, 0 - 2) == 0;\n    then apply_twice(square, 0) == 0;\n    then apply_twice(square, 2) == 16;\n}\n"
+        ],
+        "tags": [
+          "function-values",
+          "L3",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "66d8eaaf028ea73e",
+      "task": {
+        "id": "array-palindrome",
+        "instruction": "Write `is_palindrome(in xs: [Int; 5]) -> Bool`, true when the fixed array reads the same forwards and backwards.",
+        "specs": [
+          "spec is_palindrome {\n    then is_palindrome([1, 2, 3, 2, 1]);\n    then !is_palindrome([1, 2, 3, 4, 5]);\n}\n"
+        ],
+        "tests": [
+          "spec is_palindrome {\n    then is_palindrome([7, 7, 7, 7, 7]);\n    then !is_palindrome([1, 2, 3, 2, 2]);\n    then !is_palindrome([1, 2, 3, 1, 1]);\n}\n"
+        ],
+        "tags": [
+          "arrays",
+          "indexing",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "d1b0a400839ca88e",
+      "task": {
+        "id": "bank-account",
+        "instruction": "Model a bank account. Define `struct Account { balance: Int }` and `enum Op { Deposit { amount: Int }, Withdraw { amount: Int } }`. Write `apply(in acc: Account, in op: Op) -> Account`: a deposit adds its amount; a withdrawal subtracts its amount only when the balance covers it, and otherwise leaves the account unchanged. Write `run(in ops: [Op; 4]) -> Int` that starts from a zero balance, applies the four operations in order, and returns the final balance.",
+        "specs": [
+          "spec run {\n    then run([Op::Deposit { amount: 100 }, Op::Withdraw { amount: 30 }, Op::Withdraw { amount: 100 }, Op::Deposit { amount: 5 }]) == 75;\n}\n"
+        ],
+        "tests": [
+          "spec run {\n    then run([Op::Withdraw { amount: 1 }, Op::Deposit { amount: 10 }, Op::Withdraw { amount: 10 }, Op::Withdraw { amount: 1 }]) == 0;\n    then run([Op::Deposit { amount: 1 }, Op::Deposit { amount: 2 }, Op::Deposit { amount: 3 }, Op::Withdraw { amount: 6 }]) == 0;\n    then run([Op::Deposit { amount: 50 }, Op::Withdraw { amount: 51 }, Op::Withdraw { amount: 50 }, Op::Deposit { amount: 7 }]) == 7;\n}\n"
+        ],
+        "tags": [
+          "structs",
+          "enums",
+          "L4",
+          "B"
+        ]
+      }
+    },
+    {
+      "digest": "dc16db0642e3fc8e",
+      "task": {
+        "id": "boxed-list",
+        "instruction": "Define a singly linked list `struct Node { value: Int, next: Option[Box[Node]] }`. Write `list3(take a: Int, take b: Int, take c: Int) -> Node` building the list a -> b -> c, `sum_list(in n: Node) -> Int` returning the sum of every value, and `length(in n: Node) -> Int` returning the number of nodes.",
+        "specs": [
+          "spec sum_list {\n    then sum_list(list3(1, 2, 3)) == 6;\n    then length(list3(1, 2, 3)) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec sum_list {\n    then sum_list(list3(0, 0, 0)) == 0;\n    then sum_list(list3(10, 0 - 20, 5)) == 0 - 5;\n    then length(Node { value: 4, next: None }) == 1;\n}\n"
+        ],
+        "tags": [
+          "box",
+          "recursion",
+          "L4",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "e9a1e3ba65591aea",
+      "task": {
+        "id": "caesar-shift",
+        "instruction": "Write `caesar(in s: Str, take k: Int) -> String` that shifts every lowercase ASCII letter (bytes 97 to 122) forward by k positions in the alphabet, wrapping from 'z' back to 'a', for 0 <= k < 26. Every other byte is copied unchanged.",
+        "specs": [
+          "spec caesar {\n    then std::string::as_str(caesar(\"abc\", 1)) == \"bcd\";\n    then std::string::as_str(caesar(\"xyz\", 3)) == \"abc\";\n}\n"
+        ],
+        "tests": [
+          "spec caesar {\n    then std::string::as_str(caesar(\"hello, world\", 13)) == \"uryyb, jbeyq\";\n    then std::string::as_str(caesar(\"ABC z\", 1)) == \"ABC a\";\n    then std::string::as_str(caesar(\"same\", 0)) == \"same\";\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L3",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "994727613bfc19ec",
+      "task": {
+        "id": "collatz-steps",
+        "instruction": "Write `collatz_steps(take n: Int) -> Int` returning how many Collatz steps it takes n (n >= 1) to reach 1: an even number is halved, an odd number becomes 3n + 1. `collatz_steps(1)` is 0.",
+        "specs": [
+          "spec collatz_steps {\n    then collatz_steps(1) == 0;\n    then collatz_steps(6) == 8;\n}\n"
+        ],
+        "tests": [
+          "spec collatz_steps {\n    then collatz_steps(2) == 1;\n    then collatz_steps(27) == 111;\n}\n"
+        ],
+        "tags": [
+          "loops",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "f95007dda94619f2",
+      "task": {
+        "id": "count-above",
+        "instruction": "Write `count_above(in xs: [Int; 6], take threshold: Int) -> Int` returning how many elements are strictly greater than threshold.",
+        "specs": [
+          "spec count_above {\n    then count_above([1, 5, 3, 8, 2, 9], 4) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec count_above {\n    then count_above([1, 1, 1, 1, 1, 1], 1) == 0;\n    then count_above([0 - 5, 0, 5, 10, 15, 20], 0 - 10) == 6;\n}\n"
+        ],
+        "tags": [
+          "arrays",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "b9b8a9a241749092",
+      "task": {
+        "id": "count-bits",
+        "instruction": "Write `count_bits(take n: Int) -> Int` returning the number of 1 bits in n, for n >= 0, using the bitwise operators.",
+        "specs": [
+          "spec count_bits {\n    then count_bits(0) == 0;\n    then count_bits(7) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec count_bits {\n    then count_bits(8) == 1;\n    then count_bits(255) == 8;\n    then count_bits(1023) == 10;\n}\n"
+        ],
+        "tags": [
+          "bitwise",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "2544fa22e04724fc",
+      "task": {
+        "id": "count-byte",
+        "instruction": "Write `count_byte(in s: Str, take b: Int) -> Int` returning how many bytes of s equal b.",
+        "specs": [
+          "spec count_byte {\n    then count_byte(\"banana\", 97) == 3;\n    then count_byte(\"\", 97) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec count_byte {\n    then count_byte(\"banana\", 98) == 1;\n    then count_byte(\"banana\", 122) == 0;\n    then count_byte(\"aaaa\", 97) == 4;\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "c86dbed2e82dc3ed",
+      "task": {
+        "id": "count-if",
+        "instruction": "Write `count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int` returning how many elements satisfy pred, and the predicates `is_negative(take x: Int) -> Bool` and `is_multiple_of_three(take x: Int) -> Bool`.",
+        "specs": [
+          "spec count_if {\n    then count_if([0 - 1, 2, 0 - 3, 4, 0 - 5, 6], is_negative) == 3;\n    then count_if([1, 3, 6, 7, 9, 10], is_multiple_of_three) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], is_negative) == 0;\n    then count_if([0, 0 - 3, 3, 1, 2, 4], is_multiple_of_three) == 3;\n}\n"
+        ],
+        "tags": [
+          "function-values",
+          "arrays",
+          "L3",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "589e805f7b2e09db",
+      "task": {
+        "id": "digit-sum",
+        "instruction": "Write `digit_sum(take n: Int) -> Int` returning the sum of the decimal digits of n, for n >= 0.",
+        "specs": [
+          "spec digit_sum {\n    then digit_sum(123) == 6;\n    then digit_sum(0) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec digit_sum {\n    then digit_sum(9) == 9;\n    then digit_sum(9081726354) == 45;\n}\n"
+        ],
+        "tags": [
+          "scalars",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "919b0615c967c320",
+      "task": {
+        "id": "digits-reversed",
+        "instruction": "Write `digits(take n: Int) -> Array[Int]` returning the decimal digits of n (n >= 0) most significant first (`digits(0)` is a one-element array holding 0), and `reversed(in xs: Array[Int]) -> Array[Int]` returning a new array with the elements in reverse order.",
+        "specs": [
+          "spec reversed {\n    then std::array::get(digits(123), 0) == 1;\n    then std::array::get(reversed(digits(123)), 0) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec reversed {\n    then std::array::len(digits(0)) == 1;\n    then std::array::get(digits(0), 0) == 0;\n    then std::array::len(digits(90210)) == 5;\n    then std::array::get(reversed(digits(90210)), 1) == 1;\n    then std::array::get(reversed(digits(90210)), 4) == 9;\n}\n"
+        ],
+        "tags": [
+          "growable-arrays",
+          "L3",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "73005090578b1b1a",
+      "task": {
+        "id": "dot-product",
+        "instruction": "Write `dot(in a: [Int; 3], in b: [Int; 3]) -> Int` returning the dot product of the two fixed arrays.",
+        "specs": [
+          "spec dot {\n    then dot([1, 2, 3], [4, 5, 6]) == 32;\n}\n"
+        ],
+        "tests": [
+          "spec dot {\n    then dot([0, 0, 0], [4, 5, 6]) == 0;\n    then dot([1, 0 - 1, 2], [3, 3, 0 - 1]) == 0 - 2;\n}\n"
+        ],
+        "tags": [
+          "arrays",
+          "indexing",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "3b616afbea9eb115",
+      "task": {
+        "id": "evens-up-to",
+        "instruction": "Write `evens_up_to(take n: Int) -> Array[Int]` returning the growable array of the even numbers 0, 2, 4, ... that are <= n (empty when n < 0).",
+        "specs": [
+          "spec evens_up_to {\n    then std::array::len(evens_up_to(10)) == 6;\n    then std::array::get(evens_up_to(10), 5) == 10;\n}\n"
+        ],
+        "tests": [
+          "spec evens_up_to {\n    then std::array::len(evens_up_to(0)) == 1;\n    then std::array::len(evens_up_to(0 - 1)) == 0;\n    then std::array::len(evens_up_to(9)) == 5;\n    then std::array::get(evens_up_to(9), 4) == 8;\n}\n"
+        ],
+        "tags": [
+          "growable-arrays",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "365c8ec22f7988ff",
+      "task": {
+        "id": "factorial",
+        "instruction": "Write `factorial(take n: Int) -> Int` returning n! for n >= 0, recursively. `factorial(0)` is 1.",
+        "specs": [
+          "spec factorial {\n    then factorial(0) == 1;\n    then factorial(5) == 120;\n}\n"
+        ],
+        "tests": [
+          "spec factorial {\n    then factorial(1) == 1;\n    then factorial(10) == 3628800;\n}\n"
+        ],
+        "tags": [
+          "recursion",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "9b603e5a449ec051",
+      "task": {
+        "id": "fib-iterative",
+        "instruction": "Write `fib(take n: Int) -> Int` returning the n-th Fibonacci number (fib(0) = 0, fib(1) = 1), computed with a `while` loop rather than recursion.",
+        "specs": [
+          "spec fib {\n    then fib(0) == 0;\n    then fib(1) == 1;\n    then fib(10) == 55;\n}\n"
+        ],
+        "tests": [
+          "spec fib {\n    then fib(2) == 1;\n    then fib(30) == 832040;\n}\n"
+        ],
+        "tags": [
+          "loops",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "b0f8985e36cfaac9",
+      "task": {
+        "id": "first-even",
+        "instruction": "Write `first_even(in xs: [Int; 5]) -> Option[Int]` returning the first even element of the fixed array, or None if there is none, and `first_even_or(in xs: [Int; 5], take fallback: Int) -> Int`, which returns the fallback when there is no even element.",
+        "specs": [
+          "spec first_even_or {\n    then first_even_or([1, 3, 4, 6, 7], 0) == 4;\n    then first_even_or([1, 3, 5, 7, 9], 0 - 1) == 0 - 1;\n}\n"
+        ],
+        "tests": [
+          "spec first_even_or {\n    then first_even_or([2, 3, 4, 6, 7], 0) == 2;\n    then first_even_or([1, 3, 5, 7, 0], 99) == 0;\n}\n"
+        ],
+        "tags": [
+          "option",
+          "arrays",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "437520483b14274e",
+      "task": {
+        "id": "fizzbuzz-code",
+        "instruction": "Write `fizzbuzz_code(take n: Int) -> Int` returning 15 when n is divisible by both 3 and 5, 5 when only by 5, 3 when only by 3, and 0 otherwise.",
+        "specs": [
+          "spec fizzbuzz_code {\n    then fizzbuzz_code(30) == 15;\n    then fizzbuzz_code(10) == 5;\n    then fizzbuzz_code(9) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec fizzbuzz_code {\n    then fizzbuzz_code(7) == 0;\n    then fizzbuzz_code(15) == 15;\n    then fizzbuzz_code(3) == 3;\n}\n"
+        ],
+        "tags": [
+          "scalars",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "ea21e6ed074f6ce0",
+      "task": {
+        "id": "float-average",
+        "instruction": "Write `average3(take a: Float, take b: Float, take c: Float) -> Float` returning the arithmetic mean of the three values.",
+        "specs": [
+          "spec average3 {\n    then average3(1.0, 2.0, 3.0) == 2.0;\n    then (average3(1.0, 1.0, 2.0) * 3.0) as Int == 4;\n}\n"
+        ],
+        "tests": [
+          "spec average3 {\n    then average3(0.0, 0.0, 0.0) == 0.0;\n    then (average3(10.0, 20.0, 60.0)) as Int == 30;\n}\n"
+        ],
+        "tags": [
+          "floats",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "f74a68db0155f1f2",
+      "task": {
+        "id": "grade-report",
+        "instruction": "Write a small grading program. Define `struct Score { student: Int, points: Int }`. Write `letter(take points: Int) -> Int` mapping points to a grade number: 90 and above is 4, 80-89 is 3, 70-79 is 2, 60-69 is 1, below 60 is 0. Write `passing(in scores: [Score; 5]) -> Array[Int]` returning, in input order, the student numbers whose grade is at least 1, and `class_average(in scores: [Score; 5]) -> Int` returning the floor of the mean points.",
+        "specs": [
+          "spec passing {\n    then letter(95) == 4;\n    then letter(59) == 0;\n    then std::array::len(passing([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }])) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec passing {\n    then letter(80) == 3;\n    then letter(79) == 2;\n    then std::array::get(passing([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }]), 1) == 3;\n    then class_average([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }]) == 64;\n}\n"
+        ],
+        "tags": [
+          "structs",
+          "growable-arrays",
+          "L4",
+          "B"
+        ]
+      }
+    },
+    {
+      "digest": "267eb3e74d3801e7",
+      "task": {
+        "id": "histogram",
+        "instruction": "Write `count_of(in xs: [Int; 8], take v: Int) -> Int`. It must build a `Map[Int, Int]` from each value in xs to the number of times it occurs (using std::map), then look v up in that map, returning 0 when v does not occur. Also write `distinct(in xs: [Int; 8]) -> Int` returning the number of distinct values, as the size of the same kind of map.",
+        "specs": [
+          "spec count_of {\n    then count_of([1, 2, 2, 3, 3, 3, 4, 4], 3) == 3;\n    then distinct([1, 2, 2, 3, 3, 3, 4, 4]) == 4;\n}\n"
+        ],
+        "tests": [
+          "spec count_of {\n    then count_of([1, 2, 2, 3, 3, 3, 4, 4], 9) == 0;\n    then count_of([7, 7, 7, 7, 7, 7, 7, 7], 7) == 8;\n    then distinct([7, 7, 7, 7, 7, 7, 7, 7]) == 1;\n    then distinct([1, 2, 3, 4, 5, 6, 7, 8]) == 8;\n}\n"
+        ],
+        "tags": [
+          "maps",
+          "L3",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "8dfc05d54fb2227d",
+      "task": {
+        "id": "in-range",
+        "instruction": "Write `in_range(take x: Int, take low: Int, take high: Int) -> Bool`, true when low <= x <= high (both ends inclusive).",
+        "specs": [
+          "spec in_range {\n    then in_range(5, 1, 10);\n    then !in_range(11, 1, 10);\n}\n"
+        ],
+        "tests": [
+          "spec in_range {\n    then in_range(1, 1, 10);\n    then in_range(10, 1, 10);\n    then !in_range(0, 1, 10);\n}\n"
+        ],
+        "tags": [
+          "scalars",
+          "L1",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "4d9b65b5db0b1653",
+      "task": {
+        "id": "int-sqrt",
+        "instruction": "Write `int_sqrt(take n: Int) -> Int` returning the largest r with r * r <= n, for n >= 0, using only integer arithmetic.",
+        "specs": [
+          "spec int_sqrt {\n    then int_sqrt(16) == 4;\n    then int_sqrt(17) == 4;\n    then int_sqrt(0) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec int_sqrt {\n    then int_sqrt(15) == 3;\n    then int_sqrt(1) == 1;\n    then int_sqrt(1000000) == 1000;\n}\n"
+        ],
+        "tags": [
+          "loops",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "02d4b36d6dbd5382",
+      "task": {
+        "id": "is-prime",
+        "instruction": "Write `is_prime(take n: Int) -> Bool`, true exactly when n is a prime number. Numbers below 2 are not prime.",
+        "specs": [
+          "spec is_prime {\n    then is_prime(2);\n    then is_prime(13);\n    then !is_prime(15);\n}\n"
+        ],
+        "tests": [
+          "spec is_prime {\n    then !is_prime(1);\n    then !is_prime(0);\n    then is_prime(97);\n    then !is_prime(91);\n}\n"
+        ],
+        "tags": [
+          "loops",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "597d2bafbae91824",
+      "task": {
+        "id": "manhattan",
+        "instruction": "Define `struct Point { x: Int, y: Int }` and write `manhattan(in a: Point, in b: Point) -> Int` returning |a.x - b.x| + |a.y - b.y|.",
+        "specs": [
+          "spec manhattan {\n    then manhattan(Point { x: 0, y: 0 }, Point { x: 3, y: 4 }) == 7;\n}\n"
+        ],
+        "tests": [
+          "spec manhattan {\n    then manhattan(Point { x: 5, y: 5 }, Point { x: 5, y: 5 }) == 0;\n    then manhattan(Point { x: 2, y: 0 - 3 }, Point { x: 0 - 1, y: 1 }) == 7;\n}\n"
+        ],
+        "tags": [
+          "structs",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "c2870a9dd91cd3f2",
+      "task": {
+        "id": "max-index",
+        "instruction": "Write `max_index(in xs: [Int; 5]) -> Int` returning the index of the largest element; when the largest value occurs more than once, return the first index.",
+        "specs": [
+          "spec max_index {\n    then max_index([3, 9, 2, 7, 1]) == 1;\n    then max_index([5, 4, 3, 2, 1]) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec max_index {\n    then max_index([1, 2, 3, 4, 5]) == 4;\n    then max_index([2, 8, 8, 1, 8]) == 1;\n    then max_index([0 - 3, 0 - 1, 0 - 2, 0 - 9, 0 - 5]) == 1;\n}\n"
+        ],
+        "tags": [
+          "arrays",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "de8473fe0d51a002",
+      "task": {
+        "id": "parse-digit",
+        "instruction": "Write `parse_digit(take c: Int) -> Result[Int, Str]` that takes an ASCII byte: for '0' through '9' (bytes 48 to 57) it returns Ok with the digit's value, otherwise Err with the message \"not a digit\". Also write `digit_or(take c: Int, take fallback: Int) -> Int`, which calls parse_digit and returns the fallback on an error.",
+        "specs": [
+          "spec digit_or {\n    then digit_or(55, 0 - 1) == 7;\n    then digit_or(65, 0 - 1) == 0 - 1;\n}\n"
+        ],
+        "tests": [
+          "spec digit_or {\n    then digit_or(48, 0 - 1) == 0;\n    then digit_or(57, 0 - 1) == 9;\n    then digit_or(47, 100) == 100;\n    then digit_or(58, 100) == 100;\n}\n"
+        ],
+        "tags": [
+          "result",
+          "L3",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "61b53ef5dab0e00e",
+      "task": {
+        "id": "power",
+        "instruction": "Write `power(take base: Int, take exp: Int) -> Int` returning base raised to exp, for exp >= 0. Use exponentiation by squaring: square the result of power(base, exp / 2).",
+        "specs": [
+          "spec power {\n    then power(2, 10) == 1024;\n    then power(7, 0) == 1;\n}\n"
+        ],
+        "tests": [
+          "spec power {\n    then power(3, 5) == 243;\n    then power(0 - 2, 3) == 0 - 8;\n    then power(10, 18) == 1000000000000000000;\n}\n"
+        ],
+        "tags": [
+          "recursion",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "2c0b20af9d1c0717",
+      "task": {
+        "id": "prefix-sums",
+        "instruction": "Write `prefix_sums(in xs: [Int; 5]) -> Array[Int]` returning a growable array whose element i is the sum of xs[0] through xs[i].",
+        "specs": [
+          "spec prefix_sums {\n    then std::array::get(prefix_sums([1, 2, 3, 4, 5]), 4) == 15;\n    then std::array::get(prefix_sums([1, 2, 3, 4, 5]), 1) == 3;\n}\n"
+        ],
+        "tests": [
+          "spec prefix_sums {\n    then std::array::len(prefix_sums([0, 0, 0, 0, 0])) == 5;\n    then std::array::get(prefix_sums([5, 0 - 5, 5, 0 - 5, 5]), 3) == 0;\n    then std::array::get(prefix_sums([9, 1, 1, 1, 1]), 0) == 9;\n}\n"
+        ],
+        "tags": [
+          "growable-arrays",
+          "arrays",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "f56d40e0318cebb8",
+      "task": {
+        "id": "push-twice",
+        "instruction": "Write `push_twice(mut xs: Array[Int], take v: Int) -> Int`, which appends v to the caller's array two times and returns the array's new length. Also write `filled_pairs(take n: Int) -> Int`, which starts from an empty array, calls push_twice with the values 1 through n in order, and returns the final sum of the array's elements.",
+        "specs": [
+          "spec filled_pairs {\n    then filled_pairs(3) == 12;\n    then filled_pairs(0) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec filled_pairs {\n    then filled_pairs(1) == 2;\n    then filled_pairs(10) == 110;\n}\n"
+        ],
+        "tags": [
+          "modes",
+          "growable-arrays",
+          "L3",
+          "G"
+        ]
+      }
+    },
+    {
+      "digest": "b94df2a9f8023697",
+      "task": {
+        "id": "range-sum",
+        "instruction": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.",
+        "specs": [
+          "spec sum_all {\n    then sum_all(range(1, 5)) == 10;\n    then std::array::len(range(3, 3)) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec sum_all {\n    then sum_all(range(0, 101)) == 5050;\n    then std::array::len(range(5, 2)) == 0;\n    then std::array::get(range(4, 9), 2) == 6;\n}\n"
+        ],
+        "variants": [
+          {
+            "label": "while-index",
+            "note": "iterate over the growable array with a while loop over indices, using std::array::len and std::array::get"
+          },
+          {
+            "label": "for-in",
+            "note": "iterate over the growable array with `for x in xs`"
+          }
+        ],
+        "tags": [
+          "growable-arrays",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "c65a60ea1f31428d",
+      "task": {
+        "id": "rect-contains",
+        "instruction": "Define `struct Rect { left: Int, top: Int, width: Int, height: Int }` and write `contains(in r: Rect, take x: Int, take y: Int) -> Bool`, true when left <= x < left + width and top <= y < top + height.",
+        "specs": [
+          "spec contains {\n    then contains(Rect { left: 0, top: 0, width: 10, height: 5 }, 3, 2);\n    then !contains(Rect { left: 0, top: 0, width: 10, height: 5 }, 10, 2);\n}\n"
+        ],
+        "tests": [
+          "spec contains {\n    then contains(Rect { left: 2, top: 2, width: 1, height: 1 }, 2, 2);\n    then !contains(Rect { left: 2, top: 2, width: 1, height: 1 }, 2, 3);\n    then !contains(Rect { left: 0, top: 0, width: 4, height: 4 }, 0 - 1, 0);\n}\n"
+        ],
+        "tags": [
+          "structs",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "d9fa0fe9d820317f",
+      "task": {
+        "id": "repair-foreign-syntax",
+        "instruction": "This program was written with habits from another language and does not compile. Fix it so `total` returns the sum of the four elements, keeping the same function name and parameter type.\n\n```tuo\nmodule solution;\n\nfn total(xs: [Int; 4]) -> Int {\n    let mut sum = 0;\n    for x in xs {\n        sum += x;\n    }\n    return sum;\n}\n```",
+        "specs": [
+          "spec total {\n    then total([1, 2, 3, 4]) == 10;\n}\n"
+        ],
+        "tests": [
+          "spec total {\n    then total([0, 0, 0, 0]) == 0;\n    then total([0 - 1, 1, 0 - 1, 1]) == 0;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "syntax",
+          "L2",
+          "E"
+        ]
+      }
+    },
+    {
+      "digest": "8f5dfcb3ec89fee6",
+      "task": {
+        "id": "repair-method-call",
+        "instruction": "Fix this program so it compiles. tuonelang has no method-call syntax.\n\n```tuo\nmodule solution;\n\nfn is_long(in s: Str) -> Bool {\n    s.len() > 5\n}\n```",
+        "specs": [
+          "spec is_long {\n    then is_long(\"tuonelang\");\n    then !is_long(\"tuo\");\n}\n"
+        ],
+        "tests": [
+          "spec is_long {\n    then !is_long(\"\");\n    then !is_long(\"12345\");\n    then is_long(\"123456\");\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "J",
+          "L1",
+          "I"
+        ]
+      }
+    },
+    {
+      "digest": "67e42c18f74c431b",
+      "task": {
+        "id": "repair-missing-modes",
+        "instruction": "Fix this program so it compiles. Every parameter needs a mode; pick the one that fits how the parameter is used.\n\n```tuo\nmodule solution;\n\nstruct Counter { count: Int }\n\nfn bump(c: Counter, by: Int) {\n    c.count = c.count + by;\n}\n\nfn bumped_three_times(start: Int) -> Int {\n    var c = Counter { count: start };\n    bump(c, 1);\n    bump(c, 2);\n    bump(c, 3);\n    c.count\n}\n```",
+        "specs": [
+          "spec bumped_three_times {\n    then bumped_three_times(0) == 6;\n}\n"
+        ],
+        "tests": [
+          "spec bumped_three_times {\n    then bumped_three_times(10) == 16;\n    then bumped_three_times(0 - 6) == 0;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "modes",
+          "L2",
+          "E"
+        ]
+      }
+    },
+    {
+      "digest": "bda7f9bdcc13a289",
+      "task": {
+        "id": "repair-off-by-one",
+        "instruction": "This program compiles but fails its spec: `sum_to(n)` should return 1 + 2 + ... + n.\n\n```tuo\nmodule solution;\n\nfn sum_to(take n: Int) -> Int {\n    var total = 0;\n    var i = 1;\n    while i < n {\n        total = total + i;\n        i = i + 1;\n    }\n    total\n}\n\nspec sum_to {\n    then sum_to(4) == 10;\n}\n```\n\nFix the function, not the spec, and return the program without the spec.",
+        "specs": [
+          "spec sum_to {\n    then sum_to(4) == 10;\n}\n"
+        ],
+        "tests": [
+          "spec sum_to {\n    then sum_to(0) == 0;\n    then sum_to(1) == 1;\n    then sum_to(100) == 5050;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "spec-failure",
+          "L2",
+          "H"
+        ]
+      }
+    },
+    {
+      "digest": "f44c9d20843e582a",
+      "task": {
+        "id": "repair-option-payload",
+        "instruction": "Fix this program so it compiles. `find` returns the index of the first element equal to `needle`, or None.\n\n```tuo\nmodule solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option<Int> {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some(i);\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some(i) => i,\n        None => -1,\n    }\n}\n```",
+        "specs": [
+          "spec find_or {\n    then find_or([5, 6, 7, 8], 7) == 2;\n    then find_or([5, 6, 7, 8], 9) == 0 - 1;\n}\n"
+        ],
+        "tests": [
+          "spec find_or {\n    then find_or([5, 6, 7, 8], 5) == 0;\n    then find_or([1, 1, 1, 1], 1) == 0;\n    then find_or([1, 2, 3, 4], 4) == 3;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "option",
+          "L2",
+          "E"
+        ]
+      }
+    },
+    {
+      "digest": "1365e5d0e83aed9b",
+      "task": {
+        "id": "repair-trailing-semicolon",
+        "instruction": "Fix this program so it compiles.\n\n```tuo\nmodule solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b };\n}\n```",
+        "specs": [
+          "spec larger {\n    then larger(3, 9) == 9;\n}\n"
+        ],
+        "tests": [
+          "spec larger {\n    then larger(9, 3) == 9;\n    then larger(4, 4) == 4;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "types",
+          "L1",
+          "F"
+        ]
+      }
+    },
+    {
+      "digest": "ac5082d34d80e826",
+      "task": {
+        "id": "repair-use-after-move",
+        "instruction": "This program is rejected by the ownership checker. Fix it so `twice_len` returns twice the length of its argument, without copying the string.\n\n```tuo\nmodule solution;\n\nfn length(take s: String) -> Int {\n    std::string::len(s)\n}\n\nfn twice_len(take s: String) -> Int {\n    length(s) + length(s)\n}\n```",
+        "specs": [
+          "spec twice_len {\n    then twice_len(std::string::from_str(\"abc\")) == 6;\n}\n"
+        ],
+        "tests": [
+          "spec twice_len {\n    then twice_len(std::string::from_str(\"\")) == 0;\n    then twice_len(std::string::from_str(\"tuonelang\")) == 18;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "ownership",
+          "L3",
+          "G"
+        ]
+      }
+    },
+    {
+      "digest": "ad19892e1b9edba1",
+      "task": {
+        "id": "repair-wrapping-hash",
+        "instruction": "This hash aborts at run time with an integer-overflow trap on long inputs, because tuonelang's `+` and `*` trap on overflow instead of wrapping. Fix `hash` so it computes the 32-bit FNV-1a hash of s: start from 2166136261, and for each byte, xor it in and then multiply by 16777619 modulo 2^32. Keep the signature.\n\n```tuo\nmodule solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = h * 16777619;\n        i = i + 1;\n    }\n    h\n}\n```",
+        "specs": [
+          "spec hash {\n    then hash(\"\") == 2166136261;\n    then hash(\"a\") == 3826002220;\n}\n"
+        ],
+        "tests": [
+          "spec hash {\n    then hash(\"foobar\") == 3214735720;\n    then hash(\"tuonelang tuonelang tuonelang\") > 0;\n}\n"
+        ],
+        "tags": [
+          "repair",
+          "bitwise",
+          "L3",
+          "F"
+        ]
+      }
+    },
+    {
+      "digest": "25d6fd84e1d60417",
+      "task": {
+        "id": "repeat-string",
+        "instruction": "Write `repeat(in s: Str, take n: Int) -> String` returning an owned String holding s repeated n times (empty when n <= 0).",
+        "specs": [
+          "spec repeat {\n    then std::string::as_str(repeat(\"ab\", 3)) == \"ababab\";\n}\n"
+        ],
+        "tests": [
+          "spec repeat {\n    then std::string::len(repeat(\"ab\", 0)) == 0;\n    then std::string::len(repeat(\"xyz\", 4)) == 12;\n    then std::string::as_str(repeat(\"-\", 5)) == \"-----\";\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "92a74b29ed53c841",
+      "task": {
+        "id": "rpn-calculator",
+        "instruction": "Write a reverse-Polish calculator. Define `enum Token { Num { value: Int }, Add, Sub, Mul }` and `eval_rpn(in tokens: [Token; 7]) -> Int`, which evaluates the tokens with a stack (a growable `Array[Int]`): a number is pushed; an operator pops the right operand, then the left operand, and pushes left op right. Return the single value left on the stack. Inputs are always well formed.",
+        "specs": [
+          "spec eval_rpn {\n    then eval_rpn([Token::Num { value: 2 }, Token::Num { value: 3 }, Token::Add, Token::Num { value: 4 }, Token::Mul, Token::Num { value: 1 }, Token::Sub]) == 19;\n}\n"
+        ],
+        "tests": [
+          "spec eval_rpn {\n    then eval_rpn([Token::Num { value: 10 }, Token::Num { value: 2 }, Token::Num { value: 3 }, Token::Mul, Token::Sub, Token::Num { value: 0 }, Token::Add]) == 4;\n    then eval_rpn([Token::Num { value: 1 }, Token::Num { value: 2 }, Token::Num { value: 3 }, Token::Num { value: 4 }, Token::Add, Token::Add, Token::Sub]) == 0 - 8;\n}\n"
+        ],
+        "tags": [
+          "enums",
+          "growable-arrays",
+          "L4",
+          "B"
+        ]
+      }
+    },
+    {
+      "digest": "f3458c578b1886b3",
+      "task": {
+        "id": "run-length",
+        "instruction": "Write `rle(in s: Str) -> String` returning the run-length encoding of s: each maximal run of one repeated byte becomes that byte followed by the run's length in decimal, so \"aaabcc\" becomes \"a3b1c2\". The empty string encodes to the empty string.",
+        "specs": [
+          "spec rle {\n    then std::string::as_str(rle(\"aaabcc\")) == \"a3b1c2\";\n    then std::string::len(rle(\"\")) == 0;\n}\n"
+        ],
+        "tests": [
+          "spec rle {\n    then std::string::as_str(rle(\"x\")) == \"x1\";\n    then std::string::as_str(rle(\"zzzzzzzzzzzz\")) == \"z12\";\n    then std::string::as_str(rle(\"abab\")) == \"a1b1a1b1\";\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L4",
+          "B"
+        ]
+      }
+    },
+    {
+      "digest": "787713f968f70dc6",
+      "task": {
+        "id": "safe-div",
+        "instruction": "Write `safe_div(take a: Int, take b: Int) -> Option[Int]` returning the quotient a / b, or None when b is 0. Also write `div_or(take a: Int, take b: Int, take fallback: Int) -> Int`, which calls safe_div and returns the fallback when it is None.",
+        "specs": [
+          "spec div_or {\n    then div_or(10, 2, 0) == 5;\n    then div_or(1, 0, 0 - 1) == 0 - 1;\n}\n"
+        ],
+        "tests": [
+          "spec div_or {\n    then div_or(7, 2, 0) == 3;\n    then div_or(0, 0, 42) == 42;\n    then div_or(0, 5, 42) == 0;\n}\n"
+        ],
+        "tags": [
+          "option",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "dd657bdb2451fcfb",
+      "task": {
+        "id": "shape-area",
+        "instruction": "Define `enum Shape { Square { side: Int }, Rect { width: Int, height: Int }, Triangle { base: Int, height: Int } }` and write `area(in s: Shape) -> Int`. A triangle's area is base * height / 2 with integer division.",
+        "specs": [
+          "spec area {\n    then area(Shape::Square { side: 3 }) == 9;\n    then area(Shape::Rect { width: 2, height: 5 }) == 10;\n}\n"
+        ],
+        "tests": [
+          "spec area {\n    then area(Shape::Triangle { base: 4, height: 3 }) == 6;\n    then area(Shape::Triangle { base: 3, height: 3 }) == 4;\n    then area(Shape::Square { side: 0 }) == 0;\n}\n"
+        ],
+        "tags": [
+          "enums",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "2d689ac710e5ace7",
+      "task": {
+        "id": "spec-first-clamp",
+        "instruction": "Implement `clamp(take value: Int, take low: Int, take high: Int) -> Int` so that these specs pass:\n\n```tuo\nspec clamp {\n    then clamp(5, 0, 10) == 5;\n    then clamp(0 - 3, 0, 10) == 0;\n    then clamp(42, 0, 10) == 10;\n}\n```\n\nReturn only the implementation; the specs are added for you.",
+        "specs": [
+          "spec clamp {\n    then clamp(5, 0, 10) == 5;\n    then clamp(0 - 3, 0, 10) == 0;\n    then clamp(42, 0, 10) == 10;\n}\n"
+        ],
+        "tests": [
+          "spec clamp {\n    then clamp(0, 0, 10) == 0;\n    then clamp(10, 0, 10) == 10;\n    then clamp(7, 7, 7) == 7;\n}\n"
+        ],
+        "tags": [
+          "spec-first",
+          "L2",
+          "C"
+        ]
+      }
+    },
+    {
+      "digest": "b8b9df0265a71e61",
+      "task": {
+        "id": "spec-first-gcd",
+        "instruction": "Implement `gcd(take a: Int, take b: Int) -> Int`, the greatest common divisor of two non-negative integers, so that these specs pass:\n\n```tuo\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n```\n\nReturn only the implementation; the specs are added for you.",
+        "specs": [
+          "spec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n"
+        ],
+        "tests": [
+          "spec gcd {\n    then gcd(17, 5) == 1;\n    then gcd(100, 75) == 25;\n    then gcd(0, 0) == 0;\n}\n"
+        ],
+        "tags": [
+          "spec-first",
+          "recursion",
+          "L2",
+          "C"
+        ]
+      }
+    },
+    {
+      "digest": "6876d17f5ec72d4b",
+      "task": {
+        "id": "str-palindrome",
+        "instruction": "Write `is_palindrome(in s: Str) -> Bool`, true when s reads the same byte-for-byte forwards and backwards. The empty string is a palindrome.",
+        "specs": [
+          "spec is_palindrome {\n    then is_palindrome(\"racecar\");\n    then !is_palindrome(\"rocket\");\n}\n"
+        ],
+        "tests": [
+          "spec is_palindrome {\n    then is_palindrome(\"\");\n    then is_palindrome(\"a\");\n    then is_palindrome(\"abba\");\n    then !is_palindrome(\"abca\");\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L2",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "5d33b4cdf0586934",
+      "task": {
+        "id": "sum-csv",
+        "instruction": "Write `sum_csv(in s: Str) -> Int` that takes comma-separated non-negative decimal integers such as \"10,20,3\" and returns their sum. The empty string sums to 0. There are no spaces.",
+        "specs": [
+          "spec sum_csv {\n    then sum_csv(\"10,20,3\") == 33;\n    then sum_csv(\"\") == 0;\n}\n"
+        ],
+        "tests": [
+          "spec sum_csv {\n    then sum_csv(\"7\") == 7;\n    then sum_csv(\"0,0,0\") == 0;\n    then sum_csv(\"1000,2000,3000,4\") == 6004;\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "parsing",
+          "L3",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "ed403edf3e5f4afc",
+      "task": {
+        "id": "to-binary",
+        "instruction": "Write `to_binary(take n: Int) -> String` returning the base-2 digits of n (n >= 0) as an owned String with no leading zeros; `to_binary(0)` is \"0\".",
+        "specs": [
+          "spec to_binary {\n    then std::string::as_str(to_binary(5)) == \"101\";\n    then std::string::as_str(to_binary(0)) == \"0\";\n}\n"
+        ],
+        "tests": [
+          "spec to_binary {\n    then std::string::as_str(to_binary(1)) == \"1\";\n    then std::string::as_str(to_binary(8)) == \"1000\";\n    then std::string::as_str(to_binary(255)) == \"11111111\";\n}\n"
+        ],
+        "tags": [
+          "strings",
+          "L3",
+          "J"
+        ]
+      }
+    },
+    {
+      "digest": "b3cf80f22deff022",
+      "task": {
+        "id": "traffic-light",
+        "instruction": "Define `enum Light { Red, Yellow, Green }`. Write `next(in l: Light) -> Light`, which cycles Red -> Green -> Yellow -> Red, and `code(in l: Light) -> Int`, which maps Red to 0, Yellow to 1, and Green to 2.",
+        "specs": [
+          "spec next {\n    then code(next(Light::Red)) == 2;\n    then code(next(Light::Green)) == 1;\n}\n"
+        ],
+        "tests": [
+          "spec next {\n    then code(next(Light::Yellow)) == 0;\n    then code(next(next(next(Light::Red)))) == 0;\n    then code(Light::Yellow) == 1;\n}\n"
+        ],
+        "tags": [
+          "enums",
+          "L2",
+          "A"
+        ]
+      }
+    },
+    {
+      "digest": "32c048afcf48f772",
+      "task": {
+        "id": "word-lengths-map",
+        "instruction": "Write `longest_word_length(in text: Str) -> Int` returning the length of the longest space-separated word in text (0 for text with no words), and `count_word(in text: Str, in word: Str) -> Int` returning how many space-separated words of text equal word exactly. Words are separated by one or more ' ' bytes. count_word must use a `Map[Str, Int]`.",
+        "specs": [
+          "spec count_word {\n    then count_word(\"the cat and the hat\", \"the\") == 2;\n    then longest_word_length(\"the cat and the hat\") == 3;\n}\n"
+        ],
+        "tests": [
+          "spec count_word {\n    then count_word(\"a  b a\", \"a\") == 2;\n    then count_word(\"a  b a\", \"c\") == 0;\n    then longest_word_length(\"\") == 0;\n    then longest_word_length(\"  hello   world!  \") == 6;\n}\n"
+        ],
+        "tags": [
+          "maps",
+          "strings",
+          "L4",
+          "J"
+        ]
+      }
+    }
+  ]
+}

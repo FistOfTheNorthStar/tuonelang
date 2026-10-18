@@ -1,0 +1,13 @@
+module solution;
+
+pub fn max_index(in xs: [Int; 5]) -> Int {
+    var best = 0;
+    var i = 1;
+    while i < 5 {
+        if xs[i as Usize] > xs[best as Usize] {
+            best = i;
+        }
+        i = i + 1;
+    }
+    best
+}

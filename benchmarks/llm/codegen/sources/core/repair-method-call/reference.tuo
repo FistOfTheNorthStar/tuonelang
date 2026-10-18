@@ -1,0 +1,5 @@
+module solution;
+
+fn is_long(in s: Str) -> Bool {
+    std::str::len(s) > 5
+}

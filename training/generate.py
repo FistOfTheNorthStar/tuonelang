@@ -8,10 +8,13 @@ benchmark harnesses refuse to record a metric the compiler did not produce.
 Outputs (under ``training/dataset/``):
 
   * ``sft_oneshot.jsonl`` — task -> correct program (chat SFT format).
-  * ``sft_repair.jsonl``  — task -> buggy program -> REAL compiler diagnostic ->
-    corrected program (multi-turn, teaches the TDG feedback loop).
-  * ``eval_heldout.jsonl`` — a held-out slice (by concept hash) never emitted
-    into the SFT sets, for scoring Compile@1 / SpecPass@1 with the real compiler.
+  * ``sft_repair.jsonl``  — task -> buggy program -> REAL compiler feedback ->
+    corrected program (multi-turn, teaches the TDG feedback loop). The feedback
+    is a ``tuo check`` diagnostic (parse, type, or ownership break) or a failing
+    ``tuo spec`` report (a logic break or a seed's own mutant).
+  * ``eval_heldout.jsonl`` — about a fifth of each concept's seeds, never
+    emitted into the SFT sets, for scoring Compile@1 / SpecPass@1 / TestPass@1
+    with the real compiler.
   * ``stats.json`` — coverage and validation counts.
 
 Usage:
@@ -32,6 +35,7 @@ import json
 import os
 import subprocess
 import sys
+import re
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
@@ -69,33 +73,12 @@ def tuo_cmd() -> list[str]:
     return ["cargo", "run", "--quiet", "-p", "tuo-cli", "--"]
 
 
-STDLIB_DIR = REPO / "crates" / "tuo-stdlib" / "src" / "std"
+def _run(args: list[str], text: str) -> subprocess.CompletedProcess[str]:
+    """Write ``text`` to a temp ``.tuo`` file and run ``tuo <args> <file>``.
 
-
-def stdlib_dep_paths(deps: tuple[str, ...]) -> list[str]:
-    """Resolve stdlib module names (``"core"``) to their source-file paths.
-
-    tuonelang's standard library is consumed as input: a program importing
-    ``std::core`` is compiled together with ``std/core.tuo``. These committed
-    catalog files are the single source of record, so the training data always
-    reflects the exact stdlib the compiler ships.
-    """
-    paths = []
-    for dep in deps:
-        p = STDLIB_DIR / f"{dep}.tuo"
-        if not p.is_file():
-            raise FileNotFoundError(f"stdlib module source not found: {p}")
-        paths.append(str(p))
-    return paths
-
-
-def _run(
-    args: list[str], text: str, deps: tuple[str, ...] = ()
-) -> subprocess.CompletedProcess[str]:
-    """Write ``text`` to a temp ``.tuo`` file and run ``tuo <args> <file> <deps>``.
-
-    ``deps`` names stdlib modules whose source is passed alongside the program,
-    since the standard library is compiled as input rather than linked in.
+    Nothing is passed alongside the program: since ADR-0038 the toolchain loads
+    every standard-library module a program names, so the data is generated
+    the way a user compiles.
     """
     with tempfile.NamedTemporaryFile(
         "w", suffix=".tuo", dir=str(OUT), delete=False
@@ -104,7 +87,7 @@ def _run(
         path = f.name
     try:
         return subprocess.run(
-            tuo_cmd() + args + [path] + stdlib_dep_paths(deps),
+            tuo_cmd() + args + [path],
             cwd=str(REPO),
             capture_output=True,
             text=True,
@@ -114,45 +97,30 @@ def _run(
         os.unlink(path)
 
 
-def check_ok(text: str, deps: tuple[str, ...] = ()) -> tuple[bool, str]:
+def check_ok(text: str) -> tuple[bool, str]:
     """True if ``tuo check`` accepts ``text``; else (False, stderr+stdout)."""
-    p = _run(["check"], text, deps)
+    p = _run(["check"], text)
     return p.returncode == 0, (p.stderr + p.stdout).strip()
 
 
-def spec_ok(text: str, deps: tuple[str, ...] = ()) -> tuple[bool, str]:
+def spec_ok(text: str) -> tuple[bool, str]:
     """True if ``tuo spec`` runs every spec green."""
-    p = _run(["spec"], text, deps)
+    p = _run(["spec"], text)
     out = (p.stdout + p.stderr).strip()
     return p.returncode == 0 and "0 failed" in out, out
 
 
-def run_exit(text: str, deps: tuple[str, ...] = ()) -> tuple[int | None, str]:
+def run_exit(text: str) -> tuple[int | None, str]:
     """Compile+run natively; return the process exit byte (or None on failure)."""
-    p = _run(["run"], text, deps)
+    p = _run(["run"], text)
     # `tuo run` propagates the program's own exit status. A codegen/link error is
     # a nonzero tuo error with a message on stderr; distinguish by stderr noise.
     return p.returncode, (p.stderr + p.stdout).strip()
 
 
-def first_diagnostic(text: str, deps: tuple[str, ...] = ()) -> dict | None:
+def first_diagnostic(text: str) -> dict | None:
     """Run ``tuo --message-format=json check`` and return the first diagnostic."""
-    with tempfile.NamedTemporaryFile(
-        "w", suffix=".tuo", dir=str(OUT), delete=False
-    ) as f:
-        f.write(text)
-        path = f.name
-    try:
-        p = subprocess.run(
-            tuo_cmd() + ["--message-format=json", "check", path]
-            + stdlib_dep_paths(deps),
-            cwd=str(REPO),
-            capture_output=True,
-            text=True,
-            timeout=180,
-        )
-    finally:
-        os.unlink(path)
+    p = _run(["--message-format=json", "check"], text)
     for line in (p.stdout or "").splitlines():
         line = line.strip()
         if not line.startswith("{"):
@@ -165,6 +133,45 @@ def first_diagnostic(text: str, deps: tuple[str, ...] = ()) -> dict | None:
             if event.get("event") == "diagnostic":
                 return event.get("diagnostic")
     return None
+
+
+def spec_failure(text: str) -> str | None:
+    """The human ``tuo spec`` report for a program that checks but fails a
+    spec — the text a developer sees — or None if it does not fail that way."""
+    p = _run(["spec"], text)
+    out = (p.stdout + p.stderr).strip()
+    # A real spec failure: a `FAILED` report and an ordinary failure exit — not
+    # a front-end error, and not the process dying (a crash is not feedback a
+    # model can learn to act on).
+    if p.returncode != 1 or "FAILED " not in out or "error[" in out:
+        return None
+    # Temp-file paths and measured durations differ run to run; name the file
+    # the way the transcript does and drop the timings, so the dataset is
+    # reproducible.
+    out = re.sub(r"/[^\s:()]*?/tmp[^\s:()]*?\.tuo", "program.tuo", out)
+    out = re.sub(r", \d+(?:\.\d+)?(?:ns|µs|ms|s)\)", ")", out)
+    return re.sub(r" in \d+(?:\.\d+)?(?:ns|µs|ms|s)$", "", out, flags=re.MULTILINE)
+
+
+EFFECT_PATHS = (
+    "std::io::",
+    "std::fs::",
+    "std::net::",
+    "std::sync::",
+    "std::process::",
+    "std::time::now",
+    "std::rt::",
+    "std::crypto::random_byte",
+    "std::crypto::nonce",
+)
+
+
+def infer_tier(solution: str) -> str:
+    """``effect`` if the program calls an effectful module, else ``executable``.
+
+    ``interpreter`` (checks and specs, outside the native subset) cannot be
+    seen from the text; a seed declares it."""
+    return "effect" if any(p in solution for p in EFFECT_PATHS) else "executable"
 
 
 def render_diagnostic(diag: dict) -> str:
@@ -185,10 +192,31 @@ def render_diagnostic(diag: dict) -> str:
     return line
 
 
-def held_out(seed: Seed, ratio: int = 5) -> bool:
-    """Deterministically hold out ~1/ratio of seeds for eval, stable per task."""
-    h = int(hashlib.sha256(seed.task.encode()).hexdigest(), 16)
-    return (h % ratio) == 0
+def split_by_concept(seeds: list[Seed], ratio: int = 5) -> tuple[list[Seed], list[Seed]]:
+    """Hold out about 1/``ratio`` of *each concept's* seeds for eval.
+
+    A global hash split left whole concepts out of the eval set and others
+    over-represented, so a score said little about any one area. Within a
+    concept the seeds are ordered by a stable hash of their task, and the
+    first ``round(n / ratio)`` are held out — at least one when the concept has
+    two or more seeds, none when it has one (its only example stays in
+    training). Deterministic: the same seeds always give the same split.
+    """
+    by_concept: dict[str, list[Seed]] = {}
+    for seed in seeds:
+        by_concept.setdefault(seed.concept, []).append(seed)
+    held: set[int] = set()
+    for group in by_concept.values():
+        if len(group) < 2:
+            continue
+        ordered = sorted(
+            group, key=lambda s: hashlib.sha256(s.task.encode()).hexdigest()
+        )
+        for seed in ordered[: max(1, round(len(group) / ratio))]:
+            held.add(id(seed))
+    train = [s for s in seeds if id(s) not in held]
+    eval_ = [s for s in seeds if id(s) in held]
+    return train, eval_
 
 
 def chat(system: str, user: str, assistant: str) -> dict:
@@ -202,9 +230,12 @@ def chat(system: str, user: str, assistant: str) -> dict:
     }
 
 
-def repair_chat(system: str, user: str, bad: str, diag: str, fixed: str) -> dict:
+def repair_chat(
+    system: str, user: str, bad: str, diag: str, fixed: str, command: str = "check"
+) -> dict:
     """A multi-turn repair record with a compiler-tool turn between the two
-    assistant turns."""
+    assistant turns. ``command`` is what produced ``diag`` (``check`` for a
+    compile error, ``spec`` for a failing spec)."""
     return {
         "messages": [
             {"role": "system", "content": system},
@@ -213,7 +244,7 @@ def repair_chat(system: str, user: str, bad: str, diag: str, fixed: str) -> dict
             {
                 "role": "tool",
                 "name": "tuo_compiler",
-                "content": f"$ tuo check program.tuo\n{diag}",
+                "content": f"$ tuo {command} program.tuo\n{diag}",
             },
             {"role": "assistant", "content": fixed},
         ]
@@ -223,13 +254,6 @@ def repair_chat(system: str, user: str, bad: str, diag: str, fixed: str) -> dict
 def assistant_answer(seed: Seed) -> str:
     """The assistant's one-shot answer: the program, plus a short note if any."""
     body = "```tuo\n" + seed.solution.rstrip() + "\n```"
-    if seed.stdlib_deps:
-        deps = " ".join(f"std/{d}.tuo" for d in seed.stdlib_deps)
-        body += (
-            f"\n\nThis imports a standard-library module, so compile its source "
-            f"alongside your program — the tuonelang stdlib is consumed as "
-            f"input:\n\n```bash\ntuo verify program.tuo {deps}\n```"
-        )
     if seed.notes:
         body += f"\n\n{seed.notes}"
     return body
@@ -238,19 +262,34 @@ def assistant_answer(seed: Seed) -> str:
 def validate_seed(seed: Seed, idx: int) -> list[str]:
     """Return a list of failure messages (empty if the seed is fully valid)."""
     problems: list[str] = []
-    ok, out = check_ok(seed.solution, seed.stdlib_deps)
+    ok, out = check_ok(seed.solution)
     if not ok:
         problems.append(f"check failed:\n{out}")
         return problems  # no point running spec on an unchecked program
-    ok, out = spec_ok(seed.solution, seed.stdlib_deps)
+    ok, out = spec_ok(seed.solution)
     if not ok:
         problems.append(f"spec failed:\n{out}")
     if seed.runnable:
-        code, out = run_exit(seed.solution, seed.stdlib_deps)
+        code, out = run_exit(seed.solution)
         if code != seed.run_exit:
             problems.append(
                 f"run exit was {code}, expected {seed.run_exit}\n{out}"
             )
+    inferred = infer_tier(seed.solution)
+    if seed.tier and seed.tier != "interpreter" and seed.tier != inferred:
+        problems.append(f"declared tier `{seed.tier}`, but the solution is `{inferred}`")
+    if seed.difficulty not in range(0, 6):
+        problems.append(f"difficulty {seed.difficulty} is outside 0..=5")
+    if seed.heldout_specs:
+        ok, out = spec_ok(seed.solution.rstrip() + "\n\n" + seed.heldout_specs)
+        if not ok:
+            problems.append(f"held-out specs fail on the solution:\n{out}")
+    for n, mutant in enumerate(seed.mutants):
+        ok, out = check_ok(mutant)
+        if not ok:
+            problems.append(f"mutant #{n} does not check (it must, and fail a spec):\n{out}")
+        elif spec_failure(mutant) is None:
+            problems.append(f"mutant #{n} passes every spec, so no spec catches it")
     return problems
 
 
@@ -303,11 +342,11 @@ def main() -> int:
         candidates = harvest_all(REPO)
         print(f"\nHarvesting {len(candidates)} examples from repository source...")
         for item in candidates:
-            ok, _ = check_ok(item.solution, item.stdlib_deps)
+            ok, _ = check_ok(item.solution)
             if not ok:
                 harvest_dropped += 1
                 continue
-            ok, _ = spec_ok(item.solution, item.stdlib_deps)
+            ok, _ = spec_ok(item.solution)
             if not ok:
                 harvest_dropped += 1
                 continue
@@ -323,8 +362,7 @@ def main() -> int:
         )
 
     # ---- emit datasets -------------------------------------------------
-    train = [s for s in valid if not held_out(s)]
-    eval_ = [s for s in valid if held_out(s)]
+    train, eval_ = split_by_concept(valid)
 
     sft_path = OUT / "sft_oneshot.jsonl"
     repair_path = OUT / "sft_repair.jsonl"
@@ -349,34 +387,62 @@ def main() -> int:
 
     n_repair = 0
     repair_by_break: dict[str, int] = {}
+    repair_by_kind: dict[str, int] = {}
     with repair_path.open("w") as f:
+
+        def emit_repair(seed: Seed, broken: str, diag: str, command: str, label: str) -> None:
+            nonlocal n_repair
+            user = (
+                seed.task
+                + "\n\n(You may write a first attempt; the tuonelang "
+                "compiler will give you feedback to repair against.)"
+            )
+            rec = repair_chat(
+                SYSTEM_PROMPT,
+                user,
+                "```tuo\n" + broken.rstrip() + "\n```",
+                diag,
+                "```tuo\n" + seed.solution.rstrip() + "\n```",
+                command,
+            )
+            f.write(json.dumps(rec) + "\n")
+            n_repair += 1
+            repair_by_break[label] = repair_by_break.get(label, 0) + 1
+
         for seed in train:
             for brk in BREAKS:
                 broken = brk.apply(seed.solution)
                 if broken == seed.solution:
                     continue  # break not applicable to this seed
-                ok, _ = check_ok(broken, seed.stdlib_deps)
+                ok, _ = check_ok(broken)
+                if brk.kind == "spec":
+                    # The program must still check and must fail a spec: the
+                    # repair is to the logic, shown by the real spec report.
+                    if not ok:
+                        continue
+                    report = spec_failure(broken)
+                    if report is None:
+                        continue  # every spec still passes; nothing to repair
+                    emit_repair(seed, broken, report, "spec", brk.name)
+                    repair_by_kind["spec"] = repair_by_kind.get("spec", 0) + 1
+                    continue
                 if ok:
                     continue  # break did not actually break it; skip silently
-                diag = first_diagnostic(broken, seed.stdlib_deps)
+                diag = first_diagnostic(broken)
                 if diag is None:
                     continue  # no structured diagnostic captured; skip
-                rendered = render_diagnostic(diag)
-                user = (
-                    seed.task
-                    + "\n\n(You may write a first attempt; the tuonelang "
-                    "compiler will give you feedback to repair against.)"
-                )
-                rec = repair_chat(
-                    SYSTEM_PROMPT,
-                    user,
-                    "```tuo\n" + broken.rstrip() + "\n```",
-                    rendered,
-                    "```tuo\n" + seed.solution.rstrip() + "\n```",
-                )
-                f.write(json.dumps(rec) + "\n")
-                n_repair += 1
-                repair_by_break[brk.name] = repair_by_break.get(brk.name, 0) + 1
+                code = diag.get("code", "?")
+                stage = {"L": "parse", "P": "parse", "R": "resolve", "T": "type", "O": "ownership"}
+                kind = stage.get(code[:1], "other")
+                emit_repair(seed, broken, render_diagnostic(diag), "check", brk.name)
+                repair_by_kind[kind] = repair_by_kind.get(kind, 0) + 1
+            # A seed's own mutants are hand-written wrong logic, verified in
+            # `validate_seed` to check and to fail a spec.
+            for mutant in seed.mutants:
+                report = spec_failure(mutant)
+                if report is not None:
+                    emit_repair(seed, mutant, report, "spec", "seed-mutant")
+                    repair_by_kind["spec"] = repair_by_kind.get("spec", 0) + 1
 
     n_eval = 0
     with eval_path.open("w") as f:
@@ -388,14 +454,22 @@ def main() -> int:
                 "reference_solution": seed.solution,
                 "runnable": seed.runnable,
                 "run_exit": seed.run_exit if seed.runnable else None,
-                "stdlib_deps": list(seed.stdlib_deps),
+                "tier": seed.tier or infer_tier(seed.solution),
+                "difficulty": seed.difficulty,
+                "heldout_specs": seed.heldout_specs,
             }
             f.write(json.dumps(rec) + "\n")
             n_eval += 1
 
     concepts: dict[str, int] = {}
+    tiers: dict[str, int] = {}
     for s in valid:
         concepts[s.concept] = concepts.get(s.concept, 0) + 1
+        tier = s.tier or infer_tier(s.solution)
+        tiers[tier] = tiers.get(tier, 0) + 1
+    eval_by_concept: dict[str, int] = {}
+    for s in eval_:
+        eval_by_concept[s.concept] = eval_by_concept.get(s.concept, 0) + 1
 
     stats = {
         "seeds_total": len(valid),
@@ -405,7 +479,10 @@ def main() -> int:
         "repair_examples": n_repair,
         "eval_examples": n_eval,
         "repair_by_break": repair_by_break,
+        "repair_by_kind": repair_by_kind,
         "concepts": concepts,
+        "eval_by_concept": eval_by_concept,
+        "tiers": tiers,
         "harvested_kept": len(harvested),
         "harvested_dropped": harvest_dropped,
         "harvested_by_origin": harvest_by_origin,

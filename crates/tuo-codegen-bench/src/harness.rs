@@ -170,6 +170,9 @@ pub fn run_task(
         let prompt = Prompt {
             instruction: &task.instruction,
             variant: variant.map(|v| v.label.as_str()),
+            variant_note: variant
+                .map(|v| v.note.as_str())
+                .filter(|note| !note.is_empty()),
             previous_source: previous_source.as_deref(),
             feedback: &feedback,
         };
@@ -273,7 +276,10 @@ fn render_prompt(prompt: &Prompt<'_>) -> String {
     let mut out = String::new();
     out.push_str(prompt.instruction);
     if let Some(variant) = prompt.variant {
-        out.push_str(&format!("\n\n[variant: {variant}]"));
+        match prompt.variant_note {
+            Some(note) => out.push_str(&format!("\n\n[variant: {variant} — {note}]")),
+            None => out.push_str(&format!("\n\n[variant: {variant}]")),
+        }
     }
     if let Some(previous) = prompt.previous_source {
         out.push_str("\n\n[previous attempt]\n");

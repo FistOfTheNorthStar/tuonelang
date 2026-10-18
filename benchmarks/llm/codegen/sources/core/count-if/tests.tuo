@@ -1,0 +1,4 @@
+spec count_if {
+    then count_if([1, 2, 3, 4, 5, 6], is_negative) == 0;
+    then count_if([0, 0 - 3, 3, 1, 2, 4], is_multiple_of_three) == 3;
+}

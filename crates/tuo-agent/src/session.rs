@@ -59,6 +59,13 @@ pub struct Session {
     session: IncrementalSession,
     /// The formatter the transport injected (for the `format` method).
     formatter: Box<dyn Formatter>,
+    /// Each open document's latest text, by URI — what decides which
+    /// standard-library modules the program names.
+    documents: Vec<(String, String)>,
+    /// The standard-library modules loaded beside the documents (ADR-0038), by
+    /// file name. They are checked with the program but are not the agent's to
+    /// edit, and their specs are never run on the agent's behalf.
+    library: Vec<&'static str>,
 }
 
 impl Session {
@@ -68,6 +75,8 @@ impl Session {
         Self {
             session: IncrementalSession::new(),
             formatter,
+            documents: Vec::new(),
+            library: Vec::new(),
         }
     }
 
@@ -78,7 +87,22 @@ impl Session {
     /// Open or update `uri`'s text, feeding the shared incremental session.
     /// Returns the compiler [`FileId`] the document was interned under.
     pub fn set_document(&mut self, uri: &str, text: &str) -> FileId {
-        self.session.set_file(uri, text)
+        let file = self.session.set_file(uri, text);
+        match self.documents.iter_mut().find(|(open, _)| open == uri) {
+            Some((_, current)) => text.clone_into(current),
+            None => self.documents.push((uri.to_owned(), text.to_owned())),
+        }
+        // Load the standard-library modules the documents now name, exactly
+        // as `tuo check` does. A module stays loaded once a document has
+        // named it: an unused module costs a little checking and nothing else.
+        let texts = self.documents.iter().map(|(_, text)| text.as_str());
+        for module in tuo_stdlib::referenced_by(texts) {
+            if !self.library.contains(&module.name) {
+                self.session.set_file(module.name, module.source);
+                self.library.push(module.name);
+            }
+        }
+        file
     }
 
     /// The [`FileId`] of an open document, if any.
@@ -313,9 +337,26 @@ impl Session {
                             && sema.resolution.symbol(reference.symbol).kind == SymbolKind::Function
                     })
                     .max_by_key(|reference| reference.span.range().start().as_u32())?;
+                let name = sema.resolution.symbol(called.symbol).name.clone();
+                if let Some(builtin) = sema
+                    .resolution
+                    .builtin(called.symbol)
+                    .and_then(BuiltinShape::of)
+                {
+                    let params: Vec<String> = builtin
+                        .params
+                        .iter()
+                        .map(|(name, mode, ty)| format!("{mode} {name}: {ty}"))
+                        .collect();
+                    return Some(json!({
+                        "label": builtin.label,
+                        "name": name,
+                        "parameters": params,
+                        "return_type": builtin.ret,
+                    }));
+                }
                 let ty = sema.types.type_of(called.symbol)?;
                 let Ty::Fn(fn_ty) = ty else { return None };
-                let name = sema.resolution.symbol(called.symbol).name.clone();
                 let params: Vec<String> = fn_ty
                     .params
                     .iter()
@@ -569,11 +610,12 @@ impl Session {
     /// verdict agrees; affected-spec *selection* is what the shared incremental
     /// engine contributes.
     fn run_specs(&self, selection: &Selection) -> Result<Value, ResponseError> {
-        let outcome = self
-            .with_program(|map, sources| tuo_spec::run(map, sources, selection, Limits::default()));
+        let outcome = self.with_program(|map, sources, scope| {
+            tuo_spec::run_scoped(map, sources, scope, selection, Limits::default())
+        });
         match outcome {
             RunOutcome::NotChecked(problems) => {
-                let data = self.with_program(|map, _| {
+                let data = self.with_program(|map, _, _| {
                     let diagnostics: Vec<Value> =
                         problems.iter().map(|d| diagnostic_json(map, d)).collect();
                     json!({ "diagnostics": diagnostics })
@@ -585,17 +627,22 @@ impl Session {
                 .with_data(data))
             }
             RunOutcome::Ran(report) => {
-                Ok(self.with_program(|map, _| spec_report_json(&report, map)))
+                Ok(self.with_program(|map, _, _| spec_report_json(&report, map)))
             }
         }
     }
 
     /// Build a source map from the session's current documents and run `f` over
-    /// it. This reconstructs the exact program the session holds so a MIR
-    /// consumer (the spec runner) can drive it.
-    fn with_program<R>(&self, f: impl FnOnce(&SourceMap, &[tuo_source::SourceId]) -> R) -> R {
+    /// it, with the ids of the documents themselves (the library modules
+    /// excluded) as the third argument. This reconstructs the exact program the
+    /// session holds so a MIR consumer (the spec runner) can drive it.
+    fn with_program<R>(
+        &self,
+        f: impl FnOnce(&SourceMap, &[tuo_source::SourceId], &[tuo_source::SourceId]) -> R,
+    ) -> R {
         let mut map = SourceMap::new();
         let mut sources = Vec::new();
+        let mut documents = Vec::new();
         // Reconstruct from the session's semantics map (its snapshot holds every
         // file's current text).
         let texts: Vec<(String, String)> = self.session.with_semantics(|sema| {
@@ -614,9 +661,12 @@ impl Session {
             let file = map.intern_file(name);
             if let Ok(id) = map.add_source(file, text.as_str()) {
                 sources.push(id);
+                if !self.library.contains(&name.as_str()) {
+                    documents.push(id);
+                }
             }
         }
-        f(&map, &sources)
+        f(&map, &sources, &documents)
     }
 }
 
@@ -877,4 +927,34 @@ fn assertion_json(assertion: &tuo_spec::AssertionResult, map: &SourceMap) -> Val
         "outcome": outcome,
         "detail": detail,
     })
+}
+
+/// A builtin's caller-facing signature (`push(mut xs: Array[T], take value:
+/// T) -> ()`), from the shape table the brief prints
+/// ([`tuo_resolve::Builtin::surface`]). The checker's own signatures for the
+/// generic builtins are `Int`-seeded, so rendering them would tell an agent
+/// that `push` takes only an `Array[Int]`.
+pub(crate) struct BuiltinShape {
+    /// The whole declaration, modes included.
+    pub(crate) label: String,
+    /// Each parameter's name, mode keyword, and type spelling.
+    pub(crate) params: Vec<(&'static str, &'static str, &'static str)>,
+    /// The return type's spelling.
+    pub(crate) ret: &'static str,
+}
+
+impl BuiltinShape {
+    /// The shape of `builtin`, or `None` for the `std::rt` primitives.
+    pub(crate) fn of(builtin: tuo_resolve::Builtin) -> Option<Self> {
+        let (params, ret) = builtin.surface()?;
+        Some(Self {
+            label: builtin.declaration()?,
+            params: params
+                .iter()
+                .zip(builtin.param_modes())
+                .map(|((name, ty), mode)| (*name, mode.keyword(), *ty))
+                .collect(),
+            ret,
+        })
+    }
 }

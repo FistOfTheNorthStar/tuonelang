@@ -1,0 +1,16 @@
+module solution;
+
+pub fn parse_digit(take c: Int) -> Result[Int, Str] {
+    if c >= 48 && c <= 57 {
+        Ok { value: c - 48 }
+    } else {
+        Err { error: "not a digit" }
+    }
+}
+
+pub fn digit_or(take c: Int, take fallback: Int) -> Int {
+    match parse_digit(c) {
+        Ok { value } => value,
+        Err { error } => fallback,
+    }
+}

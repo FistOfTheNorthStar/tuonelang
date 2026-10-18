@@ -31,6 +31,9 @@ use std::process::Command;
 use tuo_compiler::check_sources;
 use tuo_compiler::source::{SourceId, SourceMap};
 
+/// The line the brief puts between the builtins and the catalog's modules.
+const LIBRARY_MODULES: &str = "The library's own modules, written in tuonelang:";
+
 /// Run `tuo` with `args`, returning stdout.
 fn tuo(args: &[&str]) -> String {
     let output = Command::new(env!("CARGO_BIN_EXE_tuo"))
@@ -562,8 +565,13 @@ fn the_brief_never_lists_a_function_the_library_does_not_export() {
     let brief = tuo(&["cheatsheet"]);
     let mut current: Option<&'static str> = None;
     let mut checked_any = false;
+    // The builtins come first and have no module source; they are held to
+    // account by `every_builtin_is_callable_as_listed`.
+    let (_, catalog) = brief
+        .split_once(LIBRARY_MODULES)
+        .expect("the brief marks where the library's modules begin");
 
-    for line in brief.lines() {
+    for line in catalog.lines() {
         // Section 2 ends at the next section rule; beyond it, `fn` lines are
         // illustrations (the anti-pattern table), not claimed exports.
         if line.starts_with("3. WHAT RUNS") {
@@ -595,4 +603,137 @@ fn the_brief_never_lists_a_function_the_library_does_not_export() {
         checked_any,
         "the brief should list standard-library functions to check"
     );
+}
+
+#[test]
+fn every_builtin_is_callable_as_listed() {
+    // The builtins have no declaration to read, so the brief spells their
+    // shapes itself; this is where a spelling that drifted from the checker is
+    // caught. Each listed line becomes a function with exactly those
+    // parameters — modes included — that forwards them to the builtin and
+    // returns its result as the listed type, with `T`, `K`, `V` := Int. A wrong
+    // parameter type, return type, or mode fails to compile.
+    let brief = tuo(&["cheatsheet"]);
+    let (builtins, _) = brief
+        .split_once("The library's own modules")
+        .expect("the brief marks where the library's modules begin");
+    let (_, builtins) = builtins
+        .split_once("Built into the compiler")
+        .expect("the brief lists the builtins");
+
+    let mut module = None;
+    let mut probes = Vec::new();
+    for line in builtins.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("std::") {
+            module = Some(trimmed.to_owned());
+            continue;
+        }
+        let Some(rest) = trimmed.strip_prefix("fn ") else {
+            continue;
+        };
+        let module = module
+            .as_deref()
+            .expect("a builtin line follows its module");
+        let (name, rest) = rest
+            .split_once('(')
+            .expect("a parenthesized parameter list");
+        let (params, ret) = rest.split_once(") -> ").expect("a return type");
+        let args: Vec<&str> = top_level_params(params)
+            .into_iter()
+            .map(|p| {
+                p.split_whitespace()
+                    .nth(1)
+                    .and_then(|n| n.strip_suffix(':'))
+                    .expect("`mode name: Type`")
+            })
+            .collect();
+        let generic = |text: &str| {
+            text.replace("Array[T]", "Array[Int]")
+                .replace("Box[T]", "Box[Int]")
+                .replace("Option[T]", "Option[Int]")
+                .replace("Map[K, V]", "Map[Int, Int]")
+                .replace("Option[V]", "Option[Int]")
+                .replace("Array[K]", "Array[Int]")
+                .replace(": T", ": Int")
+                .replace(": K", ": Int")
+                .replace(": V", ": Int")
+        };
+        let ret = match ret {
+            "T" | "K" | "V" => "Int".to_owned(),
+            other => generic(other),
+        };
+        probes.push((
+            format!("{module}::{name}"),
+            format!(
+                "fn probe_{index}({params}) -> () {{\n    let _result: {ret} = {module}::{name}({args});\n}}\n",
+                index = probes.len(),
+                params = generic(params),
+                args = args.join(", "),
+            ),
+        ));
+    }
+    assert!(
+        probes.len() >= 30,
+        "the brief lists the builtins ({} found)",
+        probes.len()
+    );
+    for (builtin, probe) in &probes {
+        let source = format!("module caller;\n\n{probe}");
+        let mut map = SourceMap::new();
+        let file = map.intern_file("caller.tuo");
+        let id = map.add_source(file, source.as_str()).expect("small");
+        let errors: Vec<String> = check_sources(&map, &[id])
+            .diagnostics
+            .iter()
+            .filter(|d| d.severity == tuo_compiler::diagnostics::Severity::Error)
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect();
+        assert!(
+            errors.is_empty(),
+            "the brief lists `{builtin}` as\n{probe}which does not compile:\n  {}",
+            errors.join("\n  ")
+        );
+    }
+}
+
+#[test]
+fn a_program_calls_the_library_without_copying_it() {
+    // The brief tells a model to call `std::core::abs(x)` from any program.
+    // That is only true if the toolchain loads the module the program names
+    // (ADR-0038) — so check it through the real binary, on one file.
+    let dir = std::env::temp_dir().join(format!("tuo-brief-call-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("app.tuo");
+    std::fs::write(
+        &path,
+        "module app;\n\nfn main() -> Int {\n    std::core::abs(0 - 3) + std::collections::sum(std::collections::of2(1, 2))\n}\n",
+    )
+    .expect("write the program");
+    let path = path.to_str().expect("UTF-8 temp path");
+    tuo(&["check", path]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Split a parameter list at its top-level commas (a `Map[K, V]` type has one
+/// of its own).
+fn top_level_params(params: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0_i32;
+    let mut start = 0;
+    for (i, c) in params.char_indices() {
+        match c {
+            '[' | '(' => depth += 1,
+            ']' | ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(params[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if !params[start..].trim().is_empty() {
+        out.push(params[start..].trim());
+    }
+    out
 }

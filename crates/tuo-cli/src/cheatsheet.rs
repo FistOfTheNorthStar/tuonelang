@@ -35,6 +35,7 @@ use std::process::ExitCode;
 use serde_json::json;
 use tuo_compiler::ast::{Ast, FnDecl, Item};
 use tuo_compiler::check_sources;
+use tuo_compiler::resolve::Builtin;
 use tuo_compiler::source::{SourceId, SourceMap};
 
 use crate::output::OutputMode;
@@ -296,7 +297,8 @@ Runs everywhere (check, interpreter, and native):
   * borrow-mode (`in` / `mut`) calls
   * `Str` values: literals, `==`, and the `std::str` byte operations
   * owned `String` and growable `Array[T]` (`std::string` / `std::array`)
-  * `Map[Int, Int]` and `Map[Str, Int]` (`std::map`), insertion-ordered
+  * `Map[K, V]` (`std::map`): an Int or Str key, an Int, Bool, Float, or Str
+    value, insertion-ordered
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly
@@ -501,11 +503,17 @@ listed, it does not exist — do not invent a plausible name. There is exactly
 one obvious API per task, and the library is FREE FUNCTIONS ONLY
 (`std::array::len(xs)`, never `xs.len()`).
 
+Call any of them by its full path from any program — `std::core::abs(x)`,
+`std::io::println("hi")` — with no `import` and no copy of the module: the
+toolchain loads every standard-library module a program names.
+
 `Int` is an alias for `I64` and `Float` for `F64`; both spellings are legal,
 and these declarations use the one the library authors chose.
 
 "#,
     );
+    out.push_str(&builtin_surface());
+    out.push_str(LIBRARY_MODULES);
 
     for module in tuo_stdlib::MODULES {
         let parse = tuo_compiler::parser::parse(map.source(sources[index_of(module.path)]));
@@ -530,6 +538,47 @@ and these declarations use the one the library authors chose.
     }
     Ok(out)
 }
+
+/// The operations built into the compiler — the heap types, `Str`'s byte
+/// access, `Box`, and the float square root — which have no module source to
+/// read a declaration from.
+///
+/// Every line is the compiler's own: which builtins exist and their modules
+/// ([`Builtin::ALL`]), and each one's caller-facing declaration
+/// ([`Builtin::declaration`] — modes from the table the ownership checker
+/// enforces, shapes from [`Builtin::surface`]). `cheatsheet_command.rs`
+/// compiles a call through every line, so a shape that drifted from the
+/// checker fails the suite.
+fn builtin_surface() -> String {
+    let mut out = String::from(
+        "Built into the compiler (no module file; always available). `T` is the
+element type — Int, Float, Bool, Str, String, or a struct or enum of those; a
+map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str.
+
+",
+    );
+    // One block per module, in the order modules first appear in `ALL`.
+    let mut modules: Vec<&[&str]> = Vec::new();
+    for builtin in Builtin::ALL {
+        if builtin.surface().is_some() && !modules.contains(&builtin.module_path()) {
+            modules.push(builtin.module_path());
+        }
+    }
+    for module in modules {
+        out.push_str(&format!("{}\n", module.join("::")));
+        for builtin in Builtin::ALL.iter().filter(|b| b.module_path() == module) {
+            if let Some(declaration) = builtin.declaration() {
+                out.push_str(&format!("  {declaration}\n"));
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// The line separating the builtins from the catalog's modules (a reader, and
+/// the brief's own tests, can tell the two apart by it).
+pub(crate) const LIBRARY_MODULES: &str = "The library's own modules, written in tuonelang:\n\n";
 
 /// The catalog index of the module with this path.
 fn index_of(path: &str) -> usize {

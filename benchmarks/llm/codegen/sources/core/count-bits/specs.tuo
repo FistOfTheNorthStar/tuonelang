@@ -1,0 +1,4 @@
+spec count_bits {
+    then count_bits(0) == 0;
+    then count_bits(7) == 3;
+}

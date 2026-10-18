@@ -1,0 +1,5 @@
+spec caesar {
+    then std::string::as_str(caesar("hello, world", 13)) == "uryyb, jbeyq";
+    then std::string::as_str(caesar("ABC z", 1)) == "ABC a";
+    then std::string::as_str(caesar("same", 0)) == "same";
+}

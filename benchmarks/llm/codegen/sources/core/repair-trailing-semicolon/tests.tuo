@@ -1,0 +1,4 @@
+spec larger {
+    then larger(9, 3) == 9;
+    then larger(4, 4) == 4;
+}

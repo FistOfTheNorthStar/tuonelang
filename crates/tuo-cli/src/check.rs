@@ -71,7 +71,8 @@ fn load(files: &[PathBuf], mode: OutputMode) -> Result<(SourceMap, Vec<SourceId>
             Err(error) => return Err(read_error(mode, &display, &error.to_string())),
         }
     }
-    Ok((map, sources))
+    let program = crate::stdlib_input::with_referenced_stdlib(&mut map, &sources);
+    Ok((map, program))
 }
 
 /// Report an unreadable/unusable input file through `mode`.

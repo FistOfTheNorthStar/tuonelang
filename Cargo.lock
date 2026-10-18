@@ -1247,6 +1247,7 @@ dependencies = [
  "tuo-resolve",
  "tuo-source",
  "tuo-spec",
+ "tuo-stdlib",
  "tuo-types",
 ]
 
@@ -1313,9 +1314,11 @@ dependencies = [
  "tuo-compiler",
  "tuo-corpus",
  "tuo-diagnostics",
+ "tuo-fmt",
  "tuo-resolve",
  "tuo-source",
  "tuo-spec",
+ "tuo-stdlib",
 ]
 
 [[package]]

@@ -1,0 +1,5 @@
+spec find_or {
+    then find_or([5, 6, 7, 8], 5) == 0;
+    then find_or([1, 1, 1, 1], 1) == 0;
+    then find_or([1, 2, 3, 4], 4) == 3;
+}

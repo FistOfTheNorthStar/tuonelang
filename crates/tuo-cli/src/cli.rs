@@ -351,6 +351,17 @@ enum BenchCommand {
         /// Per-request timeout in seconds.
         #[arg(long, default_value_t = 600)]
         timeout: u64,
+        /// Ask a reasoning model to reason this much before answering, sent as
+        /// the request's `reasoning_effort` and recorded in the run. `none`
+        /// turns reasoning off where the model supports it; a model that
+        /// always reasons ignores it. Omitted: the server's default.
+        #[arg(long, value_parser = ["none", "low", "medium", "high"])]
+        reasoning_effort: Option<String>,
+        /// Cap each reply at this many generated tokens (`max_tokens`),
+        /// reasoning included, and record the cap in the run. A reply cut off
+        /// before its code is a failed generation, scored as one.
+        #[arg(long)]
+        max_tokens: Option<u64>,
     },
 }
 
@@ -529,6 +540,8 @@ impl Cli {
                 prime,
                 api_key_env,
                 timeout,
+                reasoning_effort,
+                max_tokens,
             })) => bench::run_live(
                 &bench::LiveOptions {
                     tasks: &tasks,
@@ -540,6 +553,8 @@ impl Cli {
                     prime,
                     api_key_env: api_key_env.as_deref(),
                     timeout_secs: timeout,
+                    reasoning_effort: reasoning_effort.as_deref(),
+                    max_tokens,
                 },
                 mode,
             ),

@@ -1,0 +1,5 @@
+spec rle {
+    then std::string::as_str(rle("x")) == "x1";
+    then std::string::as_str(rle("zzzzzzzzzzzz")) == "z12";
+    then std::string::as_str(rle("abab")) == "a1b1a1b1";
+}

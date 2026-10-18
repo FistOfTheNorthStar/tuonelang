@@ -47,6 +47,13 @@ assert.equal(recheck.diagnostics[0].code, "R0002", JSON.stringify(recheck.diagno
 const visible = text(await rpc("tools/call", { name: "tuo_visible_symbols_at", arguments: { uri: "t.tuo", line: 6, column: 5 } }));
 assert.ok(visible.visible_symbols.some((s) => s.name === "helper"));
 
+// The standard library answers before the program names a module of it.
+const sum = text(await rpc("tools/call", { name: "tuo_imports_for_symbol", arguments: { name: "sum" } }));
+assert.ok(
+  sum.imports.some((i) => i.path === "std::collections::sum" && i.signature === "fn sum(in xs: Array[Int]) -> Int"),
+  JSON.stringify(sum),
+);
+
 const bad = await rpc("tools/call", { name: "tuo_diagnostics", arguments: { uri: "nope.tuo" } });
 assert.equal(bad.result.isError, true);
 

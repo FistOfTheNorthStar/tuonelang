@@ -1,0 +1,1 @@
+Define `enum Shape { Square { side: Int }, Rect { width: Int, height: Int }, Triangle { base: Int, height: Int } }` and write `area(in s: Shape) -> Int`. A triangle's area is base * height / 2 with integer division.

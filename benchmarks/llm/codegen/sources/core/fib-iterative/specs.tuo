@@ -1,0 +1,5 @@
+spec fib {
+    then fib(0) == 0;
+    then fib(1) == 1;
+    then fib(10) == 55;
+}

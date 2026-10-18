@@ -1,0 +1,4 @@
+spec area {
+    then area(Shape::Square { side: 3 }) == 9;
+    then area(Shape::Rect { width: 2, height: 5 }) == 10;
+}

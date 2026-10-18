@@ -1,0 +1,5 @@
+spec repeat {
+    then std::string::len(repeat("ab", 0)) == 0;
+    then std::string::len(repeat("xyz", 4)) == 12;
+    then std::string::as_str(repeat("-", 5)) == "-----";
+}

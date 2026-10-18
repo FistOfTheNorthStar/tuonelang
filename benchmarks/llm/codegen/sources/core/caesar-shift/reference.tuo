@@ -1,0 +1,16 @@
+module solution;
+
+pub fn caesar(in s: Str, take k: Int) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b >= 97 && b <= 122 {
+            std::string::push_byte(out, 97 + (b - 97 + k) % 26);
+        } else {
+            std::string::push_byte(out, b);
+        }
+        i = i + 1;
+    }
+    out
+}

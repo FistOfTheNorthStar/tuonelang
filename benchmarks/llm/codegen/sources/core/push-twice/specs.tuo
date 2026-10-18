@@ -1,0 +1,4 @@
+spec filled_pairs {
+    then filled_pairs(3) == 12;
+    then filled_pairs(0) == 0;
+}

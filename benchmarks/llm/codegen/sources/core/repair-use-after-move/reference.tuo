@@ -1,0 +1,9 @@
+module solution;
+
+fn length(in s: String) -> Int {
+    std::string::len(s)
+}
+
+fn twice_len(take s: String) -> Int {
+    length(s) + length(s)
+}

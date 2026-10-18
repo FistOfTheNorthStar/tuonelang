@@ -37,6 +37,12 @@ class Break:
     apply: Callable[[str], str]
     """Return the broken source, or the input unchanged if not applicable."""
 
+    kind: str = "compile"
+    """``compile`` — the result must fail ``tuo check`` (a parse, type, or
+    ownership error), and the repair turn shows that diagnostic. ``spec`` — the
+    result must still *check* and must *fail* a spec, and the repair turn shows
+    the real ``tuo spec`` failure: the logic is wrong, not the spelling."""
+
 
 def _replace_once(text: str, old: str, new: str) -> str:
     """Replace only the first occurrence; leave text unchanged if ``old`` absent."""
@@ -85,14 +91,128 @@ BREAKS: list[Break] = [
     Break(
         name="bool-for-int-return",
         rationale="Returning a Bool where an Int is declared (type mismatch).",
-        apply=lambda s: _bool_for_int(s),
+        # A predicate declared `-> Int` still returns its Bool: the brief's
+        # `fn f() -> Int { true }`. (The old form only matched a body that was
+        # a lone integer literal, which no seed has, so it never fired.)
+        apply=lambda s: _replace_once(s, ") -> Bool {", ") -> Int {"),
     ),
     Break(
         name="chained-comparison",
         rationale="Writing `a < b < c`, which is a non-associative parse error.",
         apply=lambda s: _chained_comparison(s),
     ),
+    # --- type errors -----------------------------------------------------
+    Break(
+        name="int-index",
+        rationale="Indexing a fixed array with an `Int` instead of `as Usize`.",
+        apply=lambda s: _replace_once(s, " as Usize]", "]"),
+    ),
+    Break(
+        name="method-call",
+        rationale="`xs.len()` method syntax; tuonelang has free functions only (T0024).",
+        apply=lambda s: _method_call(s),
+    ),
+    Break(
+        name="wrong-module-len",
+        rationale="`std::str::len` on an owned `String` (the four-way `len`).",
+        apply=lambda s: _replace_once(s, "std::string::len(", "std::str::len("),
+    ),
+    Break(
+        name="positional-ok",
+        rationale="Writing `Ok(x)` instead of the named-field `Ok { value: x }`.",
+        apply=lambda s: _positional(s, "Ok", "value"),
+    ),
+    # --- ownership errors ------------------------------------------------
+    Break(
+        name="in-for-mut",
+        rationale="Declaring `in` for a parameter the body mutates (needs `mut`).",
+        apply=lambda s: _in_for_mut(s),
+    ),
+    Break(
+        name="let-for-var-heap",
+        rationale="Binding a growable value with `let`, then mutating it in place.",
+        apply=lambda s: _let_for_var_heap(s),
+    ),
+    # --- spec failures (the program checks; its logic is wrong) ----------
+    Break(
+        name="off-by-one-bound",
+        rationale="An inclusive loop bound written exclusive (`<=` as `<`).",
+        apply=lambda s: _in_code(s, lambda c: _replace_once(c, " <= ", " < ")),
+        kind="spec",
+    ),
+    Break(
+        name="exclusive-bound-made-inclusive",
+        rationale="An exclusive loop bound written inclusive (`<` as `<=`).",
+        apply=lambda s: _in_code(s, lambda c: _while_lt_to_le(c)),
+        kind="spec",
+    ),
+    Break(
+        name="swapped-operator",
+        rationale="A subtraction written as an addition.",
+        apply=lambda s: _in_code(s, lambda c: _replace_once(c, " - ", " + ")),
+        kind="spec",
+    ),
 ]
+
+
+def _in_code(s: str, edit: Callable[[str], str]) -> str:
+    """Apply ``edit`` to the code before the first ``spec`` block only, so a
+    spec-failure break changes the implementation, never the test."""
+    import re
+
+    m = re.search(r"^spec ", s, flags=re.MULTILINE)
+    cut = m.start() if m else len(s)
+    return edit(s[:cut]) + s[cut:]
+
+
+def _method_call(s: str) -> str:
+    """Rewrite the first ``std::<module>::len(x)`` into ``x.len()``."""
+    import re
+
+    m = re.search(r"std::(?:str|string|array|map)::len\((\w+)\)", s)
+    if not m:
+        return s
+    return s[: m.start()] + f"{m.group(1)}.len()" + s[m.end() :]
+
+
+def _positional(s: str, variant: str, field: str) -> str:
+    """Rewrite the first ``Variant { field: EXPR }`` into ``Variant(EXPR)``."""
+    import re
+
+    m = re.search(variant + r" \{ " + field + r": ([^}]+?) \}", s)
+    if not m:
+        return s
+    return s[: m.start()] + f"{variant}({m.group(1)})" + s[m.end() :]
+
+
+def _in_for_mut(s: str) -> str:
+    """Turn the first ``mut name: <heap type>`` parameter into ``in``."""
+    import re
+
+    m = re.search(r"\bmut (\w+): (Array\[|String\b|Map\[)", s)
+    if not m:
+        return s
+    return s[: m.start()] + "in" + s[m.start() + len("mut") :]
+
+
+def _let_for_var_heap(s: str) -> str:
+    """Turn the first ``var x = std::<heap>::empty()`` into ``let``."""
+    import re
+
+    m = re.search(r"\bvar (\w+) = std::(?:array|string|map)::empty\(\)", s)
+    if not m:
+        return s
+    return s[: m.start()] + "let" + s[m.start() + len("var") :]
+
+
+def _while_lt_to_le(s: str) -> str:
+    """Turn the first ``while i < n`` loop condition into ``while i <= n``."""
+    import re
+
+    m = re.search(r"\bwhile (\w+) < ", s)
+    if not m:
+        return s
+    return s[: m.start()] + f"while {m.group(1)} <= " + s[m.end() :]
 
 
 def _positional_some(s: str) -> str:
@@ -114,21 +234,6 @@ def _compound_assign(s: str) -> str:
         return s
     name, rhs = m.group(1), m.group(2)
     return s[: m.start()] + f"{name} += {rhs};" + s[m.end() :]
-
-
-def _bool_for_int(s: str) -> str:
-    """If a function returns Int, replace the first `-> Int {` body's last
-    trailing scalar with `true`. Simplest robust form: append a wrapper is
-    fragile, so we instead flip a returned integer literal to `true` only when
-    the function's declared return is Int and a lone-literal body exists."""
-    import re
-
-    # Target a body of the exact shape `-> Int {\n    <intlit>\n}` (common in seeds
-    # like `fn compute() -> Int { 42 }`). Replace that literal with `true`.
-    m = re.search(r"-> Int \{\s*\n\s*(-?\d+)\s*\n\}", s)
-    if not m:
-        return s
-    return s[: m.start(1)] + "true" + s[m.end(1) :]
 
 
 def _chained_comparison(s: str) -> str:

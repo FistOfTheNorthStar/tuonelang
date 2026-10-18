@@ -1,0 +1,1 @@
+Define `enum Light { Red, Yellow, Green }`. Write `next(in l: Light) -> Light`, which cycles Red -> Green -> Yellow -> Red, and `code(in l: Light) -> Int`, which maps Red to 0, Yellow to 1, and Green to 2.

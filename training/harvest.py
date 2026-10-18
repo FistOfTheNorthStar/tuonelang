@@ -4,10 +4,11 @@ The seed library (``seeds.py``) is the hand-authored *coverage skeleton*. This
 module supplies **volume** from source the repository already keeps green by its
 own test suites:
 
-  * ``crates/tuo-stdlib/src/std/*.tuo`` — every ``pub fn`` with a doc comment
-    becomes a (doc -> implementation) example. The stdlib is pinned by
-    ``tuo-cli/tests/stdlib.rs``, which really compiles every module and runs
-    every shipped spec.
+  * ``crates/tuo-stdlib/src/std/*.tuo`` — every documented, specced ``pub fn``
+    becomes a **call-site** example: its own spec, moved into a user module
+    and written with full paths (ADR-0038 made the library callable). The
+    stdlib is pinned by ``tuo-cli/tests/stdlib.rs``, which really compiles
+    every module and runs every shipped spec.
   * ``examples/**/src/*.tuo`` — whole multi-function programs, pinned by
     ``tuo-cli/tests/dogfood_examples.rs``.
   * ``corpus/correct/*.tuo`` — compiler-validated correct programs, re-admitted
@@ -20,13 +21,12 @@ as it does for a hand-written seed. A harvested item that does not compile is
 count of drops is reported in ``stats.json`` — silent truncation is visible,
 never hidden.
 
-A harvested stdlib function is emitted as a **self-contained** program: the
-function alone, which is how a model will be asked to write it. Roughly a third
-of the library's ``pub fn``\\ s do not stand alone — they reference a
-module-private type (``Pair``) or a private helper that does not cross a file
-boundary — and those are dropped by the compile gate rather than shipped with a
-context the training prompt never shows. That is the intended trade: an example
-teaches only if the target program compiles as presented.
+A harvested call site is a **self-contained** program — a user module whose
+spec calls the library — which is exactly how a model will use it. A spec that
+reaches a module-private type or helper does not compile outside its module,
+and is dropped by the compile gate rather than shipped with a context the
+training prompt never shows: an example teaches only if the program compiles
+as presented.
 
 The harvested records are deliberately **held out of the eval split**: the eval
 set stays the hand-authored seed slice, so scoring is never contaminated by
@@ -41,6 +41,9 @@ from pathlib import Path
 
 # A `pub fn` signature line: capture the name and the full signature.
 _PUB_FN = re.compile(r"^pub fn ([a-z_][a-z0-9_]*)\s*\(")
+
+# A spec block named for a function: `spec name {`.
+_SPEC = re.compile(r"^spec ([a-z_][a-z0-9_]*) \{")
 
 # Markers that classify a stdlib function's tier (see the three-tier rule).
 _EFFECT = "EFFECT:"
@@ -64,7 +67,7 @@ class Harvested:
     """The committed tuonelang source answering ``task``."""
 
     stdlib_deps: tuple[str, ...] = ()
-    """Stdlib modules whose source must be compiled alongside (see Seed)."""
+    """Stdlib modules the example calls (informational; see Seed)."""
 
     notes: str = ""
     """Teaching note appended to the assistant answer."""
@@ -88,20 +91,28 @@ def _split_doc(doc: str) -> tuple[str, str]:
 
 
 def harvest_stdlib(repo: Path) -> list[Harvested]:
-    """Mine one example per documented ``pub fn`` in the standard library.
+    """Mine one **call-site** example per documented, specced ``pub fn``.
 
-    The doc comment is the *task* (it says what the function must do, in prose
-    a model can be asked to satisfy) and the committed body is the *solution*.
-    Effect- and contract-tier functions are skipped: their bodies call host
-    primitives that cannot be exercised from a spec, so they teach the API
-    surface rather than a self-contained implementation, and the seed library
-    already covers that tier deliberately.
+    Copying a library function's body taught a model to re-implement the
+    library — the opposite of the "one obvious API, call it" rule the brief
+    states. Since ADR-0038 a program can simply call the library, so this
+    emits what that looks like instead: the function's own committed spec,
+    moved into a user module, with every call to the module's public
+    functions written as the full path (`std::core::min(2, 5)`). The task names
+    the function, its declaration, and what its doc comment says it does.
+
+    Effect- and contract-tier functions are skipped (they cannot be specced).
+    A spec that leans on a module-private type or helper does not compile once
+    moved out of the module, and the generator's compile gate drops it.
     """
     out: list[Harvested] = []
     std = repo / "crates" / "tuo-stdlib" / "src" / "std"
     for path in sorted(std.glob("*.tuo")):
         module = path.stem
         lines = path.read_text().split("\n")
+        public: set[str] = set()
+        documented: dict[str, tuple[str, str]] = {}  # name -> (prose, decl)
+        specs: dict[str, str] = {}  # target name -> spec body
         doc: list[str] = []
         i = 0
         while i < len(lines):
@@ -111,50 +122,54 @@ def harvest_stdlib(repo: Path) -> list[Harvested]:
                 i += 1
                 continue
             m = _PUB_FN.match(line)
-            if not m or not doc:
-                if not line.startswith("///"):
-                    doc = []
+            if m:
+                name = m.group(1)
+                public.add(name)
+                body_text = _dedent_doc(doc)
+                if body_text and _EFFECT not in body_text and _CONTRACT not in body_text:
+                    prose, _ = _split_doc(body_text)
+                    decl = line[len("pub ") :].rstrip(" {")
+                    if prose:
+                        documented[name] = (prose, decl)
+            s = _SPEC.match(line)
+            if s:
+                body = []
                 i += 1
-                continue
-
-            name = m.group(1)
-            body_text = _dedent_doc(doc)
-            doc = []
-
-            # Skip the non-executable tiers (see the module docstring).
-            if _EFFECT in body_text or _CONTRACT in body_text:
-                i += 1
-                continue
-
-            # Collect the function through its closing brace at column 0.
-            start = i
-            i += 1
-            while i < len(lines) and lines[i] != "}":
-                i += 1
-            if i >= len(lines):
-                break  # unterminated; skip the tail
-            fn_src = "\n".join(lines[start : i + 1])
+                while i < len(lines) and lines[i] != "}":
+                    body.append(lines[i])
+                    i += 1
+                specs.setdefault(s.group(1), "\n".join(body))
+            if not line.startswith("///"):
+                doc = []
             i += 1
 
-            prose, example = _split_doc(body_text)
-            if not prose:
+        for name, (prose, decl) in documented.items():
+            body = specs.get(name)
+            if body is None:
                 continue
-            task = (
-                f"Implement `{module}::{name}` for the tuonelang standard "
-                f"library. {prose}"
+            qualified = re.sub(
+                r"(?<![\w:.])(" + "|".join(sorted(public, key=len, reverse=True)) + r")\(",
+                lambda m: f"std::{module}::{m.group(1)}(",
+                body,
             )
-            if example:
-                task += f"\n\nExample:\n{example}"
-
+            path_name = f"std::{module}::{name}"
+            task = (
+                f"Call the standard library's `{path_name}` from your own "
+                f"program and show what it returns with a spec. It is declared "
+                f"`{decl}`. {prose}"
+            )
+            solution = f'module example;\n\nspec "{path_name}" {{\n{qualified}\n}}\n'
             out.append(
                 Harvested(
                     origin="stdlib",
-                    name=f"std::{module}::{name}",
+                    name=path_name,
                     task=task,
-                    solution=fn_src + "\n",
+                    solution=solution,
                     notes=(
-                        f"This is the committed implementation from the "
-                        f"tuonelang standard library (`std::{module}`)."
+                        f"`{path_name}` is called by its full path from any "
+                        f"program; the toolchain loads `std::{module}` because "
+                        f"the program names it, so there is nothing to import "
+                        f"or copy. The spec is the library's own."
                     ),
                 )
             )

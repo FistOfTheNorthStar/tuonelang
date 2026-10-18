@@ -1,0 +1,16 @@
+// A recursion that never reaches its base case: `factorial(n + 1)` where
+// `n - 1` was meant. The spec sandbox's recursion ceiling must report it as a
+// failed spec — before it, a debug-built `tuo spec` overflowed its own stack
+// at about 700 calls, short of the 1,024 ceiling, and died with
+// `fatal runtime error: stack overflow` instead of a report.
+fn factorial(take n: Int) -> Int {
+    if n <= 1 {
+        1
+    } else {
+        n * factorial(n + 1)
+    }
+}
+
+spec factorial {
+    then factorial(5) == 120;
+}

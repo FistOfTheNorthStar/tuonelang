@@ -1,0 +1,4 @@
+spec fib {
+    then fib(2) == 1;
+    then fib(30) == 832040;
+}

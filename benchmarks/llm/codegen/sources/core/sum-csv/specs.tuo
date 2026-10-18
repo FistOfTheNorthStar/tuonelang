@@ -1,0 +1,4 @@
+spec sum_csv {
+    then sum_csv("10,20,3") == 33;
+    then sum_csv("") == 0;
+}

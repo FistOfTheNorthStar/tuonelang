@@ -1,0 +1,1 @@
+Define a singly linked list `struct Node { value: Int, next: Option[Box[Node]] }`. Write `list3(take a: Int, take b: Int, take c: Int) -> Node` building the list a -> b -> c, `sum_list(in n: Node) -> Int` returning the sum of every value, and `length(in n: Node) -> Int` returning the number of nodes.

@@ -1,0 +1,5 @@
+spec power {
+    then power(3, 5) == 243;
+    then power(0 - 2, 3) == 0 - 8;
+    then power(10, 18) == 1000000000000000000;
+}

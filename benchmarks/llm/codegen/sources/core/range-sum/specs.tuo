@@ -1,0 +1,4 @@
+spec sum_all {
+    then sum_all(range(1, 5)) == 10;
+    then std::array::len(range(3, 3)) == 0;
+}

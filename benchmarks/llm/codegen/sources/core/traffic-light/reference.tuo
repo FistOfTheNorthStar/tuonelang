@@ -1,0 +1,23 @@
+module solution;
+
+pub enum Light {
+    Red,
+    Yellow,
+    Green,
+}
+
+pub fn next(in l: Light) -> Light {
+    match l {
+        Light::Red => Light::Green,
+        Light::Green => Light::Yellow,
+        Light::Yellow => Light::Red,
+    }
+}
+
+pub fn code(in l: Light) -> Int {
+    match l {
+        Light::Red => 0,
+        Light::Yellow => 1,
+        Light::Green => 2,
+    }
+}

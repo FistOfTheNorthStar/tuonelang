@@ -1,0 +1,4 @@
+spec digit_sum {
+    then digit_sum(123) == 6;
+    then digit_sum(0) == 0;
+}

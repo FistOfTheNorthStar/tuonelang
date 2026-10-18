@@ -1,0 +1,12 @@
+module solution;
+
+pub fn is_palindrome(in xs: [Int; 5]) -> Bool {
+    var i = 0;
+    while i < 2 {
+        if xs[i as Usize] != xs[(4 - i) as Usize] {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}

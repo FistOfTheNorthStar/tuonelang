@@ -1,0 +1,1 @@
+Write `count_of(in xs: [Int; 8], take v: Int) -> Int`. It must build a `Map[Int, Int]` from each value in xs to the number of times it occurs (using std::map), then look v up in that map, returning 0 when v does not occur. Also write `distinct(in xs: [Int; 8]) -> Int` returning the number of distinct values, as the size of the same kind of map.

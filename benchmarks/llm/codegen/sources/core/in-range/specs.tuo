@@ -1,0 +1,4 @@
+spec in_range {
+    then in_range(5, 1, 10);
+    then !in_range(11, 1, 10);
+}

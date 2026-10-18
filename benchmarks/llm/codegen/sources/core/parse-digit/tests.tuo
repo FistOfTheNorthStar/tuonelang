@@ -1,0 +1,6 @@
+spec digit_or {
+    then digit_or(48, 0 - 1) == 0;
+    then digit_or(57, 0 - 1) == 9;
+    then digit_or(47, 100) == 100;
+    then digit_or(58, 100) == 100;
+}

@@ -1,0 +1,4 @@
+spec is_long {
+    then is_long("tuonelang");
+    then !is_long("tuo");
+}

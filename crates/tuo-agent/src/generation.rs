@@ -223,6 +223,30 @@ impl GenerationQueries for Session {
                 fn_ty.ret.render(sema.resolution)
             );
             let active = active_argument(text, called, &sema, cursor);
+            // A builtin's checked signature is `Int`-seeded and made generic by
+            // the checker's own code; show the shape a caller actually has.
+            if let Some(builtin) = sema
+                .resolution
+                .builtin(called)
+                .and_then(crate::session::BuiltinShape::of)
+            {
+                let params: Vec<Value> = builtin
+                    .params
+                    .iter()
+                    .enumerate()
+                    .map(|(index, (name, mode, ty))| {
+                        json!({ "index": index, "name": name, "mode": mode, "type": ty })
+                    })
+                    .collect();
+                return Some(json!({
+                    "label": builtin.label,
+                    "name": name,
+                    "parameters": params,
+                    "return_type": builtin.ret,
+                    "active_parameter": active,
+                    "arity": builtin.params.len(),
+                }));
+            }
             Some(json!({
                 "label": label,
                 "name": name,
@@ -255,14 +279,48 @@ impl GenerationQueries for Session {
                             "kind": s.kind.noun(),
                             "module": module,
                             "path": path,
-                            "signature": sema.types.type_of(id).map(|t| t.render(sema.resolution)),
+                            // A builtin's checked signature is `Int`-seeded
+                            // (`push` would read as `Array[I64]` only); its
+                            // caller-facing declaration says `Array[T]`.
+                            "signature": sema.resolution.builtin(id).and_then(|b| b.declaration())
+                                .or_else(|| sema.types.type_of(id).map(|t| t.render(sema.resolution))),
                         }),
                     )
                 })
                 .collect();
+            // The standard library, whether or not the program names it yet
+            // (ADR-0038 loads a module only once a program does — and "where
+            // does `sum` live?" is asked before the program says). The
+            // signature is the declaration as written, the form the brief
+            // prints and a caller types.
+            for export in tuo_stdlib::exports() {
+                if export.name != name {
+                    continue;
+                }
+                let path = format!("{}::{}", export.module, export.name);
+                if candidates.iter().any(|(known, _)| *known == path) {
+                    continue;
+                }
+                candidates.push((
+                    path.clone(),
+                    json!({
+                        "name": export.name,
+                        "kind": "function",
+                        "module": export.module,
+                        "path": path,
+                        "signature": export.declaration,
+                    }),
+                ));
+            }
             candidates.sort_by(|a, b| a.0.cmp(&b.0));
             let imports: Vec<Value> = candidates.into_iter().map(|(_, v)| v).collect();
-            json!({ "name": name, "imports": imports })
+            json!({
+                "name": name,
+                "imports": imports,
+                "note": "a standard-library function is called by its full path \
+                         (`std::core::abs(x)`) from any program, with no import; the \
+                         toolchain loads the module the program names",
+            })
         })
     }
 

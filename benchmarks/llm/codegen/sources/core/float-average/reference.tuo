@@ -1,0 +1,5 @@
+module solution;
+
+pub fn average3(take a: Float, take b: Float, take c: Float) -> Float {
+    (a + b + c) / 3.0
+}

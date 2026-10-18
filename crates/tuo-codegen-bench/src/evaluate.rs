@@ -93,19 +93,36 @@ pub fn evaluate(generation: &str, specs: &[String], limits: Limits) -> Evaluatio
             latency: started.elapsed(),
         };
     };
-    let sources = [source];
+    // The standard-library modules the generation names are loaded beside it,
+    // exactly as `tuo check` loads them (ADR-0038): a model that calls
+    // `std::core::abs` as the brief lists it is calling a real function.
+    let mut sources = vec![source];
+    for module in tuo_stdlib::referenced_by([program.as_str()]) {
+        let file = map.intern_file(module.name);
+        if let Ok(id) = map.add_source(file, module.source) {
+            sources.push(id);
+        }
+    }
 
     let check = check_sources(&map, &sources);
     let parsed = !has_error_in(&check.diagnostics, front_end_parse_namespaces());
     let checked = !check.has_errors();
     let invented_symbols = count_code(&check.diagnostics, UNDEFINED_NAME);
-    let error_lines = error_lines_of(map.source(source), &check.diagnostics, generation_lines);
-    let mut feedback = render_all(map.source(source), &check.diagnostics, generation_lines);
+    // Feedback is about the program the model wrote (and the spec appended to
+    // it); a library module's own warnings would be noise addressed to no one.
+    let own: Vec<Diagnostic> = check
+        .diagnostics
+        .iter()
+        .filter(|d| d.primary_span.source() == source)
+        .cloned()
+        .collect();
+    let error_lines = error_lines_of(map.source(source), &own, generation_lines);
+    let mut feedback = render_all(map.source(source), &own, generation_lines);
 
     // Specs only run on a program that checks; otherwise the spec runner would
     // just re-report the front-end errors.
     let specs_passed = if checked && !specs.is_empty() {
-        match tuo_spec::run(&map, &sources, &Selection::All, limits) {
+        match tuo_spec::run_scoped(&map, &sources, &[source], &Selection::All, limits) {
             RunOutcome::Ran(report) => report.passed(),
             RunOutcome::NotChecked(mut problems) => {
                 feedback.extend(render_all(map.source(source), &problems, generation_lines));

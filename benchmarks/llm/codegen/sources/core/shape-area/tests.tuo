@@ -1,0 +1,5 @@
+spec area {
+    then area(Shape::Triangle { base: 4, height: 3 }) == 6;
+    then area(Shape::Triangle { base: 3, height: 3 }) == 4;
+    then area(Shape::Square { side: 0 }) == 0;
+}

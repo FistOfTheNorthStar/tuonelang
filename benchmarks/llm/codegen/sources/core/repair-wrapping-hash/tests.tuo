@@ -1,0 +1,4 @@
+spec hash {
+    then hash("foobar") == 3214735720;
+    then hash("tuonelang tuonelang tuonelang") > 0;
+}

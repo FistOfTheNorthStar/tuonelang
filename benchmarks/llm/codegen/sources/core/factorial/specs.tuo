@@ -1,0 +1,4 @@
+spec factorial {
+    then factorial(0) == 1;
+    then factorial(5) == 120;
+}

@@ -1,0 +1,21 @@
+module solution;
+
+pub fn range(take start: Int, take end: Int) -> Array[Int] {
+    var xs = std::array::empty();
+    var i = start;
+    while i < end {
+        std::array::push(xs, i);
+        i = i + 1;
+    }
+    xs
+}
+
+pub fn sum_all(in xs: Array[Int]) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total
+}

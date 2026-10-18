@@ -337,6 +337,18 @@ pub enum BuiltinParamMode {
     Mut,
 }
 
+impl BuiltinParamMode {
+    /// The mode as it is written in a declaration: `take`, `in`, or `mut`.
+    #[must_use]
+    pub const fn keyword(self) -> &'static str {
+        match self {
+            Self::Take => "take",
+            Self::In => "in",
+            Self::Mut => "mut",
+        }
+    }
+}
+
 impl Builtin {
     /// Every builtin, in a fixed installation order.
     pub const ALL: [Self; 63] = [
@@ -645,6 +657,80 @@ impl Builtin {
                 | Self::RtMutexLock
                 | Self::RtMutexUnlock
         )
+    }
+
+    /// How a caller writes the builtin: each parameter's name and type
+    /// spelling, and the return type's — `T` an array element or box pointee,
+    /// `K`/`V` a map's key and value. `None` for the `std::rt` primitives,
+    /// which programs reach through the library's `std::io`/`std::fs`/... .
+    ///
+    /// The checker's own signatures ([`Self::param_modes`] aside) are
+    /// `Int`-seeded and made generic by dedicated checking code, so they would
+    /// tell a caller that `push` takes only an `Array[Int]`. This is the shape
+    /// to show instead; `tuo-cli/tests/cheatsheet_command.rs` compiles a call
+    /// through every one, so a spelling that drifts from the checker fails.
+    #[must_use]
+    pub const fn surface(self) -> Option<(&'static [(&'static str, &'static str)], &'static str)> {
+        let shape: (&[(&str, &str)], &str) = match self {
+            Self::StrLen => (&[("s", "Str")], "Int"),
+            Self::StrByteAt => (&[("s", "Str"), ("index", "Int")], "Int"),
+            Self::StrSlice => (&[("s", "Str"), ("start", "Int"), ("end", "Int")], "Str"),
+            Self::StringEmpty => (&[], "String"),
+            Self::StringFromStr => (&[("s", "Str")], "String"),
+            Self::StringPushByte => (&[("s", "String"), ("byte", "Int")], "()"),
+            Self::StringAppend => (&[("s", "String"), ("piece", "Str")], "()"),
+            Self::StringConcat => (&[("a", "Str"), ("b", "Str")], "String"),
+            Self::StringLen => (&[("s", "String")], "Int"),
+            Self::StringByteAt => (&[("s", "String"), ("index", "Int")], "Int"),
+            Self::StringSlice => (
+                &[("s", "String"), ("start", "Int"), ("end", "Int")],
+                "String",
+            ),
+            Self::StringAsStr => (&[("s", "String")], "Str"),
+            Self::ArrayEmpty => (&[], "Array[T]"),
+            Self::ArrayFilled => (&[("n", "Int"), ("value", "T")], "Array[T]"),
+            Self::ArrayPush => (&[("xs", "Array[T]"), ("value", "T")], "()"),
+            Self::ArrayPop => (&[("xs", "Array[T]")], "Option[T]"),
+            Self::ArrayLen => (&[("xs", "Array[T]")], "Int"),
+            Self::ArrayGet => (&[("xs", "Array[T]"), ("index", "Int")], "T"),
+            Self::ArraySet => (
+                &[("xs", "Array[T]"), ("index", "Int"), ("value", "T")],
+                "()",
+            ),
+            Self::MapEmpty => (&[], "Map[K, V]"),
+            Self::MapInsert => (
+                &[("m", "Map[K, V]"), ("key", "K"), ("value", "V")],
+                "Option[V]",
+            ),
+            Self::MapGet => (&[("m", "Map[K, V]"), ("key", "K")], "Option[V]"),
+            Self::MapContainsKey => (&[("m", "Map[K, V]"), ("key", "K")], "Bool"),
+            Self::MapRemove => (&[("m", "Map[K, V]"), ("key", "K")], "Option[V]"),
+            Self::MapLen => (&[("m", "Map[K, V]")], "Int"),
+            Self::MapKeys => (&[("m", "Map[K, V]")], "Array[K]"),
+            Self::FloatSqrt => (&[("x", "Float")], "Float"),
+            Self::BoxNew => (&[("value", "T")], "Box[T]"),
+            Self::BoxGet | Self::BoxInto => (&[("b", "Box[T]")], "T"),
+            _ => return None,
+        };
+        Some(shape)
+    }
+
+    /// The builtin as a caller-facing declaration, modes included —
+    /// `fn push(mut xs: Array[T], take value: T) -> ()` — or `None` for the
+    /// `std::rt` primitives (see [`Self::surface`]).
+    #[must_use]
+    pub fn declaration(self) -> Option<String> {
+        let (params, ret) = self.surface()?;
+        let rendered: Vec<String> = params
+            .iter()
+            .zip(self.param_modes())
+            .map(|((name, ty), mode)| format!("{} {name}: {ty}", mode.keyword()))
+            .collect();
+        Some(format!(
+            "fn {}({}) -> {ret}",
+            self.name(),
+            rendered.join(", ")
+        ))
     }
 
     /// The declared parameter modes, in declaration order.

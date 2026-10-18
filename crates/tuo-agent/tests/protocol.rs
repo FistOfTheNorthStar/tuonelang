@@ -448,3 +448,37 @@ fn a_query_on_an_unopened_document_errors() {
     assert_eq!(response["ok"], false);
     assert_eq!(response["error"]["code"], "unknown_document");
 }
+
+#[test]
+fn a_document_calling_the_library_checks_and_runs_only_its_own_specs() {
+    // ADR-0038: the session loads the standard-library modules a document
+    // names, as `tuo check` does, so an agent calling `std::core::abs` is not
+    // told the name does not exist — and `verify` runs the document's spec,
+    // not the library's own.
+    let mut server = Server::new(Box::new(StubFormatter));
+    let text = "\
+module app;
+
+fn distance(take a: Int, take b: Int) -> Int {
+    std::core::abs(a - b)
+}
+
+spec distance {
+    then distance(2, 7) == 5;
+}
+";
+    request(
+        &mut server,
+        1,
+        "set_document",
+        json!({ "uri": "app.tuo", "text": text }),
+    );
+    let checked = result(&mut server, 2, "check", json!({}));
+    assert_eq!(checked["accepted"], true, "{checked}");
+    let verified = result(&mut server, 3, "verify", json!({}));
+    assert_eq!(verified["passed"], true, "{verified}");
+    assert_eq!(
+        verified["summary"]["ran"], 1,
+        "only the document's spec runs"
+    );
+}

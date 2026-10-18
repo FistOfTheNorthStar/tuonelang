@@ -1,0 +1,11 @@
+module solution;
+
+pub fn repeat(in s: Str, take n: Int) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < n {
+        std::string::append(out, s);
+        i = i + 1;
+    }
+    out
+}

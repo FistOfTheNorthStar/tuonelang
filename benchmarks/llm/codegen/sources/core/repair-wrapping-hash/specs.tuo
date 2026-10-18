@@ -1,0 +1,4 @@
+spec hash {
+    then hash("") == 2166136261;
+    then hash("a") == 3826002220;
+}

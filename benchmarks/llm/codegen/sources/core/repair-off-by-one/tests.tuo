@@ -1,0 +1,5 @@
+spec sum_to {
+    then sum_to(0) == 0;
+    then sum_to(1) == 1;
+    then sum_to(100) == 5050;
+}

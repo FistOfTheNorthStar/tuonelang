@@ -1,0 +1,11 @@
+module solution;
+
+pub fn dot(in a: [Int; 3], in b: [Int; 3]) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < 3 {
+        total = total + a[i as Usize] * b[i as Usize];
+        i = i + 1;
+    }
+    total
+}

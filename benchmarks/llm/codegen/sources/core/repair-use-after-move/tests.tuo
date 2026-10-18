@@ -1,0 +1,4 @@
+spec twice_len {
+    then twice_len(std::string::from_str("")) == 0;
+    then twice_len(std::string::from_str("tuonelang")) == 18;
+}

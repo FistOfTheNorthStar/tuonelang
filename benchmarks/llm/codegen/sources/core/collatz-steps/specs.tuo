@@ -1,0 +1,4 @@
+spec collatz_steps {
+    then collatz_steps(1) == 0;
+    then collatz_steps(6) == 8;
+}

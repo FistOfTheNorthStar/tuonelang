@@ -1,0 +1,5 @@
+spec apply_twice {
+    then apply_twice(inc, 0 - 2) == 0;
+    then apply_twice(square, 0) == 0;
+    then apply_twice(square, 2) == 16;
+}

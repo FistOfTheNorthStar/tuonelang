@@ -397,6 +397,10 @@ struct Body<'a> {
     healed: BTreeSet<Place>,
     /// Places already diagnosed as moves out of borrows (O0003).
     reported_borrow_moves: HashSet<Place>,
+    /// The span of the `for` iterable being evaluated, while it is: a move
+    /// out of a borrow *there* is a loop over a borrowed array, whose fix is
+    /// not the one O0003 gives for an ordinary move.
+    for_iterable: Option<Span>,
     /// Live `Str` views borrowed into a `String` (ADR-0010), keyed by the
     /// borrowed `String`'s root. Empty for every body that never calls
     /// `std::string::as_str`, so this is zero-cost for the common case.
@@ -417,6 +421,7 @@ impl<'a> Body<'a> {
             loops: Vec::new(),
             healed: BTreeSet::new(),
             reported_borrow_moves: HashSet::new(),
+            for_iterable: None,
             view_borrows: HashMap::new(),
             diverged: false,
             diagnostics: Vec::new(),
@@ -633,6 +638,23 @@ impl<'a> Body<'a> {
         } else {
             format!("cannot move `{name}` out of the borrowed parameter `{mode} {root_name}`")
         };
+        let growable = matches!(self.place_ty(place), Some(Ty::Array(_)));
+        let help = if self.for_iterable == Some(span) && growable {
+            // `for` consumes the array it walks. Telling the author to take
+            // ownership "fixes" a read-only loop by changing every caller;
+            // walking the indices is the borrow-preserving form.
+            format!(
+                "`for` moves the array it walks; to read a borrowed array, loop over its \
+                 indices instead: `var i = 0; while i < std::array::len({name}) {{ let x = \
+                 std::array::get({name}, i); ... i = i + 1; }}`"
+            )
+        } else if self.for_iterable == Some(span) {
+            format!(
+                "`for` moves what it walks; declare the parameter `take {root_name}`, or walk its indices"
+            )
+        } else {
+            format!("declare the parameter `take {root_name}` if the callee should own the value")
+        };
         self.report(
             Diagnostic::error(code(3), what, span)
                 .with_primary_label("ownership cannot leave a borrowed parameter")
@@ -640,9 +662,7 @@ impl<'a> Body<'a> {
                     decl,
                     format!("`{root_name}` is borrowed for the duration of this call"),
                 )
-                .with_help(format!(
-                    "declare the parameter `take {root_name}` if the callee should own the value"
-                )),
+                .with_help(help),
         );
     }
 
@@ -966,9 +986,16 @@ impl<'a> Body<'a> {
         // §1: indexing reads an element; only `Copy` elements can be used by
         // value, and nothing moves out through an index.
         if usage == Use::Value {
-            if let Some(Ty::Array(element) | Ty::FixedArray(element, _)) =
-                base_place.as_ref().and_then(|place| self.place_ty(place))
-            {
+            let (element, growable) =
+                match base_place.as_ref().and_then(|place| self.place_ty(place)) {
+                    Some(Ty::Array(element)) => (Some(element), true),
+                    Some(Ty::FixedArray(element, _)) => (Some(element), false),
+                    _ => (None, false),
+                };
+            if let Some(element) = element {
+                let array = base_place
+                    .as_ref()
+                    .map_or_else(|| "xs".to_owned(), |place| self.display(place));
                 if !self.cx.env.is_copy(&element) {
                     let span = self.at(index.span());
                     self.report(
@@ -980,7 +1007,18 @@ impl<'a> Body<'a> {
                         .with_primary_label(
                             "index expressions are not places in v0; only `Copy` elements \
                              can be read out by value",
-                        ),
+                        )
+                        .with_help(if growable {
+                            format!(
+                                "read the element with `std::array::get({array}, i)`, which \
+                                 returns a copy"
+                            )
+                        } else {
+                            "read a `Copy` field of the element instead, or keep the elements \
+                             in a growable `Array` and read one with `std::array::get`, which \
+                             returns a copy"
+                                .to_owned()
+                        }),
                     );
                 }
             }
@@ -1687,7 +1725,9 @@ impl<'a> Body<'a> {
     fn for_expr(&mut self, for_expr: ForExpr<'_>) {
         // §3/§10: `for` moves its iterable once, before the first iteration.
         if let Some(iterable) = for_expr.iterable() {
+            let outer = self.for_iterable.replace(self.at(iterable.span()));
             self.expr(iterable, Use::Value);
+            self.for_iterable = outer;
         }
         if self.diverged {
             return;

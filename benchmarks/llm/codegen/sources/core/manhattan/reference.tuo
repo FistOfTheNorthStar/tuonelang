@@ -1,0 +1,18 @@
+module solution;
+
+pub struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn distance(take a: Int, take b: Int) -> Int {
+    if a > b {
+        a - b
+    } else {
+        b - a
+    }
+}
+
+pub fn manhattan(in a: Point, in b: Point) -> Int {
+    distance(a.x, b.x) + distance(a.y, b.y)
+}

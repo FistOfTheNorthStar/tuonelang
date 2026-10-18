@@ -1,0 +1,5 @@
+spec sum_list {
+    then sum_list(list3(0, 0, 0)) == 0;
+    then sum_list(list3(10, 0 - 20, 5)) == 0 - 5;
+    then length(Node { value: 4, next: None }) == 1;
+}

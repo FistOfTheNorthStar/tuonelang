@@ -362,7 +362,18 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Benchmark **tasks are never changed silently**: a `BenchTask` is pinned by a
   content digest and a `TaskSet` verifies every pin on load, so an edit without a
   re-pin is a loud error; tasks may carry comparable **syntax variants** so a
-  language-design decision can be evaluated empirically across spellings. The CLI
+  language-design decision can be evaluated empirically across spellings (the
+  variant's *note* — what the spelling is — reaches the model; the first live
+  runs sent only its label, which no model could act on). The **core task
+  set** (`tasks/core-tasks.json`, 53 tasks across the feature areas, levels
+  L1–L4, including repair tasks that hand the model a broken program) is
+  authored as one directory per task under
+  `benchmarks/llm/codegen/sources/core/` and generated from them by
+  `tests/core_tasks.rs` (`TUO_BLESS=1` regenerates), which also proves each
+  task **solvable**: a `reference.tuo` — never shown to a model — must pass the
+  task's specs and held-out tests through the harness's own `evaluate`, and
+  must be canonically formatted. The model sees only the instruction, so every
+  instruction states the exact signature its specs call. The CLI
   cannot generate live (no model is embedded), so `tuo bench report <tasks> <run>`
   *proves* a recorded run's metrics instead: it verifies the task-set pins
   (refusing a silently-edited benchmark), then **recompiles every recorded output**
@@ -405,7 +416,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   library that does not compile) and lists each public `fn` as its *declaration*,
   parameter names and written type spellings included, because that is the form
   a caller must type (`Ty::render` would normalize `Int` to `I64` and drop the
-  names); the runnable-core section states what `tuo check` accepts versus what
+  names), preceded — since ADR-0038 — by the **builtin operations**
+  (`std::str`'s `len`/`byte_at`/`slice`, `std::string`, `std::array`,
+  `std::map`, `std::float`, `std::boxed`) as caller-facing generic declarations
+  from `tuo_resolve::Builtin::declaration` (modes from `param_modes`, shapes
+  from `surface`; the agent's signature queries use the same table, since the
+  checker's own builtin signatures are `Int`-seeded), each compiled through a
+  generated wrapper by `every_builtin_is_callable_as_listed`; the runnable-core section states what `tuo check` accepts versus what
   `run`/`build` execute, including what is deliberately absent (capturing
   closures, `Shared`/`Weak` values, detached spawn, method calls) so a
   model does not invent it; and the anti-pattern table is the forward reading of
@@ -1052,7 +1069,27 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   file under `src/std/`, embedded
   via `include_str!` and exposed as `Module { path, name, source }`
   (`MODULES`, `module(path)`), so any host loads them into its own `SourceMap`
-  and runs its own pipeline. Every public API carries an exact signature, a doc
+  and runs its own pipeline. **Since ADR-0038 every host does so for a user's
+  program**: `tuo_stdlib::referenced_by` selects the catalog modules a program's
+  text names (`std::core::abs(x)`, `import std::io;`) plus their declared
+  dependencies (`tuo_stdlib::DEPENDENCIES`, moved out of the stdlib test, which
+  still proves it exact and acyclic), minus any module the program declares
+  itself, and the CLI's `stdlib_input` (file and package mode, `verify
+  --affected-by`, `package symbols`), the agent session behind `tuo agent` and
+  the MCP tools, and the codegen harness add them after the user's sources — so
+  a one-file program calls the library by path with no copy and no import
+  (before, nothing could: `std::core::abs` was `R0002 no \`core\` in \`std\``,
+  while the brief listed it). The facade still never depends on the catalog;
+  spec runs are scoped to the user's files (`tuo_spec::run_scoped`), and the
+  native path drops the loaded library's functions nothing reaches
+  (`tuo_mir::retain_reachable`, rooted at `main` and every user-written
+  function, so a user's own unsupported code is still refused), since
+  `std::collections::pair` — never called, generic, outside the native subset —
+  had refused every build of a program using the module. `tuo corpus
+  validate`, the `debug` dumps, and `tuo-lsp` do not load it yet (ADR-0038
+  lists them). `tuo_stdlib::exports()` is a lexical index of every catalog
+  `pub fn` declaration, which the agent's `imports_for_symbol` searches so the
+  answer does not depend on the program already naming the module. Every public API carries an exact signature, a doc
   comment, a worked example, machine-queryable symbol information (the same
   `Resolution` symbols the agent/LSP project), and — where pure-executable — an
   executable `spec`; there is deliberately **one** obvious API per fundamental

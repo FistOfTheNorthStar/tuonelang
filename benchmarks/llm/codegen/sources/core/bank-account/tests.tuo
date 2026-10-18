@@ -1,0 +1,5 @@
+spec run {
+    then run([Op::Withdraw { amount: 1 }, Op::Deposit { amount: 10 }, Op::Withdraw { amount: 10 }, Op::Withdraw { amount: 1 }]) == 0;
+    then run([Op::Deposit { amount: 1 }, Op::Deposit { amount: 2 }, Op::Deposit { amount: 3 }, Op::Withdraw { amount: 6 }]) == 0;
+    then run([Op::Deposit { amount: 50 }, Op::Withdraw { amount: 51 }, Op::Withdraw { amount: 50 }, Op::Deposit { amount: 7 }]) == 7;
+}

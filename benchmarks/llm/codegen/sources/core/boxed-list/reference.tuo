@@ -1,0 +1,26 @@
+module solution;
+
+pub struct Node {
+    value: Int,
+    next: Option[Box[Node]],
+}
+
+pub fn list3(take a: Int, take b: Int, take c: Int) -> Node {
+    let third = Node { value: c, next: None };
+    let second = Node { value: b, next: Some { value: std::boxed::new(third) } };
+    Node { value: a, next: Some { value: std::boxed::new(second) } }
+}
+
+pub fn sum_list(in n: Node) -> Int {
+    match n.next {
+        Some { value } => n.value + sum_list(std::boxed::get(value)),
+        None => n.value,
+    }
+}
+
+pub fn length(in n: Node) -> Int {
+    match n.next {
+        Some { value } => 1 + length(std::boxed::get(value)),
+        None => 1,
+    }
+}

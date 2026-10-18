@@ -1,0 +1,4 @@
+spec filled_pairs {
+    then filled_pairs(1) == 2;
+    then filled_pairs(10) == 110;
+}

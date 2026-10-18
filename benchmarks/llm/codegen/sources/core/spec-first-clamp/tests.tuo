@@ -1,0 +1,5 @@
+spec clamp {
+    then clamp(0, 0, 10) == 0;
+    then clamp(10, 0, 10) == 10;
+    then clamp(7, 7, 7) == 7;
+}

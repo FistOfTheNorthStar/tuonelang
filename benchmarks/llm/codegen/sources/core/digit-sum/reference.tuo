@@ -1,0 +1,11 @@
+module solution;
+
+pub fn digit_sum(take n: Int) -> Int {
+    var x = n;
+    var total = 0;
+    while x > 0 {
+        total = total + x % 10;
+        x = x / 10;
+    }
+    total
+}
