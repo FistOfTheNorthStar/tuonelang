@@ -1,0 +1,13 @@
+module solution;
+
+pub fn power(take base: Int, take exp: Int) -> Int {
+    if exp == 0 {
+        return 1;
+    }
+    let half = power(base, exp / 2);
+    if exp % 2 == 0 {
+        half * half
+    } else {
+        half * half * base
+    }
+}

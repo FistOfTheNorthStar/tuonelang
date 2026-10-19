@@ -1,0 +1,4 @@
+spec rle {
+    then std::string::as_str(rle("aaabcc")) == "a3b1c2";
+    then std::string::len(rle("")) == 0;
+}

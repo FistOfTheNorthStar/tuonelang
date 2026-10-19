@@ -1,0 +1,4 @@
+spec next {
+    then code(next(Light::Red)) == 2;
+    then code(next(Light::Green)) == 1;
+}

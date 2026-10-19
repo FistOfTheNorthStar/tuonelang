@@ -86,3 +86,20 @@ fn spec_reports_measured_timing() {
         "the summary reports a measured duration"
     );
 }
+
+#[test]
+fn a_runaway_recursion_is_a_failed_spec_not_a_crash() {
+    let output = run(&["spec", &path("runaway-recursion.tuo")]);
+    // A failing spec exits 1; a host stack overflow is an abort (signal).
+    assert_eq!(output.status.code(), Some(1), "{output:?}");
+    let stderr = String::from_utf8(output.stderr).expect("utf-8");
+    assert!(stderr.contains("trap recursion_limit"), "{stderr}");
+    // The thousand identical frames collapse into one line and a count.
+    assert!(
+        stderr.contains("more identical calls to `factorial`"),
+        "{stderr}"
+    );
+    assert!(stderr.lines().count() < 20, "a compact report:\n{stderr}");
+    // Locations are one-based, like every other diagnostic surface.
+    assert!(stderr.contains("runaway-recursion.tuo:15:10"), "{stderr}");
+}

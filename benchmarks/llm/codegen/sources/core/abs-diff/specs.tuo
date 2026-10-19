@@ -1,0 +1,4 @@
+spec abs_diff {
+    then abs_diff(7, 3) == 4;
+    then abs_diff(3, 7) == 4;
+}

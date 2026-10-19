@@ -1,0 +1,5 @@
+spec is_palindrome {
+    then is_palindrome([7, 7, 7, 7, 7]);
+    then !is_palindrome([1, 2, 3, 2, 2]);
+    then !is_palindrome([1, 2, 3, 1, 1]);
+}

@@ -1,0 +1,13 @@
+module solution;
+
+pub fn apply_twice(take f: fn(take Int) -> Int, take x: Int) -> Int {
+    f(f(x))
+}
+
+pub fn inc(take x: Int) -> Int {
+    x + 1
+}
+
+pub fn square(take x: Int) -> Int {
+    x * x
+}

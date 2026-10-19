@@ -112,6 +112,11 @@ pub(crate) struct LiveOptions<'a> {
     pub api_key_env: Option<&'a str>,
     /// Per-request timeout, in seconds.
     pub timeout_secs: u64,
+    /// The request's `reasoning_effort`, when given (`none` turns reasoning
+    /// off on a model that supports it).
+    pub reasoning_effort: Option<&'a str>,
+    /// The request's `max_tokens` cap, when given.
+    pub max_tokens: Option<u64>,
 }
 
 /// `tuo bench run`: generate fresh outputs for every pinned task through a live
@@ -153,6 +158,8 @@ pub(crate) fn run_live(options: &LiveOptions<'_>, mode: OutputMode) -> ExitCode 
         primed: options.prime,
         api_key,
         timeout_secs: options.timeout_secs,
+        reasoning_effort: options.reasoning_effort.map(str::to_owned),
+        max_tokens: options.max_tokens,
     };
     let config = RunConfig {
         max_repairs: options.max_repairs,
@@ -239,6 +246,8 @@ struct HttpChatModel {
     primed: bool,
     api_key: Option<String>,
     timeout_secs: u64,
+    reasoning_effort: Option<String>,
+    max_tokens: Option<u64>,
 }
 
 /// The fixed sampling seed sent with every request, so a server that honors it
@@ -251,29 +260,39 @@ impl ModelAdapter for HttpChatModel {
             key: key.to_owned(),
             value,
         };
+        let mut extra = vec![
+            entry("seed", SEED.to_string()),
+            entry("primed", self.primed.to_string()),
+            entry(
+                "system_prompt_sha256",
+                tuo_package::sha256::hex(self.system.as_bytes()),
+            ),
+            entry("transport", "curl".to_owned()),
+        ];
+        if let Some(effort) = &self.reasoning_effort {
+            extra.push(entry("reasoning_effort", effort.clone()));
+        }
+        if let Some(cap) = self.max_tokens {
+            extra.push(entry("max_tokens", cap.to_string()));
+        }
         ModelConfig {
             id: format!(
-                "{}@t{}{}",
+                "{}@t{}{}{}",
                 self.model,
                 self.temperature,
-                if self.primed { "+primed" } else { "" }
+                if self.primed { "+primed" } else { "" },
+                self.reasoning_effort
+                    .as_deref()
+                    .map_or(String::new(), |effort| format!("+reasoning-{effort}"))
             ),
             provider: Some(self.endpoint.clone()),
             temperature: Some(self.temperature.to_string()),
-            extra: vec![
-                entry("seed", SEED.to_string()),
-                entry("primed", self.primed.to_string()),
-                entry(
-                    "system_prompt_sha256",
-                    tuo_package::sha256::hex(self.system.as_bytes()),
-                ),
-                entry("transport", "curl".to_owned()),
-            ],
+            extra,
         }
     }
 
     fn generate(&self, prompt: &Prompt<'_>) -> Result<Generation, GenerationError> {
-        let body = json!({
+        let mut body = json!({
             "model": self.model,
             "temperature": self.temperature,
             "seed": SEED,
@@ -282,6 +301,12 @@ impl ModelAdapter for HttpChatModel {
                 { "role": "user", "content": render_user_turn(prompt) },
             ],
         });
+        if let Some(effort) = &self.reasoning_effort {
+            body["reasoning_effort"] = json!(effort);
+        }
+        if let Some(cap) = self.max_tokens {
+            body["max_tokens"] = json!(cap);
+        }
         let response = self.post(&body)?;
         let content = response["choices"][0]["message"]["content"]
             .as_str()
@@ -356,7 +381,9 @@ impl HttpChatModel {
 fn render_user_turn(prompt: &Prompt<'_>) -> String {
     let mut out = String::from(prompt.instruction);
     if let Some(variant) = prompt.variant {
-        out.push_str(&format!("\n\nWrite it in this style: {variant}."));
+        // The note says what the spelling is; the label is only its name.
+        let style = prompt.variant_note.unwrap_or(variant);
+        out.push_str(&format!("\n\nWrite it in this style: {style}."));
     }
     if let Some(previous) = prompt.previous_source {
         out.push_str("\n\nYour previous attempt:\n```tuo\n");
@@ -495,7 +522,8 @@ fn display(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_source, strip_think};
+    use super::{extract_source, render_user_turn, strip_think};
+    use tuo_codegen_bench::Prompt;
 
     #[test]
     fn a_fenced_block_is_extracted_whatever_its_info_string() {
@@ -507,6 +535,22 @@ mod tests {
     fn an_unfenced_reply_is_taken_whole_minus_reasoning() {
         let reply = "<think>maybe x + x</think>fn a() -> Int {\n    1\n}";
         assert_eq!(extract_source(reply), "fn a() -> Int {\n    1\n}\n");
+    }
+
+    #[test]
+    fn a_variant_is_described_by_its_note_not_its_label() {
+        let prompt = Prompt {
+            instruction: "Write `double`.",
+            variant: Some("add"),
+            variant_note: Some("double via x + x"),
+            previous_source: None,
+            feedback: &[],
+        };
+        let turn = render_user_turn(&prompt);
+        assert!(
+            turn.ends_with("Write it in this style: double via x + x."),
+            "{turn}"
+        );
     }
 
     #[test]

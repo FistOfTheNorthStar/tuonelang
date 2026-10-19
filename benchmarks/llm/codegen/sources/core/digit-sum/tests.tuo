@@ -1,0 +1,4 @@
+spec digit_sum {
+    then digit_sum(9) == 9;
+    then digit_sum(9081726354) == 45;
+}

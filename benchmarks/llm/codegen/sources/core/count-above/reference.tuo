@@ -1,0 +1,11 @@
+module solution;
+
+pub fn count_above(in xs: [Int; 6], take threshold: Int) -> Int {
+    var count = 0;
+    for x in xs {
+        if x > threshold {
+            count = count + 1;
+        }
+    }
+    count
+}

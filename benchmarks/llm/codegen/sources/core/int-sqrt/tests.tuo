@@ -1,0 +1,5 @@
+spec int_sqrt {
+    then int_sqrt(15) == 3;
+    then int_sqrt(1) == 1;
+    then int_sqrt(1000000) == 1000;
+}

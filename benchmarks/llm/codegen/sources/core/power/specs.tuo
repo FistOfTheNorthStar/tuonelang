@@ -1,0 +1,4 @@
+spec power {
+    then power(2, 10) == 1024;
+    then power(7, 0) == 1;
+}

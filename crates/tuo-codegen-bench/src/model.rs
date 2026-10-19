@@ -73,6 +73,11 @@ pub struct Prompt<'a> {
     /// generates for a specific spelling can honor it. `None` for the task's
     /// default spelling.
     pub variant: Option<&'a str>,
+    /// What the variant asks for, in words (its note), so an adapter reaching
+    /// a model can say which spelling is wanted. A label alone ("add") tells a
+    /// model nothing: the first live runs sent only the label, and the model
+    /// ignored it. `None` for the default spelling or a variant with no note.
+    pub variant_note: Option<&'a str>,
     /// The prior generation being repaired, if this is a repair turn.
     pub previous_source: Option<&'a str>,
     /// The compiler's diagnostics on the previous generation, rendered to text,

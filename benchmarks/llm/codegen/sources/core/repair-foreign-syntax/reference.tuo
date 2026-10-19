@@ -1,0 +1,9 @@
+module solution;
+
+fn total(in xs: [Int; 4]) -> Int {
+    var sum = 0;
+    for x in xs {
+        sum = sum + x;
+    }
+    sum
+}

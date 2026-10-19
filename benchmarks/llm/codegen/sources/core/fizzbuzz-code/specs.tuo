@@ -1,0 +1,5 @@
+spec fizzbuzz_code {
+    then fizzbuzz_code(30) == 15;
+    then fizzbuzz_code(10) == 5;
+    then fizzbuzz_code(9) == 3;
+}

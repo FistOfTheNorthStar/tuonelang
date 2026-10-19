@@ -1,0 +1,3 @@
+spec count_above {
+    then count_above([1, 5, 3, 8, 2, 9], 4) == 3;
+}

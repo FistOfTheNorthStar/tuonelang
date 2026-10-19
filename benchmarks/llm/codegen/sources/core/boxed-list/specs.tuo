@@ -1,0 +1,4 @@
+spec sum_list {
+    then sum_list(list3(1, 2, 3)) == 6;
+    then length(list3(1, 2, 3)) == 3;
+}

@@ -1,0 +1,5 @@
+spec int_sqrt {
+    then int_sqrt(16) == 4;
+    then int_sqrt(17) == 4;
+    then int_sqrt(0) == 0;
+}

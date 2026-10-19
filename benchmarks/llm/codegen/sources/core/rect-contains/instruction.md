@@ -1,0 +1,1 @@
+Define `struct Rect { left: Int, top: Int, width: Int, height: Int }` and write `contains(in r: Rect, take x: Int, take y: Int) -> Bool`, true when left <= x < left + width and top <= y < top + height.

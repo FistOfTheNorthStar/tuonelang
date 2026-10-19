@@ -1,0 +1,25 @@
+module solution;
+
+fn push_decimal(mut out: String, take n: Int) -> () {
+    if n >= 10 {
+        push_decimal(out, n / 10);
+    }
+    std::string::push_byte(out, 48 + n % 10);
+}
+
+pub fn rle(in s: Str) -> String {
+    var out = std::string::empty();
+    let n = std::str::len(s);
+    var i = 0;
+    while i < n {
+        let b = std::str::byte_at(s, i);
+        var run = 1;
+        while i + run < n && std::str::byte_at(s, i + run) == b {
+            run = run + 1;
+        }
+        std::string::push_byte(out, b);
+        push_decimal(out, run);
+        i = i + run;
+    }
+    out
+}

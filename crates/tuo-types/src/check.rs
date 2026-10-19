@@ -923,8 +923,10 @@ impl<'a> Checker<'a> {
             )
             .with_primary_label("this spec's executed closure performs an effect")
             .with_help(
-                "effects (`std::rt::write`/`read_byte`/`exit`/`write_string`) may run in \
-                 `main` and ordinary functions, never in a spec",
+                "effects — printing (`std::io`), files (`std::fs`), sockets (`std::net`), \
+                 threads and channels (`std::sync`), the clock, argv, randomness, and the \
+                 `std::rt` primitives under them — may run in `main` and ordinary functions, \
+                 never in a spec; move the computation into a pure function and spec that",
             )
             .with_actual(StructuredValue::Name(target));
             if let Some(declaration) = self.resolution.symbol(reached).declaration {

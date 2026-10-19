@@ -1,0 +1,12 @@
+module solution;
+
+fn hash(in s: Str) -> Int {
+    var h = 2166136261;
+    var i = 0;
+    while i < std::str::len(s) {
+        h = h ^ std::str::byte_at(s, i);
+        h = (h * 16777619) & 4294967295;
+        i = i + 1;
+    }
+    h
+}

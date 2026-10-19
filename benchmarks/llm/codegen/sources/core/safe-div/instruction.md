@@ -1,0 +1,1 @@
+Write `safe_div(take a: Int, take b: Int) -> Option[Int]` returning the quotient a / b, or None when b is 0. Also write `div_or(take a: Int, take b: Int, take fallback: Int) -> Int`, which calls safe_div and returns the fallback when it is None.

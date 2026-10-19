@@ -1,0 +1,4 @@
+spec caesar {
+    then std::string::as_str(caesar("abc", 1)) == "bcd";
+    then std::string::as_str(caesar("xyz", 3)) == "abc";
+}

@@ -1,0 +1,5 @@
+module solution;
+
+pub fn in_range(take x: Int, take low: Int, take high: Int) -> Bool {
+    low <= x && x <= high
+}

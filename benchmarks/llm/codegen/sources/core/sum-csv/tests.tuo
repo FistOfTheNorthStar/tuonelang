@@ -1,0 +1,5 @@
+spec sum_csv {
+    then sum_csv("7") == 7;
+    then sum_csv("0,0,0") == 0;
+    then sum_csv("1000,2000,3000,4") == 6004;
+}

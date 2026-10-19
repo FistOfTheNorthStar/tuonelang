@@ -1,0 +1,11 @@
+module solution;
+
+pub fn count_bits(take n: Int) -> Int {
+    var x = n;
+    var count = 0;
+    while x > 0 {
+        count = count + (x & 1);
+        x = x >> 1;
+    }
+    count
+}

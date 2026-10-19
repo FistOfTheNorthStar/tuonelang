@@ -1,0 +1,4 @@
+spec count_word {
+    then count_word("the cat and the hat", "the") == 2;
+    then longest_word_length("the cat and the hat") == 3;
+}

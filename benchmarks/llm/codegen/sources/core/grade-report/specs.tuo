@@ -1,0 +1,5 @@
+spec passing {
+    then letter(95) == 4;
+    then letter(59) == 0;
+    then std::array::len(passing([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }])) == 3;
+}

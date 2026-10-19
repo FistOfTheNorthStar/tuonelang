@@ -61,15 +61,20 @@ source the repository already keeps green (`harvest.py`):
 
 | Origin | What | Kept green by |
 |--------|------|---------------|
-| `crates/tuo-stdlib/src/std/*.tuo` | every documented `pub fn` — the doc comment becomes the task, the committed body the solution | `tuo-cli/tests/stdlib.rs` |
+| `crates/tuo-stdlib/src/std/*.tuo` | every documented, specced `pub fn` as a **call site**: the task names the function and its declaration, the solution is the library's own spec moved into a user module and written with full paths (`std::core::min(2, 5)`) | `tuo-cli/tests/stdlib.rs` |
 | `examples/**/src/*.tuo` | whole multi-function programs | `tuo-cli/tests/dogfood_examples.rs` |
 | `corpus/correct/*.tuo` | compiler-validated correct programs | `tuo-corpus/tests/shipped_corpus.rs` |
 
 Every harvested item is compiled **and** spec-run through the real `tuo` before
 it is emitted, exactly like a seed. One that does not stand alone is *dropped*,
-not shipped with hidden context: a stdlib function referencing a module-private
-type (`Pair`) or a private helper cannot compile as presented, and an example
-only teaches if the target program compiles as shown. `stats.json` records
+not shipped with hidden context: a library spec that reaches a module-private
+type or helper cannot compile from a user module, and an example only teaches
+if the target program compiles as shown.
+
+The stdlib harvest used to copy each function's *body*, which taught a model to
+re-implement the library — the opposite of the brief's "one obvious API, call
+it". Since ADR-0038 a program calls the library directly (the toolchain loads
+the modules it names), so the harvest shows the call instead. `stats.json` records
 `harvested_kept`, `harvested_dropped`, and the per-origin breakdown, so the drop
 rate is visible rather than silent.
 
@@ -92,7 +97,14 @@ One-shot (`sft_oneshot.jsonl`):
 ```
 
 Repair (`sft_repair.jsonl`) — the middle `tool` turn is the compiler's **actual**
-output, captured from `tuo --message-format=json check`:
+output. For a compile break (parse, type, or ownership) it is the first
+diagnostic from `tuo --message-format=json check`; for a **spec break** — a
+program that checks but whose logic is wrong (an off-by-one bound, a swapped
+operator, or a seed's own `mutants`) — it is the real `tuo spec` failure report,
+and the turn reads `$ tuo spec program.tuo`. Timings and temp-file paths are
+normalized so regeneration is byte-reproducible. `stats.json` breaks the
+transcripts down by `repair_by_kind` (parse / type / ownership / spec) as well
+as by break rule.
 
 ```json
 {"messages": [
@@ -127,7 +139,12 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
 
 1. **Add seeds** (`seeds.py`) — new concepts or more tasks per concept. Each new
    seed is validated the moment you run `generate.py`; a non-compiling seed
-   fails loudly, so you cannot poison the set by accident.
+   fails loudly, so you cannot poison the set by accident. A seed may also
+   carry `heldout_specs` (more specs, never shown in training, that must pass
+   and are scored as TestPass@1), `mutants` (wrong programs that must check
+   and must fail a spec — each becomes a spec-failure repair transcript), a
+   `tier` (`executable` / `effect` / `interpreter`; inferred when omitted and
+   checked when declared), a `difficulty` 1–5, and an `origin`.
 2. **Add break rules** (`breaks.py`) — more mistake patterns produce more repair
    transcripts from the same seeds. A break that fails to actually break a
    program (or that the compiler still accepts) is skipped, never faked.
@@ -159,7 +176,13 @@ its specs, and (for runnable tasks) runs it natively — reporting:
 
 - **Compile@1** — fraction whose `tuo check` passes.
 - **SpecPass@1** — fraction whose specs all pass.
+- **TestPass@1** — fraction of tasks with held-out specs whose held-out specs
+  also pass.
 - **Run@1** — fraction of runnable tasks hitting the expected exit byte.
+
+The eval split holds out about a fifth of **each concept's** seeds (none from a
+concept with a single seed), and the scorer reports every metric per concept,
+so a result can be read area by area rather than as one number.
 
 Sanity-check the harness itself (reference solutions must score 100%):
 
@@ -182,10 +205,10 @@ correctness rules a model coming from other languages gets wrong:
 - No negative literals (`-5` is unary minus); comparisons don't chain; integer
   overflow **traps**.
 - **No methods** — free functions only: `area(r)`, never `r.area()`.
-- The standard library is **consumed as input**: a program using `std::core`,
-  `std::test`, or `std::collections` is compiled *alongside* that module's
-  source (`std/core.tuo`, …). The `std::array` / `std::string` heap ops and the
-  `std::rt` effects are compiler builtins and need no such dependency.
+- The standard library is called by **full path** from any program —
+  `std::core::abs(x)` — with nothing to import or copy: the toolchain loads
+  every module a program names (ADR-0038). The `std::array` / `std::string` /
+  `std::map` heap ops and the `std::rt` effects are compiler builtins.
 
 ## Provenance and honesty
 

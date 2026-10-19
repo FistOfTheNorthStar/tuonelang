@@ -1,0 +1,1 @@
+Write `digits(take n: Int) -> Array[Int]` returning the decimal digits of n (n >= 0) most significant first (`digits(0)` is a one-element array holding 0), and `reversed(in xs: Array[Int]) -> Array[Int]` returning a new array with the elements in reverse order.

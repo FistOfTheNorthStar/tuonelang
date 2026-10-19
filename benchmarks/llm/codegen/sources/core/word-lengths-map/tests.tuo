@@ -1,0 +1,6 @@
+spec count_word {
+    then count_word("a  b a", "a") == 2;
+    then count_word("a  b a", "c") == 0;
+    then longest_word_length("") == 0;
+    then longest_word_length("  hello   world!  ") == 6;
+}

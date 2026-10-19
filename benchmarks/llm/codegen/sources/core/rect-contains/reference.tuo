@@ -1,0 +1,12 @@
+module solution;
+
+pub struct Rect {
+    left: Int,
+    top: Int,
+    width: Int,
+    height: Int,
+}
+
+pub fn contains(in r: Rect, take x: Int, take y: Int) -> Bool {
+    r.left <= x && x < r.left + r.width && r.top <= y && y < r.top + r.height
+}

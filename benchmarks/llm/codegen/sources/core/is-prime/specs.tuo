@@ -1,0 +1,5 @@
+spec is_prime {
+    then is_prime(2);
+    then is_prime(13);
+    then !is_prime(15);
+}

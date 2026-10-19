@@ -1,0 +1,9 @@
+module solution;
+
+pub fn gcd(take a: Int, take b: Int) -> Int {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}

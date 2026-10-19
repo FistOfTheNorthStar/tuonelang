@@ -9,7 +9,12 @@ ones the project's own harnesses use:
 
   * Compile@1  — fraction whose ``tuo check`` passes.
   * SpecPass@1 — fraction whose ``tuo spec`` runs every spec green.
+  * TestPass@1 — fraction of tasks with held-out specs whose held-out specs
+    also pass (behaviour the prompt did not spell out).
   * Run@1      — fraction of runnable tasks whose native exit byte matches.
+
+Every metric is also reported per concept: the eval split holds out a share of
+each concept's seeds, so an overall number can be read area by area.
 
 Input: a JSONL file where each line is ``{"task": ..., "completion": "..."}``
 matching a task in ``eval_heldout.jsonl`` (matched by exact ``task`` string). A
@@ -61,17 +66,20 @@ def load_eval() -> dict[str, dict]:
 
 
 def score_one(code: str, rec: dict) -> dict:
-    """Compile/spec/run one candidate against its held-out task record."""
-    deps = tuple(rec.get("stdlib_deps", []))
-    result = {"compile": False, "spec": False, "run": None}
-    ok, _ = check_ok(code, deps)
+    """Compile/spec/test/run one candidate against its held-out task record."""
+    result = {"compile": False, "spec": False, "test": None, "run": None}
+    ok, _ = check_ok(code)
     result["compile"] = ok
     if not ok:
         return result
-    ok, _ = spec_ok(code, deps)
+    ok, _ = spec_ok(code)
     result["spec"] = ok
+    heldout = rec.get("heldout_specs") or ""
+    if heldout:
+        ok, _ = spec_ok(code.rstrip() + "\n\n" + heldout)
+        result["test"] = ok
     if rec.get("runnable"):
-        code_exit, _ = run_exit(code, deps)
+        code_exit, _ = run_exit(code)
         result["run"] = code_exit == rec.get("run_exit")
     return result
 
@@ -116,22 +124,36 @@ def main() -> int:
         return 1
 
     n_compile = n_spec = 0
+    n_test_ok = n_tested = 0
     n_run_ok = n_runnable = 0
+    by_concept: dict[str, list[int]] = {}
     for rec, code in pairs:
         r = score_one(code, rec)
         n_compile += int(r["compile"])
         n_spec += int(r["spec"])
+        if r["test"] is not None:
+            n_tested += 1
+            n_test_ok += int(r["test"])
         if r["run"] is not None:
             n_runnable += 1
             n_run_ok += int(r["run"])
+        row = by_concept.setdefault(rec["concept"], [0, 0, 0])
+        row[0] += 1
+        row[1] += int(r["compile"])
+        row[2] += int(r["spec"])
         mark = "ok " if r["spec"] else "ERR"
         print(f"  [{mark}] {rec['concept']:22s} {rec['task'][:52]}")
 
     print(f"\nScored {n} completions:")
     print(f"  Compile@1  {n_compile}/{n} = {n_compile / n:.1%}")
     print(f"  SpecPass@1 {n_spec}/{n} = {n_spec / n:.1%}")
+    if n_tested:
+        print(f"  TestPass@1 {n_test_ok}/{n_tested} = {n_test_ok / n_tested:.1%}")
     if n_runnable:
         print(f"  Run@1      {n_run_ok}/{n_runnable} = {n_run_ok / n_runnable:.1%}")
+    print("\nBy concept (tasks, Compile@1, SpecPass@1):")
+    for concept, (total, compiled, specced) in sorted(by_concept.items()):
+        print(f"  {concept:24s} {total:3d}  {compiled}/{total}  {specced}/{total}")
     return 0
 
 

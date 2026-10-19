@@ -1,0 +1,26 @@
+module solution;
+
+pub fn reversed(in xs: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = std::array::len(xs) - 1;
+    while i >= 0 {
+        std::array::push(out, std::array::get(xs, i));
+        i = i - 1;
+    }
+    out
+}
+
+pub fn digits(take n: Int) -> Array[Int] {
+    if n == 0 {
+        var zero = std::array::empty();
+        std::array::push(zero, 0);
+        return zero;
+    }
+    var backwards = std::array::empty();
+    var x = n;
+    while x > 0 {
+        std::array::push(backwards, x % 10);
+        x = x / 10;
+    }
+    reversed(backwards)
+}

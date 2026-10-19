@@ -1,0 +1,1697 @@
+{
+  "schema_version": 1,
+  "model": {
+    "id": "qwen3:4b@t0+primed",
+    "provider": "http://localhost:11434/v1",
+    "temperature": "0",
+    "extra": [
+      {
+        "key": "seed",
+        "value": "7"
+      },
+      {
+        "key": "primed",
+        "value": "true"
+      },
+      {
+        "key": "system_prompt_sha256",
+        "value": "daa57b5a9fa3739ee984aa039fc8c3ac2f3ce0d3315e59b53f4f218e405fa385"
+      },
+      {
+        "key": "transport",
+        "value": "curl"
+      },
+      {
+        "key": "reasoning_effort",
+        "value": ""
+      },
+      {
+        "key": "max_tokens",
+        "value": "8192"
+      },
+      {
+        "key": "toolchain",
+        "value": "baseline 4dd8a24 + bench flags"
+      }
+    ]
+  },
+  "compiler_version": "0.1.0",
+  "language_version": "2024",
+  "task_set_digest": "019e1a4d754a68cb+1fcdd86d95c27cac+66d8eaaf028ea73e+d1b0a400839ca88e+dc16db0642e3fc8e+e9a1e3ba65591aea+994727613bfc19ec+f95007dda94619f2+b9b8a9a241749092+2544fa22e04724fc+c86dbed2e82dc3ed+589e805f7b2e09db+919b0615c967c320+73005090578b1b1a+3b616afbea9eb115+365c8ec22f7988ff+9b603e5a449ec051+b0f8985e36cfaac9+437520483b14274e+ea21e6ed074f6ce0+f74a68db0155f1f2+267eb3e74d3801e7+8dfc05d54fb2227d+4d9b65b5db0b1653+02d4b36d6dbd5382+597d2bafbae91824+c2870a9dd91cd3f2+de8473fe0d51a002+61b53ef5dab0e00e+2c0b20af9d1c0717+f56d40e0318cebb8+b94df2a9f8023697+c65a60ea1f31428d+d9fa0fe9d820317f+8f5dfcb3ec89fee6+67e42c18f74c431b+bda7f9bdcc13a289+f44c9d20843e582a+1365e5d0e83aed9b+ac5082d34d80e826+ad19892e1b9edba1+25d6fd84e1d60417+92a74b29ed53c841+f3458c578b1886b3+787713f968f70dc6+dd657bdb2451fcfb+2d689ac710e5ace7+b8b9df0265a71e61+6876d17f5ec72d4b+5d33b4cdf0586934+ed403edf3e5f4afc+b3cf80f22deff022+32c048afcf48f772",
+  "runs": [
+    {
+      "task_id": "abs-diff",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `abs_diff(take a: Int, take b: Int) -> Int` returning the absolute difference between `a` and `b`.",
+          "output": "module stats;\n\nimport std::core;\n\npub fn abs_diff(take a: Int, take b: Int) -> Int {\n    std::core::abs(a - b)\n}\n",
+          "generated_tokens": 2190,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 4
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `abs_diff(take a: Int, take b: Int) -> Int` returning the absolute difference between `a` and `b`.\n\n[previous attempt]\nmodule stats;\n\nimport std::core;\n\npub fn abs_diff(take a: Int, take b: Int) -> Int {\n    std::core::abs(a - b)\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `core` in `std` — not found in the imported module\nR0002 at 6:10: no `core` in `std` — not found in this module",
+          "output": "module stats;\n\npub fn abs_diff(take a: Int, take b: Int) -> Int {\n    if a > b {\n        a - b\n    } else {\n        b - a\n    }\n}\n",
+          "generated_tokens": 4889,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 6,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "apply-twice",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `apply_twice(take f: fn(take Int) -> Int, take x: Int) -> Int` returning f(f(x)), and two functions to pass to it: `inc(take x: Int) -> Int` (adds 1) and `square(take x: Int) -> Int`.",
+          "output": "module app;\n\nfn apply_twice(take f: fn(take Int) -> Int, take x: Int) -> Int {\n    f(f(x))\n}\n\nfn inc(take x: Int) -> Int {\n    x + 1\n}\n\nfn square(take x: Int) -> Int {\n    x * x\n}\n\nfn main() -> Int {\n    apply_twice(inc, 5)\n}\n",
+          "generated_tokens": 2816,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 7
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "array-palindrome",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `is_palindrome(in xs: [Int; 5]) -> Bool`, true when the fixed array reads the same forwards and backwards.",
+          "output": "module stats;\n\npub fn is_palindrome(in xs: [Int; 5]) -> Bool {\n    xs[0] == xs[4] && xs[1] == xs[3]\n}\n",
+          "generated_tokens": 2579,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "bank-account",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Model a bank account. Define `struct Account { balance: Int }` and `enum Op { Deposit { amount: Int }, Withdraw { amount: Int } }`. Write `apply(in acc: Account, in op: Op) -> Account`: a deposit adds its amount; a withdrawal subtracts its amount only when the balance covers it, and otherwise leaves the account unchanged. Write `run(in ops: [Op; 4]) -> Int` that starts from a zero balance, applies the four operations in order, and returns the final balance.",
+          "output": "module bank;\n\nstruct Account { balance: Int }\n\nenum Op {\n    Deposit { amount: Int },\n    Withdraw { amount: Int }\n}\n\nfn apply(in acc: Account, in op: Op) -> Account {\n    match op {\n        Op::Deposit { amount } => Account { balance: acc.balance + amount },\n        Op::Withdraw { amount } => {\n            if acc.balance >= amount {\n                Account { balance: acc.balance - amount }\n            } else {\n                acc\n            }\n        }\n    }\n}\n\nfn run(in ops: [Op; 4]) -> Int {\n    var acc = Account { balance: 0 };\n    for op in ops {\n        acc = apply(acc, op);\n    }\n    acc.balance\n}\n\nfn main() -> Int {\n    let ops: [Op; 4] = [\n        Op::Deposit { amount: 100 },\n        Op::Withdraw { amount: 50 },\n        Op::Withdraw { amount: 100 },\n        Op::Deposit { amount: 200 }\n    ];\n    run(ops)\n}\n",
+          "generated_tokens": 5233,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 9
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "boxed-list",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Define a singly linked list `struct Node { value: Int, next: Option[Box[Node]] }`. Write `list3(take a: Int, take b: Int, take c: Int) -> Node` building the list a -> b -> c, `sum_list(in n: Node) -> Int` returning the sum of every value, and `length(in n: Node) -> Int` returning the number of nodes.",
+          "output": "module linked_list;\n\nstruct Node { value: Int, next: Option[Box[Node]] }\n\nfn list3(take a: Int, take b: Int, take c: Int) -> Node {\n    let c_node = Node { value: c, next: None };\n    let b_node = Node { value: b, next: Some(Box[c_node]) };\n    let a_node = Node { value: a, next: Some(Box[b_node]) };\n    a_node\n}\n\nfn sum_list(in n: Node) -> Int {\n    if n.next.is_none() {\n        n.value\n    } else {\n        let next_node = std::boxed::get(n.next);\n        n.value + sum_list(next_node)\n    }\n}\n\nfn length(in n: Node) -> Int {\n    if n.next.is_none() {\n        1\n    } else {\n        1 + length(std::boxed::get(n.next))\n    }\n}\n",
+          "generated_tokens": 7520,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        },
+        {
+          "turn": 1,
+          "prompt": "Define a singly linked list `struct Node { value: Int, next: Option[Box[Node]] }`. Write `list3(take a: Int, take b: Int, take c: Int) -> Node` building the list a -> b -> c, `sum_list(in n: Node) -> Int` returning the sum of every value, and `length(in n: Node) -> Int` returning the number of nodes.\n\n[previous attempt]\nmodule linked_list;\n\nstruct Node { value: Int, next: Option[Box[Node]] }\n\nfn list3(take a: Int, take b: Int, take c: Int) -> Node {\n    let c_node = Node { value: c, next: None };\n    let b_node = Node { value: b, next: Some(Box[c_node]) };\n    let a_node = Node { value: a, next: Some(Box[b_node]) };\n    a_node\n}\n\nfn sum_list(in n: Node) -> Int {\n    if n.next.is_none() {\n        n.value\n    } else {\n        let next_node = std::boxed::get(n.next);\n        n.value + sum_list(next_node)\n    }\n}\n\nfn length(in n: Node) -> Int {\n    if n.next.is_none() {\n        1\n    } else {\n        1 + length(std::boxed::get(n.next))\n    }\n}\n\n\n[compiler feedback]\nP0002 at 7:5: malformed statement: skipped 18 token(s) starting with `let` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 7:60: malformed item: skipped 23 token(s) starting with `;` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nT0001 at 5:57: mismatched types — expected `Node`, found `()`\nT0024 at 13:8: `.is_none(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0001 at 16:41: mismatched types — expected `Box[_]`, found `Option[Box[Node]]`\nT0024 at 22:8: `.is_none(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0001 at 25:36: mismatched types — expected `Box[_]`, found `Option[Box[Node]]`",
+          "output": "module linked_list;\n\nstruct Node { value: Int, next: Option[Box[Node]] }\n\nfn list3(take a: Int, take b: Int, take c: Int) -> Node {\n    let c_node = Node { value: c, next: None };\n    let b_node = Node { value: b, next: Some(std::boxed::new(c_node)) };\n    let a_node = Node { value: a, next: Some(std::boxed::new(b_node)) };\n    a_node\n}\n\nfn sum_list(in\n",
+          "generated_tokens": 8192,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Define a singly linked list `struct Node { value: Int, next: Option[Box[Node]] }`. Write `list3(take a: Int, take b: Int, take c: Int) -> Node` building the list a -> b -> c, `sum_list(in n: Node) -> Int` returning the sum of every value, and `length(in n: Node) -> Int` returning the number of nodes.\n\n[previous attempt]\nmodule linked_list;\n\nstruct Node { value: Int, next: Option[Box[Node]] }\n\nfn list3(take a: Int, take b: Int, take c: Int) -> Node {\n    let c_node = Node { value: c, next: None };\n    let b_node = Node { value: b, next: Some(std::boxed::new(c_node)) };\n    let a_node = Node { value: a, next: Some(std::boxed::new(b_node)) };\n    a_node\n}\n\nfn sum_list(in\n\n\n[compiler feedback]\nP0002 at 12:1: malformed item: skipped 4 token(s) starting with `fn` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `sum_list` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `sum_list` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `length` in this scope\nT0012 at 7:41: variant `Some` has a payload; construct it with `Some { … }`\nT0012 at 8:41: variant `Some` has a payload; construct it with `Some { … }`\nT0011 at 7:41: type annotation needed — cannot infer the type here\nT0011 at 8:41: type annotation needed — cannot infer the type here",
+          "output": "module linked_list;\n\nstruct Node { value: Int, next: Option[Box[Node]] }\n\nfn list3(take a: Int, take b: Int, take c: Int) -> Node {\n    let c_node = Node { value: c, next: None };\n    let b_node = Node { value: b, next: Some { value: std::boxed::new(c_node) } };\n    let a_node = Node { value: a, next: Some { value: std::boxed::new(b_node) } };\n    a_node\n}\n\nfn sum_list(in n: Node) -> Int {\n    if n.next == None {\n        n.value\n    } else {\n        n.value + sum_list(std::boxed::get(n.next.value))\n    }\n}\n\nfn length(in n: Node) -> Int {\n    if n.next == None {\n        1\n    } else {\n        1 + length(std::boxed::get(n.next.value))\n    }\n}\n\nfn main() -> Int {\n    let list = list3(1, 2, 3);\n    let sum = sum_list(list);\n    let len = length(list);\n    0\n}\n",
+          "generated_tokens": 6899,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "caesar-shift",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `caesar(in s: Str, take k: Int) -> String` that shifts every lowercase ASCII letter (bytes 97 to 122) forward by k positions in the alphabet, wrapping from 'z' back to 'a', for 0 <= k < 26. Every other byte is copied unchanged.",
+          "output": "module stats;\n\npub fn caesar(in s: Str, take k: Int) -> String {\n    var builder = std::string::builder();\n    for byte in s {\n        if byte >= 97 && byte <= 122 {\n            var shifted = (byte - 97 + k) % 26 + 97;\n            std::string::push(builder, shifted);\n        } else {\n            std::string::push(builder, byte);\n        }\n    }\n    std::string::to_string(builder)\n}\n",
+          "generated_tokens": 6460,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 3
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `caesar(in s: Str, take k: Int) -> String` that shifts every lowercase ASCII letter (bytes 97 to 122) forward by k positions in the alphabet, wrapping from 'z' back to 'a', for 0 <= k < 26. Every other byte is copied unchanged.\n\n[previous attempt]\nmodule stats;\n\npub fn caesar(in s: Str, take k: Int) -> String {\n    var builder = std::string::builder();\n    for byte in s {\n        if byte >= 97 && byte <= 122 {\n            var shifted = (byte - 97 + k) % 26 + 97;\n            std::string::push(builder, shifted);\n        } else {\n            std::string::push(builder, byte);\n        }\n    }\n    std::string::to_string(builder)\n}\n\n\n[compiler feedback]\nR0002 at 4:32: no `builder` in `std::string` — not found in this module\nR0002 at 8:26: no `push` in `std::string` — not found in this module\nR0002 at 10:26: no `push` in `std::string` — not found in this module\nR0002 at 13:18: no `to_string` in `std::string` — not found in this module\nT0006 at 5:17: type `Str` is not iterable\n  note: `for` iterates ranges (`a .. b`) and arrays in v0",
+          "output": "module stats;\n\npub fn caesar(in s: Str, take k: Int) -> String {\n    import std::string;\n    var builder = std::string::builder();\n    var len = std::array::len(s);\n    for i in 0..len {\n        var byte = s[i as Usize];\n        if byte >= 97 && byte <= 122 {\n            var shifted = (byte - 97 + k) % 26 + 97;\n            std::string::push_int(builder, shifted);\n        } else {\n            std::string::push_int(builder, byte);\n        }\n    }\n    std::string::to_string(builder)\n}\n",
+          "generated_tokens": 7084,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `caesar(in s: Str, take k: Int) -> String` that shifts every lowercase ASCII letter (bytes 97 to 122) forward by k positions in the alphabet, wrapping from 'z' back to 'a', for 0 <= k < 26. Every other byte is copied unchanged.\n\n[previous attempt]\nmodule stats;\n\npub fn caesar(in s: Str, take k: Int) -> String {\n    import std::string;\n    var builder = std::string::builder();\n    var len = std::array::len(s);\n    for i in 0..len {\n        var byte = s[i as Usize];\n        if byte >= 97 && byte <= 122 {\n            var shifted = (byte - 97 + k) % 26 + 97;\n            std::string::push_int(builder, shifted);\n        } else {\n            std::string::push_int(builder, byte);\n        }\n    }\n    std::string::to_string(builder)\n}\n\n\n[compiler feedback]\nP0002 at 4:5: malformed statement: skipped 4 token(s) starting with `import` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 5:32: no `builder` in `std::string` — not found in this module\nR0002 at 11:26: no `push_int` in `std::string` — not found in this module\nR0002 at 13:26: no `push_int` in `std::string` — not found in this module\nR0002 at 16:18: no `to_string` in `std::string` — not found in this module\nT0001 at 6:31: mismatched types — expected `Array[_]`, found `Str`\n  help: `std::str::len` takes `Str` — the same operation on this type lives in a different module\nT0006 at 8:20: operator `index` is not supported for type `Str`\nT0011 at 6:15: type annotation needed — cannot infer the type here",
+          "output": "module stats;\n\npub fn caesar(in s: Str, take k: Int) -> String {\n    import std::string;\n    var builder = std::string::builder();\n    var len = std::str::len(s);\n    for i in 0..len {\n        var byte = std::str::byte_at(s, i);\n        if byte >= 97 && byte <= 122 {\n            var shifted = (byte - 97 + k) % 26 + 97;\n            std::string::push_int(builder, shifted);\n        } else {\n            std::string::push_int(builder, byte);\n        }\n    }\n    std::string::to_string(builder)\n}\n",
+          "generated_tokens": 8143,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "collatz-steps",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `collatz_steps(take n: Int) -> Int` returning how many Collatz steps it takes n (n >= 1) to reach 1: an even number is halved, an odd number becomes 3n + 1. `collatz_steps(1)` is 0.",
+          "output": "module collatz;\n\npub fn collatz_steps(take n: Int) -> Int {\n    if n == 1 {\n        0\n    } else {\n        let next = if n % 2 == 0 {\n            n / 2\n        } else {\n            3 * n + 1\n        };\n        collatz_steps(take next) + 1\n    }\n}\n\nspec collatz_steps {\n    then collatz_steps(1) == 0;\n    then collatz_steps(2) == 1;\n    then collatz_steps(3) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 2923,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `collatz_steps(take n: Int) -> Int` returning how many Collatz steps it takes n (n >= 1) to reach 1: an even number is halved, an odd number becomes 3n + 1. `collatz_steps(1)` is 0.\n\n[previous attempt]\nmodule collatz;\n\npub fn collatz_steps(take n: Int) -> Int {\n    if n == 1 {\n        0\n    } else {\n        let next = if n % 2 == 0 {\n            n / 2\n        } else {\n            3 * n + 1\n        };\n        collatz_steps(take next) + 1\n    }\n}\n\nspec collatz_steps {\n    then collatz_steps(1) == 0;\n    then collatz_steps(2) == 1;\n    then collatz_steps(3) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0001 at 12:23: `take` is a parameter mode, not part of a call argument — remove `take` here\n  help: modes are written once, on the callee's parameters; a call passes the argument plainly and the signature decides whether it is borrowed or moved",
+          "output": "module collatz;\n\npub fn collatz_steps(take n: Int) -> Int {\n    if n == 1 {\n        0\n    } else {\n        let next = if n % 2 == 0 {\n            n / 2\n        } else {\n            3 * n + 1\n        };\n        collatz_steps(next) + 1\n    }\n}\n\nspec collatz_steps {\n    then collatz_steps(1) == 0;\n    then collatz_steps(2) == 1;\n    then collatz_steps(3) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 1777,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 7,
+          "unrelated_edit": false
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "count-above",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `count_above(in xs: [Int; 6], take threshold: Int) -> Int` returning how many elements are strictly greater than threshold.",
+          "output": "module stats;\n\nimport util::helpers;\n\npub fn count_above(in xs: [Int; 6], take threshold: Int) -> Int {\n    var count = 0;\n    for x in xs {\n        if x > threshold {\n            count = count + 1;\n        }\n    }\n    count\n}\n\nspec count_above {\n    then count_above([1, 2, 3, 4, 5, 6], 3) == 3;\n    then count_above([10, 10, 10, 10, 10, 10], 9) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 2244,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `count_above(in xs: [Int; 6], take threshold: Int) -> Int` returning how many elements are strictly greater than threshold.\n\n[previous attempt]\nmodule stats;\n\nimport util::helpers;\n\npub fn count_above(in xs: [Int; 6], take threshold: Int) -> Int {\n    var count = 0;\n    for x in xs {\n        if x > threshold {\n            count = count + 1;\n        }\n    }\n    count\n}\n\nspec count_above {\n    then count_above([1, 2, 3, 4, 5, 6], 3) == 3;\n    then count_above([10, 10, 10, 10, 10, 10], 9) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0003 at 3:8: unresolved import: module `util` does not exist — no such module",
+          "output": "module stats;\n\npub fn count_above(in xs: [Int; 6], take threshold: Int) -> Int {\n    var count = 0;\n    for x in xs {\n        if x > threshold {\n            count = count + 1;\n        }\n    }\n    count\n}\n\nspec count_above {\n    then count_above([1, 2, 3, 4, 5, 6], 3) == 3;\n    then count_above([10, 10, 10, 10, 10, 10], 9) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 757,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 8,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "count-bits",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `count_bits(take n: Int) -> Int` returning the number of 1 bits in n, for n >= 0, using the bitwise operators.",
+          "output": "module bit_count;\n\npub fn count_bits(take n: Int) -> Int {\n    var count = 0;\n    while n != 0 {\n        count = count + (n & 1);\n        n = n >> 1;\n    }\n    count\n}\n",
+          "generated_tokens": 3147,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "count-byte",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `count_byte(in s: Str, take b: Int) -> Int` returning how many bytes of s equal b.",
+          "output": "module main;\n\nfn count_byte(in s: Str, take b: Int) -> Int {\n    var count = 0;\n    for byte in s {\n        if byte == b {\n            count = count + 1;\n        }\n    }\n    count\n}\n\nspec count_byte {\n    then count_byte(\"hello\", 104) == 1;\n    then count_byte(\"hello\", 101) == 1;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4974,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `count_byte(in s: Str, take b: Int) -> Int` returning how many bytes of s equal b.\n\n[previous attempt]\nmodule main;\n\nfn count_byte(in s: Str, take b: Int) -> Int {\n    var count = 0;\n    for byte in s {\n        if byte == b {\n            count = count + 1;\n        }\n    }\n    count\n}\n\nspec count_byte {\n    then count_byte(\"hello\", 104) == 1;\n    then count_byte(\"hello\", 101) == 1;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nT0006 at 5:17: type `Str` is not iterable\n  note: `for` iterates ranges (`a .. b`) and arrays in v0",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `count_byte(in s: Str, take b: Int) -> Int` returning how many bytes of s equal b.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `count_byte` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `count_byte` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `count_byte` in this scope",
+          "output": "module stats;\n\nfn count_byte(in s: Str, take b: Int) -> Int {\n    var count = 0;\n    var i = 0;\n    while i < std::str::len(s) {\n        if std::str::byte_at(s, i) == b {\n            count = count + 1;\n        }\n        i = i + 1;\n    }\n    count\n}\n\nspec count_byte {\n    then count_byte(\"hello\", 104) == 1;\n    then count_byte(\"hello\", 101) == 1;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5670,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "count-if",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int` returning how many elements satisfy pred, and the predicates `is_negative(take x: Int) -> Bool` and `is_multiple_of_three(take x: Int) -> Bool`.",
+          "output": "module stats;\n\npub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {\n    var count = 0;\n    for x in xs {\n        if pred(x) {\n            count = count + 1;\n        }\n    }\n    count\n}\n\npub fn is_negative(take x: Int) -> Bool {\n    x < 0\n}\n\npub fn is_multiple_of_three(take x: Int) -> Bool {\n    x % 3 == 0\n}\n\nspec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_negative) == 0;\n    then count_if([1, -2, 3, -4, 5, -6], take pred: is_negative) == 3;\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_multiple_of_three) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4847,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int` returning how many elements satisfy pred, and the predicates `is_negative(take x: Int) -> Bool` and `is_multiple_of_three(take x: Int) -> Bool`.\n\n[previous attempt]\nmodule stats;\n\npub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {\n    var count = 0;\n    for x in xs {\n        if pred(x) {\n            count = count + 1;\n        }\n    }\n    count\n}\n\npub fn is_negative(take x: Int) -> Bool {\n    x < 0\n}\n\npub fn is_multiple_of_three(take x: Int) -> Bool {\n    x % 3 == 0\n}\n\nspec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_negative) == 0;\n    then count_if([1, -2, 3, -4, 5, -6], take pred: is_negative) == 3;\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_multiple_of_three) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 22:5: malformed statement: skipped 24 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 23:5: malformed statement: skipped 27 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 24:5: malformed statement: skipped 24 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued",
+          "output": "module stats;\n\npub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {\n    var count = 0;\n    for x in xs {\n        if pred(x) {\n            count = count + 1;\n        }\n    }\n    count\n}\n\npub fn is_negative(take x: Int) -> Bool {\n    x < 0\n}\n\npub fn is_multiple_of_three(take x: Int) -> Bool {\n    x % 3 == 0\n}\n\nspec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], pred: is_negative) == 0;\n    then count_if([1, -2, 3, -4, 5, -6], pred: is_negative) == 3;\n    then count_if([1, 2, 3, 4, 5, 6], pred: is_multiple_of_three) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 7542,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int` returning how many elements satisfy pred, and the predicates `is_negative(take x: Int) -> Bool` and `is_multiple_of_three(take x: Int) -> Bool`.\n\n[previous attempt]\nmodule stats;\n\npub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {\n    var count = 0;\n    for x in xs {\n        if pred(x) {\n            count = count + 1;\n        }\n    }\n    count\n}\n\npub fn is_negative(take x: Int) -> Bool {\n    x < 0\n}\n\npub fn is_multiple_of_three(take x: Int) -> Bool {\n    x % 3 == 0\n}\n\nspec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], pred: is_negative) == 0;\n    then count_if([1, -2, 3, -4, 5, -6], pred: is_negative) == 3;\n    then count_if([1, 2, 3, 4, 5, 6], pred: is_multiple_of_three) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 22:5: malformed statement: skipped 23 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 23:5: malformed statement: skipped 26 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 24:5: malformed statement: skipped 23 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued",
+          "output": "module stats;\n\npub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {\n    var count = 0;\n    for x in xs {\n        if pred(x) {\n            count = count + 1;\n        }\n    }\n    count\n}\n\npub fn is_negative(take x: Int) -> Bool {\n    x < 0\n}\n\npub fn is_multiple_of_three(take x: Int) -> Bool {\n    x % 3 == 0\n}\n\nspec count_if {\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_negative) == 0;\n    then count_if([1, -2, 3, -4, 5, -6], take pred: is_negative) == 3;\n    then count_if([1, 2, 3, 4, 5, 6], take pred: is_multiple_of_three) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 7241,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "digit-sum",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `digit_sum(take n: Int) -> Int` returning the sum of the decimal digits of n, for n >= 0.",
+          "output": "module main;\n\npub fn digit_sum(take n: Int) -> Int {\n    var sum = 0;\n    while n != 0 {\n        sum = sum + (n % 10);\n        n = n / 10;\n    }\n    sum\n}\n",
+          "generated_tokens": 2354,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "digits-reversed",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `digits(take n: Int) -> Array[Int]` returning the decimal digits of n (n >= 0) most significant first (`digits(0)` is a one-element array holding 0), and `reversed(in xs: Array[Int]) -> Array[Int]` returning a new array with the elements in reverse order.",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `digits(take n: Int) -> Array[Int]` returning the decimal digits of n (n >= 0) most significant first (`digits(0)` is a one-element array holding 0), and `reversed(in xs: Array[Int]) -> Array[Int]` returning a new array with the elements in reverse order.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `reversed` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `digits` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `reversed` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `digits` in this scope",
+          "output": "module stats;\n\nimport std::array;\n\npub fn digits(take n: Int) -> Array[Int] {\n    if n == 0 {\n        return [0];\n    }\n    var digits = Array[Int];\n    var current = n;\n    while current > 0 {\n        var digit = current % 10;\n        current = current / 10;\n        digits = std::array::push(digits, digit);\n    }\n    return std::array::reversed(digits);\n}\n\npub fn reversed(in xs: Array[Int]) -> Array[Int] {\n    var result = Array[Int];\n    var len = std::array::len(xs);\n    for i in 0..len {\n        result = std::array::push(result, xs[len - 1 - i]);\n    }\n    return result;\n}\n\nspec digits {\n    then digits(0) == [0];\n    then digits(123) == [1, 2, 3];\n}\n\nspec reversed {\n    then reversed([1, 2, 3]) == [3, 2, 1];\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 7535,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 5,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `digits(take n: Int) -> Array[Int]` returning the decimal digits of n (n >= 0) most significant first (`digits(0)` is a one-element array holding 0), and `reversed(in xs: Array[Int]) -> Array[Int]` returning a new array with the elements in reverse order.\n\n[previous attempt]\nmodule stats;\n\nimport std::array;\n\npub fn digits(take n: Int) -> Array[Int] {\n    if n == 0 {\n        return [0];\n    }\n    var digits = Array[Int];\n    var current = n;\n    while current > 0 {\n        var digit = current % 10;\n        current = current / 10;\n        digits = std::array::push(digits, digit);\n    }\n    return std::array::reversed(digits);\n}\n\npub fn reversed(in xs: Array[Int]) -> Array[Int] {\n    var result = Array[Int];\n    var len = std::array::len(xs);\n    for i in 0..len {\n        result = std::array::push(result, xs[len - 1 - i]);\n    }\n    return result;\n}\n\nspec digits {\n    then digits(0) == [0];\n    then digits(123) == [1, 2, 3];\n}\n\nspec reversed {\n    then reversed([1, 2, 3]) == [3, 2, 1];\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 9:18: cannot find `Array` in this scope — not found\nR0002 at 9:24: cannot find `Int` in this scope — not found\nR0002 at 16:24: no `reversed` in `std::array` — not found in this module\nR0002 at 20:18: cannot find `Array` in this scope — not found\nR0002 at 20:24: cannot find `Int` in this scope — not found\nT0001 at 7:16: mismatched types — expected `Array[I64]`, found `[_; 1]`\nT0001 at 23:46: mismatched types — expected `Usize`, found `I64`\nT0001 at 29:23: mismatched types — expected `Array[I64]`, found `[_; 1]`\nT0001 at 30:25: mismatched types — expected `Array[I64]`, found `[_; 3]`\nT0001 at 34:19: mismatched types — expected `Array[I64]`, found `[_; 3]`\nT0001 at 34:33: mismatched types — expected `Array[I64]`, found `[_; 3]`",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "dot-product",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `dot(in a: [Int; 3], in b: [Int; 3]) -> Int` returning the dot product of the two fixed arrays.",
+          "output": "module stats;\n\nfn dot(in a: [Int; 3], in b: [Int; 3]) -> Int {\n    var sum = 0;\n    for i in 0..3 {\n        sum = sum + a[i] * b[i];\n    }\n    sum\n}\n",
+          "generated_tokens": 4162,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "evens-up-to",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `evens_up_to(take n: Int) -> Array[Int]` returning the growable array of the even numbers 0, 2, 4, ... that are <= n (empty when n < 0).",
+          "output": "module stats;\n\npub fn evens_up_to(take n: Int) -> Array[Int] {\n    if n < 0 {\n        return std::array::empty();\n    }\n    var evens = std::array::empty();\n    var i = 0;\n    while i <= n {\n        evens = std::array::concat(evens, std::array::singleton(i));\n        i = i + 2;\n    }\n    evens\n}\n\nspec evens_up_to {\n    then evens_up_to(5) == [0, 2, 4];\n    then evens_up_to(-1) == [];\n}\n",
+          "generated_tokens": 6950,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `evens_up_to(take n: Int) -> Array[Int]` returning the growable array of the even numbers 0, 2, 4, ... that are <= n (empty when n < 0).\n\n[previous attempt]\nmodule stats;\n\npub fn evens_up_to(take n: Int) -> Array[Int] {\n    if n < 0 {\n        return std::array::empty();\n    }\n    var evens = std::array::empty();\n    var i = 0;\n    while i <= n {\n        evens = std::array::concat(evens, std::array::singleton(i));\n        i = i + 2;\n    }\n    evens\n}\n\nspec evens_up_to {\n    then evens_up_to(5) == [0, 2, 4];\n    then evens_up_to(-1) == [];\n}\n\n\n[compiler feedback]\nR0002 at 10:29: no `concat` in `std::array` — not found in this module\nR0002 at 10:55: no `singleton` in `std::array` — not found in this module\nT0001 at 17:28: mismatched types — expected `Array[I64]`, found `[_; 3]`\nT0001 at 18:29: mismatched types — expected `Array[I64]`, found `[_; 0]`\nT0011 at 18:29: type annotation needed — cannot infer the type here",
+          "output": "module stats;\n\nimport std::array;\nimport std::collections;\n\npub fn evens_up_to(take n: Int) -> Array[Int] {\n    if n < 0 {\n        return std::array::empty();\n    }\n    var evens = std::array::empty();\n    var i = 0;\n    while i <= n {\n        evens = std::collections::concat(evens, std::collections::singleton(i));\n        i = i + 2;\n    }\n    evens\n}\n\nspec evens_up_to {\n    then evens_up_to(5) == [0, 2, 4];\n    then evens_up_to(-1) == [];\n}\n",
+          "generated_tokens": 7598,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `evens_up_to(take n: Int) -> Array[Int]` returning the growable array of the even numbers 0, 2, 4, ... that are <= n (empty when n < 0).\n\n[previous attempt]\nmodule stats;\n\nimport std::array;\nimport std::collections;\n\npub fn evens_up_to(take n: Int) -> Array[Int] {\n    if n < 0 {\n        return std::array::empty();\n    }\n    var evens = std::array::empty();\n    var i = 0;\n    while i <= n {\n        evens = std::collections::concat(evens, std::collections::singleton(i));\n        i = i + 2;\n    }\n    evens\n}\n\nspec evens_up_to {\n    then evens_up_to(5) == [0, 2, 4];\n    then evens_up_to(-1) == [];\n}\n\n\n[compiler feedback]\nR0003 at 4:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 13:22: no `collections` in `std` — not found in this module\nR0002 at 13:54: no `collections` in `std` — not found in this module\nT0001 at 20:28: mismatched types — expected `Array[I64]`, found `[_; 3]`\nT0001 at 21:29: mismatched types — expected `Array[I64]`, found `[_; 0]`\nT0011 at 21:29: type annotation needed — cannot infer the type here",
+          "output": "module stats;\n\nimport std::array;\n\npub fn evens_up_to(take n: Int) -> Array[Int] {\n    if n < 0 {\n        return std::array::empty();\n    }\n    var evens\n",
+          "generated_tokens": 8192,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "factorial",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `factorial(take n: Int) -> Int` returning n! for n >= 0, recursively. `factorial(0)` is 1.",
+          "output": "module factorial;\n\npub fn factorial(take n: Int) -> Int {\n    if n == 0 {\n        1\n    } else {\n        n * factorial(n - 1)\n    }\n}\n\nspec factorial {\n    then factorial(0) == 1;\n    then factorial(1) == 1;\n    then factorial(2) == 2;\n    then factorial(3) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4214,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "fib-iterative",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `fib(take n: Int) -> Int` returning the n-th Fibonacci number (fib(0) = 0, fib(1) = 1), computed with a `while` loop rather than recursion.",
+          "output": "module stats;\n\npub fn fib(take n: Int) -> Int {\n    var a = 0;\n    var b = 1;\n    var i = 0;\n    while i < n {\n        var c = a + b;\n        a = b;\n        b = c;\n        i = i + 1;\n    }\n    a\n}\n\nspec \"fib\" {\n    then fib(0) == 0;\n    then fib(1) == 1;\n    then fib(2) == 1;\n    then fib(3) == 2;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 3613,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "first-even",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `first_even(in xs: [Int; 5]) -> Option[Int]` returning the first even element of the fixed array, or None if there is none, and `first_even_or(in xs: [Int; 5], take fallback: Int) -> Int`, which returns the fallback when there is no even element.",
+          "output": "module stats;\n\npub fn first_even(in xs: [Int; 5]) -> Option[Int] {\n    for x in xs {\n        if x % 2 == 0 {\n            return Some { value: x };\n        }\n    }\n    None\n}\n\npub fn first_even_or(in xs: [Int; 5], take fallback: Int) -> Int {\n    for x in xs {\n        if x % 2 == 0 {\n            return x;\n        }\n    }\n    fallback\n}\n",
+          "generated_tokens": 3942,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "fizzbuzz-code",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `fizzbuzz_code(take n: Int) -> Int` returning 15 when n is divisible by both 3 and 5, 5 when only by 5, 3 when only by 3, and 0 otherwise.",
+          "output": "module stats;\n\nimport std::math;\n\npub fn fizzbuzz_code(take n: Int) -> Int {\n    if (modulo(n, 3) == 0 && modulo(n, 5) == 0) {\n        15\n    } else if (modulo(n, 5) == 0) {\n        5\n    } else if (modulo(n, 3) == 0) {\n        3\n    } else {\n        0\n    }\n}\n\nspec \"fizzbuzz_code\" {\n    given n: Int;\n    when let result = fizzbuzz_code(n);\n    then result == 15 when n == 15;\n    then result == 5 when n == 5;\n    then result == 3 when n == 3;\n    then result == 0 when n == 1;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 3064,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `fizzbuzz_code(take n: Int) -> Int` returning 15 when n is divisible by both 3 and 5, 5 when only by 5, 3 when only by 3, and 0 otherwise.\n\n[previous attempt]\nmodule stats;\n\nimport std::math;\n\npub fn fizzbuzz_code(take n: Int) -> Int {\n    if (modulo(n, 3) == 0 && modulo(n, 5) == 0) {\n        15\n    } else if (modulo(n, 5) == 0) {\n        5\n    } else if (modulo(n, 3) == 0) {\n        3\n    } else {\n        0\n    }\n}\n\nspec \"fizzbuzz_code\" {\n    given n: Int;\n    when let result = fizzbuzz_code(n);\n    then result == 15 when n == 15;\n    then result == 5 when n == 5;\n    then result == 3 when n == 3;\n    then result == 0 when n == 1;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 20:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 21:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 22:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 23:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0003 at 3:13: unresolved import: no `math` in `std` — not found in the imported module\nR0002 at 6:9: cannot find `modulo` in this scope — not found\nR0002 at 6:30: cannot find `modulo` in this scope — not found\nR0002 at 8:16: cannot find `modulo` in this scope — not found\nR0002 at 10:16: cannot find `modulo` in this scope — not found",
+          "output": "module stats;\n\npub fn fizzbuzz_code(take n: Int) -> Int {\n    if (n % 3 == 0 && n % 5 == 0) {\n        15\n    } else if (n % 5 == 0) {\n        5\n    } else if (n % 3 == 0) {\n        3\n    } else {\n        0\n    }\n}\n\nspec \"fizzbuzz_code\" {\n    given n: Int;\n    when let result = fizzbuzz_code(n);\n    then result == 15 when n == 15;\n    then result == 5 when n == 5;\n    then result == 3 when n == 3;\n    then result == 0 when n == 1;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4981,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `fizzbuzz_code(take n: Int) -> Int` returning 15 when n is divisible by both 3 and 5, 5 when only by 5, 3 when only by 3, and 0 otherwise.\n\n[previous attempt]\nmodule stats;\n\npub fn fizzbuzz_code(take n: Int) -> Int {\n    if (n % 3 == 0 && n % 5 == 0) {\n        15\n    } else if (n % 5 == 0) {\n        5\n    } else if (n % 3 == 0) {\n        3\n    } else {\n        0\n    }\n}\n\nspec \"fizzbuzz_code\" {\n    given n: Int;\n    when let result = fizzbuzz_code(n);\n    then result == 15 when n == 15;\n    then result == 5 when n == 5;\n    then result == 3 when n == 3;\n    then result == 0 when n == 1;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 18:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 19:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 20:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 21:5: malformed statement: skipped 8 token(s) starting with `then` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued",
+          "output": "module stats;\n\npub fn fizzbuzz_code(take n: Int) -> Int {\n    if (n % 3 == 0 && n % 5 == 0) {\n        15\n    } else if (n % 5 == 0) {\n        5\n    } else if (n % 3 == 0) {\n        3\n    } else {\n        0\n    }\n}\n\nspec \"fizzbuzz_code\" {\n    given n: Int;\n    when let result = fizzbuzz_code(n);\n    then result == 15;\n    then result == 5;\n    then result == 3;\n    then result == 0;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 6882,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": false
+        }
+      ],
+      "tests_passed": false
+    },
+    {
+      "task_id": "float-average",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `average3(take a: Float, take b: Float, take c: Float) -> Float` returning the arithmetic mean of the three values.",
+          "output": "module app;\n\npub fn average3(take a: Float, take b: Float, take c: Float) -> Float {\n    (a + b + c) / 3.0\n}\n",
+          "generated_tokens": 2631,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "grade-report",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a small grading program. Define `struct Score { student: Int, points: Int }`. Write `letter(take points: Int) -> Int` mapping points to a grade number: 90 and above is 4, 80-89 is 3, 70-79 is 2, 60-69 is 1, below 60 is 0. Write `passing(in scores: [Score; 5]) -> Array[Int]` returning, in input order, the student numbers whose grade is at least 1, and `class_average(in scores: [Score; 5]) -> Int` returning the floor of the mean points.",
+          "output": "module stats;\n\nstruct Score { student: Int, points: Int }\n\nfn letter(take points: Int) -> Int {\n    if points >= 90 {\n        4\n    } else if points >= 80 {\n        3\n    } else if points >= 70 {\n        2\n    } else if points >= 60 {\n        1\n    } else {\n        0\n    }\n}\n\nfn passing(in scores: [Score; 5]) -> Array[Int] {\n    var result = [];\n    for score in scores {\n        let grade = letter(score.points);\n        if grade >= 1 {\n            result = std::collections::concat(result, std::collections::singleton(score.student));\n        }\n    }\n    result\n}\n\nfn class_average(in scores: [Score; 5]) -> Int {\n    var sum = 0;\n    for score in scores {\n        sum = sum + score.points;\n    }\n    sum / 5\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5983,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write a small grading program. Define `struct Score { student: Int, points: Int }`. Write `letter(take points: Int) -> Int` mapping points to a grade number: 90 and above is 4, 80-89 is 3, 70-79 is 2, 60-69 is 1, below 60 is 0. Write `passing(in scores: [Score; 5]) -> Array[Int]` returning, in input order, the student numbers whose grade is at least 1, and `class_average(in scores: [Score; 5]) -> Int` returning the floor of the mean points.\n\n[previous attempt]\nmodule stats;\n\nstruct Score { student: Int, points: Int }\n\nfn letter(take points: Int) -> Int {\n    if points >= 90 {\n        4\n    } else if points >= 80 {\n        3\n    } else if points >= 70 {\n        2\n    } else if points >= 60 {\n        1\n    } else {\n        0\n    }\n}\n\nfn passing(in scores: [Score; 5]) -> Array[Int] {\n    var result = [];\n    for score in scores {\n        let grade = letter(score.points);\n        if grade >= 1 {\n            result = std::collections::concat(result, std::collections::singleton(score.student));\n        }\n    }\n    result\n}\n\nfn class_average(in scores: [Score; 5]) -> Int {\n    var sum = 0;\n    for score in scores {\n        sum = sum + score.points;\n    }\n    sum / 5\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 24:27: no `collections` in `std` — not found in this module\nR0002 at 24:60: no `collections` in `std` — not found in this module\nT0001 at 27:5: mismatched types — expected `Array[I64]`, found `[_; 0]`\nT0011 at 20:18: type annotation needed — cannot infer the type here",
+          "output": "module stats;\n\nimport std::collections;\n\nstruct Score { student: Int, points: Int }\n\nfn letter(take points: Int) -> Int {\n    if points >= 90 {\n        4\n    } else if points >= 80 {\n        3\n    } else if points >= 70 {\n        2\n    } else if points >= 60 {\n        1\n    } else {\n        0\n    }\n}\n\nfn passing(in scores: [Score; 5]) -> Array[Int] {\n    var result: Array[Int] = [];\n    for score in scores {\n        let grade = letter(score.points);\n        if grade >= 1 {\n            result = std::collections::concat(result, std::collections::singleton(score.student));\n        }\n    }\n    result\n}\n\nfn class_average(in scores: [Score; 5]) -> Int {\n    var sum = 0;\n    for score in scores {\n        sum = sum + score.points;\n    }\n    sum / 5\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5380,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write a small grading program. Define `struct Score { student: Int, points: Int }`. Write `letter(take points: Int) -> Int` mapping points to a grade number: 90 and above is 4, 80-89 is 3, 70-79 is 2, 60-69 is 1, below 60 is 0. Write `passing(in scores: [Score; 5]) -> Array[Int]` returning, in input order, the student numbers whose grade is at least 1, and `class_average(in scores: [Score; 5]) -> Int` returning the floor of the mean points.\n\n[previous attempt]\nmodule stats;\n\nimport std::collections;\n\nstruct Score { student: Int, points: Int }\n\nfn letter(take points: Int) -> Int {\n    if points >= 90 {\n        4\n    } else if points >= 80 {\n        3\n    } else if points >= 70 {\n        2\n    } else if points >= 60 {\n        1\n    } else {\n        0\n    }\n}\n\nfn passing(in scores: [Score; 5]) -> Array[Int] {\n    var result: Array[Int] = [];\n    for score in scores {\n        let grade = letter(score.points);\n        if grade >= 1 {\n            result = std::collections::concat(result, std::collections::singleton(score.student));\n        }\n    }\n    result\n}\n\nfn class_average(in scores: [Score; 5]) -> Int {\n    var sum = 0;\n    for score in scores {\n        sum = sum + score.points;\n    }\n    sum / 5\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 26:27: no `collections` in `std` — not found in this module\nR0002 at 26:60: no `collections` in `std` — not found in this module\nT0001 at 22:30: mismatched types — expected `Array[I64]`, found `[_; 0]`\nT0011 at 22:30: type annotation needed — cannot infer the type here",
+          "output": "module stats;\n\nimport std::array;\n\nstruct Score { student: Int, points: Int }\n\nfn letter(take points: Int) -> Int {\n    if points >= 90 {\n        4\n    } else if points >= 80 {\n        3\n    } else if points >= 70 {\n        2\n    } else if points >= 60 {\n        1\n    } else {\n        0\n    }\n}\n\nfn passing(in scores: [Score; 5]) -> Array[Int] {\n    var result: Array[Int] = [];\n    for score in scores {\n        let grade = letter(score.points);\n        if grade >= 1 {\n            result = std::array::concat(result, std::array::singleton(score.student));\n        }\n    }\n    result\n}\n\nfn class_average(in scores: [Score; 5]) -> Int {\n    var sum = 0;\n    for score in scores {\n        sum = sum + score.points;\n    }\n    sum / 5\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5962,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "histogram",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `count_of(in xs: [Int; 8], take v: Int) -> Int`. It must build a `Map[Int, Int]` from each value in xs to the number of times it occurs (using std::map), then look v up in that map, returning 0 when v does not occur. Also write `distinct(in xs: [Int; 8]) -> Int` returning the number of distinct values, as the size of the same kind of map.",
+          "output": "module stats;\n\npub fn count_of(in xs: [Int; 8], take v: Int) -> Int {\n    let counts = std::collections::counts(xs);\n    let count = counts.get(v);\n    count.unwrap_or(0)\n}\n\npub fn distinct(in xs: [Int; 8]) -> Int {\n    let counts = std::collections::counts(xs);\n    counts.len()\n}\n",
+          "generated_tokens": 5872,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `count_of(in xs: [Int; 8], take v: Int) -> Int`. It must build a `Map[Int, Int]` from each value in xs to the number of times it occurs (using std::map), then look v up in that map, returning 0 when v does not occur. Also write `distinct(in xs: [Int; 8]) -> Int` returning the number of distinct values, as the size of the same kind of map.\n\n[previous attempt]\nmodule stats;\n\npub fn count_of(in xs: [Int; 8], take v: Int) -> Int {\n    let counts = std::collections::counts(xs);\n    let count = counts.get(v);\n    count.unwrap_or(0)\n}\n\npub fn distinct(in xs: [Int; 8]) -> Int {\n    let counts = std::collections::counts(xs);\n    counts.len()\n}\n\n\n[compiler feedback]\nR0002 at 4:23: no `collections` in `std` — not found in this module\nR0002 at 10:23: no `collections` in `std` — not found in this module\nT0024 at 5:17: `.get(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0024 at 6:5: `.unwrap_or(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0024 at 11:5: `.len(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first",
+          "output": "module stats;\n\nimport std::collections;\n\npub fn count_of(in xs: [Int; 8], take v: Int) -> Int {\n    let counts = std::collections::counts(xs);\n    let count = std::collections::get(counts, v);\n    std::option::unwrap_or(count, 0)\n}\n\npub fn distinct(in xs: [Int; 8]) -> Int {\n    let counts = std::collections::counts(xs);\n    std::collections::len(counts)\n}\n",
+          "generated_tokens": 6628,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 5,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `count_of(in xs: [Int; 8], take v: Int) -> Int`. It must build a `Map[Int, Int]` from each value in xs to the number of times it occurs (using std::map), then look v up in that map, returning 0 when v does not occur. Also write `distinct(in xs: [Int; 8]) -> Int` returning the number of distinct values, as the size of the same kind of map.\n\n[previous attempt]\nmodule stats;\n\nimport std::collections;\n\npub fn count_of(in xs: [Int; 8], take v: Int) -> Int {\n    let counts = std::collections::counts(xs);\n    let count = std::collections::get(counts, v);\n    std::option::unwrap_or(count, 0)\n}\n\npub fn distinct(in xs: [Int; 8]) -> Int {\n    let counts = std::collections::counts(xs);\n    std::collections::len(counts)\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 6:23: no `collections` in `std` — not found in this module\nR0002 at 7:22: no `collections` in `std` — not found in this module\nR0002 at 8:10: no `option` in `std` — not found in this module\nR0002 at 12:23: no `collections` in `std` — not found in this module\nR0002 at 13:10: no `collections` in `std` — not found in this module",
+          "output": "module stats;\n\nimport std::collections;\nimport std::core;\n\npub fn count_of(in xs: [Int; 8], take v: Int) -> Int {\n    let counts = std::collections::counts(xs);\n    let count = std::collections::get(counts, v);\n    std::core::unwrap_or(count, 0)\n}\n\npub fn distinct(in xs: [Int; 8]) -> Int {\n    let counts = std::collections::counts(xs);\n    std::collections::len(counts)\n}\n",
+          "generated_tokens": 6572,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 5,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "in-range",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `in_range(take x: Int, take low: Int, take high: Int) -> Bool`, true when low <= x <= high (both ends inclusive).",
+          "output": "module main;\n\nfn in_range(take x: Int, take low: Int, take high: Int) -> Bool {\n    low <= x && x <= high\n}\n",
+          "generated_tokens": 2246,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "int-sqrt",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `int_sqrt(take n: Int) -> Int` returning the largest r with r * r <= n, for n >= 0, using only integer arithmetic.",
+          "output": "module math;\n\nimport util::helpers;\n\npub fn int_sqrt(take n: Int) -> Int {\n    var low = 0;\n    var high = n;\n    while low <= high {\n        var mid = (low + high) / 2;\n        var square = mid * mid;\n        if square <= n {\n            low = mid + 1;\n        } else {\n            high = mid - 1;\n        }\n    }\n    high\n}\n",
+          "generated_tokens": 2626,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `int_sqrt(take n: Int) -> Int` returning the largest r with r * r <= n, for n >= 0, using only integer arithmetic.\n\n[previous attempt]\nmodule math;\n\nimport util::helpers;\n\npub fn int_sqrt(take n: Int) -> Int {\n    var low = 0;\n    var high = n;\n    while low <= high {\n        var mid = (low + high) / 2;\n        var square = mid * mid;\n        if square <= n {\n            low = mid + 1;\n        } else {\n            high = mid - 1;\n        }\n    }\n    high\n}\n\n\n[compiler feedback]\nR0003 at 3:8: unresolved import: module `util` does not exist — no such module",
+          "output": "module math;\n\npub fn int_sqrt(take n: Int) -> Int {\n    var low = 0;\n    var high = n;\n    while low <= high {\n        var mid = (low + high) / 2;\n        var square = mid * mid;\n        if square <= n {\n            low = mid + 1;\n        } else {\n            high = mid - 1;\n        }\n    }\n    high\n}\n",
+          "generated_tokens": 957,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "is-prime",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `is_prime(take n: Int) -> Bool`, true exactly when n is a prime number. Numbers below 2 are not prime.",
+          "output": "module prime;\n\npub fn is_prime(take n: Int) -> Bool {\n    if n < 2 {\n        return false;\n    }\n    if n == 2 {\n        return true;\n    }\n    if n % 2 == 0 {\n        return false;\n    }\n    var i = 3;\n    while i * i <= n {\n        if n % i == 0 {\n            return false;\n        }\n        i = i + 2;\n    }\n    true\n}\n",
+          "generated_tokens": 3213,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "manhattan",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Define `struct Point { x: Int, y: Int }` and write `manhattan(in a: Point, in b: Point) -> Int` returning |a.x - b.x| + |a.y - b.y|.",
+          "output": "module app;\n\nstruct Point { x: Int, y: Int }\n\npub fn manhattan(in a: Point, in b: Point) -> Int {\n    abs(a.x - b.x) + abs(a.y - b.y)\n}\n",
+          "generated_tokens": 1327,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Define `struct Point { x: Int, y: Int }` and write `manhattan(in a: Point, in b: Point) -> Int` returning |a.x - b.x| + |a.y - b.y|.\n\n[previous attempt]\nmodule app;\n\nstruct Point { x: Int, y: Int }\n\npub fn manhattan(in a: Point, in b: Point) -> Int {\n    abs(a.x - b.x) + abs(a.y - b.y)\n}\n\n\n[compiler feedback]\nR0002 at 6:5: cannot find `abs` in this scope — not found\nR0002 at 6:22: cannot find `abs` in this scope — not found",
+          "output": "module app;\n\nimport std::core;\n\nstruct Point { x: Int, y: Int }\n\npub fn manhattan(in a: Point, in b: Point) -> Int {\n    abs(a.x - b.x) + abs(a.y - b.y)\n}\n",
+          "generated_tokens": 1659,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 0,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Define `struct Point { x: Int, y: Int }` and write `manhattan(in a: Point, in b: Point) -> Int` returning |a.x - b.x| + |a.y - b.y|.\n\n[previous attempt]\nmodule app;\n\nimport std::core;\n\nstruct Point { x: Int, y: Int }\n\npub fn manhattan(in a: Point, in b: Point) -> Int {\n    abs(a.x - b.x) + abs(a.y - b.y)\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `core` in `std` — not found in the imported module\nR0002 at 8:5: cannot find `abs` in this scope — not found\nR0002 at 8:22: cannot find `abs` in this scope — not found",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "max-index",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `max_index(in xs: [Int; 5]) -> Int` returning the index of the largest element; when the largest value occurs more than once, return the first index.",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `max_index(in xs: [Int; 5]) -> Int` returning the index of the largest element; when the largest value occurs more than once, return the first index.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `max_index` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `max_index` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `max_index` in this scope",
+          "output": "module stats;\n\nimport util::helpers;\n\npub fn max_index(in xs: [Int; 5]) -> Int {\n    var max_index = 0;\n    var i = 0;\n    while i < 5 {\n        if xs[i] > xs[max_index] {\n            max_index = i;\n        }\n        i = i + 1;\n    }\n    max_index\n}\n\nspec max_index {\n    then max_index([1, 2, 3, 4, 5]) == 4;\n    then max_index([5, 5, 5, 5, 5]) == 0;\n    then max_index([3, 1, 2, 3, 0]) == 0;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 2333,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `max_index(in xs: [Int; 5]) -> Int` returning the index of the largest element; when the largest value occurs more than once, return the first index.\n\n[previous attempt]\nmodule stats;\n\nimport util::helpers;\n\npub fn max_index(in xs: [Int; 5]) -> Int {\n    var max_index = 0;\n    var i = 0;\n    while i < 5 {\n        if xs[i] > xs[max_index] {\n            max_index = i;\n        }\n        i = i + 1;\n    }\n    max_index\n}\n\nspec max_index {\n    then max_index([1, 2, 3, 4, 5]) == 4;\n    then max_index([5, 5, 5, 5, 5]) == 0;\n    then max_index([3, 1, 2, 3, 0]) == 0;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0003 at 3:8: unresolved import: module `util` does not exist — no such module\nT0001 at 14:5: mismatched types — expected `I64`, found `Usize`",
+          "output": "module stats;\n\npub fn max_index(in xs: [Int; 5]) -> Int {\n    var max_index = 0;\n    var i: Usize = 0;\n    while i < 5 {\n        if xs[i] > xs[max_index] {\n            max_index = i;\n        }\n        i = i + 1;\n    }\n    max_index\n}\n\nspec max_index {\n    then max_index([1, 2, 3, 4, 5]) == 4;\n    then max_index([5, 5, 5, 5, 5]) == 0;\n    then max_index([3, 1, 2, 3, 0]) == 0;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 8094,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "parse-digit",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `parse_digit(take c: Int) -> Result[Int, Str]` that takes an ASCII byte: for '0' through '9' (bytes 48 to 57) it returns Ok with the digit's value, otherwise Err with the message \"not a digit\". Also write `digit_or(take c: Int, take fallback: Int) -> Int`, which calls parse_digit and returns the fallback on an error.",
+          "output": "module stats;\n\nfn parse_digit(take c: Int) -> Result[Int, Str] {\n    if c >= 48 && c <= 57 {\n        Ok { value: c - 48 }\n    } else {\n        Err { message: \"not a digit\" }\n    }\n}\n\nfn digit_or(take c: Int, take fallback: Int) -> Int {\n    let result = parse_digit(c);\n    match result {\n        Ok { value } => value,\n        Err { message } => fallback,\n    }\n}\n",
+          "generated_tokens": 5002,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `parse_digit(take c: Int) -> Result[Int, Str]` that takes an ASCII byte: for '0' through '9' (bytes 48 to 57) it returns Ok with the digit's value, otherwise Err with the message \"not a digit\". Also write `digit_or(take c: Int, take fallback: Int) -> Int`, which calls parse_digit and returns the fallback on an error.\n\n[previous attempt]\nmodule stats;\n\nfn parse_digit(take c: Int) -> Result[Int, Str] {\n    if c >= 48 && c <= 57 {\n        Ok { value: c - 48 }\n    } else {\n        Err { message: \"not a digit\" }\n    }\n}\n\nfn digit_or(take c: Int, take fallback: Int) -> Int {\n    let result = parse_digit(c);\n    match result {\n        Ok { value } => value,\n        Err { message } => fallback,\n    }\n}\n\n\n[compiler feedback]\nT0004 at 7:15: no field `message` on type `Result[_, _]`\nT0005 at 7:9: missing fields `error` in literal of `Result[_, _]`\nT0004 at 15:15: no field `message` on type `Result[I64, Str]`\nT0005 at 15:9: pattern for `Result[I64, Str]` does not mention fields `error`\n  help: add the missing fields, or `..` to ignore the rest",
+          "output": "module stats;\n\nfn parse_digit(take c: Int) -> Result[Int, Str] {\n    if c >= 48 && c <= 57 {\n        Ok { value: c - 48 }\n    } else {\n        Err { error: \"not a digit\" }\n    }\n}\n\nfn digit_or(take c: Int, take fallback: Int) -> Int {\n    let result = parse_digit(c);\n    match result {\n        Ok { value } => value,\n        Err { error } => fallback,\n    }\n}\n",
+          "generated_tokens": 3811,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": false
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "power",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `power(take base: Int, take exp: Int) -> Int` returning base raised to exp, for exp >= 0. Use exponentiation by squaring: square the result of power(base, exp / 2).",
+          "output": "module stats;\n\npub fn power(take base: Int, take exp: Int) -> Int {\n    if exp == 0 {\n        1\n    } else {\n        var half = exp / 2;\n        var result = power(base, half);\n        var squared = result * result;\n        if exp % 2 == 1 {\n            squared * base\n        } else {\n            squared\n        }\n    }\n}\n",
+          "generated_tokens": 3293,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "prefix-sums",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `prefix_sums(in xs: [Int; 5]) -> Array[Int]` returning a growable array whose element i is the sum of xs[0] through xs[i].",
+          "output": "module stats;\n\nfn prefix_sums(in xs: [Int; 5]) -> Array[Int] {\n    var sums = std::array::empty();\n    var current = 0;\n    for x in xs {\n        current = current + x;\n        sums = std::array::push(sums, current);\n    }\n    sums\n}\n",
+          "generated_tokens": 4228,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `prefix_sums(in xs: [Int; 5]) -> Array[Int]` returning a growable array whose element i is the sum of xs[0] through xs[i].\n\n[previous attempt]\nmodule stats;\n\nfn prefix_sums(in xs: [Int; 5]) -> Array[Int] {\n    var sums = std::array::empty();\n    var current = 0;\n    for x in xs {\n        current = current + x;\n        sums = std::array::push(sums, current);\n    }\n    sums\n}\n\n\n[compiler feedback]\nT0001 at 8:16: mismatched types — expected `Array[I64]`, found `()`",
+          "output": "module stats;\n\nfn prefix_sums(in xs: [Int; 5]) -> Array[Int] {\n    var sums = std::array::empty();\n    var current = 0;\n    for x in xs {\n        current = current + x;\n        std::array::push(sums, current);\n    }\n    sums\n}\n",
+          "generated_tokens": 1780,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4,
+          "unrelated_edit": false
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "push-twice",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `push_twice(mut xs: Array[Int], take v: Int) -> Int`, which appends v to the caller's array two times and returns the array's new length. Also write `filled_pairs(take n: Int) -> Int`, which starts from an empty array, calls push_twice with the values 1 through n in order, and returns the final sum of the array's elements.",
+          "output": "module main;\n\nimport std::array;\nimport std::collections;\n\nfn push_twice(mut xs: Array[Int], take v: Int) -> Int {\n    xs = std::array::concat(xs, std::collections::singleton(v));\n    xs = std::array::concat(xs, std::collections::singleton(v));\n    std::array::len(xs)\n}\n\nfn filled_pairs(take n: Int) -> Int {\n    var xs = std::array::empty();\n    for i in 1..n+1 {\n        xs = push_twice(xs, i);\n    }\n    std::collections::sum(xs)\n}\n",
+          "generated_tokens": 7965,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 5,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `push_twice(mut xs: Array[Int], take v: Int) -> Int`, which appends v to the caller's array two times and returns the array's new length. Also write `filled_pairs(take n: Int) -> Int`, which starts from an empty array, calls push_twice with the values 1 through n in order, and returns the final sum of the array's elements.\n\n[previous attempt]\nmodule main;\n\nimport std::array;\nimport std::collections;\n\nfn push_twice(mut xs: Array[Int], take v: Int) -> Int {\n    xs = std::array::concat(xs, std::collections::singleton(v));\n    xs = std::array::concat(xs, std::collections::singleton(v));\n    std::array::len(xs)\n}\n\nfn filled_pairs(take n: Int) -> Int {\n    var xs = std::array::empty();\n    for i in 1..n+1 {\n        xs = push_twice(xs, i);\n    }\n    std::collections::sum(xs)\n}\n\n\n[compiler feedback]\nR0003 at 4:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 7:22: no `concat` in `std::array` — not found in this module\nR0002 at 7:38: no `collections` in `std` — not found in this module\nR0002 at 8:22: no `concat` in `std::array` — not found in this module\nR0002 at 8:38: no `collections` in `std` — not found in this module\nR0002 at 17:10: no `collections` in `std` — not found in this module\nT0001 at 15:14: mismatched types — expected `Array[I64]`, found `I64`",
+          "output": "module main;\n\nimport std::array;\nimport std::collections;\n\nfn push_twice(mut xs: Array[Int], take v: Int) -> Int {\n    xs = std::collections::concat(xs, std::collections::of2(v, v));\n    std::array::len(xs)\n}\n\nfn filled_pairs(take n: Int) -> Int {\n    var xs = std::array::empty();\n    for i in 1..n+1 {\n        xs = push_twice(xs, i);\n    }\n    std::collections::sum(xs)\n}\n",
+          "generated_tokens": 5711,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `push_twice(mut xs: Array[Int], take v: Int) -> Int`, which appends v to the caller's array two times and returns the array's new length. Also write `filled_pairs(take n: Int) -> Int`, which starts from an empty array, calls push_twice with the values 1 through n in order, and returns the final sum of the array's elements.\n\n[previous attempt]\nmodule main;\n\nimport std::array;\nimport std::collections;\n\nfn push_twice(mut xs: Array[Int], take v: Int) -> Int {\n    xs = std::collections::concat(xs, std::collections::of2(v, v));\n    std::array::len(xs)\n}\n\nfn filled_pairs(take n: Int) -> Int {\n    var xs = std::array::empty();\n    for i in 1..n+1 {\n        xs = push_twice(xs, i);\n    }\n    std::collections::sum(xs)\n}\n\n\n[compiler feedback]\nR0003 at 4:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 7:15: no `collections` in `std` — not found in this module\nR0002 at 7:44: no `collections` in `std` — not found in this module\nR0002 at 16:10: no `collections` in `std` — not found in this module\nT0001 at 14:14: mismatched types — expected `Array[I64]`, found `I64`",
+          "output": "module main;\n\nimport std::array;\n\nfn push_twice(mut xs: Array[Int], take v: Int) -> Int {\n    xs = std::array::concat(xs, std::array::of2(v, v));\n    std::array::len(xs)\n}\n\nfn filled_pairs(take n: Int) -> Int {\n    var xs = std::array::empty();\n    for i in 1..n+1 {\n        xs = push_twice(xs, i);\n    }\n    std::array::sum(xs)\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4844,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "range-sum",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.",
+          "output": "module range_sum;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    std::collections::sum(xs)\n}\n\nspec range {\n    then std::collections::equals(range(0, 3), [0, 1, 2]);\n}\n\nspec sum_all {\n    then sum_all([1, 2, 3]) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 6876,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[previous attempt]\nmodule range_sum;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    std::collections::sum(xs)\n}\n\nspec range {\n    then std::collections::equals(range(0, 3), [0, 1, 2]);\n}\n\nspec sum_all {\n    then sum_all([1, 2, 3]) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 14:10: no `collections` in `std` — not found in this module\nR0002 at 18:15: no `collections` in `std` — not found in this module\nT0001 at 22:18: mismatched types — expected `Array[I64]`, found `[_; 3]`",
+          "output": "module range_sum;\nimport std::collections;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    std::collections::sum(xs)\n}\n\nspec range {\n    then std::collections::equals(range(0, 3), std::collections::of3(0, 1, 2));\n}\n\nspec sum_all {\n    then sum_all(std::collections::of3(1, 2, 3)) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5008,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[previous attempt]\nmodule range_sum;\nimport std::collections;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    std::collections::sum(xs)\n}\n\nspec range {\n    then std::collections::equals(range(0, 3), std::collections::of3(0, 1, 2));\n}\n\nspec sum_all {\n    then sum_all(std::collections::of3(1, 2, 3)) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0003 at 2:13: unresolved import: no `collections` in `std` — not found in the imported module\nR0002 at 15:10: no `collections` in `std` — not found in this module\nR0002 at 19:15: no `collections` in `std` — not found in this module\nR0002 at 19:53: no `collections` in `std` — not found in this module\nR0002 at 23:23: no `collections` in `std` — not found in this module",
+          "output": "module range_sum;\n\nimport std::array;\nimport std::collections;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    std::collections::sum(xs)\n}\n\nspec range {\n    then std::collections::equals(range(0, 3), std::collections::of3(0, 1, 2));\n}\n\nspec sum_all {\n    then sum_all(std::collections::of3(1, 2, 3)) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 3137,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "range-sum",
+      "variant": "while-index",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[variant: while-index]",
+          "output": "module stats;\n\nimport std::array;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    var total = 0;\n    var i = 0;\n    while i < std::array::len(xs) {\n        total = total + xs[i];\n        i = i + 1;\n    }\n    total\n}\n\nspec range {\n    then range(0, 0) == std::array::empty();\n    then range(0, 3) == [0, 1, 2];\n}\n\nspec sum_all {\n    then sum_all([1, 2, 3]) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5773,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[variant: while-index]\n\n[previous attempt]\nmodule stats;\n\nimport std::array;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    var total = 0;\n    var i = 0;\n    while i < std::array::len(xs) {\n        total = total + xs[i];\n        i = i + 1;\n    }\n    total\n}\n\nspec range {\n    then range(0, 0) == std::array::empty();\n    then range(0, 3) == [0, 1, 2];\n}\n\nspec sum_all {\n    then sum_all([1, 2, 3]) == 6;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nT0001 at 19:28: mismatched types — expected `Usize`, found `I64`\nT0001 at 27:25: mismatched types — expected `Array[I64]`, found `[_; 3]`\nT0001 at 31:18: mismatched types — expected `Array[I64]`, found `[_; 3]`",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[variant: while-index]\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `sum_all` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `sum_all` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `range` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `range` in this scope\nT0011 in the task's spec (which you did not write), spec line 4: type annotation needed",
+          "output": "module stats;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        arr = std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    var total = 0;\n    var i = 0;\n    while i < std::array::len(xs) {\n        total = total + xs[i];\n        i = i + 1;\n    }\n    total\n}\n\nspec range {\n    then range(0, 3) == [0, 1, 2];\n    then range(5, 5) == [];\n}\n\nspec sum_all {\n    then sum_all([1, 2, 3]) == 6;\n    then sum_all([]) == 0;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5293,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "range-sum",
+      "variant": "for-in",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[variant: for-in]",
+          "output": "module stats;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    var total = 0;\n    for x in xs {\n        total = total + x;\n    }\n    total\n}\n",
+          "generated_tokens": 6852,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.\n\n[variant: for-in]\n\n[previous attempt]\nmodule stats;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    var i = start;\n    while i < end {\n        std::array::push(arr, i);\n        i = i + 1;\n    }\n    arr\n}\n\nfn sum_all(in xs: Array[Int]) -> Int {\n    var total = 0;\n    for x in xs {\n        total = total + x;\n    }\n    total\n}\n\n\n[compiler feedback]\nO0003 at 15:14: cannot move out of `in xs` — ownership cannot leave a borrowed parameter\n  help: declare the parameter `take xs` if the callee should own the value",
+          "output": "module stats;\n\nfn range(take start: Int, take end: Int) -> Array[Int] {\n    var arr = std::array::empty();\n    for i in start..end {\n        std::array::push(arr, i);\n    }\n    arr\n}\n\nfn sum_all(take xs: Array[Int]) -> Int {\n    var total = 0;\n    for x in xs {\n        total = total + x;\n    }\n    total\n}\n",
+          "generated_tokens": 6780,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "rect-contains",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Define `struct Rect { left: Int, top: Int, width: Int, height: Int }` and write `contains(in r: Rect, take x: Int, take y: Int) -> Bool`, true when left <= x < left + width and top <= y < top + height.",
+          "output": "module rect;\n\nstruct Rect { left: Int, top: Int, width: Int, height: Int }\n\npub fn contains(in r: Rect, take x: Int, take y: Int) -> Bool {\n    r.left <= x && x < r.left + r.width && r.top <= y && y < r.top + r.height\n}\n",
+          "generated_tokens": 2322,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-foreign-syntax",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "This program was written with habits from another language and does not compile. Fix it so `total` returns the sum of the four elements, keeping the same function name and parameter type.\n\n```tuo\nmodule solution;\n\nfn total(xs: [Int; 4]) -> Int {\n    let mut sum = 0;\n    for x in xs {\n        sum += x;\n    }\n    return sum;\n}\n```",
+          "output": "module solution;\n\nfn total(in xs: [Int; 4]) -> Int {\n    var sum = 0;\n    for x in xs {\n        sum = sum + x;\n    }\n    sum\n}\n",
+          "generated_tokens": 1054,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-method-call",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Fix this program so it compiles. tuonelang has no method-call syntax.\n\n```tuo\nmodule solution;\n\nfn is_long(in s: Str) -> Bool {\n    s.len() > 5\n}\n```",
+          "output": "module solution;\n\nfn is_long(in s: Str) -> Bool {\n    std::str::len(s) > 5\n}\n",
+          "generated_tokens": 6688,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-missing-modes",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Fix this program so it compiles. Every parameter needs a mode; pick the one that fits how the parameter is used.\n\n```tuo\nmodule solution;\n\nstruct Counter { count: Int }\n\nfn bump(c: Counter, by: Int) {\n    c.count = c.count + by;\n}\n\nfn bumped_three_times(start: Int) -> Int {\n    var c = Counter { count: start };\n    bump(c, 1);\n    bump(c, 2);\n    bump(c, 3);\n    c.count\n}\n```",
+          "output": "module solution;\n\nstruct Counter { count: Int }\n\nfn bump(mut c: Counter, take by: Int) {\n    c.count = c.count + by;\n}\n\nfn bumped_three_times(take start: Int) -> Int {\n    var c = Counter { count: start };\n    bump(c, 1);\n    bump(c, 2);\n    bump(c, 3);\n    c.count\n}\n",
+          "generated_tokens": 4585,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-off-by-one",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "This program compiles but fails its spec: `sum_to(n)` should return 1 + 2 + ... + n.\n\n```tuo\nmodule solution;\n\nfn sum_to(take n: Int) -> Int {\n    var total = 0;\n    var i = 1;\n    while i < n {\n        total = total + i;\n        i = i + 1;\n    }\n    total\n}\n\nspec sum_to {\n    then sum_to(4) == 10;\n}\n```\n\nFix the function, not the spec, and return the program without the spec.",
+          "output": "module solution;\n\nfn sum_to(take n: Int) -> Int {\n    var total = 0;\n    var i = 1;\n    while i <= n {\n        total = total + i;\n        i = i + 1;\n    }\n    total\n}\n",
+          "generated_tokens": 3117,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-option-payload",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Fix this program so it compiles. `find` returns the index of the first element equal to `needle`, or None.\n\n```tuo\nmodule solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option<Int> {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some(i);\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some(i) => i,\n        None => -1,\n    }\n}\n```",
+          "output": "module solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option[Int] {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some { value: i };\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some { value: i } => i,\n        None => -1,\n    }\n}\n",
+          "generated_tokens": 2252,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Fix this program so it compiles. `find` returns the index of the first element equal to `needle`, or None.\n\n```tuo\nmodule solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option<Int> {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some(i);\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some(i) => i,\n        None => -1,\n    }\n}\n```\n\n[previous attempt]\nmodule solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option[Int] {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some { value: i };\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some { value: i } => i,\n        None => -1,\n    }\n}\n\n\n[compiler feedback]\nT0001 at 7:20: mismatched types — expected `I64`, found `Usize`",
+          "output": "module solution;\n\nfn find(in xs: [Int; 4], take needle: Int) -> Option[Int] {\n    var i = 0;\n    while i < 4 {\n        if xs[i] == needle {\n            return Some { value: i as Int };\n        }\n        i = i + 1;\n    }\n    None\n}\n\nfn find_or(in xs: [Int; 4], take needle: Int) -> Int {\n    match find(xs, needle) {\n        Some { value: i } => i,\n        None => -1,\n    }\n}\n",
+          "generated_tokens": 2958,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": false
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-trailing-semicolon",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Fix this program so it compiles.\n\n```tuo\nmodule solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b };\n}\n```",
+          "output": "module solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b };\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 3119,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Fix this program so it compiles.\n\n```tuo\nmodule solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b };\n}\n```\n\n[previous attempt]\nmodule solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b };\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nT0001 at 3:44: mismatched types — expected `I64`, found `()`",
+          "output": "module solution;\n\nfn larger(take a: Int, take b: Int) -> Int {\n    if a > b { a } else { b }\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 1484,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-use-after-move",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "This program is rejected by the ownership checker. Fix it so `twice_len` returns twice the length of its argument, without copying the string.\n\n```tuo\nmodule solution;\n\nfn length(take s: String) -> Int {\n    std::string::len(s)\n}\n\nfn twice_len(take s: String) -> Int {\n    length(s) + length(s)\n}\n```",
+          "output": "module solution;\n\nfn length(take s: String) -> Int {\n    std::string::len(s)\n}\n\nfn twice_len(take s: String) -> Int {\n    length(s) * 2\n}\n",
+          "generated_tokens": 2005,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 3
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "repair-wrapping-hash",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "This hash aborts at run time with an integer-overflow trap on long inputs, because tuonelang's `+` and `*` trap on overflow instead of wrapping. Fix `hash` so it computes the 32-bit FNV-1a hash of s: start from 2166136261, and for each byte, xor it in and then multiply by 16777619 modulo 2^32. Keep the signature.\n\n```tuo\nmodule solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = h * 16777619;\n        i = i + 1;\n    }\n    h\n}\n```",
+          "output": "module solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = std::bits::mul32(h, 16777619);\n        i = i + 1;\n    }\n    h\n}\n",
+          "generated_tokens": 2302,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "This hash aborts at run time with an integer-overflow trap on long inputs, because tuonelang's `+` and `*` trap on overflow instead of wrapping. Fix `hash` so it computes the 32-bit FNV-1a hash of s: start from 2166136261, and for each byte, xor it in and then multiply by 16777619 modulo 2^32. Keep the signature.\n\n```tuo\nmodule solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = h * 16777619;\n        i = i + 1;\n    }\n    h\n}\n```\n\n[previous attempt]\nmodule solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = std::bits::mul32(h, 16777619);\n        i = i + 1;\n    }\n    h\n}\n\n\n[compiler feedback]\nR0002 at 8:18: no `bits` in `std` — not found in this module",
+          "output": "module solution;\n\nimport std::bits;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = std::bits::mul32(h, 16777619);\n        i = i + 1;\n    }\n    h\n}\n",
+          "generated_tokens": 1585,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "This hash aborts at run time with an integer-overflow trap on long inputs, because tuonelang's `+` and `*` trap on overflow instead of wrapping. Fix `hash` so it computes the 32-bit FNV-1a hash of s: start from 2166136261, and for each byte, xor it in and then multiply by 16777619 modulo 2^32. Keep the signature.\n\n```tuo\nmodule solution;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = h * 16777619;\n        i = i + 1;\n    }\n    h\n}\n```\n\n[previous attempt]\nmodule solution;\n\nimport std::bits;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = std::bits::mul32(h, 16777619);\n        i = i + 1;\n    }\n    h\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `bits` in `std` — not found in the imported module\nR0002 at 10:18: no `bits` in `std` — not found in this module",
+          "output": "module solution;\n\nimport std::bits;\n\nfn hash(in s: Str) -> Int {\n    var h = 2166136261;\n    var i = 0;\n    while i < std::str::len(s) {\n        h = h ^ std::str::byte_at(s, i);\n        h = std::bits::mul32(h, 16777619);\n        i = i + 1;\n    }\n    h\n}\n",
+          "generated_tokens": 5106,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        }
+      ]
+    },
+    {
+      "task_id": "repeat-string",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `repeat(in s: Str, take n: Int) -> String` returning an owned String holding s repeated n times (empty when n <= 0).",
+          "output": "module string_utils;\n\nimport std::str;\n\nfn repeat(in s: Str, take n: Int) -> String {\n    if n <= 0 {\n        return \"\";\n    }\n    var builder = std::str::builder();\n    var i = 0;\n    while i < n {\n        std::str::push(builder, s);\n        i = i + 1;\n    }\n    std::str::to_string(builder);\n}\n",
+          "generated_tokens": 4792,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `repeat(in s: Str, take n: Int) -> String` returning an owned String holding s repeated n times (empty when n <= 0).\n\n[previous attempt]\nmodule string_utils;\n\nimport std::str;\n\nfn repeat(in s: Str, take n: Int) -> String {\n    if n <= 0 {\n        return \"\";\n    }\n    var builder = std::str::builder();\n    var i = 0;\n    while i < n {\n        std::str::push(builder, s);\n        i = i + 1;\n    }\n    std::str::to_string(builder);\n}\n\n\n[compiler feedback]\nR0002 at 9:29: no `builder` in `std::str` — not found in this module\nR0002 at 12:19: no `push` in `std::str` — not found in this module\nR0002 at 15:15: no `to_string` in `std::str` — not found in this module\nT0001 at 7:16: mismatched types — expected `String`, found `Str`\nT0001 at 5:45: mismatched types — expected `String`, found `()`",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `repeat(in s: Str, take n: Int) -> String` returning an owned String holding s repeated n times (empty when n <= 0).\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `repeat` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `repeat` in this scope",
+          "output": "module string_utils;\n\npub fn repeat(in s: Str, take n: Int) -> String {\n    if n <= 0 {\n        return \"\";\n    }\n    var parts: Array[Str] = [];\n    for _ in 0..n {\n        parts = std::array::push(parts, s);\n    }\n    std::str::join(parts, \"\");\n}\n\nspec repeat {\n    then repeat(\"a\", 0) == \"\";\n    then repeat(\"a\", 3) == \"aaa\";\n}\n",
+          "generated_tokens": 6307,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "rpn-calculator",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write a reverse-Polish calculator. Define `enum Token { Num { value: Int }, Add, Sub, Mul }` and `eval_rpn(in tokens: [Token; 7]) -> Int`, which evaluates the tokens with a stack (a growable `Array[Int]`): a number is pushed; an operator pops the right operand, then the left operand, and pushes left op right. Return the single value left on the stack. Inputs are always well formed.",
+          "output": "module calculator;\n\nenum Token {\n    Num { value: Int },\n    Add,\n    Sub,\n    Mul,\n}\n\nfn eval_rpn(in tokens: [Token; 7]) -> Int {\n    var stack = std::array::empty();\n    for token in tokens {\n        match token {\n            Num { value } => {\n                stack.push(value);\n            }\n            Add => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left + right);\n            }\n            Sub => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left - right);\n            }\n            Mul => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left * right);\n            }\n        }\n    }\n    stack.pop()\n}\n\nspec \"eval_rpn\" {\n    then eval_rpn([Num { value: 1 }, Num { value: 2 }, Add, Num { value: 3 }, Num { value: 4 }, Add, Mul]) == 21;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 8134,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 7,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write a reverse-Polish calculator. Define `enum Token { Num { value: Int }, Add, Sub, Mul }` and `eval_rpn(in tokens: [Token; 7]) -> Int`, which evaluates the tokens with a stack (a growable `Array[Int]`): a number is pushed; an operator pops the right operand, then the left operand, and pushes left op right. Return the single value left on the stack. Inputs are always well formed.\n\n[previous attempt]\nmodule calculator;\n\nenum Token {\n    Num { value: Int },\n    Add,\n    Sub,\n    Mul,\n}\n\nfn eval_rpn(in tokens: [Token; 7]) -> Int {\n    var stack = std::array::empty();\n    for token in tokens {\n        match token {\n            Num { value } => {\n                stack.push(value);\n            }\n            Add => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left + right);\n            }\n            Sub => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left - right);\n            }\n            Mul => {\n                var right = stack.pop();\n                var left = stack.pop();\n                stack.push(left * right);\n            }\n        }\n    }\n    stack.pop()\n}\n\nspec \"eval_rpn\" {\n    then eval_rpn([Num { value: 1 }, Num { value: 2 }, Add, Num { value: 3 }, Num { value: 4 }, Add, Mul]) == 21;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 13:9: malformed statement: skipped 6 token(s) starting with `match` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 14:27: malformed statement: skipped 8 token(s) starting with `=>` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 17:13: malformed item: skipped 101 token(s) starting with identifier — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 38:20: cannot find `Num` in this scope — not found\nR0002 at 38:38: cannot find `Num` in this scope — not found\nR0002 at 38:56: cannot find `Add` in this scope — not found\nR0002 at 38:61: cannot find `Num` in this scope — not found\nR0002 at 38:79: cannot find `Num` in this scope — not found\nR0002 at 38:97: cannot find `Add` in this scope — not found\nR0002 at 38:102: cannot find `Mul` in this scope — not found\nT0001 at 10:43: mismatched types — expected `I64`, found `()`\nT0011 at 11:17: type annotation needed — cannot infer the type here",
+          "output": "module calculator;\n\nenum Token {\n    Num { value: Int },\n    Add,\n    Sub,\n    Mul,\n}\n\nfn eval_rpn(in tokens: [Token; 7]) -> Int {\n    var stack = std::array::empty();\n    for token in tokens {\n        match token {\n            Token::Num { value } => {\n                std::array::push(stack, value);\n            }\n            Token::Add => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left + right);\n            }\n            Token::Sub => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left - right);\n            }\n            Token::Mul => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left * right);\n            }\n        }\n    }\n    std::array::pop(stack)\n}\n\nspec \"eval_rpn\" {\n    then eval_rpn([Token::Num { value: 1 }, Token::Num { value: 2 }, Token::Add, Token::Num { value: 3 }, Token::Num { value: 4 }, Token::Add, Token::Mul]) == 21;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5215,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write a reverse-Polish calculator. Define `enum Token { Num { value: Int }, Add, Sub, Mul }` and `eval_rpn(in tokens: [Token; 7]) -> Int`, which evaluates the tokens with a stack (a growable `Array[Int]`): a number is pushed; an operator pops the right operand, then the left operand, and pushes left op right. Return the single value left on the stack. Inputs are always well formed.\n\n[previous attempt]\nmodule calculator;\n\nenum Token {\n    Num { value: Int },\n    Add,\n    Sub,\n    Mul,\n}\n\nfn eval_rpn(in tokens: [Token; 7]) -> Int {\n    var stack = std::array::empty();\n    for token in tokens {\n        match token {\n            Token::Num { value } => {\n                std::array::push(stack, value);\n            }\n            Token::Add => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left + right);\n            }\n            Token::Sub => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left - right);\n            }\n            Token::Mul => {\n                var right = std::array::pop(stack);\n                var left = std::array::pop(stack);\n                std::array::push(stack, left * right);\n            }\n        }\n    }\n    std::array::pop(stack)\n}\n\nspec \"eval_rpn\" {\n    then eval_rpn([Token::Num { value: 1 }, Token::Num { value: 2 }, Token::Add, Token::Num { value: 3 }, Token::Num { value: 4 }, Token::Add, Token::Mul]) == 21;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nP0002 at 13:9: malformed statement: skipped 8 token(s) starting with `match` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 14:34: malformed statement: skipped 12 token(s) starting with `=>` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 17:13: malformed item: skipped 140 token(s) starting with identifier — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nT0001 at 10:43: mismatched types — expected `I64`, found `()`\nT0011 at 11:17: type annotation needed — cannot infer the type here",
+          "output": "module calculator;\n\nenum Token {\n    Num { value: Int },\n    Add,\n    Sub,\n    Mul\n}\n\nfn eval_rpn(in tokens: [Token; 7]) -> Int {\n    var stack = std::array::empty();\n    for token in tokens {\n        match token {\n            Token::Num { value } => {\n                std::array::push(stack, value);\n            }\n            Token::Add => {\n                var right = std::array::pop(stack).unwrap();\n                var left = std::array::pop(stack).unwrap();\n                std::array::push(stack, left + right);\n            }\n            Token::Sub => {\n                var right = std::array::pop(stack).unwrap();\n                var left = std::array::pop(stack).unwrap();\n                std::array::push(stack, left - right);\n            }\n            Token::Mul => {\n                var right = std::array::pop(stack).unwrap();\n                var left = std::array::pop(stack).unwrap();\n                std::array::push(stack, left * right);\n            }\n        }\n    }\n    std::array::pop(stack).unwrap()\n}\n\nspec \"eval_rpn\" {\n    then eval_rpn([Token::Num { value: 1 }, Token::Num { value: 2 }, Token::Add, Token::Num { value: 3 }, Token::Num { value: 4 }, Token::Add, Token::Mul]) == 21;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4401,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "run-length",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `rle(in s: Str) -> String` returning the run-length encoding of s: each maximal run of one repeated byte becomes that byte followed by the run's length in decimal, so \"aaabcc\" becomes \"a3b1c2\". The empty string encodes to the empty string.",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `rle(in s: Str) -> String` returning the run-length encoding of s: each maximal run of one repeated byte becomes that byte followed by the run's length in decimal, so \"aaabcc\" becomes \"a3b1c2\". The empty string encodes to the empty string.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `rle` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `rle` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `rle` in this scope",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": false
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `rle(in s: Str) -> String` returning the run-length encoding of s: each maximal run of one repeated byte becomes that byte followed by the run's length in decimal, so \"aaabcc\" becomes \"a3b1c2\". The empty string encodes to the empty string.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `rle` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `rle` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `rle` in this scope",
+          "output": "module stats;\n\npub fn rle(in s: Str) -> String {\n    var result = String;\n    var index = 0;\n    var current_byte = 0;\n    var count = 0;\n\n    if std::str::count(s, \"\") == 0 {\n        return result;\n    }\n\n    while index < std::str::count(s, \"\") {\n        current_byte = std::str::byte_at(s, index);\n        count = 1;\n        var next_index = index + 1;\n        while next_index < std::str::count(s, \"\") {\n            if std::str::byte_at(s, next_index) == current_byte {\n                count = count + 1;\n                next_index = next_index + 1;\n            } else {\n                break;\n            }\n        }\n        result = result.push_int(current_byte);\n        result = result.push_int(count);\n        index = next_index;\n    }\n    return result;\n}\n\nspec rle {\n    then rle(\"\") == \"\";\n    then rle(\"a\") == \"a1\";\n    then rle(\"aaabcc\") == \"a3b1c2\";\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 8043,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "safe-div",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `safe_div(take a: Int, take b: Int) -> Option[Int]` returning the quotient a / b, or None when b is 0. Also write `div_or(take a: Int, take b: Int, take fallback: Int) -> Int`, which calls safe_div and returns the fallback when it is None.",
+          "output": "module math;\n\npub fn safe_div(take a: Int, take b: Int) -> Option[Int] {\n    if b == 0 {\n        None\n    } else {\n        Some { value: a / b }\n    }\n}\n\npub fn div_or(take a: Int, take b: Int, take fallback: Int) -> Int {\n    match safe_div(a, b) {\n        Some { value } => value,\n        None => fallback,\n    }\n}\n\nfn main() -> Int {\n    let result = div_or(10, 0, 5);\n    println(result.to_string());\n    0\n}\n",
+          "generated_tokens": 4541,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `safe_div(take a: Int, take b: Int) -> Option[Int]` returning the quotient a / b, or None when b is 0. Also write `div_or(take a: Int, take b: Int, take fallback: Int) -> Int`, which calls safe_div and returns the fallback when it is None.\n\n[previous attempt]\nmodule math;\n\npub fn safe_div(take a: Int, take b: Int) -> Option[Int] {\n    if b == 0 {\n        None\n    } else {\n        Some { value: a / b }\n    }\n}\n\npub fn div_or(take a: Int, take b: Int, take fallback: Int) -> Int {\n    match safe_div(a, b) {\n        Some { value } => value,\n        None => fallback,\n    }\n}\n\nfn main() -> Int {\n    let result = div_or(10, 0, 5);\n    println(result.to_string());\n    0\n}\n\n\n[compiler feedback]\nR0002 at 20:5: cannot find `println` in this scope — not found\nT0024 at 20:13: `.to_string(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first",
+          "output": "module math;\n\nimport std::io;\nimport std::str;\n\npub fn safe_div(take a: Int, take b: Int) -> Option[Int] {\n    if b == 0 {\n        None\n    } else {\n        Some { value: a / b }\n    }\n}\n\npub fn div_or(take a: Int, take b: Int, take fallback: Int) -> Int {\n    match safe_div(a, b) {\n        Some { value } => value,\n        None => fallback,\n    }\n}\n\nfn main() -> Int {\n    let result = div_or(10, 0, 5);\n    std::io::println(std::str::to_string(result));\n    0\n}\n",
+          "generated_tokens": 2720,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `safe_div(take a: Int, take b: Int) -> Option[Int]` returning the quotient a / b, or None when b is 0. Also write `div_or(take a: Int, take b: Int, take fallback: Int) -> Int`, which calls safe_div and returns the fallback when it is None.\n\n[previous attempt]\nmodule math;\n\nimport std::io;\nimport std::str;\n\npub fn safe_div(take a: Int, take b: Int) -> Option[Int] {\n    if b == 0 {\n        None\n    } else {\n        Some { value: a / b }\n    }\n}\n\npub fn div_or(take a: Int, take b: Int, take fallback: Int) -> Int {\n    match safe_div(a, b) {\n        Some { value } => value,\n        None => fallback,\n    }\n}\n\nfn main() -> Int {\n    let result = div_or(10, 0, 5);\n    std::io::println(std::str::to_string(result));\n    0\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `io` in `std` — not found in the imported module\nR0002 at 23:10: no `io` in `std` — not found in this module\nR0002 at 23:32: no `to_string` in `std::str` — not found in this module",
+          "output": "module math;\n\npub fn safe_div(take a: Int, take b: Int) -> Option[Int] {\n    if b == 0 {\n        None\n    } else {\n        Some { value: a / b }\n    }\n}\n\npub fn div_or(take a: Int, take b: Int, take fallback: Int) -> Int {\n    match safe_div(a, b) {\n        Some { value } => value,\n        None => fallback,\n    }\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4198,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "shape-area",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Define `enum Shape { Square { side: Int }, Rect { width: Int, height: Int }, Triangle { base: Int, height: Int } }` and write `area(in s: Shape) -> Int`. A triangle's area is base * height / 2 with integer division.",
+          "output": "module shapes;\n\nenum Shape {\n    Square { side: Int },\n    Rect { width: Int, height: Int },\n    Triangle { base: Int, height: Int }\n}\n\nfn area(in s: Shape) -> Int {\n    match s {\n        Shape::Square { side } => side * side,\n        Shape::Rect { width, height } => width * height,\n        Shape::Triangle { base, height } => (base * height) / 2,\n    }\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 2491,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "spec-first-clamp",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Implement `clamp(take value: Int, take low: Int, take high: Int) -> Int` so that these specs pass:\n\n```tuo\nspec clamp {\n    then clamp(5, 0, 10) == 5;\n    then clamp(0 - 3, 0, 10) == 0;\n    then clamp(42, 0, 10) == 10;\n}\n```\n\nReturn only the implementation; the specs are added for you.",
+          "output": "pub fn clamp(take value: Int, take low: Int, take high: Int) -> Int {\n    if value < low {\n        low\n    } else if value > high {\n        high\n    } else {\n        value\n    }\n}\n",
+          "generated_tokens": 1322,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "spec-first-gcd",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Implement `gcd(take a: Int, take b: Int) -> Int`, the greatest common divisor of two non-negative integers, so that these specs pass:\n\n```tuo\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n```\n\nReturn only the implementation; the specs are added for you.",
+          "output": "pub fn gcd(take a: Int, take b: Int) -> Int {\n    if b == 0 {\n        a\n    } else {\n        gcd(b, modulo(a, b))\n    }\n}\n",
+          "generated_tokens": 2202,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Implement `gcd(take a: Int, take b: Int) -> Int`, the greatest common divisor of two non-negative integers, so that these specs pass:\n\n```tuo\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n```\n\nReturn only the implementation; the specs are added for you.\n\n[previous attempt]\npub fn gcd(take a: Int, take b: Int) -> Int {\n    if b == 0 {\n        a\n    } else {\n        gcd(b, modulo(a, b))\n    }\n}\n\n\n[compiler feedback]\nR0002 at 5:16: cannot find `modulo` in this scope — not found",
+          "output": "module stats;\n\nimport std::math;\n\npub fn gcd(take a: Int, take b: Int) -> Int {\n    if b == 0 {\n        a\n    } else {\n        gcd(b, modulo(a, b))\n    }\n}\n\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 1826,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Implement `gcd(take a: Int, take b: Int) -> Int`, the greatest common divisor of two non-negative integers, so that these specs pass:\n\n```tuo\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n```\n\nReturn only the implementation; the specs are added for you.\n\n[previous attempt]\nmodule stats;\n\nimport std::math;\n\npub fn gcd(take a: Int, take b: Int) -> Int {\n    if b == 0 {\n        a\n    } else {\n        gcd(b, modulo(a, b))\n    }\n}\n\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0003 at 3:13: unresolved import: no `math` in `std` — not found in the imported module\nR0002 at 9:16: cannot find `modulo` in this scope — not found",
+          "output": "module stats;\n\npub fn gcd(take a: Int, take b: Int) -> Int {\n    if b == 0 {\n        a\n    } else {\n        gcd(b, a % b)\n    }\n}\n\nspec gcd {\n    then gcd(12, 18) == 6;\n    then gcd(7, 0) == 7;\n    then gcd(0, 7) == 7;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5138,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 4,
+          "unrelated_edit": true
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "str-palindrome",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `is_palindrome(in s: Str) -> Bool`, true when s reads the same byte-for-byte forwards and backwards. The empty string is a palindrome.",
+          "output": "module stats;\n\npub fn is_palindrome(in s: Str) -> Bool {\n    if s == \"\" {\n        return true;\n    }\n\n    var length = std::str::len(s);\n    var start = 0;\n    var end = length - 1;\n    while start < end {\n        if s[start] != s[end] {\n            return false;\n        }\n        start = start + 1;\n        end = end - 1;\n    }\n    return true;\n}\n",
+          "generated_tokens": 7326,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 2
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `is_palindrome(in s: Str) -> Bool`, true when s reads the same byte-for-byte forwards and backwards. The empty string is a palindrome.\n\n[previous attempt]\nmodule stats;\n\npub fn is_palindrome(in s: Str) -> Bool {\n    if s == \"\" {\n        return true;\n    }\n\n    var length = std::str::len(s);\n    var start = 0;\n    var end = length - 1;\n    while start < end {\n        if s[start] != s[end] {\n            return false;\n        }\n        start = start + 1;\n        end = end - 1;\n    }\n    return true;\n}\n\n\n[compiler feedback]\nT0006 at 12:12: operator `index` is not supported for type `Str`\nT0006 at 12:24: operator `index` is not supported for type `Str`",
+          "output": "module stats;\n\nimport std::str;\n\npub fn is_palindrome(in s: Str) -> Bool {\n    var bytes = std::str::bytes_of_str(s);\n    var length = std::array::len(bytes);\n    var start = 0;\n    var end = length - 1;\n    while start < end {\n        if bytes[start] != bytes[end] {\n            return false;\n        }\n        start = start + 1;\n        end = end - 1;\n    }\n    return true;\n}\n\nspec is_palindrome {\n    then is_palindrome(\"\") == true;\n    then is_palindrome(\"a\") == true;\n    then is_palindrome(\"ab\") == false;\n    then is_palindrome(\"aba\") == true;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 4897,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `is_palindrome(in s: Str) -> Bool`, true when s reads the same byte-for-byte forwards and backwards. The empty string is a palindrome.\n\n[previous attempt]\nmodule stats;\n\nimport std::str;\n\npub fn is_palindrome(in s: Str) -> Bool {\n    var bytes = std::str::bytes_of_str(s);\n    var length = std::array::len(bytes);\n    var start = 0;\n    var end = length - 1;\n    while start < end {\n        if bytes[start] != bytes[end] {\n            return false;\n        }\n        start = start + 1;\n        end = end - 1;\n    }\n    return true;\n}\n\nspec is_palindrome {\n    then is_palindrome(\"\") == true;\n    then is_palindrome(\"a\") == true;\n    then is_palindrome(\"ab\") == false;\n    then is_palindrome(\"aba\") == true;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 6:27: no `bytes_of_str` in `std::str` — not found in this module\nT0011 at 7:18: type annotation needed — cannot infer the type here",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "sum-csv",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `sum_csv(in s: Str) -> Int` that takes comma-separated non-negative decimal integers such as \"10,20,3\" and returns their sum. The empty string sums to 0. There are no spaces.",
+          "output": "module main;\n\nfn sum_csv(in s: Str) -> Int {\n    let parts = std::str::split(s, \",\");\n    var sum = 0;\n    for part in parts {\n        match std::parse_int(part) {\n            Ok(n) => sum = sum + n,\n            Err(_) => {}\n        }\n    }\n    sum\n}\n",
+          "generated_tokens": 5775,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `sum_csv(in s: Str) -> Int` that takes comma-separated non-negative decimal integers such as \"10,20,3\" and returns their sum. The empty string sums to 0. There are no spaces.\n\n[previous attempt]\nmodule main;\n\nfn sum_csv(in s: Str) -> Int {\n    let parts = std::str::split(s, \",\");\n    var sum = 0;\n    for part in parts {\n        match std::parse_int(part) {\n            Ok(n) => sum = sum + n,\n            Err(_) => {}\n        }\n    }\n    sum\n}\n\n\n[compiler feedback]\nP0002 at 7:9: malformed statement: skipped 25 token(s) starting with `match` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 11:5: malformed item: skipped 3 token(s) starting with `}` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 4:27: no `split` in `std::str` — not found in this module\nT0001 at 6:5: mismatched types — expected `I64`, found `()`",
+          "output": "module main;\n\nfn sum_csv(in s: Str) -> Int {\n    let parts = std::str::split(in s, in \",\");\n    var sum = 0;\n    for part in parts {\n        let n = match std::str::parse_int(part) {\n            Ok(n) => n,\n            Err(_) => 0,\n        };\n        sum = sum + n;\n    }\n    sum\n}\n",
+          "generated_tokens": 6135,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `sum_csv(in s: Str) -> Int` that takes comma-separated non-negative decimal integers such as \"10,20,3\" and returns their sum. The empty string sums to 0. There are no spaces.\n\n[previous attempt]\nmodule main;\n\nfn sum_csv(in s: Str) -> Int {\n    let parts = std::str::split(in s, in \",\");\n    var sum = 0;\n    for part in parts {\n        let n = match std::str::parse_int(part) {\n            Ok(n) => n,\n            Err(_) => 0,\n        };\n        sum = sum + n;\n    }\n    sum\n}\n\n\n[compiler feedback]\nP0001 at 4:33: `in` is a parameter mode, not part of a call argument — remove `in` here\n  help: modes are written once, on the callee's parameters; a call passes the argument plainly and the signature decides whether it is borrowed or moved\nP0001 at 4:39: `in` is a parameter mode, not part of a call argument — remove `in` here\n  help: modes are written once, on the callee's parameters; a call passes the argument plainly and the signature decides whether it is borrowed or moved\nP0002 at 7:9: malformed statement: skipped 27 token(s) starting with `let` — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nP0002 at 13:5: malformed item: skipped 2 token(s) starting with identifier — skipped during error recovery\n  note: the parser resynchronized at the next `;`, `}`, or item keyword and continued\nR0002 at 4:27: no `split` in `std::str` — not found in this module\nR0002 at 11:21: cannot find `n` in this scope — not found\nT0001 at 3:30: mismatched types — expected `I64`, found `()`",
+          "output": "module main;\n\npub fn sum_csv(in s: Str) -> Int {\n    let parts = std::str::split(s, \",\");\n    var sum = 0;\n    for part in parts {\n        let n = match std::str::parse_int(part) {\n            Ok(value) => value,\n            Err(_) => 0,\n        };\n        sum = sum + n;\n    }\n    sum\n}\n",
+          "generated_tokens": 4529,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 2,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "to-binary",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `to_binary(take n: Int) -> String` returning the base-2 digits of n (n >= 0) as an owned String with no leading zeros; `to_binary(0)` is \"0\".",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `to_binary(take n: Int) -> String` returning the base-2 digits of n (n >= 0) as an owned String with no leading zeros; `to_binary(0)` is \"0\".\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `to_binary` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `to_binary` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `to_binary` in this scope",
+          "output": "module stats;\n\npub fn to_binary(take n: Int) -> String {\n    if n == 0 {\n        return \"0\";\n    }\n    var bits = std::string::builder();\n    while n > 0 {\n        var bit = n % 2;\n        n = n / 2;\n        bits.push(bit as Char);\n    }\n    bits.to_string()\n}\n\nspec \"to_binary(0) is '0'\" {\n    then to_binary(0) == \"0\";\n}\n\nspec \"to_binary(1) is '1'\" {\n    then to_binary(1) == \"1\";\n}\n\nspec \"to_binary(2) is '10'\" {\n    then to_binary(2) == \"10\";\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5237,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 1,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `to_binary(take n: Int) -> String` returning the base-2 digits of n (n >= 0) as an owned String with no leading zeros; `to_binary(0)` is \"0\".\n\n[previous attempt]\nmodule stats;\n\npub fn to_binary(take n: Int) -> String {\n    if n == 0 {\n        return \"0\";\n    }\n    var bits = std::string::builder();\n    while n > 0 {\n        var bit = n % 2;\n        n = n / 2;\n        bits.push(bit as Char);\n    }\n    bits.to_string()\n}\n\nspec \"to_binary(0) is '0'\" {\n    then to_binary(0) == \"0\";\n}\n\nspec \"to_binary(1) is '1'\" {\n    then to_binary(1) == \"1\";\n}\n\nspec \"to_binary(2) is '10'\" {\n    then to_binary(2) == \"10\";\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 7:29: no `builder` in `std::string` — not found in this module\nT0001 at 5:16: mismatched types — expected `String`, found `Str`\nT0008 at 11:19: invalid cast from `I64` to `Char`\n  note: `as` converts only between numeric types\nT0024 at 11:9: `.push(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0024 at 13:5: `.to_string(…)` is a method call, and tuonelang has no methods — method calls are not executed by any engine\n  help: write a free function call with the receiver as the first argument; no function of this name takes this type first\nT0001 at 17:26: mismatched types — expected `String`, found `Str`\nT0001 at 21:26: mismatched types — expected `String`, found `Str`\nT0001 at 25:26: mismatched types — expected `String`, found `Str`",
+          "output": "module stats;\n\nimport std::string;\nimport std::str;\n\npub fn to_binary(take n: Int) -> String {\n    if n == 0 {\n        return \"0\";\n    }\n    var bits = std::string::builder();\n    while n > 0 {\n        var bit = n % 2;\n        n = n / 2\n",
+          "generated_tokens": 8192,
+          "parsed": false,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    },
+    {
+      "task_id": "traffic-light",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Define `enum Light { Red, Yellow, Green }`. Write `next(in l: Light) -> Light`, which cycles Red -> Green -> Yellow -> Red, and `code(in l: Light) -> Int`, which maps Red to 0, Yellow to 1, and Green to 2.",
+          "output": "module app;\n\nenum Light {\n    Red,\n    Yellow,\n    Green,\n}\n\nfn next(in l: Light) -> Light {\n    match l {\n        Light::Red => Light::Green,\n        Light::Green => Light::Yellow,\n        Light::Yellow => Light::Red,\n    }\n}\n\nfn code(in l: Light) -> Int {\n    match l {\n        Light::Red => 0,\n        Light::Yellow => 1,\n        Light::Green => 2,\n    }\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 3528,
+          "parsed": true,
+          "checked": true,
+          "specs_passed": true,
+          "invented_symbols": 0,
+          "feedback_latency_ms": 5
+        }
+      ],
+      "tests_passed": true
+    },
+    {
+      "task_id": "word-lengths-map",
+      "variant": "default",
+      "turns": [
+        {
+          "turn": 0,
+          "prompt": "Write `longest_word_length(in text: Str) -> Int` returning the length of the longest space-separated word in text (0 for text with no words), and `count_word(in text: Str, in word: Str) -> Int` returning how many space-separated words of text equal word exactly. Words are separated by one or more ' ' bytes. count_word must use a `Map[Str, Int]`.",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1
+        },
+        {
+          "turn": 1,
+          "prompt": "Write `longest_word_length(in text: Str) -> Int` returning the length of the longest space-separated word in text (0 for text with no words), and `count_word(in text: Str, in word: Str) -> Int` returning how many space-separated words of text equal word exactly. Words are separated by one or more ' ' bytes. count_word must use a `Map[Str, Int]`.\n\n[previous attempt]\n\n\n\n[compiler feedback]\nR0002 in the task's spec (which you did not write), spec line 2: cannot find `count_word` in this scope\nR0002 in the task's spec (which you did not write), spec line 3: cannot find `count_word` in this scope\nR0002 in the task's spec (which you did not write), spec line 4: cannot find `longest_word_length` in this scope",
+          "output": "module word_count;\n\npub fn longest_word_length(in text: Str) -> Int {\n    var words = std::str::split(text, \" \");\n    var max_length = 0;\n    for word in words {\n        var len = std::str::length(word);\n        if len > max_length {\n            max_length = len;\n        }\n    }\n    max_length\n}\n\npub fn count_word(in text: Str, in word: Str) -> Int {\n    var words = std::str::split(text, \" \");\n    var counts = std::map::empty();\n    for w in words {\n        var count = std::map::get(counts, w);\n        var new_count = if count == 0 { 1 } else { count + 1 };\n        std::map::set(counts, w, new_count);\n    }\n    std::map::get(counts, word)\n}\n\nspec longest_word_length {\n    then longest_word_length(\"hello world\") == 5;\n    then longest_word_length(\"   \") == 0;\n}\n\nspec count_word {\n    then count_word(\"hello world\", \"world\") == 1;\n    then count_word(\"hello world hello\", \"hello\") == 2;\n    then count_word(\"   \", \"hello\") == 0;\n}\n\nfn main() -> Int {\n    0\n}\n",
+          "generated_tokens": 5615,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 4,
+          "feedback_latency_ms": 2,
+          "unrelated_edit": true
+        },
+        {
+          "turn": 2,
+          "prompt": "Write `longest_word_length(in text: Str) -> Int` returning the length of the longest space-separated word in text (0 for text with no words), and `count_word(in text: Str, in word: Str) -> Int` returning how many space-separated words of text equal word exactly. Words are separated by one or more ' ' bytes. count_word must use a `Map[Str, Int]`.\n\n[previous attempt]\nmodule word_count;\n\npub fn longest_word_length(in text: Str) -> Int {\n    var words = std::str::split(text, \" \");\n    var max_length = 0;\n    for word in words {\n        var len = std::str::length(word);\n        if len > max_length {\n            max_length = len;\n        }\n    }\n    max_length\n}\n\npub fn count_word(in text: Str, in word: Str) -> Int {\n    var words = std::str::split(text, \" \");\n    var counts = std::map::empty();\n    for w in words {\n        var count = std::map::get(counts, w);\n        var new_count = if count == 0 { 1 } else { count + 1 };\n        std::map::set(counts, w, new_count);\n    }\n    std::map::get(counts, word)\n}\n\nspec longest_word_length {\n    then longest_word_length(\"hello world\") == 5;\n    then longest_word_length(\"   \") == 0;\n}\n\nspec count_word {\n    then count_word(\"hello world\", \"world\") == 1;\n    then count_word(\"hello world hello\", \"hello\") == 2;\n    then count_word(\"   \", \"hello\") == 0;\n}\n\nfn main() -> Int {\n    0\n}\n\n\n[compiler feedback]\nR0002 at 4:27: no `split` in `std::str` — not found in this module\nR0002 at 7:29: no `length` in `std::str` — not found in this module\nR0002 at 16:27: no `split` in `std::str` — not found in this module\nR0002 at 21:19: no `set` in `std::map` — not found in this module\nT0001 at 20:37: mismatched types — expected `I64`, found `Option[_]`\nT0001 at 20:60: mismatched types — expected `I64`, found `Option[_]`\nT0006 at 20:52: operator `+` is not supported for type `Option[_]`\nT0001 at 23:5: mismatched types — expected `I64`, found `Option[_]`\nT0011 at 17:18: type annotation needed — cannot infer the type here",
+          "output": "\n",
+          "generated_tokens": 8192,
+          "parsed": true,
+          "checked": false,
+          "specs_passed": false,
+          "invented_symbols": 3,
+          "feedback_latency_ms": 1,
+          "unrelated_edit": true
+        }
+      ]
+    }
+  ]
+}

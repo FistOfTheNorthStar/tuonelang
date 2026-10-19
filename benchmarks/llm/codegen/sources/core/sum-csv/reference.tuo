@@ -1,0 +1,18 @@
+module solution;
+
+pub fn sum_csv(in s: Str) -> Int {
+    var total = 0;
+    var current = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b == 44 {
+            total = total + current;
+            current = 0;
+        } else {
+            current = current * 10 + (b - 48);
+        }
+        i = i + 1;
+    }
+    total + current
+}

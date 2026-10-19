@@ -404,3 +404,298 @@ pub const MODULES: &[Module] = &[
 pub fn module(path: &str) -> Option<Module> {
     MODULES.iter().copied().find(|m| m.path == path)
 }
+
+/// The catalog's declared intra-library dependency edges, as
+/// `(module, every module it may use)` — each list is the module's whole
+/// closure, so loading a module with exactly its list is enough to compile it.
+///
+/// Most modules stand alone. `std::crypto` was the first that did not: its
+/// algorithms are *defined* over the fixed-width bit and byte-order operations
+/// `std::bits` owns (ADR-0019 Stage B), and the alternative — a second copy of
+/// `rotr32`/`add32`/`be32` inside `std::crypto` — would be two implementations
+/// of one specification, free to drift apart. One audited copy is worth the
+/// edge, and the same reasoning gives every other entry here.
+///
+/// This table is the *whole* permitted graph: a module absent from it must
+/// compile alone. `tuo-cli/tests/stdlib.rs` checks every module with exactly
+/// its listed dependencies (so an undeclared use fails to resolve) and proves
+/// the graph acyclic; hosts use it to load what a program's modules need
+/// ([`referenced_by`]).
+pub const DEPENDENCIES: &[(&str, &[&str])] = &[
+    ("std::crypto", &["std::bits", "std::ct"]),
+    // ChaCha20 is defined over 32-bit add/XOR/rotate, which is exactly what
+    // `std::bits` owns — reimplementing them here would be a second copy free
+    // to drift from the one `std::crypto` already depends on.
+    // `std::crypto` for the constant-time tag comparison (`verify`), which
+    // must have one implementation rather than a re-derived copy in the
+    // module that most needs it to be right; `std::crypto` in turn brings
+    // `std::ct` and `std::bits`.
+    (
+        "std::chacha",
+        &["std::bits", "std::ct", "std::bignum", "std::crypto"],
+    ),
+    // `std::ct` for the ladder's conditional swap: exchanging the two points
+    // on a bit of the secret scalar is the textbook X25519 timing leak, so the
+    // selection is the shared branchless one rather than a re-derived `if`.
+    ("std::x25519", &["std::bignum", "std::ct"]),
+    // HKDF is HMAC-SHA256 in a loop, so it depends on `std::crypto` (which
+    // brings `std::bits` and `std::ct`) rather than carrying a second copy.
+    ("std::hkdf", &["std::bits", "std::ct", "std::crypto"]),
+    // Ed25519 reuses `std::x25519`'s field arithmetic (same prime) rather
+    // than shipping a second copy, and is defined over SHA-512.
+    (
+        "std::ed25519",
+        &[
+            "std::bits",
+            "std::ct",
+            "std::bignum",
+            "std::x25519",
+            "std::sha512",
+        ],
+    ),
+    // The protocol layer composes every primitive below it.
+    (
+        "std::tls",
+        &[
+            "std::bits",
+            "std::ct",
+            "std::bignum",
+            "std::crypto",
+            "std::chacha",
+            "std::hkdf",
+            "std::x25519",
+        ],
+    ),
+];
+
+/// The modules `path` may use (its declared closure), or an empty slice for a
+/// module that stands alone.
+#[must_use]
+pub fn dependencies(path: &str) -> &'static [&'static str] {
+    DEPENDENCIES
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map_or(&[], |(_, deps)| *deps)
+}
+
+/// The catalog modules a program written as `programs` needs loaded beside it
+/// (ADR-0038): every module whose path the text names (`std::core::abs(x)`,
+/// `import std::io;`), together with its [declared dependencies](dependencies),
+/// in catalog order — minus any module the program declares itself (a program
+/// carrying its own copy of `std::io` keeps it, rather than meeting a second).
+///
+/// The scan is lexical and deliberately generous: a path mentioned inside a
+/// comment or a string also loads its module. Loading a module that goes
+/// unused costs a little checking time and nothing else — every module checks
+/// cleanly, and only what `main` reaches is compiled natively — whereas a
+/// missed module would turn a correct call into a resolution error.
+#[must_use]
+pub fn referenced_by<'a>(programs: impl IntoIterator<Item = &'a str>) -> Vec<Module> {
+    let mut named: Vec<&'static str> = Vec::new();
+    let mut declared: Vec<String> = Vec::new();
+    for text in programs {
+        for line in text.lines() {
+            if let Some(rest) = line.trim_start().strip_prefix("module ") {
+                if let Some(path) = rest.trim().strip_suffix(';') {
+                    declared.push(path.trim().to_owned());
+                }
+            }
+        }
+        let mut rest = text;
+        while let Some(at) = rest.find("std::") {
+            let after = &rest[at + "std::".len()..];
+            let end = after
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(after.len());
+            let path = &rest[at..at + "std::".len() + end];
+            if let Some(module) = MODULES.iter().find(|m| m.path == path) {
+                if !named.contains(&module.path) {
+                    named.push(module.path);
+                }
+            }
+            rest = after;
+        }
+    }
+    let mut needed: Vec<&'static str> = Vec::new();
+    for path in named {
+        for dependency in dependencies(path).iter().chain(std::iter::once(&path)) {
+            if !needed.contains(dependency) {
+                needed.push(dependency);
+            }
+        }
+    }
+    MODULES
+        .iter()
+        .copied()
+        .filter(|m| needed.contains(&m.path) && !declared.iter().any(|d| d == m.path))
+        .collect()
+}
+
+/// One public function of the catalog, as its module declares it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Export {
+    /// The module's path, e.g. `"std::core"`.
+    pub module: &'static str,
+    /// The function's name, e.g. `"abs"`.
+    pub name: String,
+    /// The declaration as written, on one line: `fn abs(take n: Int) -> Int`.
+    pub declaration: String,
+}
+
+/// Every `pub fn` the catalog declares, in catalog order.
+///
+/// Read from the module sources' declarations — the same text a caller types
+/// and the brief prints — so a host can answer "which module has `sum`?"
+/// without compiling the library. That matters since ADR-0038: a module is
+/// loaded only once a program names it, and the moment a tool is asked where
+/// a function lives is exactly the moment the program does not name it yet.
+#[must_use]
+pub fn exports() -> Vec<Export> {
+    let mut out = Vec::new();
+    for module in MODULES {
+        let mut lines = module.source.lines();
+        while let Some(line) = lines.next() {
+            let Some(rest) = line.strip_prefix("pub fn ") else {
+                continue;
+            };
+            // A long signature continues over several lines up to its `{`.
+            let mut declaration = format!("fn {rest}");
+            while !declaration.trim_end().ends_with('{') {
+                let Some(next) = lines.next() else { break };
+                declaration.push(' ');
+                declaration.push_str(next.trim());
+            }
+            let declaration = declaration
+                .trim_end()
+                .trim_end_matches('{')
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .replace("( ", "(")
+                .replace(", )", ")")
+                .replace(",)", ")");
+            // An omitted return type is `()`; say so, as the brief does. The
+            // check looks past the parameter list's closing parenthesis, since
+            // a function-typed parameter has an `->` of its own.
+            let mut depth = 0_i32;
+            let after_params = declaration.char_indices().find_map(|(i, c)| {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            return Some(i + 1);
+                        }
+                    }
+                    _ => {}
+                }
+                None
+            });
+            let declaration = match after_params {
+                Some(end) if !declaration[end..].contains("->") => {
+                    format!("{} -> ()", declaration[..end].trim_end())
+                }
+                _ => declaration,
+            };
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            out.push(Export {
+                module: module.path,
+                name,
+                declaration,
+            });
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::referenced_by;
+
+    #[test]
+    fn every_export_is_one_normalized_declaration() {
+        let exports = super::exports();
+        assert!(exports.len() > 400, "{} exports", exports.len());
+        let abs = exports
+            .iter()
+            .find(|e| e.module == "std::core" && e.name == "abs")
+            .expect("std::core::abs");
+        assert_eq!(abs.declaration, "fn abs(take n: Int) -> Int");
+        // A declaration written over several lines comes back on one.
+        let seal = exports
+            .iter()
+            .find(|e| e.module == "std::chacha" && e.name == "aead_seal")
+            .expect("std::chacha::aead_seal");
+        assert!(!seal.declaration.contains('\n') && !seal.declaration.contains("  "));
+        assert!(
+            seal.declaration
+                .starts_with("fn aead_seal(in key: Array[Int],"),
+            "{}",
+            seal.declaration
+        );
+        assert!(
+            seal.declaration.ends_with(") -> Array[Int]"),
+            "{}",
+            seal.declaration
+        );
+        // An omitted return type reads as `()`, but a function-typed
+        // parameter's own `->` does not count as the return type.
+        let push = exports
+            .iter()
+            .find(|e| e.module == "std::str" && e.name == "push")
+            .expect("std::str::push");
+        assert_eq!(
+            push.declaration,
+            "fn push(mut b: String, in piece: Str) -> ()"
+        );
+        let fold = exports
+            .iter()
+            .find(|e| e.module == "std::collections" && e.name == "fold")
+            .expect("std::collections::fold");
+        assert!(
+            fold.declaration.ends_with(") -> Int"),
+            "{}",
+            fold.declaration
+        );
+    }
+
+    fn paths(text: &str) -> Vec<&'static str> {
+        referenced_by([text]).iter().map(|m| m.path).collect()
+    }
+
+    #[test]
+    fn a_named_module_is_loaded_with_its_dependencies() {
+        assert_eq!(
+            paths("fn f() -> Int { std::core::abs(0 - 1) }"),
+            ["std::core"]
+        );
+        assert_eq!(
+            paths("import std::hkdf;"),
+            ["std::bits", "std::hkdf", "std::ct", "std::crypto"]
+        );
+    }
+
+    #[test]
+    fn builtin_only_paths_load_nothing() {
+        assert!(paths("std::array::push(xs, 1); std::string::len(s); std::rt::exit(0)").is_empty());
+    }
+
+    #[test]
+    fn a_module_the_program_declares_is_not_loaded_twice() {
+        let text = "module std::io;\npub fn print(in t: Str) -> Int { 0 }";
+        assert!(paths(text).is_empty());
+        assert_eq!(
+            paths("module app;\nfn f() -> Int { std::io::x() }"),
+            ["std::io"]
+        );
+    }
+
+    #[test]
+    fn a_longer_name_is_not_mistaken_for_a_shorter_module() {
+        // `std::coreutils` is not `std::core`.
+        assert!(paths("std::coreutils::f()").is_empty());
+    }
+}

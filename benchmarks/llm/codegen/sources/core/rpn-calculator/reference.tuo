@@ -1,0 +1,40 @@
+module solution;
+
+pub enum Token {
+    Num { value: Int },
+    Add,
+    Sub,
+    Mul,
+}
+
+fn pop_or_zero(mut stack: Array[Int]) -> Int {
+    match std::array::pop(stack) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+pub fn eval_rpn(in tokens: [Token; 7]) -> Int {
+    var stack = std::array::empty();
+    for t in tokens {
+        match t {
+            Token::Num { value } => std::array::push(stack, value),
+            Token::Add => {
+                let right = pop_or_zero(stack);
+                let left = pop_or_zero(stack);
+                std::array::push(stack, left + right);
+            },
+            Token::Sub => {
+                let right = pop_or_zero(stack);
+                let left = pop_or_zero(stack);
+                std::array::push(stack, left - right);
+            },
+            Token::Mul => {
+                let right = pop_or_zero(stack);
+                let left = pop_or_zero(stack);
+                std::array::push(stack, left * right);
+            },
+        }
+    }
+    pop_or_zero(stack)
+}

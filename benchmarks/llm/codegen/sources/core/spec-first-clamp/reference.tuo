@@ -1,0 +1,11 @@
+module solution;
+
+pub fn clamp(take value: Int, take low: Int, take high: Int) -> Int {
+    if value < low {
+        low
+    } else if value > high {
+        high
+    } else {
+        value
+    }
+}

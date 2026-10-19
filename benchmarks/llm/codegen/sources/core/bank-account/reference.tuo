@@ -1,0 +1,33 @@
+module solution;
+
+pub struct Account {
+    balance: Int,
+}
+
+pub enum Op {
+    Deposit { amount: Int },
+    Withdraw { amount: Int },
+}
+
+pub fn apply(in acc: Account, in op: Op) -> Account {
+    match op {
+        Op::Deposit { amount } => Account { balance: acc.balance + amount },
+        Op::Withdraw { amount } => {
+            if amount <= acc.balance {
+                Account { balance: acc.balance - amount }
+            } else {
+                Account { balance: acc.balance }
+            }
+        },
+    }
+}
+
+pub fn run(in ops: [Op; 4]) -> Int {
+    var acc = Account { balance: 0 };
+    var i = 0;
+    while i < 4 {
+        acc = apply(acc, ops[i as Usize]);
+        i = i + 1;
+    }
+    acc.balance
+}

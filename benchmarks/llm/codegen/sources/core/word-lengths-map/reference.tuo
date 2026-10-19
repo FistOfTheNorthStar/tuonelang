@@ -1,0 +1,44 @@
+module solution;
+
+pub fn longest_word_length(in text: Str) -> Int {
+    var best = 0;
+    var current = 0;
+    var i = 0;
+    while i < std::str::len(text) {
+        if std::str::byte_at(text, i) == 32 {
+            current = 0;
+        } else {
+            current = current + 1;
+            if current > best {
+                best = current;
+            }
+        }
+        i = i + 1;
+    }
+    best
+}
+
+pub fn count_word(in text: Str, in word: Str) -> Int {
+    var m = std::map::empty();
+    var start = 0;
+    var i = 0;
+    let n = std::str::len(text);
+    while i <= n {
+        if i == n || std::str::byte_at(text, i) == 32 {
+            if i > start {
+                let w = std::str::slice(text, start, i);
+                let seen = match std::map::get(m, w) {
+                    Some { value } => value,
+                    None => 0,
+                };
+                let _ = std::map::insert(m, w, seen + 1);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    match std::map::get(m, word) {
+        Some { value } => value,
+        None => 0,
+    }
+}

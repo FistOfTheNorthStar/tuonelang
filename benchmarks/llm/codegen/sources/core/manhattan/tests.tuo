@@ -1,0 +1,4 @@
+spec manhattan {
+    then manhattan(Point { x: 5, y: 5 }, Point { x: 5, y: 5 }) == 0;
+    then manhattan(Point { x: 2, y: 0 - 3 }, Point { x: 0 - 1, y: 1 }) == 7;
+}

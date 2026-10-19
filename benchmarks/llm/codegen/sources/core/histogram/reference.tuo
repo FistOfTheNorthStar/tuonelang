@@ -1,0 +1,24 @@
+module solution;
+
+fn counts(in xs: [Int; 8]) -> Map[Int, Int] {
+    var m = std::map::empty();
+    for x in xs {
+        let seen = match std::map::get(m, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(m, x, seen + 1);
+    }
+    m
+}
+
+pub fn count_of(in xs: [Int; 8], take v: Int) -> Int {
+    match std::map::get(counts(xs), v) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+pub fn distinct(in xs: [Int; 8]) -> Int {
+    std::map::len(counts(xs))
+}

@@ -1,0 +1,4 @@
+spec bumped_three_times {
+    then bumped_three_times(10) == 16;
+    then bumped_three_times(0 - 6) == 0;
+}

@@ -1,0 +1,4 @@
+spec count_byte {
+    then count_byte("banana", 97) == 3;
+    then count_byte("", 97) == 0;
+}

@@ -1,0 +1,4 @@
+spec count_above {
+    then count_above([1, 1, 1, 1, 1, 1], 1) == 0;
+    then count_above([0 - 5, 0, 5, 10, 15, 20], 0 - 10) == 6;
+}

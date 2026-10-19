@@ -1,0 +1,1 @@
+Write `first_even(in xs: [Int; 5]) -> Option[Int]` returning the first even element of the fixed array, or None if there is none, and `first_even_or(in xs: [Int; 5], take fallback: Int) -> Int`, which returns the fallback when there is no even element.

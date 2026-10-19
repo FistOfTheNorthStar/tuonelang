@@ -1,0 +1,13 @@
+module solution;
+
+pub fn fizzbuzz_code(take n: Int) -> Int {
+    if n % 15 == 0 {
+        15
+    } else if n % 5 == 0 {
+        5
+    } else if n % 3 == 0 {
+        3
+    } else {
+        0
+    }
+}

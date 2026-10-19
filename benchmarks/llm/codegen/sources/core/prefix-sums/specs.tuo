@@ -1,0 +1,4 @@
+spec prefix_sums {
+    then std::array::get(prefix_sums([1, 2, 3, 4, 5]), 4) == 15;
+    then std::array::get(prefix_sums([1, 2, 3, 4, 5]), 1) == 3;
+}

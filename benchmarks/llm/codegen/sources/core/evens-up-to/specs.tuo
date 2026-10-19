@@ -1,0 +1,4 @@
+spec evens_up_to {
+    then std::array::len(evens_up_to(10)) == 6;
+    then std::array::get(evens_up_to(10), 5) == 10;
+}

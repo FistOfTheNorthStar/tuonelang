@@ -1,0 +1,5 @@
+spec sum_all {
+    then sum_all(range(0, 101)) == 5050;
+    then std::array::len(range(5, 2)) == 0;
+    then std::array::get(range(4, 9), 2) == 6;
+}

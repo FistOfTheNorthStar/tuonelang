@@ -1,0 +1,1 @@
+Write `longest_word_length(in text: Str) -> Int` returning the length of the longest space-separated word in text (0 for text with no words), and `count_word(in text: Str, in word: Str) -> Int` returning how many space-separated words of text equal word exactly. Words are separated by one or more ' ' bytes. count_word must use a `Map[Str, Int]`.

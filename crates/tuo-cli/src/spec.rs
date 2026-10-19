@@ -43,7 +43,7 @@ fn load(
     files: &[PathBuf],
     command: ProtocolCommand,
     mode: OutputMode,
-) -> Result<(SourceMap, Vec<SourceId>), ExitCode> {
+) -> Result<(SourceMap, Vec<SourceId>, Vec<SourceId>), ExitCode> {
     let mut map = SourceMap::new();
     let mut sources = Vec::new();
     for path in files {
@@ -72,12 +72,13 @@ fn load(
             }
         }
     }
-    Ok((map, sources))
+    let program = crate::stdlib_input::with_referenced_stdlib(&mut map, &sources);
+    Ok((map, program, sources))
 }
 
 /// `tuo spec [--target] <files>`: execute the selected specs.
 pub(crate) fn run(target: Option<String>, files: &[PathBuf], mode: OutputMode) -> ExitCode {
-    let (map, sources) = match load(files, ProtocolCommand::Spec, mode) {
+    let (map, sources, scope) = match load(files, ProtocolCommand::Spec, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
@@ -85,6 +86,7 @@ pub(crate) fn run(target: Option<String>, files: &[PathBuf], mode: OutputMode) -
     execute(
         &map,
         &sources,
+        &scope,
         &selection,
         files,
         ProtocolCommand::Spec,
@@ -103,7 +105,7 @@ pub(crate) fn run(target: Option<String>, files: &[PathBuf], mode: OutputMode) -
 /// selected through the incremental dependency graph. Without it, every spec
 /// runs.
 pub(crate) fn verify(affected_by: Option<&Path>, files: &[PathBuf], mode: OutputMode) -> ExitCode {
-    let (map, sources) = match load(files, ProtocolCommand::Verify, mode) {
+    let (map, sources, scope) = match load(files, ProtocolCommand::Verify, mode) {
         Ok(loaded) => loaded,
         Err(code) => return code,
     };
@@ -117,6 +119,7 @@ pub(crate) fn verify(affected_by: Option<&Path>, files: &[PathBuf], mode: Output
     execute(
         &map,
         &sources,
+        &scope,
         &selection,
         files,
         ProtocolCommand::Verify,
@@ -156,6 +159,19 @@ fn affected_selection(
             changed_file = Some(file);
         }
     }
+    // Give the session the program `load` builds — the user's files, then the
+    // standard-library modules they name — so the selection is computed over
+    // the program that runs. (The user's files come first in both, so their
+    // symbols coincide either way; this keeps the session from analysing a
+    // program in which every library call is unresolved.)
+    let texts: Vec<String> = files
+        .iter()
+        .filter_map(|path| std::fs::read_to_string(path).ok())
+        .collect();
+    let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+    for module in crate::stdlib_input::referenced_modules(&texts) {
+        session.set_file(module.name, module.source);
+    }
     let Some(changed_file) = changed_file else {
         if !mode.is_machine() {
             eprintln!(
@@ -186,12 +202,15 @@ fn same_path(a: &Path, b: &Path) -> bool {
 pub(crate) fn execute(
     map: &SourceMap,
     sources: &[SourceId],
+    scope: &[SourceId],
     selection: &Selection,
     files: &[PathBuf],
     command: ProtocolCommand,
     mode: OutputMode,
 ) -> ExitCode {
-    let outcome = tuo_spec::run(map, sources, selection, Limits::default());
+    // Only the program's own specs run; a standard-library module loaded
+    // beside it (ADR-0038) is checked with it but keeps its specs to itself.
+    let outcome = tuo_spec::run_scoped(map, sources, scope, selection, Limits::default());
     if mode.is_machine() {
         report_machine(&outcome, map, files, command, mode)
     } else {
@@ -432,27 +451,63 @@ fn present_run(out: &mut String, run: &SpecRun, map: &SourceMap) {
                     assertion.source,
                     location(map, assertion.span)
                 ));
-                present_trap(out, trap, map);
+                present_trap(out, trap, &run.name, map);
             }
         }
     }
 }
 
 /// Render a trap's cause and TDG call trace.
-fn present_trap(out: &mut String, trap: &TrapReport, map: &SourceMap) {
+fn present_trap(out: &mut String, trap: &TrapReport, spec: &str, map: &SourceMap) {
     out.push_str(&format!(
         "    trap {}: {} ({})\n",
         trap.label,
         trap.message,
         location(map, trap.span)
     ));
-    for frame in &trap.trace {
-        out.push_str(&format!(
-            "      at {} ({})\n",
-            frame.function,
-            location(map, frame.span)
-        ));
+    // A runaway recursion is a thousand identical frames; one line and a
+    // count say the same thing, and a report a person (or a model being
+    // shown its own failure) can read.
+    let mut frames = trace_runs(&trace_frames(trap));
+    for (function, span, repeats) in frames.drain(..) {
+        // An assertion runs as a synthetic `spec$…` function; name it as the
+        // reader wrote it.
+        let shown = if function.starts_with("spec$") {
+            format!("spec {spec}")
+        } else {
+            function.to_owned()
+        };
+        out.push_str(&format!("      at {shown} ({})\n", location(map, span)));
+        if repeats > 1 {
+            out.push_str(&format!(
+                "      ... {} more identical call{} to `{function}`\n",
+                repeats - 1,
+                if repeats == 2 { "" } else { "s" }
+            ));
+        }
     }
+}
+
+/// The trace's frames as `(function, span)` pairs.
+fn trace_frames(trap: &TrapReport) -> Vec<(&str, Span)> {
+    trap.trace
+        .iter()
+        .map(|frame| (frame.function.as_str(), frame.span))
+        .collect()
+}
+
+/// Collapse consecutive identical frames into `(function, span, count)` runs.
+fn trace_runs<'a>(frames: &[(&'a str, Span)]) -> Vec<(&'a str, Span, usize)> {
+    let mut runs: Vec<(&str, Span, usize)> = Vec::new();
+    for &(function, span) in frames {
+        match runs.last_mut() {
+            Some((last, last_span, count)) if *last == function && *last_span == span => {
+                *count += 1;
+            }
+            _ => runs.push((function, span, 1)),
+        }
+    }
+    runs
 }
 
 /// A one-line pass/fail/timing summary.
@@ -472,14 +527,15 @@ fn summary(report: &SpecReport) -> String {
     line
 }
 
-/// `file:line:col` for a span, or `?` if it cannot be located.
+/// `file:line:col` for a span (one-based, as every other diagnostic surface
+/// prints it), or `?` if it cannot be located.
 fn location(map: &SourceMap, span: Span) -> String {
     let Some(text) = map.get_source(span.source()) else {
         return "?".to_owned();
     };
     let file = map.file_name(text.file());
     match text.line_col(span.range().start()) {
-        Ok(lc) => format!("{file}:{}:{}", lc.line, lc.column),
+        Ok(lc) => format!("{file}:{}:{}", lc.line + 1, lc.column + 1),
         Err(_) => file.to_owned(),
     }
 }

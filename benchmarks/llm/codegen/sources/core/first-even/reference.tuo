@@ -1,0 +1,17 @@
+module solution;
+
+pub fn first_even(in xs: [Int; 5]) -> Option[Int] {
+    for x in xs {
+        if x % 2 == 0 {
+            return Some { value: x };
+        }
+    }
+    None
+}
+
+pub fn first_even_or(in xs: [Int; 5], take fallback: Int) -> Int {
+    match first_even(xs) {
+        Some { value } => value,
+        None => fallback,
+    }
+}

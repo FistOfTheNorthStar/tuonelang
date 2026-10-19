@@ -43,12 +43,35 @@ class Seed:
     """Optional teaching note surfaced in the SFT ``assistant`` rationale."""
 
     stdlib_deps: tuple[str, ...] = ()
-    """Stdlib module names (e.g. ``"core"``, ``"test"``) whose ``.tuo`` source
-    must be compiled alongside this program. tuonelang's standard library is
-    *consumed as input*: modules like ``std::core`` are ordinary source files,
-    not linked-in builtins, so a program importing them must be compiled
-    together with their source. (The ``std::array`` / ``std::string`` heap ops
-    and the ``std::rt`` effects are compiler builtins and need no dep here.)"""
+    """Stdlib module names (e.g. ``"core"``) the solution calls. Informational
+    since ADR-0038: the toolchain loads every standard-library module a program
+    names, so nothing is passed alongside the program and no example tells a
+    model to. (The ``std::array`` / ``std::string`` heap ops and the
+    ``std::rt`` effects are compiler builtins either way.)"""
+
+    tier: str = ""
+    """``executable`` (pure; its specs run), ``effect`` (calls io/fs/net/sync,
+    so it runs natively but cannot be specced), or ``interpreter`` (checks and
+    specs but is outside the native subset). Empty means *inferred* by
+    ``generate.py`` from what the solution calls; a declared tier is checked
+    against the inference."""
+
+    difficulty: int = 0
+    """1 (one construct) to 5 (a multi-function program with heap data and
+    ownership choices); 0 = unrated."""
+
+    heldout_specs: str = ""
+    """Extra ``spec`` blocks kept out of every SFT example. The generator runs
+    them against the solution (they must pass) and puts them in the eval
+    record, so scoring checks behaviour the prompt did not spell out."""
+
+    mutants: tuple[str, ...] = ()
+    """Plausible wrong solutions: each must *check* and must *fail* a spec.
+    The generator verifies both and emits each as a spec-failure repair
+    transcript, with the real ``tuo spec`` output as the compiler turn."""
+
+    origin: str = "hand"
+    """Where the seed came from (``hand``, ``py2tuo``, ``benchmark``, ...)."""
 
 
 # ---------------------------------------------------------------------------
@@ -643,10 +666,9 @@ spec clamp_unit {
 }
 """,
         stdlib_deps=("core",),
-        notes="Standard library is free functions only, consumed as input: "
-        "`std::core` is an ordinary source module, so compile its `.tuo` source "
-        "alongside your program. One obvious API per task; call it as "
-        "`std::core::clamp(...)`.",
+        notes="The standard library is free functions only, called by full "
+        "path — `std::core::clamp(...)` — from any program; the toolchain loads "
+        "`std::core` because the program names it. One obvious API per task.",
     ),
     # --- growable Array[Int] (heap) -------------------------------------
     Seed(
@@ -725,8 +747,8 @@ spec sum_all {
         notes="A bare top-level `fn` name in value position is a Copy code "
         "pointer of type `fn(take Int, take Int) -> Int`. Only ordinary "
         "top-level user functions are first-class (builtins/generics are "
-        "T0015). No closures in Tier 1. `std::collections` is a source module, "
-        "compiled alongside; `std::array` is a builtin needing no dep.",
+        "T0015). No closures in Tier 1. `std::collections::fold` is called by "
+        "its full path; `std::array` is a compiler builtin.",
     ),
     # --- generics --------------------------------------------------------
     Seed(
@@ -1241,5 +1263,332 @@ fn main() -> Int {
         "indexes — `read_byte` (the stream spelling) cannot see it. "
         "`udp_peer_port` names the sender so a server can reply. An EFFECT, so "
         "no spec (R0007).",
+    ),
+
+    # --- strings, bitwise, maps, modes, and library calls (2026-10-16) ----
+    # Written with the fields the guideline added: held-out specs the prompt
+    # never shows, and mutants (plausible wrong logic that checks but fails a
+    # spec), which become spec-failure repair transcripts.
+    Seed(
+        concept="str-bytes",
+        task="Write `count_vowels(in s: Str) -> Int` returning how many bytes of "
+        "`s` are a lowercase vowel (a, e, i, o, u).",
+        solution="""fn is_vowel(take b: Int) -> Bool {
+    b == 97 || b == 101 || b == 105 || b == 111 || b == 117
+}
+
+fn count_vowels(in s: Str) -> Int {
+    var count = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        if is_vowel(std::str::byte_at(s, i)) {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+spec count_vowels {
+    then count_vowels("tuonelang") == 4;
+    then count_vowels("apple") == 2;
+    then count_vowels("") == 0;
+}
+""",
+        tier="executable",
+        difficulty=2,
+        heldout_specs="""spec "count_vowels ignores consonants and capitals" {
+    then count_vowels("rhythm") == 0;
+    then count_vowels("AEIOU") == 0;
+    then count_vowels("aeiou") == 5;
+}
+""",
+        mutants=(
+            """fn is_vowel(take b: Int) -> Bool {
+    b == 97 || b == 101 || b == 105 || b == 111 || b == 117
+}
+
+fn count_vowels(in s: Str) -> Int {
+    var count = 0;
+    var i = 1;
+    while i < std::str::len(s) {
+        if is_vowel(std::str::byte_at(s, i)) {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+spec count_vowels {
+    then count_vowels("tuonelang") == 4;
+    then count_vowels("apple") == 2;
+    then count_vowels("") == 0;
+}
+""",
+        ),
+        notes="`std::str::len` and `std::str::byte_at` are the byte-level view "
+        "of a `Str`; a byte is an `Int`, so the vowels are compared as 97, 101, ...",
+    ),
+    Seed(
+        concept="owned-string",
+        task="Write `reversed(in s: Str) -> String` returning an owned String with "
+        "the bytes of `s` in reverse order.",
+        solution="""fn reversed(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = std::str::len(s) - 1;
+    while i >= 0 {
+        std::string::push_byte(out, std::str::byte_at(s, i));
+        i = i - 1;
+    }
+    out
+}
+
+spec reversed {
+    then std::string::as_str(reversed("abc")) == "cba";
+}
+""",
+        tier="executable",
+        difficulty=2,
+        heldout_specs="""spec "reversed edge cases" {
+    then std::string::len(reversed("")) == 0;
+    then std::string::as_str(reversed("a")) == "a";
+    then std::string::as_str(reversed("racecar")) == "racecar";
+}
+""",
+        notes="A `String` is built with `var` and grown in place through "
+        "`std::string::push_byte`, whose first parameter is `mut`; "
+        "`std::string::as_str` views it as a `Str` so a spec can compare it.",
+    ),
+    Seed(
+        concept="bitwise",
+        task="Write `is_power_of_two(take n: Int) -> Bool`, true exactly when `n` "
+        "is a positive power of two, using a bitwise test rather than a loop.",
+        solution="""fn is_power_of_two(take n: Int) -> Bool {
+    n > 0 && (n & (n - 1)) == 0
+}
+
+spec is_power_of_two {
+    then is_power_of_two(1);
+    then is_power_of_two(64);
+    then !is_power_of_two(12);
+    then !is_power_of_two(0);
+}
+""",
+        tier="executable",
+        difficulty=2,
+        heldout_specs="""spec "is_power_of_two on large and negative values" {
+    then is_power_of_two(1073741824);
+    then !is_power_of_two(0 - 8);
+    then !is_power_of_two(6);
+}
+""",
+        mutants=(
+            """fn is_power_of_two(take n: Int) -> Bool {
+    (n & (n - 1)) == 0
+}
+
+spec is_power_of_two {
+    then is_power_of_two(1);
+    then is_power_of_two(64);
+    then !is_power_of_two(12);
+    then !is_power_of_two(0);
+}
+""",
+        ),
+        notes="`n & (n - 1)` clears the lowest set bit, so it is zero only for a "
+        "power of two — and for zero, which the `n > 0` guard excludes.",
+    ),
+    Seed(
+        concept="bitwise",
+        task="Write `checksum(in s: Str) -> Int`: start at 0 and, for each byte, "
+        "multiply the running value by 31 and add the byte, all modulo 2^32. Use "
+        "the standard library's modular arithmetic, since `+` and `*` trap on overflow.",
+        solution="""fn checksum(in s: Str) -> Int {
+    var h = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        h = std::bits::add32(std::bits::mul32(h, 31), std::str::byte_at(s, i));
+        i = i + 1;
+    }
+    h
+}
+
+spec checksum {
+    then checksum("") == 0;
+    then checksum("a") == 97;
+    then checksum("ab") == 3105;
+}
+""",
+        tier="executable",
+        difficulty=3,
+        stdlib_deps=("bits",),
+        heldout_specs="""spec "checksum wraps instead of trapping" {
+    then checksum("the quick brown fox jumps over the lazy dog") == 2212148595;
+}
+""",
+        notes="`std::bits::add32` and `std::bits::mul32` are the operations that "
+        "are *defined* modulo 2^32; plain `+` and `*` trap on overflow, which is "
+        "right for arithmetic and wrong for a hash.",
+    ),
+    Seed(
+        concept="hash-map",
+        task="Write `most_common(in xs: [Int; 6]) -> Int` returning the value that "
+        "occurs most often in `xs` (the first such value on a tie), counting with "
+        "a `Map[Int, Int]`.",
+        solution="""fn most_common(in xs: [Int; 6]) -> Int {
+    var counts = std::map::empty();
+    var best = xs[0];
+    var best_count = 0;
+    for x in xs {
+        let seen = match std::map::get(counts, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(counts, x, seen + 1);
+        if seen + 1 > best_count {
+            best = x;
+            best_count = seen + 1;
+        }
+    }
+    best
+}
+
+spec most_common {
+    then most_common([1, 2, 2, 3, 3, 3]) == 3;
+    then most_common([4, 4, 5, 5, 6, 6]) == 4;
+}
+""",
+        tier="executable",
+        difficulty=3,
+        heldout_specs="""spec "most_common on a uniform batch" {
+    then most_common([9, 9, 9, 9, 9, 9]) == 9;
+    then most_common([1, 2, 3, 4, 5, 6]) == 1;
+}
+""",
+        mutants=(
+            """fn most_common(in xs: [Int; 6]) -> Int {
+    var counts = std::map::empty();
+    var best = xs[0];
+    var best_count = 0;
+    for x in xs {
+        let seen = match std::map::get(counts, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(counts, x, seen + 1);
+        if seen + 1 >= best_count {
+            best = x;
+            best_count = seen + 1;
+        }
+    }
+    best
+}
+
+spec most_common {
+    then most_common([1, 2, 2, 3, 3, 3]) == 3;
+    then most_common([4, 4, 5, 5, 6, 6]) == 4;
+}
+""",
+        ),
+        notes="`std::map::insert` returns the previous value as an `Option`; "
+        "bind it to `_` when only the side effect matters.",
+    ),
+    Seed(
+        concept="borrow-modes",
+        task="Define `struct Tally { total: Int, count: Int }` and write "
+        "`record(mut t: Tally, take value: Int) -> ()`, which adds one value to the "
+        "caller's tally, and `mean_of_three(take a: Int, take b: Int, take c: Int) -> Int`, "
+        "which records the three values into a fresh tally and returns the floor of "
+        "their mean.",
+        solution="""struct Tally {
+    total: Int,
+    count: Int,
+}
+
+fn record(mut t: Tally, take value: Int) -> () {
+    t.total = t.total + value;
+    t.count = t.count + 1;
+}
+
+fn mean_of_three(take a: Int, take b: Int, take c: Int) -> Int {
+    var t = Tally { total: 0, count: 0 };
+    record(t, a);
+    record(t, b);
+    record(t, c);
+    t.total / t.count
+}
+
+spec mean_of_three {
+    then mean_of_three(1, 2, 3) == 2;
+    then mean_of_three(10, 10, 11) == 10;
+}
+""",
+        tier="executable",
+        difficulty=3,
+        heldout_specs="""spec "mean_of_three with negatives" {
+    then mean_of_three(0 - 3, 0, 3) == 0;
+}
+""",
+        notes="`mut` lends the caller's `var` for the call, so `record` updates "
+        "the tally in place; the call site writes no mode — the signature decides.",
+    ),
+    Seed(
+        concept="stdlib-core",
+        task="Write `distance(take a: Int, take b: Int) -> Int` returning |a - b|, "
+        "and `capped(take a: Int, take b: Int, take cap: Int) -> Int` returning the "
+        "distance but never more than `cap`. Use `std::core` rather than writing "
+        "your own absolute value or minimum.",
+        solution="""fn distance(take a: Int, take b: Int) -> Int {
+    std::core::abs(a - b)
+}
+
+fn capped(take a: Int, take b: Int, take cap: Int) -> Int {
+    std::core::min(distance(a, b), cap)
+}
+
+spec capped {
+    then capped(2, 9, 100) == 7;
+    then capped(2, 9, 5) == 5;
+}
+""",
+        tier="executable",
+        difficulty=1,
+        stdlib_deps=("core",),
+        heldout_specs="""spec "capped is symmetric" {
+    then capped(9, 2, 5) == 5;
+    then distance(0 - 4, 4) == 8;
+}
+""",
+        notes="A standard-library function is called by its full path from any "
+        "program; the toolchain loads `std::core` because the program names it.",
+    ),
+    Seed(
+        concept="str-bytes",
+        task="Write `parse_number(in s: Str) -> Int` that returns the decimal "
+        "number written in `s`, or -1 when `s` is empty or holds a non-digit byte. "
+        "Use `std::str::parse_int` and match on its `Result`.",
+        solution="""fn parse_number(in s: Str) -> Int {
+    match std::str::parse_int(s) {
+        Ok { value } => value,
+        Err { error } => 0 - 1,
+    }
+}
+
+spec parse_number {
+    then parse_number("42") == 42;
+    then parse_number("4x2") == 0 - 1;
+}
+""",
+        tier="executable",
+        difficulty=2,
+        stdlib_deps=("str",),
+        heldout_specs="""spec "parse_number on the empty string" {
+    then parse_number("") == 0 - 1;
+    then parse_number("0") == 0;
+}
+""",
+        notes="`Result` payloads are named fields: `Ok { value }` and "
+        "`Err { error }`, matched exhaustively.",
     ),
 ]

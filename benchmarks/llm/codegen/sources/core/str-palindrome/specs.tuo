@@ -1,0 +1,4 @@
+spec is_palindrome {
+    then is_palindrome("racecar");
+    then !is_palindrome("rocket");
+}

@@ -1,0 +1,5 @@
+spec div_or {
+    then div_or(7, 2, 0) == 3;
+    then div_or(0, 0, 42) == 42;
+    then div_or(0, 5, 42) == 0;
+}

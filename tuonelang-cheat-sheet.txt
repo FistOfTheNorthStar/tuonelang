@@ -148,8 +148,60 @@ listed, it does not exist — do not invent a plausible name. There is exactly
 one obvious API per task, and the library is FREE FUNCTIONS ONLY
 (`std::array::len(xs)`, never `xs.len()`).
 
+Call any of them by its full path from any program — `std::core::abs(x)`,
+`std::io::println("hi")` — with no `import` and no copy of the module: the
+toolchain loads every standard-library module a program names.
+
 `Int` is an alias for `I64` and `Float` for `F64`; both spellings are legal,
 and these declarations use the one the library authors chose.
+
+Built into the compiler (no module file; always available). `T` is the
+element type — Int, Float, Bool, Str, String, or a struct or enum of those; a
+map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str.
+
+std::str
+  fn len(in s: Str) -> Int
+  fn byte_at(in s: Str, take index: Int) -> Int
+  fn slice(in s: Str, take start: Int, take end: Int) -> Str
+
+std::string
+  fn empty() -> String
+  fn from_str(in s: Str) -> String
+  fn push_byte(mut s: String, take byte: Int) -> ()
+  fn append(mut s: String, in piece: Str) -> ()
+  fn concat(in a: Str, in b: Str) -> String
+  fn len(in s: String) -> Int
+  fn byte_at(in s: String, take index: Int) -> Int
+  fn slice(in s: String, take start: Int, take end: Int) -> String
+  fn as_str(in s: String) -> Str
+
+std::array
+  fn empty() -> Array[T]
+  fn push(mut xs: Array[T], take value: T) -> ()
+  fn pop(mut xs: Array[T]) -> Option[T]
+  fn len(in xs: Array[T]) -> Int
+  fn get(in xs: Array[T], take index: Int) -> T
+  fn set(mut xs: Array[T], take index: Int, take value: T) -> ()
+  fn filled(take n: Int, take value: T) -> Array[T]
+
+std::map
+  fn empty() -> Map[K, V]
+  fn insert(mut m: Map[K, V], take key: K, take value: V) -> Option[V]
+  fn get(in m: Map[K, V], take key: K) -> Option[V]
+  fn contains_key(in m: Map[K, V], take key: K) -> Bool
+  fn remove(mut m: Map[K, V], take key: K) -> Option[V]
+  fn len(in m: Map[K, V]) -> Int
+  fn keys(in m: Map[K, V]) -> Array[K]
+
+std::float
+  fn sqrt(take x: Float) -> Float
+
+std::boxed
+  fn new(take value: T) -> Box[T]
+  fn get(in b: Box[T]) -> T
+  fn into(take b: Box[T]) -> T
+
+The library's own modules, written in tuonelang:
 
 std::core
   fn min(take a: Int, take b: Int) -> Int
@@ -687,7 +739,8 @@ Runs everywhere (check, interpreter, and native):
   * borrow-mode (`in` / `mut`) calls
   * `Str` values: literals, `==`, and the `std::str` byte operations
   * owned `String` and growable `Array[T]` (`std::string` / `std::array`)
-  * `Map[Int, Int]` and `Map[Str, Int]` (`std::map`), insertion-ordered
+  * `Map[K, V]` (`std::map`): an Int or Str key, an Int, Bool, Float, or Str
+    value, insertion-ordered
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly

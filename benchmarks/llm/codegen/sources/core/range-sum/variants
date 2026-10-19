@@ -1,0 +1,2 @@
+while-index: iterate over the growable array with a while loop over indices, using std::array::len and std::array::get
+for-in: iterate over the growable array with `for x in xs`

@@ -1,0 +1,1 @@
+Write `push_twice(mut xs: Array[Int], take v: Int) -> Int`, which appends v to the caller's array two times and returns the array's new length. Also write `filled_pairs(take n: Int) -> Int`, which starts from an empty array, calls push_twice with the values 1 through n in order, and returns the final sum of the array's elements.

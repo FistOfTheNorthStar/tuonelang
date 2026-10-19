@@ -1,0 +1,6 @@
+spec passing {
+    then letter(80) == 3;
+    then letter(79) == 2;
+    then std::array::get(passing([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }]), 1) == 3;
+    then class_average([Score { student: 1, points: 90 }, Score { student: 2, points: 40 }, Score { student: 3, points: 60 }, Score { student: 4, points: 59 }, Score { student: 5, points: 75 }]) == 64;
+}

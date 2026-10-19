@@ -1,0 +1,13 @@
+module solution;
+
+pub fn count_byte(in s: Str, take b: Int) -> Int {
+    var count = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        if std::str::byte_at(s, i) == b {
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}

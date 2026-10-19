@@ -322,8 +322,8 @@ fn variants_are_each_run_and_an_endpoint_error_is_recorded_not_fatal() {
         requests[1]["messages"][1]["content"]
             .as_str()
             .unwrap()
-            .contains("mul"),
-        "the variant request names its style"
+            .contains("Write it in this style: x * 2."),
+        "the variant request describes its style by its note, not just its label"
     );
     let run = BenchmarkRun::from_json(&fs::read_to_string(&run_path).unwrap()).unwrap();
     assert_eq!(run.runs.len(), 2, "default spelling plus one variant");
@@ -362,4 +362,54 @@ fn a_missing_api_key_variable_is_refused_before_any_request() {
         String::from_utf8_lossy(&output.stderr).contains("TUO_BENCH_RUN_TEST_UNSET_KEY"),
         "names the variable"
     );
+}
+
+#[test]
+fn a_reasoning_effort_and_a_token_cap_are_sent_and_recorded() {
+    if !curl_available() {
+        return;
+    }
+    let dir = scratch("reasoning");
+    let tasks = write_task_set(&dir, vec![double_task()]);
+    let (endpoint, seen) = fake_endpoint(vec![Reply::Content(GOOD, 5)]);
+    let run_path = dir.join("run.json");
+    let output = tuo(&[
+        "bench",
+        "run",
+        tasks.to_str().unwrap(),
+        "--endpoint",
+        &endpoint,
+        "--model",
+        "scripted",
+        "--reasoning-effort",
+        "none",
+        "--max-tokens",
+        "4096",
+        "-o",
+        run_path.to_str().unwrap(),
+    ]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let request = seen.lock().unwrap()[0].clone();
+    assert_eq!(request["reasoning_effort"], "none", "{request}");
+    assert_eq!(request["max_tokens"], 4096, "{request}");
+    let run = BenchmarkRun::from_json(&fs::read_to_string(&run_path).unwrap()).unwrap();
+    assert!(
+        run.model.id.ends_with("+reasoning-none"),
+        "{}",
+        run.model.id
+    );
+    for (key, value) in [("reasoning_effort", "none"), ("max_tokens", "4096")] {
+        assert!(
+            run.model
+                .extra
+                .iter()
+                .any(|e| e.key == key && e.value == value),
+            "{key} is recorded: {:?}",
+            run.model.extra
+        );
+    }
 }

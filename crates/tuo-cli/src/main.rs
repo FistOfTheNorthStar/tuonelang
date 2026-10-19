@@ -33,6 +33,7 @@ mod output;
 mod package;
 mod protocol;
 mod spec;
+mod stdlib_input;
 
 use std::process::ExitCode;
 

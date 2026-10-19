@@ -176,7 +176,7 @@ pub(crate) fn remove(name: &str, dir: &Path, mode: OutputMode) -> ExitCode {
 /// `tuo check [--manifest <dir>]`: resolve the package and front-end-check its
 /// whole graph as one program.
 pub(crate) fn check(dir: &Path, mode: OutputMode) -> ExitCode {
-    compile_command(dir, mode, |map, sources, names, mode| {
+    compile_command(dir, mode, |map, sources, _packaged, names, mode| {
         check::report(map, sources, names, ProtocolCommand::Check, mode)
     })
 }
@@ -189,7 +189,7 @@ pub(crate) fn build(
     release: bool,
     mode: OutputMode,
 ) -> ExitCode {
-    compile_command(dir, mode, move |map, sources, names, mode| {
+    compile_command(dir, mode, move |map, sources, _packaged, names, mode| {
         codegen::build_loaded(map, sources, names, output.clone(), release, mode)
     })
 }
@@ -200,7 +200,7 @@ pub(crate) fn build(
 /// The same resolution, lockfile refresh, and dependency-drift check as
 /// `build` — a drifted dependency is refused before anything executes.
 pub(crate) fn run(dir: &Path, release: bool, mode: OutputMode) -> ExitCode {
-    compile_command(dir, mode, move |map, sources, names, mode| {
+    compile_command(dir, mode, move |map, sources, _packaged, names, mode| {
         codegen::run_loaded(map, sources, names, release, mode)
     })
 }
@@ -208,10 +208,11 @@ pub(crate) fn run(dir: &Path, release: bool, mode: OutputMode) -> ExitCode {
 /// `tuo verify [--manifest <dir>]`: every static check plus all specs across the
 /// resolved graph.
 pub(crate) fn verify(dir: &Path, mode: OutputMode) -> ExitCode {
-    compile_command(dir, mode, |map, sources, names, mode| {
+    compile_command(dir, mode, |map, sources, packaged, names, mode| {
         spec::execute(
             map,
             sources,
+            packaged,
             &Selection::All,
             names,
             ProtocolCommand::Verify,
@@ -225,10 +226,11 @@ pub(crate) fn verify(dir: &Path, mode: OutputMode) -> ExitCode {
 /// colocated specs, so `test` executes exactly the specs `verify` does; it
 /// exists as the conventionally-named command.
 pub(crate) fn test(dir: &Path, mode: OutputMode) -> ExitCode {
-    compile_command(dir, mode, |map, sources, names, mode| {
+    compile_command(dir, mode, |map, sources, packaged, names, mode| {
         spec::execute(
             map,
             sources,
+            packaged,
             &Selection::All,
             names,
             ProtocolCommand::Test,
@@ -243,14 +245,14 @@ pub(crate) fn test(dir: &Path, mode: OutputMode) -> ExitCode {
 fn compile_command(
     dir: &Path,
     mode: OutputMode,
-    run: impl FnOnce(&SourceMap, &[SourceId], &[PathBuf], OutputMode) -> ExitCode,
+    run: impl FnOnce(&SourceMap, &[SourceId], &[SourceId], &[PathBuf], OutputMode) -> ExitCode,
 ) -> ExitCode {
     let graph = match resolve_and_lock(dir, mode) {
         Ok(graph) => graph,
         Err(code) => return code,
     };
-    let (map, sources, names) = load_graph(&graph);
-    run(&map, &sources, &names, mode)
+    let (map, program, packaged, names) = load_graph(&graph);
+    run(&map, &program, &packaged, &names, mode)
 }
 
 /// Resolve the package at `dir`, verify it against the prior lockfile (if any),
@@ -309,9 +311,11 @@ fn resolve(dir: &Path, mode: OutputMode) -> Result<ResolvedGraph, ExitCode> {
 }
 
 /// Load every module source across the resolved graph into one `SourceMap`,
-/// returning the map, the source ids, and display names (one per module) for
-/// machine-mode reporting.
-fn load_graph(graph: &ResolvedGraph) -> (SourceMap, Vec<SourceId>, Vec<PathBuf>) {
+/// followed by the standard-library modules they name (ADR-0038). Returns the
+/// map, the whole program's source ids, the graph's own ids (the scope whose
+/// specs run and whose symbols the package exports), and display names (one
+/// per graph module) for machine-mode reporting.
+fn load_graph(graph: &ResolvedGraph) -> (SourceMap, Vec<SourceId>, Vec<SourceId>, Vec<PathBuf>) {
     let mut map = SourceMap::new();
     let mut sources = Vec::new();
     let mut names = Vec::new();
@@ -325,7 +329,8 @@ fn load_graph(graph: &ResolvedGraph) -> (SourceMap, Vec<SourceId>, Vec<PathBuf>)
             names.push(PathBuf::from(&module.name));
         }
     }
-    (map, sources, names)
+    let program = crate::stdlib_input::with_referenced_stdlib(&mut map, &sources);
+    (map, program, sources, names)
 }
 
 /// `tuo package symbols [--manifest <dir>]`: the machine-queryable symbol
@@ -349,12 +354,20 @@ pub(crate) fn symbols(dir: &Path, mode: OutputMode) -> ExitCode {
         Ok(graph) => graph,
         Err(code) => return code,
     };
-    let (map, sources, _names) = load_graph(&graph);
+    let (map, sources, packaged, _names) = load_graph(&graph);
     let checked = check_sources(&map, &sources);
 
     let mut list: Vec<Value> = Vec::new();
     for (_, symbol) in checked.resolution.symbols() {
         if !symbol.is_pub {
+            continue;
+        }
+        // The package exports what its own modules declare, not the
+        // standard-library modules loaded beside them.
+        if !symbol
+            .declaration
+            .is_some_and(|span| packaged.contains(&span.source()))
+        {
             continue;
         }
         if !matches!(

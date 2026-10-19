@@ -1,0 +1,1 @@
+Write `parse_digit(take c: Int) -> Result[Int, Str]` that takes an ASCII byte: for '0' through '9' (bytes 48 to 57) it returns Ok with the digit's value, otherwise Err with the message "not a digit". Also write `digit_or(take c: Int, take fallback: Int) -> Int`, which calls parse_digit and returns the fallback on an error.

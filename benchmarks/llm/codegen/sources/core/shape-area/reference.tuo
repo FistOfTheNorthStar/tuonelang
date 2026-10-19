@@ -1,0 +1,15 @@
+module solution;
+
+pub enum Shape {
+    Square { side: Int },
+    Rect { width: Int, height: Int },
+    Triangle { base: Int, height: Int },
+}
+
+pub fn area(in s: Shape) -> Int {
+    match s {
+        Shape::Square { side } => side * side,
+        Shape::Rect { width, height } => width * height,
+        Shape::Triangle { base, height } => base * height / 2,
+    }
+}

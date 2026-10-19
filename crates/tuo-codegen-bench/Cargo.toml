@@ -28,8 +28,10 @@ tuo-compiler.workspace = true
 tuo-spec.workspace = true
 tuo-bench.workspace = true
 tuo-corpus.workspace = true
+tuo-stdlib.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+tuo-fmt.workspace = true
 tuo-codegen-cranelift.workspace = true

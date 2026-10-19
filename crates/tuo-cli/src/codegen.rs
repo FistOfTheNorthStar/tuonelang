@@ -277,6 +277,14 @@ fn compile_and_finish(
     // and the driver re-verifies after each pass, so `program` remains
     // verified MIR a backend may consume. Both backends run over the optimized
     // MIR; the release backend layers LLVM's own optimizer on top.
+    // A loaded standard-library module (ADR-0038) is compiled only as far as
+    // the program reaches into it: an unused library function cannot change
+    // the program's behavior, but it can be outside the native subset (the
+    // generic `std::collections::pair`). Everything the user wrote is kept, so
+    // their own unsupported code is still refused, used or not.
+    mir::retain_reachable(&mut program, ENTRY, |f| {
+        !crate::stdlib_input::is_library(map, f.span.source())
+    });
     emit_progress(
         &mut emitter,
         mode,
@@ -394,6 +402,9 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
             reason: "lowered MIR failed verification".to_owned(),
         };
     }
+    mir::retain_reachable(&mut program, ENTRY, |f| {
+        !crate::stdlib_input::is_library(map, f.span.source())
+    });
     let _opt = mir::optimize(&mut program, &check.types);
 
     let target = TargetSpec::host();
@@ -647,7 +658,8 @@ fn load(
             }
         }
     }
-    Ok((map, sources))
+    let program = crate::stdlib_input::with_referenced_stdlib(&mut map, &sources);
+    Ok((map, program))
 }
 
 /// Report a failure through the active output mode and return a failure exit.

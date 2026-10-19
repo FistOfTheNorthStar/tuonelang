@@ -1,0 +1,1 @@
+Write `range(take start: Int, take end: Int) -> Array[Int]` returning the growable array start, start + 1, ..., end - 1 (empty when start >= end), and `sum_all(in xs: Array[Int]) -> Int` returning the sum of its elements.

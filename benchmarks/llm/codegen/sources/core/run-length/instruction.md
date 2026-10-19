@@ -1,0 +1,1 @@
+Write `rle(in s: Str) -> String` returning the run-length encoding of s: each maximal run of one repeated byte becomes that byte followed by the run's length in decimal, so "aaabcc" becomes "a3b1c2". The empty string encodes to the empty string.

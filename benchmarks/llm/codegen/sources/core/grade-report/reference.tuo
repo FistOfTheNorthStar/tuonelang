@@ -1,0 +1,38 @@
+module solution;
+
+pub struct Score {
+    student: Int,
+    points: Int,
+}
+
+pub fn letter(take points: Int) -> Int {
+    if points >= 90 {
+        4
+    } else if points >= 80 {
+        3
+    } else if points >= 70 {
+        2
+    } else if points >= 60 {
+        1
+    } else {
+        0
+    }
+}
+
+pub fn passing(in scores: [Score; 5]) -> Array[Int] {
+    var out = std::array::empty();
+    for s in scores {
+        if letter(s.points) >= 1 {
+            std::array::push(out, s.student);
+        }
+    }
+    out
+}
+
+pub fn class_average(in scores: [Score; 5]) -> Int {
+    var total = 0;
+    for s in scores {
+        total = total + s.points;
+    }
+    total / 5
+}

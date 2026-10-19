@@ -1,0 +1,7 @@
+spec reversed {
+    then std::array::len(digits(0)) == 1;
+    then std::array::get(digits(0), 0) == 0;
+    then std::array::len(digits(90210)) == 5;
+    then std::array::get(reversed(digits(90210)), 1) == 1;
+    then std::array::get(reversed(digits(90210)), 4) == 9;
+}

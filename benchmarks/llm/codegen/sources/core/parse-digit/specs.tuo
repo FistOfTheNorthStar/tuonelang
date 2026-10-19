@@ -1,0 +1,4 @@
+spec digit_or {
+    then digit_or(55, 0 - 1) == 7;
+    then digit_or(65, 0 - 1) == 0 - 1;
+}

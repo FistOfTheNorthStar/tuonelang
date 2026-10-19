@@ -1,0 +1,11 @@
+module solution;
+
+pub fn prefix_sums(in xs: [Int; 5]) -> Array[Int] {
+    var out = std::array::empty();
+    var running = 0;
+    for x in xs {
+        running = running + x;
+        std::array::push(out, running);
+    }
+    out
+}

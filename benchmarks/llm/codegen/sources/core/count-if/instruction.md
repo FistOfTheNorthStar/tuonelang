@@ -1,0 +1,1 @@
+Write `count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int` returning how many elements satisfy pred, and the predicates `is_negative(take x: Int) -> Bool` and `is_multiple_of_three(take x: Int) -> Bool`.

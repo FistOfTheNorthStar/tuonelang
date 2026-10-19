@@ -196,7 +196,7 @@ const TOOLS = [
   { name: "tuo_call_signature", description: "The signature of the call being written at a position, for filling in its arguments.", inputSchema: positional, method: "call_signature", params: pos },
   {
     name: "tuo_imports_for_symbol",
-    description: "Which module(s) export a symbol of this name, and the import line that would bring it into scope. Use this instead of guessing a module path.",
+    description: "Which module(s) export a symbol of this name, each with its full path and its declaration (parameter modes and types) — the open documents' own modules, the builtins (std::array, std::string, std::map, ...), and every standard-library function whether or not the program names its module yet. Call a standard-library function by that path (std::core::abs(x)); no import is needed. Use this instead of guessing a module path.",
     inputSchema: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
     method: "imports_for_symbol",
     params: (a) => ({ name: a.name }),

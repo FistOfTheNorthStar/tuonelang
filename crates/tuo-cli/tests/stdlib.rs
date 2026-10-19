@@ -104,64 +104,12 @@ fn the_catalog_lists_exactly_its_modules() {
 }
 
 /// The catalog's declared intra-library dependency edges, as
-/// `(module, the modules it may use)`.
-///
-/// Most modules stand alone. `std::crypto` is the first that does not: its
-/// algorithms are *defined* over the fixed-width bit and byte-order operations
-/// `std::bits` owns (ADR-0019 Stage B), and the alternative — a second copy of
-/// `rotr32`/`add32`/`be32` inside `std::crypto` — would be two implementations
-/// of one specification, free to drift apart. One audited copy is worth the
-/// edge.
-///
-/// This table is the *whole* permitted graph: a module absent from it must
-/// still compile alone, and `the_dependency_graph_is_declared_and_acyclic`
-/// proves the edges listed here are the only ones and that they form no cycle.
-const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = &[
-    ("std::crypto", &["std::bits", "std::ct"]),
-    // ChaCha20 is defined over 32-bit add/XOR/rotate, which is exactly what
-    // `std::bits` owns — reimplementing them here would be a second copy free
-    // to drift from the one `std::crypto` already depends on.
-    // `std::crypto` for the constant-time tag comparison (`verify`), which
-    // must have one implementation rather than a re-derived copy in the
-    // module that most needs it to be right; `std::crypto` in turn brings
-    // `std::ct` and `std::bits`.
-    (
-        "std::chacha",
-        &["std::bits", "std::ct", "std::bignum", "std::crypto"],
-    ),
-    // `std::ct` for the ladder's conditional swap: exchanging the two points
-    // on a bit of the secret scalar is the textbook X25519 timing leak, so the
-    // selection is the shared branchless one rather than a re-derived `if`.
-    ("std::x25519", &["std::bignum", "std::ct"]),
-    // HKDF is HMAC-SHA256 in a loop, so it depends on `std::crypto` (which
-    // brings `std::bits` and `std::ct`) rather than carrying a second copy.
-    ("std::hkdf", &["std::bits", "std::ct", "std::crypto"]),
-    // Ed25519 reuses `std::x25519`'s field arithmetic (same prime) rather
-    // than shipping a second copy, and is defined over SHA-512.
-    (
-        "std::ed25519",
-        &[
-            "std::bits",
-            "std::ct",
-            "std::bignum",
-            "std::x25519",
-            "std::sha512",
-        ],
-    ),
-    // The protocol layer composes every primitive below it.
-    (
-        "std::tls",
-        &[
-            "std::bits",
-            "std::ct",
-            "std::bignum",
-            "std::crypto",
-            "std::chacha",
-            "std::hkdf",
-            "std::x25519",
-        ],
-    ),
-];
+/// `(module, the modules it may use)` — owned by the catalog itself
+/// ([`tuo_stdlib::DEPENDENCIES`]) since hosts load a program's referenced
+/// modules by it (ADR-0038). This suite is what keeps it honest:
+/// `the_dependency_graph_is_declared_and_acyclic` proves the edges listed
+/// there are the only ones and that they form no cycle.
+const DECLARED_DEPENDENCIES: &[(&str, &[&str])] = tuo_stdlib::DEPENDENCIES;
 
 /// Every module in `path`'s dependency closure, in an order where each
 /// module follows everything it depends on.
@@ -199,10 +147,7 @@ fn dependency_closure(path: &str) -> Vec<String> {
 
 /// The modules `module` may use, or an empty slice if it must stand alone.
 fn declared_dependencies_of(path: &str) -> &'static [&'static str] {
-    DECLARED_DEPENDENCIES
-        .iter()
-        .find(|(name, _)| *name == path)
-        .map_or(&[], |(_, deps)| *deps)
+    tuo_stdlib::dependencies(path)
 }
 
 /// Intern `module` together with its declared dependencies, dependencies

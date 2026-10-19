@@ -1,0 +1,19 @@
+module solution;
+
+pub fn count_if(in xs: [Int; 6], take pred: fn(take Int) -> Bool) -> Int {
+    var count = 0;
+    for x in xs {
+        if pred(x) {
+            count = count + 1;
+        }
+    }
+    count
+}
+
+pub fn is_negative(take x: Int) -> Bool {
+    x < 0
+}
+
+pub fn is_multiple_of_three(take x: Int) -> Bool {
+    x % 3 == 0
+}

@@ -1,0 +1,5 @@
+spec next {
+    then code(next(Light::Yellow)) == 0;
+    then code(next(next(next(Light::Red)))) == 0;
+    then code(Light::Yellow) == 1;
+}

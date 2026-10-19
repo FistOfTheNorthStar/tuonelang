@@ -1,0 +1,11 @@
+module solution;
+
+fn sum_to(take n: Int) -> Int {
+    var total = 0;
+    var i = 1;
+    while i <= n {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}

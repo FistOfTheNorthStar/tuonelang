@@ -72,6 +72,68 @@ pub fn run(
     selection: &Selection,
     limits: Limits,
 ) -> RunOutcome {
+    run_scoped(map, sources, sources, selection, limits)
+}
+
+/// [`run`], executing only the specs written in `scope` — a subset of
+/// `sources`.
+///
+/// The whole program is still checked and lowered; only which specs execute
+/// changes. A host that loads standard-library modules beside the user's files
+/// (ADR-0038) scopes the run to the user's files, so `tuo spec` reports the
+/// program's specs rather than also re-running the library's own.
+#[must_use]
+pub fn run_scoped(
+    map: &SourceMap,
+    sources: &[SourceId],
+    scope: &[SourceId],
+    selection: &Selection,
+    limits: Limits,
+) -> RunOutcome {
+    // The interpreter recurses on the host stack once per tuonelang call, so
+    // the recursion ceiling is only a ceiling if the host stack outlasts it. A
+    // debug build spends ~10-13 KiB of host stack per interpreted call, and an
+    // 8 MiB main thread overflowed at about 700 calls — before the default
+    // 1,024 — killing the process (`fatal runtime error: stack overflow`)
+    // instead of reporting `RecursionLimit`. So the run gets its own thread
+    // with a stack sized from the configured depth.
+    let stack = usize::try_from(limits.max_call_depth)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(HOST_STACK_PER_CALL)
+        .max(MIN_HOST_STACK);
+    std::thread::scope(|scope_| {
+        let worker = std::thread::Builder::new()
+            .name("tuo-spec".to_owned())
+            .stack_size(stack)
+            .spawn_scoped(scope_, || {
+                run_on_this_thread(map, sources, scope, selection, limits)
+            });
+        match worker {
+            Ok(handle) => match handle.join() {
+                Ok(outcome) => outcome,
+                Err(panic) => std::panic::resume_unwind(panic),
+            },
+            // No thread to be had (resource exhaustion): run here, as before.
+            Err(_) => run_on_this_thread(map, sources, scope, selection, limits),
+        }
+    })
+}
+
+/// Host stack reserved per permitted interpreter call (see [`run_scoped`]):
+/// several times the debug build's measured use, so an optimized build has a
+/// wide margin too. Reserved, not committed — untouched pages cost nothing.
+const HOST_STACK_PER_CALL: usize = 64 * 1024;
+
+/// The smallest stack a spec run gets, whatever its configured depth.
+const MIN_HOST_STACK: usize = 64 * 1024 * 1024;
+
+fn run_on_this_thread(
+    map: &SourceMap,
+    sources: &[SourceId],
+    scope: &[SourceId],
+    selection: &Selection,
+    limits: Limits,
+) -> RunOutcome {
     // The spec runner is a MIR consumer, like a backend: it drives the
     // front-end stages directly rather than through the orchestration facade
     // (which sits above it). A program with front-end errors does not run
@@ -118,6 +180,9 @@ pub fn run(
 
     let mut report = SpecReport::default();
     for skipped in &specs.skipped {
+        if !scope.contains(&skipped.span.source()) {
+            continue;
+        }
         report.skipped.push(SkippedSpec {
             symbol: skipped.symbol,
             name: skipped.name.clone(),
@@ -126,7 +191,7 @@ pub fn run(
         });
     }
     for spec in &specs.specs {
-        if !selects(selection, spec, &resolution) {
+        if !scope.contains(&spec.span.source()) || !selects(selection, spec, &resolution) {
             continue;
         }
         report.runs.push(run_one(&interpreter, spec, map));

@@ -430,3 +430,48 @@ fn a_generation_query_on_an_unopened_document_errors() {
     assert_eq!(response["ok"], false);
     assert_eq!(response["error"]["code"], "unknown_document");
 }
+
+#[test]
+fn imports_for_symbol_finds_the_standard_library_before_the_program_names_it() {
+    // The program never mentions `std::collections`, so the module is not
+    // loaded (ADR-0038) — but this is exactly when an agent asks where `sum`
+    // lives, so the answer must come from the catalog anyway.
+    let mut server = server_with_prog();
+    let result = result(
+        &mut server,
+        2,
+        "imports_for_symbol",
+        json!({ "name": "sum" }),
+    );
+    let imports = result["imports"].as_array().unwrap();
+    let sum = imports
+        .iter()
+        .find(|i| i["path"] == "std::collections::sum")
+        .unwrap_or_else(|| panic!("finds std::collections::sum: {result}"));
+    assert_eq!(sum["signature"], "fn sum(in xs: Array[Int]) -> Int");
+}
+
+#[test]
+fn call_signature_of_a_builtin_shows_its_generic_shape() {
+    // The checker's signature for `std::array::push` is `Int`-seeded; shown
+    // raw it would tell an agent the element must be an `Int`.
+    let mut server = Server::new(Box::new(StubFormatter));
+    let text = "module a;\nfn f() -> Int {\n    var xs = std::array::empty();\n    std::array::push(xs, 1);\n    std::array::len(xs)\n}\n";
+    request(
+        &mut server,
+        1,
+        "set_document",
+        json!({ "uri": "a.tuo", "text": text }),
+    );
+    let result = result(
+        &mut server,
+        2,
+        "call_signature",
+        json!({ "uri": "a.tuo", "position": position_of(text, "xs, 1") }),
+    );
+    assert_eq!(
+        result["label"], "fn push(mut xs: Array[T], take value: T) -> ()",
+        "{result}"
+    );
+    assert_eq!(result["parameters"][1]["type"], "T", "{result}");
+}

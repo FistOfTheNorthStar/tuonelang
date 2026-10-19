@@ -1,0 +1,17 @@
+module solution;
+
+struct Counter {
+    count: Int,
+}
+
+fn bump(mut c: Counter, take by: Int) -> () {
+    c.count = c.count + by;
+}
+
+fn bumped_three_times(take start: Int) -> Int {
+    var c = Counter { count: start };
+    bump(c, 1);
+    bump(c, 2);
+    bump(c, 3);
+    c.count
+}
