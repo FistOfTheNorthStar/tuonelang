@@ -114,6 +114,16 @@ indexing row, so the advice exists only in the "further traps" prose. The case
 therefore rests on Findings 1–4, and the LLM measurement belongs in the
 benchmark plan rather than in the premise.
 
+**Update (2026-10-19).** The 53-task core set now gives a first reading. In
+its seven committed runs (`benchmarks/llm/codegen/results/core/`), a `T0001`
+naming `Usize` reached the first repair prompt in 1–3 tasks per run, 12 times
+in total. Both `expected Usize, found I64` (an `Int` cursor indexing) and
+`expected I64, found Usize` (a `Usize` cursor passed back to an `Int`
+builtin) occur. That is a small share of the 22–51 failing first turns per
+run, comparable to the borrowed-`for` error (ADR-0039) and below the
+growable-literal error (ADR-0040). The three together are the array-surface
+friction of the baseline. Benchmark item 3 still applies as written.
+
 ## Options
 
 - **(a) The index is `Int`.** This matches every builtin. It breaks every
