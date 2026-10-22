@@ -1,0 +1,36 @@
+module app;
+
+fn main() -> Int {
+    let server = std::rt::udp_bind(0);
+    if server < 0 {
+        return 1;
+    }
+    let port = std::rt::bound_port(server);
+    if port < 0 {
+        return 2;
+    }
+    let client = std::rt::udp_bind(0);
+    if client < 0 {
+        return 3;
+    }
+
+    let sent = std::rt::udp_send(client, "127.0.0.1", port, "ping");
+    if sent < 0 {
+        return 4;
+    }
+
+    let n = std::rt::udp_recv(server, 2000);
+    if n < 0 {
+        return 5;
+    }
+
+    var sum = 0;
+    var i = 0;
+    while i < n {
+        sum = sum + std::rt::udp_byte_at(server, i);
+        i = i + 1;
+    }
+    let _ = std::rt::close(server);
+    let _ = std::rt::close(client);
+    sum % 100
+}

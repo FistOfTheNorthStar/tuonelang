@@ -1,0 +1,12 @@
+fn count_up(take n: Int) -> Int {
+    var acc = 0;
+    for i in 0 .. n {
+        acc = acc + i;
+    }
+    acc
+}
+
+spec count_up {
+    then count_up(0) == 0;
+    then count_up(4) == 6;
+}

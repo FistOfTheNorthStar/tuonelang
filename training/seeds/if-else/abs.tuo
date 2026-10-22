@@ -1,0 +1,13 @@
+fn abs(take n: Int) -> Int {
+    if n < 0 {
+        0 - n
+    } else {
+        n
+    }
+}
+
+spec abs {
+    then abs(5) == 5;
+    then abs(-5) == 5;
+    then abs(0) == 0;
+}

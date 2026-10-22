@@ -1,0 +1,12 @@
+fn average3(take a: F64, take b: F64, take c: F64) -> F64 {
+    (a + b + c) / 3.0
+}
+
+fn is_two(take x: F64) -> Bool {
+    x == 2.0
+}
+
+spec average3 {
+    then is_two(average3(1.0, 2.0, 3.0));
+    then average3(0.0, 0.0, 0.0) == 0.0;
+}

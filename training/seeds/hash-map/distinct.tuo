@@ -1,0 +1,22 @@
+fn sample() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 3);
+    std::array::push(xs, 3);
+    std::array::push(xs, 8);
+    xs
+}
+
+fn distinct(in xs: Array[Int]) -> Int {
+    var seen = std::map::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let _ = std::map::insert(seen, std::array::get(xs, i), 1);
+        i = i + 1;
+    }
+    std::array::len(std::map::keys(seen))
+}
+
+spec distinct {
+    then distinct(sample()) == 2;
+    then distinct(std::array::empty()) == 0;
+}

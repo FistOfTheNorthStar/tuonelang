@@ -1,0 +1,6 @@
+task = """
+Write `abs(n)` using an if/else expression (remember: there are no negative \
+literals, use unary minus). Spec both branches."""
+notes = """
+`if` is an expression; each branch is a block whose trailing expression (no \
+semicolon) is its value."""

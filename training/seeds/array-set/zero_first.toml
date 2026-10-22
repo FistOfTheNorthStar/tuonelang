@@ -1,0 +1,7 @@
+task = """
+Write `zero_first(xs)` that overwrites element 0 of a growable `Array[Int]` \
+in place with 0 (leaving an empty array alone) and returns it."""
+notes = """
+`std::array::set` is an in-place indexed write (ADR-0016). It never grows \
+the array and traps IndexOutOfBounds off the end; the old element is dropped \
+in place."""

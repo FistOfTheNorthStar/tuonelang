@@ -1,0 +1,8 @@
+task = """
+Write `is_power_of_two(take n: Int) -> Bool`, true exactly when `n` is a \
+positive power of two, using a bitwise test rather than a loop."""
+notes = """
+`n & (n - 1)` clears the lowest set bit, so it is zero only for a power of \
+two — and for zero, which the `n > 0` guard excludes."""
+tier = "executable"
+difficulty = 2

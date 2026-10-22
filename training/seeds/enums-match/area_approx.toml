@@ -1,0 +1,3 @@
+task = """
+Define `enum Shape { Circle { r }, Rect { w, h } }` and `area_approx(s)` \
+using pi≈3."""

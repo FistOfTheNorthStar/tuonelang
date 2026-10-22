@@ -1,0 +1,21 @@
+fn parse_flag(take n: Int) -> Result[Int, Str] {
+    if n == 0 {
+        Ok { value: 0 }
+    } else if n == 1 {
+        Ok { value: 1 }
+    } else {
+        Err { error: "not a flag" }
+    }
+}
+
+fn or_neg1(in r: Result[Int, Str]) -> Int {
+    match r {
+        Ok { value } => value,
+        Err { error } => 0 - 1,
+    }
+}
+
+spec parse_flag {
+    then or_neg1(parse_flag(1)) == 1;
+    then or_neg1(parse_flag(9)) == 0 - 1;
+}

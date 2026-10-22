@@ -1,0 +1,9 @@
+task = """
+Write a runnable program that writes a short file with `std::fs`, reads it \
+back, removes it, and returns the byte count it read."""
+notes = """
+`std::fs` returns `Result[_, FsError]` over the ADR-0013 file primitives. \
+The whole tier is an EFFECT (no spec, R0007) — correctness is proven by \
+really running it."""
+run_exit = 5
+stdlib_deps = ["fs"]

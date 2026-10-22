@@ -1,0 +1,19 @@
+fn classify(take outcome: Int) -> Int {
+    if outcome >= 0 {
+        0
+    } else {
+        if outcome == -3 {
+            1
+        } else {
+            2
+        }
+    }
+}
+
+spec classify {
+    then classify(7) == 0;
+    then classify(0) == 0;
+    then classify(-3) == 1;
+    then classify(-1) == 2;
+    then classify(-2) == 2;
+}

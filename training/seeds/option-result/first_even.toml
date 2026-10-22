@@ -1,0 +1,6 @@
+task = """
+Write `first_even(a, b)` returning `Option[Int]` — `Some` of the first even \
+argument, else `None`. Add an `or_zero` extractor for the spec."""
+notes = """
+Construct Option payloads with named fields: `Some { value: a }`, never \
+`Some(a)`."""

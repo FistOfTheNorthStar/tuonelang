@@ -1,0 +1,6 @@
+task = """
+Using `std::string`, concatenate two string literals and return the length \
+of the result."""
+notes = """
+`std::string::concat` returns a fresh owned `String`. Heap ops are pure, so \
+this is spec-checkable."""

@@ -1,0 +1,3 @@
+task = """
+Using `std::array`, write `first_or_zero()` that pushes one element then \
+reads index 0 with `std::array::get`."""

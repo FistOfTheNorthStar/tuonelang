@@ -1,0 +1,10 @@
+task = """
+Write `parse_number(in s: Str) -> Int` that returns the decimal number \
+written in `s`, or -1 when `s` is empty or holds a non-digit byte. Use \
+`std::str::parse_int` and match on its `Result`."""
+notes = """
+`Result` payloads are named fields: `Ok { value }` and `Err { error }`, \
+matched exhaustively."""
+stdlib_deps = ["str"]
+tier = "executable"
+difficulty = 2

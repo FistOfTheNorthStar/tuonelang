@@ -1,0 +1,11 @@
+task = """
+Write `distance(take a: Int, take b: Int) -> Int` returning |a - b|, and \
+`capped(take a: Int, take b: Int, take cap: Int) -> Int` returning the \
+distance but never more than `cap`. Use `std::core` rather than writing your \
+own absolute value or minimum."""
+notes = """
+A standard-library function is called by its full path from any program; the \
+toolchain loads `std::core` because the program names it."""
+stdlib_deps = ["core"]
+tier = "executable"
+difficulty = 1

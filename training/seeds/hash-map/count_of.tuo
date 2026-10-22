@@ -1,0 +1,31 @@
+fn build() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 4);
+    std::array::push(xs, 9);
+    std::array::push(xs, 4);
+    xs
+}
+
+fn count_of(in xs: Array[Int], take needle: Int) -> Int {
+    var freq = std::map::empty();
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        let seen = match std::map::get(freq, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(freq, x, seen + 1);
+        i = i + 1;
+    }
+    match std::map::get(freq, needle) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec count_of {
+    then count_of(build(), 4) == 2;
+    then count_of(build(), 9) == 1;
+    then count_of(build(), 7) == 0;
+}

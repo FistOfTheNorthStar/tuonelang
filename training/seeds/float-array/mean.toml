@@ -1,0 +1,6 @@
+task = """
+Write `mean(xs)` over an `Array[Float]`, returning 0.0 for an empty array. \
+Spec it."""
+notes = """
+`Float` array elements landed with ADR-0016. `as Float` is a saturating \
+cast; float literals need the decimal point (`0.0`)."""

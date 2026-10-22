@@ -1,0 +1,3 @@
+task = """
+Define `Rect { w, h }` and `area(r)`. Use field shorthand in a constructor \
+helper `square_rect(side)`."""

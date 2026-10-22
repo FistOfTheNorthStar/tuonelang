@@ -1,0 +1,9 @@
+fn square(take n: Int) -> Int {
+    n * n
+}
+
+spec square {
+    then square(0) == 0;
+    then square(5) == 25;
+    then square(-4) == 16;
+}

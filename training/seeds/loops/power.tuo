@@ -1,0 +1,15 @@
+fn power(take base: Int, take exp: Int) -> Int {
+    var result = 1;
+    var i = 0;
+    while i < exp {
+        result = result * base;
+        i = i + 1;
+    }
+    result
+}
+
+spec power {
+    then power(2, 0) == 1;
+    then power(2, 10) == 1024;
+    then power(5, 3) == 125;
+}

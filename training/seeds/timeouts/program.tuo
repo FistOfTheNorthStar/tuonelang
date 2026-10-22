@@ -1,0 +1,17 @@
+module app;
+
+import std::net;
+
+fn main() -> Int {
+    let sock = std::net::udp_bind(0);
+    if sock < 0 {
+        return 1;
+    }
+    let outcome = std::net::udp_recv(sock, 50);
+    let _ = std::net::close(sock);
+    if std::net::is_timeout(outcome) {
+        42
+    } else {
+        0
+    }
+}

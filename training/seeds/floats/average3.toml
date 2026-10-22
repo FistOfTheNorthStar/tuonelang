@@ -1,0 +1,8 @@
+task = """
+Write `average3(a, b, c)` over three F64 values returning their mean, and a \
+`Bool` helper `is_two(x)` checking x == 2.0 so the spec can assert a scalar."""
+notes = """
+Floats are IEEE-754 and never trap. `1.` and `.5` are not valid float \
+literals (write `1.0`, `0.5`). Float `==` is exact; there is no float \
+tolerance helper in v0 (`std::test::near` operates on `Int`), so compare \
+against exactly-representable values or fold to an Int first."""

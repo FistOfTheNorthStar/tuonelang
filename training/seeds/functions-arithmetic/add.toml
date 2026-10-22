@@ -1,0 +1,3 @@
+task = """
+Write a function `add(a, b)` that returns the sum of two Ints, with a spec \
+covering a positive case and a zero case."""

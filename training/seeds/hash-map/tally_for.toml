@@ -1,0 +1,6 @@
+task = """
+Key a `Map[Str, Int]` with a view borrowed from an owned `String` via \
+`std::string::as_str`, and look entries up by Str."""
+notes = """
+`std::string::as_str` is a zero-copy `Str` view into a live `String` \
+(ADR-0010); it composes with `Map[Str, Int]` keys."""

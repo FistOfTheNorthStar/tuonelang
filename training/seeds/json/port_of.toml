@@ -1,0 +1,9 @@
+task = """
+Using `std::json`, write `port_of(text)` that parses a JSON object and \
+returns its integer `port` member, or 0 when the input is not valid JSON or \
+has no such member."""
+notes = """
+A parsed `Json` is an index arena navigated by node index; `member` returns \
+a negative index when the key is absent, and JSON numbers are `Float` (cast \
+with `as Int`). std::json is entirely pure, so it runs in the spec sandbox."""
+stdlib_deps = ["json"]

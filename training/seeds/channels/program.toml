@@ -1,0 +1,8 @@
+task = """
+Write a runnable program that sends five doubled values into a channel, \
+closes it, then drains it and returns the total."""
+notes = """
+Channels (ADR-0015) carry non-negative Ints by copy through a process-lived \
+Int handle; `chan_recv` returns -1 once the channel is closed AND drained, \
+which is the drain loop's sentinel. An EFFECT, so no spec (R0007)."""
+run_exit = 30

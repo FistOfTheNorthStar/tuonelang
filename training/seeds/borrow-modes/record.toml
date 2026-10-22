@@ -1,0 +1,11 @@
+task = """
+Define `struct Tally { total: Int, count: Int }` and write `record(mut t: \
+Tally, take value: Int) -> ()`, which adds one value to the caller's tally, \
+and `mean_of_three(take a: Int, take b: Int, take c: Int) -> Int`, which \
+records the three values into a fresh tally and returns the floor of their \
+mean."""
+notes = """
+`mut` lends the caller's `var` for the call, so `record` updates the tally \
+in place; the call site writes no mode — the signature decides."""
+tier = "executable"
+difficulty = 3

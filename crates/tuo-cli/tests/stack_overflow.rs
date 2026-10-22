@@ -21,8 +21,17 @@ fn scratch(name: &str) -> PathBuf {
     dir.join(name)
 }
 
+/// The main thread's stack limit every program here runs under, in KiB: the
+/// common 8 MiB default, set explicitly because the limit is inherited from
+/// whoever runs the test. Whether a 10^6-node drop overflows depends on it —
+/// LLVM's x86-64 glue frame is 16 bytes, so the drop needs about 16 MB and
+/// completes under a 16 MiB limit, which is how this suite once passed on a
+/// laptop and failed on a CI runner.
+const MAIN_STACK_KIB: u32 = 8192;
+
 /// Build `source` with the default (Cranelift) and the `--release` (LLVM)
-/// backend and run each binary with `args`, returning both outputs.
+/// backend and run each binary with `args` under [`MAIN_STACK_KIB`],
+/// returning both outputs.
 fn build_and_run(name: &str, source: &str, args: &[&str]) -> Vec<(&'static str, Output)> {
     let path = scratch(&format!("{name}.tuo"));
     fs::write(&path, source).expect("scratch source is writable");
@@ -44,7 +53,10 @@ fn build_and_run(name: &str, source: &str, args: &[&str]) -> Vec<(&'static str, 
             built.status.success(),
             "{name} builds on {backend}: {built:?}"
         );
-        let ran = Command::new(&exe)
+        let ran = Command::new("sh")
+            .arg("-c")
+            .arg(format!("ulimit -s {MAIN_STACK_KIB} && exec \"$0\" \"$@\""))
+            .arg(&exe)
             .args(args)
             .output()
             .expect("the built program runs");

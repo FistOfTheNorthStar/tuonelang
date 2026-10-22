@@ -1,0 +1,12 @@
+fn dot(take a: [Int; 3], take b: [Int; 3]) -> Int {
+    var acc = 0;
+    for i in 0 .. 3 {
+        acc = acc + a[i] * b[i];
+    }
+    acc
+}
+
+spec dot {
+    then dot([1, 2, 3], [4, 5, 6]) == 32;
+    then dot([0, 0, 0], [1, 2, 3]) == 0;
+}

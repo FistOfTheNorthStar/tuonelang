@@ -1,0 +1,6 @@
+task = """
+Write `is_origin(p)` taking a Point by `in` borrow and returning whether \
+both coordinates are zero."""
+notes = """
+`in` is a shared read-only borrow for the duration of the call. There are no \
+reference types; borrowing is only through modes."""

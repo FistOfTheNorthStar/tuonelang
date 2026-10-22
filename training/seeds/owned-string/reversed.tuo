@@ -1,0 +1,13 @@
+fn reversed(in s: Str) -> String {
+    var out = std::string::empty();
+    var i = std::str::len(s) - 1;
+    while i >= 0 {
+        std::string::push_byte(out, std::str::byte_at(s, i));
+        i = i - 1;
+    }
+    out
+}
+
+spec reversed {
+    then std::string::as_str(reversed("abc")) == "cba";
+}

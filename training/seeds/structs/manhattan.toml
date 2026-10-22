@@ -1,0 +1,6 @@
+task = """
+Define a `Point { x, y }` struct and a `manhattan(p)` function returning |x| \
++ |y| (assume non-negative for the spec)."""
+notes = """
+Aggregates are read with the `in` borrow mode. Fields are named-only and \
+private by default."""

@@ -1,0 +1,8 @@
+task = """
+Write `count_vowels(in s: Str) -> Int` returning how many bytes of `s` are a \
+lowercase vowel (a, e, i, o, u)."""
+notes = """
+`std::str::len` and `std::str::byte_at` are the byte-level view of a `Str`; \
+a byte is an `Int`, so the vowels are compared as 97, 101, ..."""
+tier = "executable"
+difficulty = 2

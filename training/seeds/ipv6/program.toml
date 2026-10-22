@@ -1,0 +1,11 @@
+task = """
+Write a runnable program that listens on an ephemeral IPv6 loopback port, \
+connects to it over `::1`, accepts the connection, and returns 6 when the \
+peer family really is IPv6."""
+notes = """
+A server cannot infer an address family from a port, so IPv6 listening is \
+the explicit `listen6`. The CLIENT side needs no new spelling: `connect` \
+infers the family from the numeric address, so `connect(\"::1\", port)` just \
+works. `bound_port` covers both families. An EFFECT, so no spec (R0007)."""
+run_exit = 6
+stdlib_deps = ["net"]

@@ -1,0 +1,13 @@
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn manhattan(in p: Point) -> Int {
+    p.x + p.y
+}
+
+spec manhattan {
+    then manhattan(Point { x: 3, y: 4 }) == 7;
+    then manhattan(Point { x: 0, y: 0 }) == 0;
+}

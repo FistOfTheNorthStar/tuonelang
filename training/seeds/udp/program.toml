@@ -1,0 +1,10 @@
+task = """
+Write a runnable program that sends the datagram \"ping\" from one UDP \
+socket to another on loopback, reads the payload back byte by byte, and \
+returns the byte sum modulo 100."""
+notes = """
+A datagram is a MESSAGE, not a stream: `udp_recv` returns the message LENGTH \
+and stages the payload, which `udp_byte_at` then indexes — `read_byte` (the \
+stream spelling) cannot see it. `udp_peer_port` names the sender so a server \
+can reply. An EFFECT, so no spec (R0007)."""
+run_exit = 30

@@ -1,0 +1,15 @@
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+fn sum_all() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 1);
+    std::array::push(xs, 2);
+    std::array::push(xs, 3);
+    std::collections::fold(xs, 0, add)
+}
+
+spec sum_all {
+    then sum_all() == 6;
+}

@@ -1,0 +1,6 @@
+task = """
+Using a `Map[Str, Int]`, write `score_of(key)` that looks up a score for a \
+string key, returning 0 when the key is absent."""
+notes = """
+The v0 map operation surface is `Map[Int, Int]` and `Map[Str, Int]`; any \
+other key/value pair is a `T0001`."""

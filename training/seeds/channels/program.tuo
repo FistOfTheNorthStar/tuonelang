@@ -1,0 +1,18 @@
+module app;
+
+fn main() -> Int {
+    let ch = std::rt::chan_new();
+    var i = 1;
+    while i <= 5 {
+        let _ = std::rt::chan_send(ch, i * 2);
+        i = i + 1;
+    }
+    let _ = std::rt::chan_close(ch);
+    var total = 0;
+    var v = std::rt::chan_recv(ch);
+    while v >= 0 {
+        total = total + v;
+        v = std::rt::chan_recv(ch);
+    }
+    total
+}

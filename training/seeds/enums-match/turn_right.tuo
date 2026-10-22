@@ -1,0 +1,29 @@
+enum Dir {
+    North,
+    South,
+    East,
+    West,
+}
+
+fn code(take d: Dir) -> Int {
+    match d {
+        Dir::North => 0,
+        Dir::East => 1,
+        Dir::South => 2,
+        Dir::West => 3,
+    }
+}
+
+fn turn_right(take d: Dir) -> Dir {
+    match d {
+        Dir::North => Dir::East,
+        Dir::East => Dir::South,
+        Dir::South => Dir::West,
+        Dir::West => Dir::North,
+    }
+}
+
+spec turn_right {
+    then code(turn_right(Dir::North)) == 1;
+    then code(turn_right(Dir::West)) == 0;
+}

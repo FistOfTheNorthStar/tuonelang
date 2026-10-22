@@ -1,6 +1,6 @@
 """Harvest additional SFT examples from the repository's validated tuonelang.
 
-The seed library (``seeds.py``) is the hand-authored *coverage skeleton*. This
+The seed library (``seeds/``) is the hand-authored *coverage skeleton*. This
 module supplies **volume** from source the repository already keeps green by its
 own test suites:
 

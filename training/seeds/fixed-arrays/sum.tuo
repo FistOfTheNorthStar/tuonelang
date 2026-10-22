@@ -1,0 +1,12 @@
+fn sum(take xs: [Int; 5]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    total
+}
+
+spec sum {
+    then sum([1, 2, 3, 4, 5]) == 15;
+    then sum([0; 5]) == 0;
+}

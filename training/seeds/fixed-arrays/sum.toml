@@ -1,0 +1,4 @@
+task = 'Write `sum(xs)` over a fixed `[Int; 5]` array using a `for` loop.'
+notes = """
+`[0; 5]` is the repeat literal (five zeros). Array length is part of the \
+type: `[Int; 5]` and `[Int; 4]` are different types."""

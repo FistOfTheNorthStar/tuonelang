@@ -1,0 +1,1 @@
+task = 'Write `power(base, exp)` computing base^exp for exp >= 0 with a loop.'

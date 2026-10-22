@@ -1,0 +1,19 @@
+fn safe_div(take a: Int, take b: Int) -> Option[Int] {
+    if b == 0 {
+        None
+    } else {
+        Some { value: a / b }
+    }
+}
+
+fn or_zero(in o: Option[Int]) -> Int {
+    match o {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec safe_div {
+    then or_zero(safe_div(10, 2)) == 5;
+    then or_zero(safe_div(10, 0)) == 0;
+}

@@ -1,0 +1,14 @@
+const LIMIT: Int = 100;
+
+fn capped(take n: Int) -> Int {
+    if n < LIMIT {
+        n
+    } else {
+        LIMIT
+    }
+}
+
+spec capped {
+    then capped(30) == 30;
+    then capped(250) == 100;
+}

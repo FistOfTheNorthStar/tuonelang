@@ -1,0 +1,4 @@
+task = """
+Define a `const LIMIT: Int = 100` and a function `capped(n)` that returns \
+the smaller of n and LIMIT."""
+notes = '`const` requires an explicit type annotation.'

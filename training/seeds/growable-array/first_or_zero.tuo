@@ -1,0 +1,9 @@
+fn first_or_zero() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 42);
+    std::array::get(xs, 0)
+}
+
+spec first_or_zero {
+    then first_or_zero() == 42;
+}
