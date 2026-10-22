@@ -87,6 +87,8 @@ the replacement, preserving the decision history.
 | [ADR-0036](ADR-0036-tls-in-tuonelang.md) | TLS in tuonelang — admitting ciphers, key exchange, and certificates into the standard library | accepted (retroactive; conformance gaps fixed) |
 | [ADR-0037](ADR-0037-reading-through-borrows.md) | Reading through borrows — lent pattern bindings, and a boxed pointee lent without a copy | accepted |
 | [ADR-0038](ADR-0038-the-standard-library-is-in-scope.md) | The standard library is in scope — a host loads the modules a program names | accepted |
+| [ADR-0039](ADR-0039-for-borrows-what-it-walks.md) | `for` borrows what it walks — reading an array without an index loop | proposed |
+| [ADR-0040](ADR-0040-growable-array-literals.md) | Array literals for growable arrays — a literal takes its array type from context | proposed |
 
 (`ADR-parser-strategy.md` carries number 0001 without it in the filename;
 new ADRs should follow the `ADR-NNNN-…` naming above. ADR-0005 is intentionally
