@@ -1,0 +1,5 @@
+task = """
+Write `parse_flag(n)` returning `Result[Int, Str]` — `Ok` of n when n is 0 \
+or 1, else `Err { error: \"not a flag\" }`."""
+notes = """
+`Ok { value: x }` / `Err { error: e }` — Result payloads are named fields."""

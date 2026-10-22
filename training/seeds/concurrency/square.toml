@@ -1,0 +1,9 @@
+task = """
+Write a runnable program whose `main` squares four tasks in parallel with \
+`std::rt::par_map` over two workers and returns the sum of the results."""
+notes = """
+`par_map` is structured fork-join: it takes a NON-capturing function value, \
+runs the tasks across N OS threads, and joins before returning — so no data \
+race is expressible. It is an EFFECT, so it cannot appear in a spec (R0007); \
+this program is verified by running."""
+run_exit = 30

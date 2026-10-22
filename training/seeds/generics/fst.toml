@@ -1,0 +1,4 @@
+task = """
+Define a generic `Pair[A, B] { first, second }` struct and a `fst` that \
+reads the first field of a `Pair[Int, Int]`."""
+notes = 'Generics use square brackets: `Pair[A, B]`, never `<>`.'

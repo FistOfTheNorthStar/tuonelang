@@ -1,0 +1,7 @@
+task = """
+Define an enum `Dir { North, South, East, West }` and a function \
+`turn_right(d)` mapping each direction to the next clockwise one. Return an \
+Int code (0..3) so the spec can compare scalars."""
+notes = """
+`match` is exhaustive (T0007 otherwise). Specs compare scalars, so map the \
+enum to an Int before `==`."""

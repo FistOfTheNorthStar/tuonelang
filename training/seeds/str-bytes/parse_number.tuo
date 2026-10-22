@@ -1,0 +1,11 @@
+fn parse_number(in s: Str) -> Int {
+    match std::str::parse_int(s) {
+        Ok { value } => value,
+        Err { error } => 0 - 1,
+    }
+}
+
+spec parse_number {
+    then parse_number("42") == 42;
+    then parse_number("4x2") == 0 - 1;
+}

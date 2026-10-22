@@ -1,0 +1,19 @@
+fn checked_sub(take a: Int, take b: Int) -> Result[Int, Str] {
+    if b > a {
+        Err { error: "underflow" }
+    } else {
+        Ok { value: a - b }
+    }
+}
+
+fn or_neg1(in r: Result[Int, Str]) -> Int {
+    match r {
+        Ok { value } => value,
+        Err { error } => 0 - 1,
+    }
+}
+
+spec checked_sub {
+    then or_neg1(checked_sub(10, 3)) == 7;
+    then or_neg1(checked_sub(3, 10)) == 0 - 1;
+}

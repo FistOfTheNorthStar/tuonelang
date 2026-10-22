@@ -1,0 +1,27 @@
+fn two() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 5);
+    std::array::push(xs, 6);
+    xs
+}
+
+fn head(in xs: Array[Int]) -> Int {
+    if std::array::len(xs) > 0 {
+        std::array::get(xs, 0)
+    } else {
+        -1
+    }
+}
+
+fn zero_first(take xs: Array[Int]) -> Array[Int] {
+    var ys = xs;
+    if std::array::len(ys) > 0 {
+        std::array::set(ys, 0, 0);
+    }
+    ys
+}
+
+spec zero_first {
+    then head(zero_first(two())) == 0;
+    then std::array::len(zero_first(two())) == 2;
+}

@@ -1,0 +1,17 @@
+fn tally_for(in name: Str) -> Int {
+    var owned = std::string::empty();
+    std::string::append(owned, "beta");
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "alpha", 1);
+    let _ = std::map::insert(m, std::string::as_str(owned), 2);
+    match std::map::get(m, name) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec tally_for {
+    then tally_for("alpha") == 1;
+    then tally_for("beta") == 2;
+    then tally_for("gamma") == 0;
+}

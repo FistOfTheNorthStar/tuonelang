@@ -1,0 +1,9 @@
+task = """
+Write `reversed(in s: Str) -> String` returning an owned String with the \
+bytes of `s` in reverse order."""
+notes = """
+A `String` is built with `var` and grown in place through \
+`std::string::push_byte`, whose first parameter is `mut`; \
+`std::string::as_str` views it as a `Str` so a spec can compare it."""
+tier = "executable"
+difficulty = 2

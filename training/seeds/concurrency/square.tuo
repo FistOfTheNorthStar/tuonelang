@@ -1,0 +1,21 @@
+module app;
+
+fn square(take n: Int) -> Int {
+    n * n
+}
+
+fn main() -> Int {
+    var tasks = std::array::empty();
+    std::array::push(tasks, 1);
+    std::array::push(tasks, 2);
+    std::array::push(tasks, 3);
+    std::array::push(tasks, 4);
+    let results = std::rt::par_map(square, tasks, 2);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(results) {
+        total = total + std::array::get(results, i);
+        i = i + 1;
+    }
+    total
+}

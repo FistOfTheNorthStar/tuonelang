@@ -1,0 +1,14 @@
+fn largest(take xs: [Int; 4]) -> Int {
+    var best = xs[0];
+    for x in xs {
+        if x > best {
+            best = x;
+        }
+    }
+    best
+}
+
+spec largest {
+    then largest([3, 9, 2, 7]) == 9;
+    then largest([5, 5, 5, 5]) == 5;
+}

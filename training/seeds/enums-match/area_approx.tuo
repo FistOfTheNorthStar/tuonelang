@@ -1,0 +1,16 @@
+enum Shape {
+    Circle { r: Int },
+    Rect { w: Int, h: Int },
+}
+
+fn area_approx(take s: Shape) -> Int {
+    match s {
+        Shape::Circle { r } => r * r * 3,
+        Shape::Rect { w, h } => w * h,
+    }
+}
+
+spec area_approx {
+    then area_approx(Shape::Circle { r: 2 }) == 12;
+    then area_approx(Shape::Rect { w: 3, h: 5 }) == 15;
+}

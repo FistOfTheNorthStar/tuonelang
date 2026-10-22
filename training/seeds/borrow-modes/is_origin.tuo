@@ -1,0 +1,13 @@
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn is_origin(in p: Point) -> Bool {
+    p.x == 0 && p.y == 0
+}
+
+spec is_origin {
+    then is_origin(Point { x: 0, y: 0 });
+    then is_origin(Point { x: 1, y: 0 }) == false;
+}

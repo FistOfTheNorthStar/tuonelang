@@ -1,0 +1,13 @@
+module answer;
+
+fn compute() -> Int {
+    6 * 7
+}
+
+fn main() -> Int {
+    compute()
+}
+
+spec compute {
+    then compute() == 42;
+}

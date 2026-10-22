@@ -1,0 +1,10 @@
+fn is_power_of_two(take n: Int) -> Bool {
+    n > 0 && (n & (n - 1)) == 0
+}
+
+spec is_power_of_two {
+    then is_power_of_two(1);
+    then is_power_of_two(64);
+    then !is_power_of_two(12);
+    then !is_power_of_two(0);
+}

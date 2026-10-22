@@ -1,0 +1,9 @@
+task = """
+Write `most_common(in xs: [Int; 6]) -> Int` returning the value that occurs \
+most often in `xs` (the first such value on a tie), counting with a \
+`Map[Int, Int]`."""
+notes = """
+`std::map::insert` returns the previous value as an `Option`; bind it to `_` \
+when only the side effect matters."""
+tier = "executable"
+difficulty = 3

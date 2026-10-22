@@ -1,0 +1,25 @@
+fn sample() -> Array[Float] {
+    var xs = std::array::empty();
+    std::array::push(xs, 1.0);
+    std::array::push(xs, 2.0);
+    std::array::push(xs, 3.0);
+    xs
+}
+
+fn mean(in xs: Array[Float]) -> Float {
+    if std::array::len(xs) == 0 {
+        return 0.0;
+    }
+    var total = 0.0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total / (std::array::len(xs) as Float)
+}
+
+spec mean {
+    then mean(sample()) == 2.0;
+    then mean(std::array::empty()) == 0.0;
+}

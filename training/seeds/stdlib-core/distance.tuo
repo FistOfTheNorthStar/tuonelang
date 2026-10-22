@@ -1,0 +1,12 @@
+fn distance(take a: Int, take b: Int) -> Int {
+    std::core::abs(a - b)
+}
+
+fn capped(take a: Int, take b: Int, take cap: Int) -> Int {
+    std::core::min(distance(a, b), cap)
+}
+
+spec capped {
+    then capped(2, 9, 100) == 7;
+    then capped(2, 9, 5) == 5;
+}

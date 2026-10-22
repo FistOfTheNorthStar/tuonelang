@@ -1,0 +1,13 @@
+fn gcd(take a: Int, take b: Int) -> Int {
+    if b == 0 {
+        a
+    } else {
+        gcd(b, a % b)
+    }
+}
+
+spec gcd {
+    then gcd(12, 8) == 4;
+    then gcd(17, 5) == 1;
+    then gcd(9, 0) == 9;
+}

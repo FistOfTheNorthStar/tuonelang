@@ -1,0 +1,22 @@
+fn most_common(in xs: [Int; 6]) -> Int {
+    var counts = std::map::empty();
+    var best = xs[0];
+    var best_count = 0;
+    for x in xs {
+        let seen = match std::map::get(counts, x) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(counts, x, seen + 1);
+        if seen + 1 >= best_count {
+            best = x;
+            best_count = seen + 1;
+        }
+    }
+    best
+}
+
+spec most_common {
+    then most_common([1, 2, 2, 3, 3, 3]) == 3;
+    then most_common([4, 4, 5, 5, 6, 6]) == 4;
+}

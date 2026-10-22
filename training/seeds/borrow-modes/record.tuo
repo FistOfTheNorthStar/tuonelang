@@ -1,0 +1,22 @@
+struct Tally {
+    total: Int,
+    count: Int,
+}
+
+fn record(mut t: Tally, take value: Int) -> () {
+    t.total = t.total + value;
+    t.count = t.count + 1;
+}
+
+fn mean_of_three(take a: Int, take b: Int, take c: Int) -> Int {
+    var t = Tally { total: 0, count: 0 };
+    record(t, a);
+    record(t, b);
+    record(t, c);
+    t.total / t.count
+}
+
+spec mean_of_three {
+    then mean_of_three(1, 2, 3) == 2;
+    then mean_of_three(10, 10, 11) == 10;
+}

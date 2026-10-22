@@ -1,0 +1,8 @@
+fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+spec add {
+    then add(40, 2) == 42;
+    then add(-1, 1) == 0;
+}

@@ -1,0 +1,5 @@
+spec "is_power_of_two on large and negative values" {
+    then is_power_of_two(1073741824);
+    then !is_power_of_two(0 - 8);
+    then !is_power_of_two(6);
+}

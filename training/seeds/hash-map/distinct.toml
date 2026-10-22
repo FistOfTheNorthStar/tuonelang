@@ -1,0 +1,6 @@
+task = """
+Write `distinct(xs)` returning how many distinct values an `Array[Int]` \
+holds, using a map's keys."""
+notes = """
+`std::map::keys` returns a NEW `Array[K]` in insertion (first-seen) order — \
+deterministic across all three engines."""

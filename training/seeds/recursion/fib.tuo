@@ -1,0 +1,13 @@
+fn fib(take n: Int) -> Int {
+    if n < 2 {
+        n
+    } else {
+        fib(n - 1) + fib(n - 2)
+    }
+}
+
+spec fib {
+    then fib(0) == 0;
+    then fib(1) == 1;
+    then fib(10) == 55;
+}

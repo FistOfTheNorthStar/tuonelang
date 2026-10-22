@@ -1,0 +1,7 @@
+task = """
+Using `std::array`, build a growable `Array[Int]`, push three values, and \
+return its length via `std::array::len`."""
+notes = """
+Owned `Array[Int]` allocates real memory; the mutators take the buffer by \
+`mut` borrow, so it must be a `var`. Heap ops are pure, so specs may build \
+arrays."""

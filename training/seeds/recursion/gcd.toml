@@ -1,0 +1,3 @@
+task = """
+Write a recursive `gcd(a, b)` using Euclid's algorithm (a, b non-negative). \
+Spec it."""

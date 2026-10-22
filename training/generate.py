@@ -22,6 +22,10 @@ Usage:
     python3 training/generate.py --check    # validate only; emit nothing
     python3 training/generate.py --limit 5  # first N seeds (smoke test)
 
+The seeds are read from ``training/seeds/`` (see ``seeds.py`` for the layout);
+``crates/tuo-cli/tests/training_seeds.rs`` admits the same files on every
+``cargo test``.
+
 The generator shells out to ``cargo run -p tuo-cli`` by default; set
 ``TUO_BIN=/path/to/tuo`` to use a prebuilt binary (much faster). Build one with
 ``cargo build -p tuo-cli`` and point ``TUO_BIN`` at ``target/debug/tuo``.
@@ -259,7 +263,7 @@ def assistant_answer(seed: Seed) -> str:
     return body
 
 
-def validate_seed(seed: Seed, idx: int) -> list[str]:
+def validate_seed(seed: Seed) -> list[str]:
     """Return a list of failure messages (empty if the seed is fully valid)."""
     problems: list[str] = []
     ok, out = check_ok(seed.solution)
@@ -310,17 +314,17 @@ def main() -> int:
     print(f"Validating {len(seeds)} seeds through the real tuo compiler...")
     valid: list[Seed] = []
     failures = 0
-    for i, seed in enumerate(seeds):
-        problems = validate_seed(seed, i)
+    for seed in seeds:
+        problems = validate_seed(seed)
         if problems:
             failures += 1
-            print(f"  [FAIL] seed #{i} ({seed.concept}): {seed.task[:60]}")
+            print(f"  [FAIL] {seed.concept}/{seed.name}: {seed.task[:60]}")
             for p in problems:
                 print("         " + p.replace("\n", "\n         "))
         else:
             valid.append(seed)
             tag = "run" if seed.runnable else "spec"
-            print(f"  [ ok ] seed #{i} ({seed.concept}) [{tag}]")
+            print(f"  [ ok ] {seed.concept}/{seed.name} [{tag}]")
 
     print(f"\n{len(valid)}/{len(seeds)} seeds valid, {failures} failed.")
     if failures:
@@ -487,7 +491,7 @@ def main() -> int:
         "harvested_dropped": harvest_dropped,
         "harvested_by_origin": harvest_by_origin,
     }
-    (OUT / "stats.json").write_text(json.dumps(stats, indent=2) + "\n")
+    (OUT / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True) + "\n")
 
     print("\nEmitted:")
     print(f"  {sft_path.relative_to(REPO)}   ({n_oneshot} one-shot examples)")

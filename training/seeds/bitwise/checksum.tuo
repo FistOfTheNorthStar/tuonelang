@@ -1,0 +1,15 @@
+fn checksum(in s: Str) -> Int {
+    var h = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        h = std::bits::add32(std::bits::mul32(h, 31), std::str::byte_at(s, i));
+        i = i + 1;
+    }
+    h
+}
+
+spec checksum {
+    then checksum("") == 0;
+    then checksum("a") == 97;
+    then checksum("ab") == 3105;
+}

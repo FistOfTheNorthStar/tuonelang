@@ -1,0 +1,20 @@
+module app;
+
+import std::fs;
+
+fn main() -> Int {
+    let path = "tuo_seed_scratch.txt";
+    match std::fs::write(path, "hello") {
+        Ok { value } => {
+            let n = match std::fs::read(path) {
+                Ok { value } => std::string::len(value),
+                Err { error } => 0,
+            };
+            match std::fs::remove(path) {
+                Ok { value } => n,
+                Err { error } => 0,
+            }
+        },
+        Err { error } => 0,
+    }
+}

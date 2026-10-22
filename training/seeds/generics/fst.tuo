@@ -1,0 +1,12 @@
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+fn fst(in p: Pair[Int, Int]) -> Int {
+    p.first
+}
+
+spec fst {
+    then fst(Pair { first: 7, second: 9 }) == 7;
+}

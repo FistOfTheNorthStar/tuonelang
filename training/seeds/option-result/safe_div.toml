@@ -1,0 +1,7 @@
+task = """
+Write `safe_div(a, b)` returning `Option[Int]` — `None` on divide by zero, \
+else `Some { value }`. Provide a helper `or_zero(o)` that extracts the value \
+or 0 so the spec can compare scalars."""
+notes = """
+Option/Result payloads are named fields: `Some { value: x }`, matched as \
+`Some { value } => ...`. There is no `Some(x)`."""

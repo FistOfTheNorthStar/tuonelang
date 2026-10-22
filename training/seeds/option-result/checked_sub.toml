@@ -1,0 +1,3 @@
+task = """
+Write `checked_sub(a, b)` returning `Result[Int, Str]` — `Err { error: \
+\"underflow\" }` when b > a, else `Ok { value }`."""

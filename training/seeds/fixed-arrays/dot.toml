@@ -1,0 +1,1 @@
+task = 'Write `dot(a, b)` computing the dot product of two `[Int; 3]` arrays.'

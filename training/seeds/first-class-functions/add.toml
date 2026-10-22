@@ -1,0 +1,10 @@
+task = """
+Write a top-level `add(a, b)` and use it as a first-class value passed to \
+`std::collections::fold` over a growable array to sum it."""
+notes = """
+A bare top-level `fn` name in value position is a Copy code pointer of type \
+`fn(take Int, take Int) -> Int`. Only ordinary top-level user functions are \
+first-class (builtins/generics are T0015). No closures in Tier 1. \
+`std::collections::fold` is called by its full path; `std::array` is a \
+compiler builtin."""
+stdlib_deps = ["collections"]

@@ -1,0 +1,12 @@
+task = """
+Write a runnable program that binds a UDP socket, waits at most 50ms for a \
+datagram that never arrives, and returns 42 when the wait times out instead \
+of hanging."""
+notes = """
+ADR-0017 added bounded waits so a program can RECOVER from a silent peer \
+instead of blocking forever. A timeout is a value you branch on \
+(`is_timeout`), not a trap. `ms` of 0 is a valid poll; a negative `ms` is a \
+host error, never an unbounded wait. An EFFECT, so no spec (R0007) — proven \
+by running."""
+run_exit = 42
+stdlib_deps = ["net"]

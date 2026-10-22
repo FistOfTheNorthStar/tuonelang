@@ -1,0 +1,25 @@
+fn max2(take a: Int, take b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+fn min2(take a: Int, take b: Int) -> Int {
+    if a < b {
+        a
+    } else {
+        b
+    }
+}
+
+spec max2 {
+    then max2(3, 7) == 7;
+    then max2(7, 3) == 7;
+}
+
+spec min2 {
+    then min2(3, 7) == 3;
+    then min2(4, 4) == 4;
+}

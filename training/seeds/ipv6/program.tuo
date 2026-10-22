@@ -1,0 +1,31 @@
+module app;
+
+import std::net;
+
+fn main() -> Int {
+    let server = std::net::listen6(0);
+    if server < 0 {
+        return 1;
+    }
+    let port = std::net::bound_port(server);
+    if port < 0 {
+        return 2;
+    }
+    let client = std::net::connect("::1", port);
+    if client < 0 {
+        return 3;
+    }
+    let session = std::net::accept(server);
+    if session < 0 {
+        return 4;
+    }
+    let family = std::net::peer_family(session);
+    let _ = std::net::close(session);
+    let _ = std::net::close(client);
+    let _ = std::net::close(server);
+    if std::net::is_ipv6(family) {
+        6
+    } else {
+        4
+    }
+}

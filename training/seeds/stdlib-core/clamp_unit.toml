@@ -1,0 +1,8 @@
+task = """
+Using `std::core`, write `clamp_unit(n)` that clamps n into 0..=100 by \
+calling `std::core::clamp`."""
+notes = """
+The standard library is free functions only, called by full path — \
+`std::core::clamp(...)` — from any program; the toolchain loads `std::core` \
+because the program names it. One obvious API per task."""
+stdlib_deps = ["core"]

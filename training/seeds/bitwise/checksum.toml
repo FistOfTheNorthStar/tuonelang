@@ -1,0 +1,11 @@
+task = """
+Write `checksum(in s: Str) -> Int`: start at 0 and, for each byte, multiply \
+the running value by 31 and add the byte, all modulo 2^32. Use the standard \
+library's modular arithmetic, since `+` and `*` trap on overflow."""
+notes = """
+`std::bits::add32` and `std::bits::mul32` are the operations that are \
+*defined* modulo 2^32; plain `+` and `*` trap on overflow, which is right \
+for arithmetic and wrong for a hash."""
+stdlib_deps = ["bits"]
+tier = "executable"
+difficulty = 3

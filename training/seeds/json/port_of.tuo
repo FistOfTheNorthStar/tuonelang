@@ -1,0 +1,23 @@
+module app;
+
+import std::json;
+
+fn port_of(in text: Str) -> Int {
+    match std::json::parse(text) {
+        Ok { value } => {
+            let node = std::json::member(value, std::json::root(), "port");
+            if node < 0 {
+                0
+            } else {
+                std::json::num_of(value, node) as Int
+            }
+        },
+        Err { error } => 0,
+    }
+}
+
+spec port_of {
+    then port_of("{\"port\": 8080}") == 8080;
+    then port_of("{\"host\": \"x\"}") == 0;
+    then port_of("not json") == 0;
+}

@@ -1,0 +1,15 @@
+fn score_of(in key: Str) -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "alpha", 10);
+    let _ = std::map::insert(m, "beta", 20);
+    match std::map::get(m, key) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec score_of {
+    then score_of("alpha") == 10;
+    then score_of("beta") == 20;
+    then score_of("gamma") == 0;
+}

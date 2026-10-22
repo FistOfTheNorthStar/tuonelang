@@ -1,0 +1,9 @@
+task = """
+Write `classify(outcome)` that turns a `std::net` return value into 0 for \
+success, 1 for a timeout, and 2 for a host error. Spec every branch."""
+notes = """
+The socket seam never traps: it reports through negative return values. A \
+descriptor/length is `>= 0`, `-3` is the ADR-0017 timeout sentinel \
+NET_TIMEOUT, and `-1`/`-2` are host errors. The stdlib spells these once as \
+`std::net::is_descriptor` / `is_timeout`. Classifying is pure, so unlike the \
+socket calls themselves it can carry a spec."""

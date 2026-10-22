@@ -1,0 +1,8 @@
+task = """
+Write `count_of(xs, needle)` that builds a frequency table of an \
+`Array[Int]` in a `Map[Int, Int]` and returns how many times `needle` occurs \
+(0 if absent). Spec it."""
+notes = """
+`std::map::get` returns `Option[V]` and never traps; `std::map::insert` \
+returns the PREVIOUS value, so bind it to `_`. A map is built through a \
+`var` binding because the mutators take it by `mut` borrow."""

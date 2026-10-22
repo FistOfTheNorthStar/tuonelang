@@ -1,0 +1,7 @@
+task = """
+Write a complete program with `main() -> Int` that returns 42 via a helper. \
+Include a spec on the helper."""
+notes = """
+`main` is nullary returning Int; its value becomes the process exit status \
+truncated to a byte."""
+run_exit = 42

@@ -1,0 +1,7 @@
+fn joined_len() -> Int {
+    std::string::len(std::string::concat("ab", "cde"))
+}
+
+spec joined_len {
+    then joined_len() == 5;
+}

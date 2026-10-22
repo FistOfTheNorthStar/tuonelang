@@ -1,0 +1,11 @@
+fn build_len() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 10);
+    std::array::push(xs, 20);
+    std::array::push(xs, 30);
+    std::array::len(xs)
+}
+
+spec build_len {
+    then build_len() == 3;
+}

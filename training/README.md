@@ -17,8 +17,11 @@ compiler did not produce.
 
 ```
 training/
-  seeds.py         The seed library: (concept, task, canonical solution) triples,
-                   authored against the v0 runnable core (see ../REFERENCE.md).
+  seeds/           The seed library: one directory per concept, one seed per
+                   group of files (below), authored against the v0 runnable core
+                   (see ../REFERENCE.md).
+  seeds.py         The seed loader: reads seeds/ into `Seed` records, refusing
+                   an unknown metadata key or a file that belongs to no seed.
   breaks.py        Break rules: deterministic edits that inject the cross-language
                    mistakes a model actually makes (use-for-import, <>-generics,
                    Some(x), += , missing param mode, chained comparison, ...).
@@ -137,14 +140,30 @@ The records use the common OpenAI-style `messages` schema. Convert as needed:
 
 The seed library is the *coverage skeleton*, not the final corpus. To scale:
 
-1. **Add seeds** (`seeds.py`) — new concepts or more tasks per concept. Each new
-   seed is validated the moment you run `generate.py`; a non-compiling seed
-   fails loudly, so you cannot poison the set by accident. A seed may also
-   carry `heldout_specs` (more specs, never shown in training, that must pass
-   and are scored as TestPass@1), `mutants` (wrong programs that must check
-   and must fail a spec — each becomes a spec-failure repair transcript), a
-   `tier` (`executable` / `effect` / `interpreter`; inferred when omitted and
-   checked when declared), a `difficulty` 1–5, and an `origin`.
+1. **Add seeds** (`seeds/`) — new concepts or more tasks per concept. A seed
+   is a group of files in `seeds/<concept>/`, named after the function it is
+   about:
+
+   ```
+   seeds/hash-map/most_common.toml          task, notes, run_exit, tier, ...
+   seeds/hash-map/most_common.tuo           the solution: a complete program
+   seeds/hash-map/most_common.heldout.tuo   optional: held-out spec blocks
+   seeds/hash-map/most_common.mutant1.tuo   optional: wrong programs, 1..n
+   ```
+
+   The `.toml` carries `task` (required), `notes`, `run_exit` (present exactly
+   when the program has a `main` to run natively), `stdlib_deps`, a `tier`
+   (`executable` / `effect` / `interpreter`; inferred when omitted and checked
+   when declared), a `difficulty` 1–5, and an `origin`. The held-out specs
+   are never shown in training; they must pass and are scored as TestPass@1.
+   Each mutant must check and must fail a spec, and becomes a spec-failure
+   repair transcript. Every `.tuo` file must be canonically formatted
+   (`tuo fmt`), since a model learns its style from them.
+
+   `crates/tuo-cli/tests/training_seeds.rs` admits every seed on each
+   `cargo test` — formatting, `check`, `spec`, `run_exit`, held-out specs,
+   mutants, and stray files — so a language change that breaks a seed fails
+   in the same PR, and `generate.py` validates them again before emitting.
 2. **Add break rules** (`breaks.py`) — more mistake patterns produce more repair
    transcripts from the same seeds. A break that fails to actually break a
    program (or that the compiler still accepts) is skipped, never faked.
@@ -218,6 +237,6 @@ correctness rules a model coming from other languages gets wrong:
 - `stats.json` records exactly what was produced, including which break rules
   fired and how often — silent truncation is visible, not hidden.
 
-If a seed ever stops compiling (say, after a language change), `generate.py`
-fails loudly and emits nothing rather than shipping a stale example. Keep the
-seeds green the same way the rest of the repository stays green.
+If a seed ever stops compiling (say, after a language change),
+`training_seeds.rs` fails in that change's own CI run, and `generate.py`
+fails loudly and emits nothing rather than shipping a stale example.

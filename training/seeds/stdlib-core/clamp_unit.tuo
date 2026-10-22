@@ -1,0 +1,11 @@
+import std::core;
+
+fn clamp_unit(take n: Int) -> Int {
+    std::core::clamp(n, 0, 100)
+}
+
+spec clamp_unit {
+    then clamp_unit(-5) == 0;
+    then clamp_unit(50) == 50;
+    then clamp_unit(250) == 100;
+}

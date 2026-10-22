@@ -1,0 +1,4 @@
+task = """
+Write a runnable program whose `main` sums a fixed `[Int; 4]` array and \
+returns the total (which fits in a byte)."""
+run_exit = 100
