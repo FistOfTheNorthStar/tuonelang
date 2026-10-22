@@ -81,6 +81,7 @@ fn the_catalog_lists_exactly_its_modules() {
         "std::sync",
         "std::test",
         "std::chacha",
+        "std::fe25519",
         "std::x25519",
         "std::hkdf",
         "std::der",
@@ -1370,10 +1371,9 @@ fn main() -> Int {
 
 /// `std::x25519` reproduces RFC 7748 §5.2's **published** test vector.
 ///
-/// This is X25519's load-bearing pin, and it lives here rather than in a
-/// spec because one scalar multiplication is 255 ladder steps of 255-bit
-/// bignum arithmetic — far past the spec sandbox's instruction fuel, for the
-/// same reason `std::crypto`'s PBKDF2 vector is pinned natively.
+/// The module's specs assert the same vector in the interpreter, since the
+/// ladder moved onto `std::fe25519` (it was far past the sandbox's fuel over
+/// `std::bignum`); this pins it on both native backends.
 ///
 /// It is also the check that actually earns its keep. An earlier revision
 /// computed the ladder's `z2` term as `E * (BB + a24 * E)` instead of
@@ -1431,6 +1431,7 @@ fn main() -> Int {
                 tuo_stdlib::BITS,
                 tuo_stdlib::CT,
                 tuo_stdlib::BIGNUM,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
             ],
             caller,
@@ -1696,6 +1697,7 @@ fn compare_to_message(take got: Array[Int]) -> Int {\n\
                 tuo_stdlib::BIGNUM,
                 tuo_stdlib::CRYPTO,
                 tuo_stdlib::CHACHA,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::HKDF,
             ],
@@ -1822,6 +1824,7 @@ fn main() -> Int {
                 tuo_stdlib::BITS,
                 tuo_stdlib::CT,
                 tuo_stdlib::BIGNUM,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,
                 tuo_stdlib::ED25519,
@@ -1836,6 +1839,151 @@ fn main() -> Int {
             "{which}: Ed25519 must verify RFC 8032 §7.1's published signatures \
              and refuse forgeries; the exit status is a bitmask of which \
              checks failed. stderr:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+/// `std::ed25519::sign` and `public_key` reproduce RFC 8032 §7.1's published
+/// tests 1–3, and three further keys and messages whose expected values came
+/// from **OpenSSL** (`openssl pkeyutl -sign -rawin`, OpenSSL 3.6) and agree
+/// with an independent big-integer implementation of RFC 8032.
+///
+/// Signing runs on `std::fe25519` and the fixed-limb scalar arithmetic
+/// (ADR-0022), while `verify` runs on `std::bignum`, so the last check —
+/// every signature produced here verifies — is two implementations agreeing,
+/// not one agreeing with itself. The exit status counts failures.
+#[test]
+fn ed25519_signs_rfc_8032_vectors() {
+    // (seed, message, public key, signature), all hex.
+    const VECTORS: &[(&str, &str, &str, &str)] = &[
+        (
+            "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+            "",
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e065224901555fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b",
+        ),
+        (
+            "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+            "72",
+            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+            "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
+        ),
+        (
+            "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+            "af82",
+            "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+            "6291d657deec24024827e69c3abe01a30ce548a284743a445e3680d7db5ac3ac18ff9b538d16f290ae67f760984dc6594a7c15e9716ed28dc027beceea1ec40a",
+        ),
+        (
+            "1e5180f383a5dcf31ae239e5999f8e6bc8928cd7bbc6c47dc0c596703d009d14",
+            "1c49d1",
+            "abc8e2e1960bb70bb7eda440031d0abb26b56c489c00309a2388985dc41e30c1",
+            "8a92fc8c5b630fc016dad3a8cbd56f3f13b4dbc3f30c76ba4075e04d15e411bf3f2f2438c754224d81f838d37f2075f1a3c4c9d015bdda94cfbdcce59dcb1304",
+        ),
+        (
+            "197302d0e4af7dad5035654059faffed5bce60ffbe83a313b957168e894a4975",
+            "24e0a5b4b7934f06d9b55e5d766c1766e4958d7fde1d6c81cdc0dd99e07d65ea8642d86b90edfb7a8384ce069339c421d10cf6b485e3ab1ab79f6d78247be23a",
+            "473d4f51e2a910d2e23fec9b2d862c25d23b04afecdb40f2a62cd2bf6b704079",
+            "859a3603736ede35fc5eedfb9a77bda3899ab66d39f486135535a1449fbc1116ab99a7fe5017537db9c9780ad11c91e11ebeb1e246700e97dcd3bf66b304510a",
+        ),
+        (
+            "d9e21fa0b374ac78b6edf5fcfa8b408f66abff4e8ccca580b27acee2666e334b",
+            "d444020826a7e198f575cd85ed7d5ceb3342b17c7782c4d37fce6f8ea9e808d44a5175eacf1970b0b7c8f6834273ecf72ef76cd7ba7af010a644e77f5e1831bfdb692573ea03170073948beed6159ccb323f1e9e0bc08bf444abc1a25b270150aa9593c4edf3dc7db0b8f0228b39799621f599e0b1814a156aab28ef22c8c8ea964e816963ce2685ce326003f51b63e3120dd558a55aefc5f10606827953ae4d7353e91f7ff277929ece2b279785346f9f5675993badb5118c660832a5eb2c0ba58beed60c73dec1",
+            "a7122997de9795e91302aaef61e045aaeb5dcf6a99fdfb891e86ab645a3e7cf5",
+            "dfa38e056fa3882979d448fce227c821ced777b5f4eddfbe9e79491658250ac0106d3e003b59a20baf7b706ccb0b6134325015fad2a7da005e3d81ac51128808",
+        ),
+    ];
+    let mut checks = String::new();
+    for (seed, message, public, signature) in VECTORS {
+        checks.push_str(&format!(
+            "    bad = bad + check(hex(\"{seed}\"), hex(\"{message}\"), hex(\"{public}\"), hex(\"{signature}\"));\n"
+        ));
+    }
+    let dir = native_workspace("ed25519_sign");
+    let caller = format!(
+        "\
+module caller;
+
+import std::ed25519;
+
+/// Bytes from lowercase hex.
+fn hex(in text: Str) -> Array[Int] {{
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::str::len(text) {{
+        std::array::push(out, digit(std::str::byte_at(text, i)) * 16 + digit(std::str::byte_at(text, i + 1)));
+        i = i + 2;
+    }}
+    out
+}}
+
+fn digit(take c: Int) -> Int {{
+    if c >= 97 {{
+        return c - 87;
+    }}
+    c - 48
+}}
+
+fn same(in a: Array[Int], in b: Array[Int]) -> Bool {{
+    if std::array::len(a) != std::array::len(b) {{
+        return false;
+    }}
+    var i = 0;
+    while i < std::array::len(a) {{
+        if std::array::get(a, i) != std::array::get(b, i) {{
+            return false;
+        }}
+        i = i + 1;
+    }}
+    true
+}}
+
+/// The number of ways one vector fails: wrong public key, wrong signature,
+/// or a signature the independent verifier rejects.
+fn check(take seed: Array[Int], take message: Array[Int], take public: Array[Int], take expected: Array[Int]) -> Int {{
+    var bad = 0;
+    if !same(std::ed25519::public_key(seed), public) {{
+        bad = bad + 1;
+    }}
+    let signature = std::ed25519::sign(seed, message);
+    if !same(signature, expected) {{
+        bad = bad + 1;
+    }}
+    if !std::ed25519::verify(public, message, signature) {{
+        bad = bad + 1;
+    }}
+    bad
+}}
+
+fn main() -> Int {{
+    var bad = 0;
+{checks}    bad
+}}
+"
+    );
+    for release in [false, true] {
+        let output = run_with_modules(
+            &dir,
+            &[
+                tuo_stdlib::BITS,
+                tuo_stdlib::CT,
+                tuo_stdlib::BIGNUM,
+                tuo_stdlib::FE25519,
+                tuo_stdlib::X25519,
+                tuo_stdlib::SHA512,
+                tuo_stdlib::ED25519,
+            ],
+            &caller,
+            release,
+        );
+        let which = backend_name(release);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{which}: Ed25519 signing must reproduce RFC 8032's and OpenSSL's \
+             public keys and signatures, and every signature must verify; the \
+             exit status counts failures. stderr:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -1919,6 +2067,7 @@ fn main() -> Int {
                 tuo_stdlib::BITS,
                 tuo_stdlib::CT,
                 tuo_stdlib::BIGNUM,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,
                 tuo_stdlib::ED25519,
@@ -2008,6 +2157,7 @@ fn main() -> Int {
                 tuo_stdlib::CRYPTO,
                 tuo_stdlib::CHACHA,
                 tuo_stdlib::HKDF,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::TLS,
             ],
@@ -2219,6 +2369,7 @@ fn main() -> Int {
                 tuo_stdlib::CRYPTO,
                 tuo_stdlib::CHACHA,
                 tuo_stdlib::HKDF,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,
                 tuo_stdlib::ED25519,
@@ -2915,6 +3066,7 @@ fn tls_serves_a_real_https_request() {
                 tuo_stdlib::CRYPTO,
                 tuo_stdlib::CHACHA,
                 tuo_stdlib::HKDF,
+                tuo_stdlib::FE25519,
                 tuo_stdlib::X25519,
                 tuo_stdlib::SHA512,
                 tuo_stdlib::ED25519,
@@ -3010,6 +3162,7 @@ const TLS_MODULES: &[tuo_stdlib::Module] = &[
     tuo_stdlib::CRYPTO,
     tuo_stdlib::CHACHA,
     tuo_stdlib::HKDF,
+    tuo_stdlib::FE25519,
     tuo_stdlib::X25519,
     tuo_stdlib::TLS,
 ];

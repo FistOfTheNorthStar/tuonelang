@@ -171,6 +171,9 @@ fn c_equivalent(label: &str) -> Option<&'static str> {
         "constant-time" => {
             include_str!("../../../../benchmarks/runtime/programs/c/constant-time.c")
         }
+        "wrapping-add64" => {
+            include_str!("../../../../benchmarks/runtime/programs/c/wrapping-add64.c")
+        }
         "wire-decode" => include_str!("../../../../benchmarks/runtime/programs/c/wire-decode.c"),
         "integer-computation" => {
             include_str!("../../../../benchmarks/runtime/programs/c/integer-computation.c")
@@ -224,6 +227,9 @@ fn go_equivalent(label: &str) -> Option<&'static str> {
         "sha256-hash" => include_str!("../../../../benchmarks/runtime/programs/go/sha256-hash.go"),
         "constant-time" => {
             include_str!("../../../../benchmarks/runtime/programs/go/constant-time.go")
+        }
+        "wrapping-add64" => {
+            include_str!("../../../../benchmarks/runtime/programs/go/wrapping-add64.go")
         }
         "wire-decode" => include_str!("../../../../benchmarks/runtime/programs/go/wire-decode.go"),
         "integer-computation" => {

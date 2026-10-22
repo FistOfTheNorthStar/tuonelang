@@ -187,7 +187,12 @@ fn scratch_buffers_match_the_interpreter() {
 #[test]
 fn boxes_match_the_interpreter() {
     // ADR-0028 Stage B: `Box[T]` values and recursive types through them.
-    for name in ["box_values.tuo", "box_recursive.tuo", "lend_bindings.tuo"] {
+    for name in [
+        "box_values.tuo",
+        "box_recursive.tuo",
+        "box_niche.tuo",
+        "lend_bindings.tuo",
+    ] {
         assert_agrees(name);
     }
 }

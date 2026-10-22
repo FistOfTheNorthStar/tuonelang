@@ -72,6 +72,7 @@
 
 mod lower;
 mod mir;
+mod mono;
 pub mod opt;
 mod print;
 mod reach;
@@ -84,6 +85,7 @@ pub use mir::{
     HeapMutOp, HeapOp, LocalDecl, LocalId, Operand, PassMode, Place, Program, Projection, Rvalue,
     Skipped, Statement, StrOp, Terminator, Trap, UnOp,
 };
+pub use mono::{MonoError, monomorphize};
 pub use opt::{OptReport, PassReport, optimize, pass_descriptions};
 pub use print::render;
 pub use reach::retain_reachable;

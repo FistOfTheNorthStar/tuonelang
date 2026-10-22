@@ -29,15 +29,16 @@
 // the same convention `std::crypto` already uses, so the two compose without
 // a conversion layer.
 //
-// WHAT THIS IS NOT. The constant-time claim here is deliberately narrow.
-// ChaCha20's control flow is data-independent by construction (no branch and
-// no index depends on the key or the plaintext), and that much is real. But
-// these functions are NOT marked `#[constant_time]`: they loop and index by
-// nature, which the ADR-0020 checker refuses, and there is no `#[allow]`
-// escape hatch — a function that cannot satisfy the checker simply goes
-// unmarked. Poly1305's `std::bignum` arithmetic is explicitly documented as
-// not constant time. So this module promises correctness against the RFC,
-// not a timing guarantee.
+// WHAT IS CONSTANT TIME, AND HOW FAR THAT GOES. ChaCha20's control flow is
+// data-independent by construction (no branch and no index depends on the
+// key or the plaintext), but its functions are NOT marked
+// `#[constant_time]`: they loop and index by nature, which the ADR-0020
+// checker refuses, and there is no `#[allow]` escape hatch — a function that
+// cannot satisfy the checker simply goes unmarked. Poly1305's arithmetic is
+// marked: `poly_step` and `poly_finish` are fixed-limb straight-line code
+// (ADR-0022), compiler-checked and disassembly-pinned, with only the
+// length-driven loops around them unmarked. As everywhere in the library,
+// this is verified-branchless source, not a guarantee about wall time.
 
 module std::chacha;
 
@@ -472,9 +473,7 @@ spec quarter_round_at {
 // --- Poly1305 (RFC 8439 §2.5) -----------------------------------------------
 //
 // The one-time authenticator that turns ChaCha20's confidentiality into an
-// AEAD. It evaluates a polynomial over the prime field 2^130 - 5, which is
-// why it needs `std::bignum`: the accumulator exceeds 64 bits by design, so
-// there is no way to write this over `Int` alone.
+// AEAD. It evaluates a polynomial over the prime field 2^130 - 5.
 //
 // ONE-TIME is the load-bearing word, and it is a *security* property, not a
 // performance note. The key must never be reused across two messages: two
@@ -482,36 +481,43 @@ spec quarter_round_at {
 // messages. In the AEAD below the key is derived per-record from the nonce,
 // which is what makes that safe.
 //
-// NOT CONSTANT TIME. `std::bignum` documents itself as variable-time, and
-// this builds directly on it. The tag *comparison* is constant time
-// (`std::crypto::verify` via `std::ct::bytes_eq`), which is the comparison
-// that matters for forgery resistance, but the tag *computation* here leaks
-// timing information about the key. That is a real limitation, stated rather
-// than hidden.
+// FIXED LIMBS, CONSTANT TIME (ADR-0022). The accumulator, the key halves `r`
+// and `s`, and each message block are `Poly` values: five 26-bit limbs, the
+// layout of poly1305-donna. A block step is twenty-five limb products and a
+// fixed carry chain, written with `std::int`'s wrapping operations and
+// marked `#[constant_time]`, as is the final reduction, which chooses
+// between h and h - p by mask rather than by comparison. The bound that
+// replaces the trap: limbs enter a step below 2^27 and the clamped `r`
+// below 2^26 (2^28.4 times five), so every product sum stays below 2^58.
+// The loops — over blocks, and over bytes in the loaders — depend only on
+// the message *length*, which the record layer sends in the clear anyway.
+//
+// This replaced a `std::bignum` implementation that normalized, skipped zero
+// limbs, and reduced by repeated subtraction — timing that depended on the
+// one-time key and the plaintext.
 
-/// The Poly1305 prime, 2^130 - 5, as a bignum.
+/// An element of GF(2^130 - 5) — the accumulator, a key half, or one message
+/// block — in five 26-bit limbs, least significant first.
 ///
 /// # Example
 ///
 /// ```tuo
-/// let p = std::chacha::poly_prime();
+/// let r = std::chacha::poly_limbs(std::chacha::poly_clamp_r(key));
 /// ```
-pub fn poly_prime() -> Array[Int] {
-    // 2^130 = 1 followed by 130 zero bits; subtract 5.
-    var two_130 = std::bignum::from_int(1);
-    var i = 0;
-    while i < 130 {
-        two_130 = std::bignum::mul_small(two_130, 2);
-        i = i + 1;
-    }
-    std::bignum::sub(two_130, std::bignum::from_int(5))
+pub struct Poly {
+    l0: Int,
+    l1: Int,
+    l2: Int,
+    l3: Int,
+    l4: Int,
 }
 
 /// Clamp the `r` half of a Poly1305 key (RFC 8439 §2.5): certain bits are
 /// forced to zero so the multiplication cannot overflow the field.
 ///
 /// The clamp is part of the algorithm, not an optimization — an unclamped `r`
-/// produces tags no other implementation agrees with.
+/// produces tags no other implementation agrees with. The two `if`s branch on
+/// the byte position, never on the key.
 ///
 /// # Example
 ///
@@ -537,50 +543,229 @@ pub fn poly_clamp_r(in key: Array[Int]) -> Array[Int] {
     out
 }
 
-/// Read a little-endian byte array as a bignum.
-///
-/// Poly1305 is little-endian throughout, while `std::bignum::from_be_bytes`
-/// is big-endian, so the bytes are reversed here rather than a second
-/// conversion being written.
-///
-/// # Example
-///
-/// ```tuo
-/// let n = std::chacha::le_bytes_to_num(bytes);
-/// ```
-pub fn le_bytes_to_num(in bytes: Array[Int]) -> Array[Int] {
-    var reversed = std::array::empty();
-    var i = std::array::len(bytes) - 1;
-    while i >= 0 {
-        std::array::push(reversed, std::array::get(bytes, i) & 255);
-        i = i - 1;
+/// The 26 bits of a little-endian byte string starting at bit `low`, with
+/// bytes past the end read as zero.
+fn bits_26(in bytes: Array[Int], take low: Int) -> Int {
+    let first = low >> 3;
+    var acc = 0;
+    var k = 0;
+    while k < 5 {
+        acc = acc | (byte_or_zero(bytes, first + k) << (k * 8));
+        k = k + 1;
     }
-    std::bignum::from_be_bytes(reversed)
+    (acc >> (low & 7)) & 67108863
 }
 
-/// Serialize a bignum as exactly `count` little-endian bytes, truncating
-/// above that width.
+/// A little-endian byte string of up to 17 bytes as five 26-bit limbs (bits
+/// 0 to 129; missing bytes are zero).
 ///
 /// # Example
 ///
 /// ```tuo
-/// let bytes = std::chacha::num_to_le_bytes(tag, 16);
+/// let s = std::chacha::poly_limbs(pad_bytes);
 /// ```
-pub fn num_to_le_bytes(in value: Array[Int], take count: Int) -> Array[Int] {
-    let be = std::bignum::to_be_bytes(value);
-    let n = std::array::len(be);
+pub fn poly_limbs(in bytes: Array[Int]) -> Poly {
+    Poly {
+        l0: bits_26(bytes, 0),
+        l1: bits_26(bytes, 26),
+        l2: bits_26(bytes, 52),
+        l3: bits_26(bytes, 78),
+        l4: bits_26(bytes, 104),
+    }
+}
+
+/// The 16 bytes of a reduced value's low 128 bits, little-endian — the tag.
+///
+/// # Example
+///
+/// ```tuo
+/// let tag = std::chacha::poly_bytes(std::chacha::poly_finish(h, s));
+/// ```
+pub fn poly_bytes(take f: Poly) -> Array[Int] {
+    let limbs = [f.l0, f.l1, f.l2, f.l3, f.l4];
     var out = std::array::empty();
-    var i = 0;
-    while i < count {
-        // Little-endian index `i` is big-endian index `n - 1 - i`.
-        let index = n - 1 - i;
-        if index < 0 {
-            std::array::push(out, 0);
-        } else {
-            std::array::push(out, std::array::get(be, index) & 255);
+    var acc = 0;
+    var bits = 0;
+    var limb = 0;
+    while limb < 5 {
+        acc = acc | (limbs[limb as Usize] << bits);
+        bits = bits + 26;
+        while bits >= 8 && std::array::len(out) < 16 {
+            std::array::push(out, acc & 255);
+            acc = acc >> 8;
+            bits = bits - 8;
         }
+        limb = limb + 1;
+    }
+    out
+}
+
+/// Zero, the accumulator's starting value.
+///
+/// # Example
+///
+/// ```tuo
+/// var h = std::chacha::poly_zero();
+/// ```
+#[constant_time]
+pub fn poly_zero() -> Poly {
+    Poly { l0: 0, l1: 0, l2: 0, l3: 0, l4: 0 }
+}
+
+/// One Poly1305 block: `(h + m) * r mod 2^130 - 5`, partially carried.
+///
+/// `m` is the block with its padding bit already set (`poly_limbs` of the
+/// padded block). Since 2^130 = 5 in this field, a product's limbs past
+/// 2^130 fold back multiplied by 5, which is why `r`'s upper limbs appear
+/// pre-multiplied (`s1` to `s4`).
+///
+/// # Example
+///
+/// ```tuo
+/// h = std::chacha::poly_step(h, r, std::chacha::poly_limbs(block));
+/// ```
+#[constant_time]
+pub fn poly_step(take h: Poly, take r: Poly, take m: Poly) -> Poly {
+    let h0 = std::int::wrapping_add(h.l0, m.l0);
+    let h1 = std::int::wrapping_add(h.l1, m.l1);
+    let h2 = std::int::wrapping_add(h.l2, m.l2);
+    let h3 = std::int::wrapping_add(h.l3, m.l3);
+    let h4 = std::int::wrapping_add(h.l4, m.l4);
+    let s1 = std::int::wrapping_mul(r.l1, 5);
+    let s2 = std::int::wrapping_mul(r.l2, 5);
+    let s3 = std::int::wrapping_mul(r.l3, 5);
+    let s4 = std::int::wrapping_mul(r.l4, 5);
+    var d0 = std::int::wrapping_mul(h0, r.l0);
+    d0 = std::int::wrapping_add(d0, std::int::wrapping_mul(h1, s4));
+    d0 = std::int::wrapping_add(d0, std::int::wrapping_mul(h2, s3));
+    d0 = std::int::wrapping_add(d0, std::int::wrapping_mul(h3, s2));
+    d0 = std::int::wrapping_add(d0, std::int::wrapping_mul(h4, s1));
+    var d1 = std::int::wrapping_mul(h0, r.l1);
+    d1 = std::int::wrapping_add(d1, std::int::wrapping_mul(h1, r.l0));
+    d1 = std::int::wrapping_add(d1, std::int::wrapping_mul(h2, s4));
+    d1 = std::int::wrapping_add(d1, std::int::wrapping_mul(h3, s3));
+    d1 = std::int::wrapping_add(d1, std::int::wrapping_mul(h4, s2));
+    var d2 = std::int::wrapping_mul(h0, r.l2);
+    d2 = std::int::wrapping_add(d2, std::int::wrapping_mul(h1, r.l1));
+    d2 = std::int::wrapping_add(d2, std::int::wrapping_mul(h2, r.l0));
+    d2 = std::int::wrapping_add(d2, std::int::wrapping_mul(h3, s4));
+    d2 = std::int::wrapping_add(d2, std::int::wrapping_mul(h4, s3));
+    var d3 = std::int::wrapping_mul(h0, r.l3);
+    d3 = std::int::wrapping_add(d3, std::int::wrapping_mul(h1, r.l2));
+    d3 = std::int::wrapping_add(d3, std::int::wrapping_mul(h2, r.l1));
+    d3 = std::int::wrapping_add(d3, std::int::wrapping_mul(h3, r.l0));
+    d3 = std::int::wrapping_add(d3, std::int::wrapping_mul(h4, s4));
+    var d4 = std::int::wrapping_mul(h0, r.l4);
+    d4 = std::int::wrapping_add(d4, std::int::wrapping_mul(h1, r.l3));
+    d4 = std::int::wrapping_add(d4, std::int::wrapping_mul(h2, r.l2));
+    d4 = std::int::wrapping_add(d4, std::int::wrapping_mul(h3, r.l1));
+    d4 = std::int::wrapping_add(d4, std::int::wrapping_mul(h4, r.l0));
+    var c = d0 >> 26;
+    var l0 = d0 & 67108863;
+    d1 = std::int::wrapping_add(d1, c);
+    c = d1 >> 26;
+    let l1 = d1 & 67108863;
+    d2 = std::int::wrapping_add(d2, c);
+    c = d2 >> 26;
+    let l2 = d2 & 67108863;
+    d3 = std::int::wrapping_add(d3, c);
+    c = d3 >> 26;
+    let l3 = d3 & 67108863;
+    d4 = std::int::wrapping_add(d4, c);
+    c = d4 >> 26;
+    let l4 = d4 & 67108863;
+    l0 = std::int::wrapping_add(l0, std::int::wrapping_mul(c, 5));
+    c = l0 >> 26;
+    l0 = l0 & 67108863;
+    Poly {
+        l0: l0,
+        l1: std::int::wrapping_add(l1, c),
+        l2: l2,
+        l3: l3,
+        l4: l4,
+    }
+}
+
+/// The tag from the final accumulator: carry `h` fully, reduce it below
+/// 2^130 - 5, add the pad `s`, and keep the low 128 bits.
+///
+/// The reduction computes g = h + 5 - 2^130 and keeps it exactly when it is
+/// non-negative (h >= p), choosing by the sign of g's top limb and
+/// `std::ct::select` rather than by comparing.
+///
+/// # Example
+///
+/// ```tuo
+/// let tag = std::chacha::poly_bytes(std::chacha::poly_finish(h, s));
+/// ```
+#[constant_time]
+pub fn poly_finish(take h: Poly, take s: Poly) -> Poly {
+    var h0 = h.l0;
+    var h1 = h.l1;
+    var h2 = h.l2;
+    var h3 = h.l3;
+    var h4 = h.l4;
+    var c = h1 >> 26;
+    h1 = h1 & 67108863;
+    h2 = std::int::wrapping_add(h2, c);
+    c = h2 >> 26;
+    h2 = h2 & 67108863;
+    h3 = std::int::wrapping_add(h3, c);
+    c = h3 >> 26;
+    h3 = h3 & 67108863;
+    h4 = std::int::wrapping_add(h4, c);
+    c = h4 >> 26;
+    h4 = h4 & 67108863;
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(c, 5));
+    c = h0 >> 26;
+    h0 = h0 & 67108863;
+    h1 = std::int::wrapping_add(h1, c);
+    // g = h + 5 - 2^130.
+    var g0 = std::int::wrapping_add(h0, 5);
+    c = g0 >> 26;
+    g0 = g0 & 67108863;
+    var g1 = std::int::wrapping_add(h1, c);
+    c = g1 >> 26;
+    g1 = g1 & 67108863;
+    var g2 = std::int::wrapping_add(h2, c);
+    c = g2 >> 26;
+    g2 = g2 & 67108863;
+    var g3 = std::int::wrapping_add(h3, c);
+    c = g3 >> 26;
+    g3 = g3 & 67108863;
+    let g4 = std::int::wrapping_sub(std::int::wrapping_add(h4, c), 67108864);
+    // 1 when g4 >= 0 (h >= p, so g = h - p is the reduced value), else 0.
+    let reduce = std::int::wrapping_add(g4 >> 63, 1);
+    let f0 = std::ct::select(reduce, g0, h0);
+    let f1 = std::ct::select(reduce, g1, h1);
+    let f2 = std::ct::select(reduce, g2, h2);
+    let f3 = std::ct::select(reduce, g3, h3);
+    let f4 = std::ct::select(reduce, g4 & 67108863, h4);
+    // Add s and keep 128 bits: the top limb holds bits 104 to 127.
+    var t = std::int::wrapping_add(f0, s.l0);
+    let o0 = t & 67108863;
+    t = std::int::wrapping_add(std::int::wrapping_add(f1, s.l1), t >> 26);
+    let o1 = t & 67108863;
+    t = std::int::wrapping_add(std::int::wrapping_add(f2, s.l2), t >> 26);
+    let o2 = t & 67108863;
+    t = std::int::wrapping_add(std::int::wrapping_add(f3, s.l3), t >> 26);
+    let o3 = t & 67108863;
+    t = std::int::wrapping_add(std::int::wrapping_add(f4, s.l4), t >> 26);
+    Poly { l0: o0, l1: o1, l2: o2, l3: o3, l4: t & 16777215 }
+}
+
+/// The 17-byte block at `offset`: up to 16 message bytes, then the 1 byte
+/// that makes the polynomial injective over variable-length input, then
+/// zeros. For a full block the 1 lands at bit 128.
+fn poly_block(in message: Array[Int], take offset: Int) -> Array[Int] {
+    var out = std::array::empty();
+    let n = std::array::len(message);
+    var i = 0;
+    while i < 16 && offset + i < n {
+        std::array::push(out, std::array::get(message, offset + i) & 255);
         i = i + 1;
     }
+    std::array::push(out, 1);
     out
 }
 
@@ -595,72 +780,22 @@ pub fn num_to_le_bytes(in value: Array[Int], take count: Int) -> Array[Int] {
 /// let tag = std::chacha::poly1305(one_time_key, message); // 16 bytes
 /// ```
 pub fn poly1305(in key: Array[Int], in message: Array[Int]) -> Array[Int] {
-    let prime = poly_prime();
-    let r = le_bytes_to_num(poly_clamp_r(key));
+    let r = poly_limbs(poly_clamp_r(key));
     var s_bytes = std::array::empty();
     var k = 16;
     while k < 32 {
         std::array::push(s_bytes, byte_or_zero(key, k));
         k = k + 1;
     }
-    let s = le_bytes_to_num(s_bytes);
-
-    var acc = std::bignum::from_int(0);
+    let s = poly_limbs(s_bytes);
+    var h = poly_zero();
     let n = std::array::len(message);
     var offset = 0;
     while offset < n {
-        // Each block is up to 16 bytes with a 1 byte appended — the padding
-        // bit that makes the polynomial injective over variable-length input.
-        var block_bytes = std::array::empty();
-        var i = 0;
-        while i < 16 && offset + i < n {
-            std::array::push(block_bytes, std::array::get(message, offset + i) & 255);
-            i = i + 1;
-        }
-        std::array::push(block_bytes, 1);
-        let value = le_bytes_to_num(block_bytes);
-        acc = std::bignum::add(acc, value);
-        acc = std::bignum::mul(acc, r);
-        acc = poly_mod(acc, prime);
+        h = poly_step(h, r, poly_limbs(poly_block(message, offset)));
         offset = offset + 16;
     }
-    acc = std::bignum::add(acc, s);
-    num_to_le_bytes(acc, 16)
-}
-
-/// Reduce `value` modulo `prime` by repeated subtraction of shifted multiples.
-///
-/// `std::bignum` has no modulo by a bignum — only `rem_small` by an `Int` —
-/// so the reduction is written here. Doubling the subtrahend keeps it
-/// logarithmic rather than the linear loop a naive version would use, which
-/// matters because Poly1305 reduces once per 16-byte block.
-///
-/// # Example
-///
-/// ```tuo
-/// let reduced = std::chacha::poly_mod(acc, std::chacha::poly_prime());
-/// ```
-pub fn poly_mod(in value: Array[Int], in prime: Array[Int]) -> Array[Int] {
-    var rest = std::bignum::normalized(value);
-    if std::bignum::compare(rest, prime) < 0 {
-        return rest;
-    }
-    // Find the largest doubling of `prime` that still fits under `rest`, then
-    // subtract downwards.
-    var shifts = 0;
-    var probe = std::bignum::normalized(prime);
-    while std::bignum::compare(std::bignum::mul_small(probe, 2), rest) <= 0 {
-        probe = std::bignum::mul_small(probe, 2);
-        shifts = shifts + 1;
-    }
-    while shifts >= 0 {
-        if std::bignum::compare(probe, rest) <= 0 {
-            rest = std::bignum::sub(rest, probe);
-        }
-        probe = std::bignum::div_small(probe, 2);
-        shifts = shifts - 1;
-    }
-    rest
+    poly_bytes(poly_finish(h, s))
 }
 
 // --- Poly1305 specs: RFC 8439 2.5.2's PUBLISHED vector ----------------------
@@ -805,34 +940,66 @@ spec poly_clamp_r {
     then std::array::get(poly_clamp_r(poly_vector_key()), 0) == 133;
 }
 
-spec poly_prime {
-    // 2^130 - 5 = 1361129467683753853853498429727072845819:
-    // exactly 130 bits wide, ending in 9.
-    then std::bignum::bit_length(poly_prime()) == 130;
-    then std::bignum::rem_small(poly_prime(), 10) == 9;
+/// A `Poly` from five limbs, for the specs below.
+fn poly_of(take l0: Int, take l1: Int, take l2: Int, take l3: Int, take l4: Int) -> Poly {
+    Poly { l0: l0, l1: l1, l2: l2, l3: l3, l4: l4 }
 }
 
-spec le_bytes_to_num {
-    // Little-endian: [1, 0, 0, 0] is 1, not 2^24.
-    // The tag is 128 bits, too wide for an `Int`, so `to_int` declines it —
-    // which is itself the check that the little-endian read produced a full
-    // 16-byte number rather than silently truncating.
-    then std::bignum::int_or(std::bignum::to_int(le_bytes_to_num(poly_vector_tag())), 0 - 1) == 0 - 1;
-    then std::bignum::bit_length(le_bytes_to_num(poly_vector_key())) > 0;
+/// Whether two `Poly` values have the same limbs.
+fn poly_same(take a: Poly, take b: Poly) -> Bool {
+    a.l0 == b.l0 && a.l1 == b.l1 && a.l2 == b.l2 && a.l3 == b.l3 && a.l4 == b.l4
 }
 
-spec num_to_le_bytes {
-    // Round-trip: a tag serialized and read back is the same number.
-    then std::array::len(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16)) == 16;
-    then std::array::get(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16), 0) == 168;
-    then std::array::get(num_to_le_bytes(le_bytes_to_num(poly_vector_tag()), 16), 15) == 169;
+/// `count` bytes of 0xff.
+fn ones(take count: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < count {
+        std::array::push(out, 255);
+        i = i + 1;
+    }
+    out
 }
 
-spec poly_mod {
-    // Reducing a value already below the prime leaves it unchanged.
-    then std::bignum::int_or(std::bignum::to_int(poly_mod(std::bignum::from_int(7), poly_prime())), 0 - 1) == 7;
-    // Reducing the prime itself yields zero.
-    then std::bignum::is_zero(poly_mod(poly_prime(), poly_prime()));
+spec poly_limbs {
+    // Little-endian, 26 bits a limb: byte 0 is limb 0's low bits, and a 17th
+    // byte of 1 is bit 128, bit 24 of the top limb.
+    then poly_limbs(poly_vector_tag()).l0 == 168 + 6 * 256 + 29 * 65536 + (193 & 3) * 16777216;
+    then poly_same(poly_limbs(ones(17)), poly_of(67108863, 67108863, 67108863, 67108863, 67108863));
+    then poly_same(poly_limbs(ones(16)), poly_of(67108863, 67108863, 67108863, 67108863, 16777215));
+    then poly_same(poly_limbs(std::array::empty()), poly_zero());
+}
+
+spec poly_bytes {
+    // The inverse of `poly_limbs` on 16 bytes.
+    then std::array::len(poly_bytes(poly_limbs(poly_vector_tag()))) == 16;
+    then std::array::get(poly_bytes(poly_limbs(poly_vector_tag())), 0) == 168;
+    then std::array::get(poly_bytes(poly_limbs(poly_vector_tag())), 15) == 169;
+    then std::array::get(poly_bytes(poly_limbs(poly_vector_tag())), 7) == 198;
+}
+
+spec poly_zero {
+    then poly_same(poly_zero(), poly_of(0, 0, 0, 0, 0));
+}
+
+spec poly_step {
+    // (0 + 2) * 3 = 6, and (1 + 0) * 2^26 = 2^26 (a carry into limb 1).
+    then poly_same(poly_step(poly_zero(), poly_of(3, 0, 0, 0, 0), poly_of(2, 0, 0, 0, 0)), poly_of(6, 0, 0, 0, 0));
+    then poly_same(poly_step(poly_of(1, 0, 0, 0, 0), poly_of(0, 1, 0, 0, 0), poly_zero()), poly_of(0, 1, 0, 0, 0));
+    // 2^104 * 2^26 = 2^130 = 5: the fold.
+    then poly_same(poly_finish(poly_step(poly_of(0, 0, 0, 0, 1), poly_of(0, 1, 0, 0, 0), poly_zero()), poly_zero()), poly_of(5, 0, 0, 0, 0));
+}
+
+spec poly_finish {
+    // p = 2^130 - 5 reduces to 0, p + 1 to 1, and p - 1 stays.
+    then poly_same(poly_finish(poly_of(67108859, 67108863, 67108863, 67108863, 67108863), poly_zero()), poly_zero());
+    then poly_same(poly_finish(poly_of(67108860, 67108863, 67108863, 67108863, 67108863), poly_zero()), poly_of(1, 0, 0, 0, 0));
+    then poly_same(
+        poly_finish(poly_of(67108858, 67108863, 67108863, 67108863, 67108863), poly_zero()),
+        poly_of(67108858, 67108863, 67108863, 67108863, 16777215),
+    );
+    // The pad is added modulo 2^128: (2^128 - 1) + 1 wraps to 0.
+    then poly_same(poly_finish(poly_limbs(ones(16)), poly_of(1, 0, 0, 0, 0)), poly_zero());
 }
 
 // --- AEAD_CHACHA20_POLY1305 (RFC 8439 §2.8) ---------------------------------

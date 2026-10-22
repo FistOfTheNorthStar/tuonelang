@@ -297,8 +297,9 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             "cryptographic hashing throughput over the ADR-0019 bitwise \
              operators: per round, the full FIPS 180-4 SHA-256 compression \
              function over a fixed 64-byte message (two padded blocks), \
-             every hash word combined with a masked modular add since a bare \
-             `+` traps on the carry a checksum requires — measured against a \
+             the hash words `U32` and combined with ADR-0031's \
+             `std::int::wrapping_add`/`rotate_right` since a bare `+` traps \
+             on the carry a checksum requires — measured against a \
              uint32_t C peer making the identical rotations and shifts and \
              Go's standard crypto/sha256 (the parity target). This workload \
              could not be written before ADR-0019 Stage A: SHA-256 is \
@@ -337,6 +338,22 @@ pub fn workloads() -> Vec<RuntimeWorkload> {
             // a few dozen instructions: fewer rounds finish below the
             // timer's resolution and would record a meaningless zero.
             32,
+        ),
+        RuntimeWorkload::supported(
+            "wrapping-add64",
+            "modular 64-bit arithmetic (ADR-0031): 50,000,000 rounds of a \
+             wrapping U64 add and a rotate right by 29 — the two operations \
+             SHA-512, BLAKE2b, and every other 64-bit mixing function is \
+             defined in, spelled with `std::int::wrapping_add` and \
+             `std::int::rotate_right`, each a single instruction on both \
+             backends. Before ADR-0031 a bare `+` trapped on the carry and \
+             `std::sha512` rebuilt both from 32-bit halves and masks; this is \
+             the smallest program that is nothing but the two, so its gap to \
+             C's wrapping `uint64_t` (and Go's `math/bits.RotateLeft64`) is \
+             the cost of the spelling and nothing else",
+            include_str!("../../../../benchmarks/runtime/programs/tuo/wrapping-add64.tuo"),
+            // The low byte of x ^ y after 50,000,000 rounds.
+            231,
         ),
         RuntimeWorkload::supported(
             "wire-decode",
@@ -591,6 +608,7 @@ mod tests {
                 "json-parse".to_string(),
                 "sha256-hash".to_string(),
                 "constant-time".to_string(),
+                "wrapping-add64".to_string(),
                 "wire-decode".to_string(),
                 "udp-echo".to_string(),
                 "connect-timeout".to_string(),
@@ -634,7 +652,7 @@ mod tests {
     fn run_supported_only_runs_supported_workloads() {
         // Return the startup workload's expected value; only startup will match.
         let results = run_supported(&FakeRunner { status: 0 });
-        assert_eq!(results.len(), 24, "exactly the supported workloads run");
+        assert_eq!(results.len(), 25, "exactly the supported workloads run");
         let startup = results
             .iter()
             .find(|(label, _)| label == "startup")

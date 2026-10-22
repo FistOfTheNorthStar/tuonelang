@@ -1,0 +1,18 @@
+module attrs;
+
+/// A marked function.
+#[constant_time]
+pub fn mask(take bit: Int) -> Int {
+    (bit << 63) >> 63
+}
+
+#[constant_time]
+fn select(take c: Int, take a: Int, take b: Int) -> Int {
+    b ^ (mask(c) & (a ^ b))
+}
+
+#[constant_time]
+/// Docs may follow the attribute.
+pub fn keep(take x: Int) -> Int {
+    x
+}

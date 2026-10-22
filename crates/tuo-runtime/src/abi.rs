@@ -102,7 +102,15 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// `StackOverflow`, code `6`) and the `tuo_rt_thread_guard`/`unguard`
 /// symbols every runtime thread arms it with, and `par_map` workers get an
 /// 8 MiB stack.
-pub const ABI_VERSION: u32 = 14;
+///
+/// `15` — `Option[Box[T]]` is **niche-packed**: a box is never null, so
+/// `None` is the null pointer and `Some(b)` is `b` itself, one pointer word
+/// with no discriminant ([`tag_repr`] → [`TagRepr::NullPointer`]). It was a
+/// `u32` tag plus a padded pointer, 16 bytes, which doubled the size of every
+/// node of a boxed tree (`binary-trees`'s `Node` went from 32 bytes to 16).
+/// The variant *numbering* is unchanged (`Some` = 0, `None` = 1), so the
+/// interpreter's `Value::Variant` still agrees; only where it is stored moved.
+pub const ABI_VERSION: u32 = 15;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -228,6 +236,34 @@ pub const DISCRIMINANT_SIZE: u64 = 4;
 /// The alignment of the [`DISCRIMINANT_SIZE`] tag.
 pub const DISCRIMINANT_ALIGN: u64 = 4;
 
+/// How an enum-shaped value records which variant is live.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum TagRepr {
+    /// A [`DISCRIMINANT_SIZE`] `u32` tag at offset 0 holding the variant's
+    /// declaration-order index; the payload follows it.
+    Tag,
+    /// No tag: the value is one pointer word that is null exactly when
+    /// `null_variant` is live, and is otherwise the payload of the one other
+    /// variant, at offset 0. Only `Option[Box[T]]` is laid out this way, since
+    /// a `Box` is never null (ABI 15).
+    NullPointer {
+        /// The variant the null pointer stands for (`None`, variant 1).
+        null_variant: u32,
+    },
+}
+
+/// How `ty`, an enum-shaped type, records its live variant. A backend must
+/// consult this wherever it reads or writes a discriminant, and only there.
+#[must_use]
+pub fn tag_repr(ty: &Ty) -> TagRepr {
+    match ty {
+        Ty::Option(inner) if matches!(**inner, Ty::Wrapper(WrapperKind::Box, _)) => {
+            TagRepr::NullPointer { null_variant: 1 }
+        }
+        _ => TagRepr::Tag,
+    }
+}
+
 /// The layout of a tuonelang type, per [`specification/abi.md`].
 ///
 /// `types` resolves user structs and enums to their fields; it may be a
@@ -316,6 +352,9 @@ pub fn layout_of(ty: &Ty, types: &TypeckResult) -> Result<Layout, LayoutError> {
         // MIR number `Some`/`Ok` = variant 0 and `None`/`Err` = variant 1, so the
         // ABI must too (byte-identical to `Value::Variant`): `Some` carries the
         // payload at variant 0, `None` is the empty variant 1.
+        // ... except that `Option[Box[T]]` is the box's own pointer, null for
+        // `None` (ABI 15, [`tag_repr`]).
+        Ty::Option(_) if tag_repr(ty) != TagRepr::Tag => Ok(Layout::pointer()),
         Ty::Option(inner) => enum_layout([vec![(**inner).clone()], Vec::new()], types),
         Ty::Result(ok, err) => enum_layout([vec![(**ok).clone()], vec![(**err).clone()]], types),
 
@@ -463,7 +502,11 @@ pub fn variant_field_offsets(
 
     // The payload begins after the tag, rounded up to the payload's alignment
     // (matching `enum_layout`), then fields are laid out `#[repr(C)]` from there.
+    // A niche-packed value has no tag: its one payload field is the value.
     let (body, mut offsets) = aggregate_layout_and_offsets(payload, types)?;
+    if tag_repr(ty) != TagRepr::Tag {
+        return Ok(offsets);
+    }
     let start = align_up(DISCRIMINANT_SIZE, body.align.max(1));
     for off in &mut offsets {
         *off += start;
@@ -474,7 +517,8 @@ pub fn variant_field_offsets(
 /// The layout of an enum: a [`DISCRIMINANT_SIZE`] tag followed by the largest
 /// variant's payload, the whole sized/aligned to hold any variant. The
 /// discriminant is the variant's declaration-order index (see
-/// [`DISCRIMINANT_SIZE`]); v0 uses no niche packing.
+/// [`DISCRIMINANT_SIZE`]); the one niche-packed type, `Option[Box[T]]`, never
+/// reaches here (see [`tag_repr`]).
 fn enum_layout(
     variants: impl IntoIterator<Item = Vec<Ty>>,
     types: &TypeckResult,
@@ -516,7 +560,7 @@ mod tests {
         // channel and mutex symbols. Version 13 made the map's value slot a
         // caller-supplied stride and its value a by-pointer argument
         // (ADR-0023 Stage B2), so every `tuo_rt_map_*` signature changed.
-        assert_eq!(ABI_VERSION, 14);
+        assert_eq!(ABI_VERSION, 15);
     }
 
     #[test]
@@ -734,6 +778,43 @@ mod tests {
         );
         assert_eq!(variant_field_offsets(&res, 0, t).unwrap(), vec![8]);
         assert_eq!(variant_field_offsets(&res, 1, t).unwrap(), vec![4]);
+    }
+
+    #[test]
+    fn an_optional_box_is_a_nullable_pointer_and_nothing_else_is() {
+        use super::{TagRepr, tag_repr, variant_field_offsets};
+        let t = &TypeckResult::default();
+        let boxed = |inner: Ty| Ty::Wrapper(WrapperKind::Box, Box::new(inner));
+        let opt_box = Ty::Option(Box::new(boxed(Ty::int())));
+        assert_eq!(tag_repr(&opt_box), TagRepr::NullPointer { null_variant: 1 });
+        assert_eq!(layout_of(&opt_box, t).unwrap(), Layout::pointer());
+        // `Some`'s one field is the pointer itself; `None` has none.
+        assert_eq!(variant_field_offsets(&opt_box, 0, t).unwrap(), vec![0]);
+        assert_eq!(
+            variant_field_offsets(&opt_box, 1, t).unwrap(),
+            Vec::<u64>::new()
+        );
+        // Every other enum-shaped type keeps its tag: an `Option` of anything
+        // but a box (a `Shared` may yet be weak-dangling), a `Result` holding a
+        // box, and an `Option` of an `Option` of a box, whose outer `None`
+        // would otherwise have no bit pattern left.
+        for ty in [
+            Ty::Option(Box::new(Ty::int())),
+            Ty::Option(Box::new(Ty::Wrapper(
+                WrapperKind::Shared,
+                Box::new(Ty::int()),
+            ))),
+            Ty::Result(Box::new(boxed(Ty::int())), Box::new(Ty::int())),
+            Ty::Option(Box::new(opt_box.clone())),
+        ] {
+            assert_eq!(tag_repr(&ty), TagRepr::Tag, "{ty:?}");
+        }
+        let nested = Ty::Option(Box::new(opt_box));
+        assert_eq!(
+            layout_of(&nested, t).unwrap(),
+            Layout { size: 16, align: 8 }
+        );
+        assert_eq!(variant_field_offsets(&nested, 0, t).unwrap(), vec![8]);
     }
 
     #[test]

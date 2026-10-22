@@ -169,7 +169,7 @@ fn honesty_rules_hold_over_the_catalog() {
     // all run, as do all six Computer Language Benchmarks Game programs —
     // binary-trees, the last unsupported entry, since ADR-0028 Stage B gave
     // `Box` values a native lowering.
-    assert_eq!(supported, 24);
+    assert_eq!(supported, 25);
     assert_eq!(unsupported, 0);
 }
 
@@ -252,7 +252,7 @@ fn committed_example_report_is_valid_and_regenerable() {
     let committed = LabReport::from_json(&read(&path)).expect("example report parses");
     assert_eq!(committed.schema_version, tuo_bench::SCHEMA_VERSION);
     assert_eq!(committed.runtime_workloads, workloads());
-    assert_eq!(committed.supported_workload_count(), 24);
+    assert_eq!(committed.supported_workload_count(), 25);
     assert_eq!(
         committed.edit_scenarios, fresh_edits,
         "example report's edit scenarios are stale; regenerate the example"
@@ -260,9 +260,9 @@ fn committed_example_report_is_valid_and_regenerable() {
 
     // The example's comparisons are all recorded as skipped (no live toolchain
     // is assumed for the committed file) and cover exactly the supported set:
-    // C and Go for all 24 supported workloads, Rust for the six Benchmarks
-    // Game programs — 24 × 2 + 6 = 54.
-    assert_eq!(committed.comparisons.len(), 54);
+    // C and Go for all 25 supported workloads, Rust for the six Benchmarks
+    // Game programs — 25 × 2 + 6 = 56.
+    assert_eq!(committed.comparisons.len(), 56);
     for entry in &committed.comparisons {
         assert!(matches!(entry.peer, Verdict::Skipped { .. }));
     }
@@ -281,8 +281,8 @@ fn committed_example_report_is_valid_and_regenerable() {
         .iter()
         .filter(|e| e.workload.peer == PeerLanguage::Rust)
         .count();
-    assert_eq!(c_count, 24, "every supported workload has a C peer entry");
-    assert_eq!(go_count, 24, "every supported workload has a Go peer entry");
+    assert_eq!(c_count, 25, "every supported workload has a C peer entry");
+    assert_eq!(go_count, 25, "every supported workload has a Go peer entry");
     assert_eq!(
         rust_count, 6,
         "every supported Benchmarks Game workload has a Rust peer"

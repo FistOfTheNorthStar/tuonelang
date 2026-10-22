@@ -270,13 +270,17 @@ amount outside 0..width TRAPS rather than wrapping, so `x << 64` is an abort,
 not `x`. Note `|` does double duty: alternation inside a match pattern,
 bitwise-or everywhere else. There is NO compound assignment (`+=`, `|=`), and
 comparisons DO NOT chain (`a < b < c` is a parse error). Integer overflow
-TRAPS — wraparound does not exist. That is right for arithmetic and WRONG for
-a checksum or hash, which is *defined* modulo 2^32: `a + b` on two large
-values aborts the program rather than wrapping. When you want wraparound, say
-so — `std::bits::add32(a, b)` and `std::bits::mul32(a, b)` are the modular
-operations, and they are what every hash, checksum, and digest in
-`std::crypto` is built from. Reach for them whenever the arithmetic is
-supposed to overflow.
+TRAPS: `+ - *` never wrap. That is right for arithmetic and WRONG for a
+checksum or hash, which is *defined* modulo 2^w: `a + b` on two large values
+aborts the program rather than wrapping. When you want wraparound, say so —
+`std::int::wrapping_add(a, b)`, `wrapping_sub`, and `wrapping_mul` work on
+any integer type (`U32` for a 32-bit hash, `U64` or `Int` for 64-bit), and
+`std::int::rotate_left(x, n)` / `rotate_right` rotate by any amount (reduced
+mod the width; unlike a shift, never a trap). When overflow is an input
+error rather than intended, `std::int::checked_add(a, b)` (and
+`checked_sub`, `checked_mul`) returns `None` exactly where `+` would trap.
+None of these ever traps. They are free functions: `a.wrapping_add(b)` is
+method syntax and is refused.
 
 "#;
 
@@ -302,6 +306,10 @@ Runs everywhere (check, interpreter, and native):
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly
+  * generic FUNCTIONS, `fn ident[T](take x: T) -> T`, compiled once per type
+    they are called at. Inside the body `T` is owned, never `Copy`: move each
+    `T` value exactly once. A generic is called, never passed as a value
+    (T0015)
   * `Box[T]`, the one heap wrapper with values: `std::boxed::new(v)` boxes,
     `std::boxed::get(b)` copies the pointee out, `std::boxed::into(b)` moves it
     out. A recursive type holds itself behind one: `next: Option[Box[Node]]`.
@@ -364,6 +372,7 @@ free function to call instead. Write the free function.
   fn f() -> Int { true }         fn f() -> Bool { true }
   if a < b < c                   if a < b && b < c
   xs.len()                       std::array::len(xs)
+  a.wrapping_add(b)              std::int::wrapping_add(a, b)
 
 Further traps, in the order they usually bite:
 
@@ -553,7 +562,9 @@ fn builtin_surface() -> String {
     let mut out = String::from(
         "Built into the compiler (no module file; always available). `T` is the
 element type — Int, Float, Bool, Str, String, or a struct or enum of those; a
-map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str.
+map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str. In
+`std::int`, `T` is any integer type (both operands share it) and a rotation's
+amount `N` is any integer type of its own.
 
 ",
     );

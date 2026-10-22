@@ -1,0 +1,87 @@
+// ADR-0027 Stage B: generic functions lowered natively by monomorphization.
+// Each generic below is instantiated at more than one type — scalars, a
+// struct, an owned `String` and `Array[Int]` (whose instances must carry
+// the drop glue the generic body only implied), `Option[T]`, a function
+// value — and two generics call each other, so an instance's own calls are
+// instantiated in turn. `depth` recurses at one fixed type, which reuses its
+// instance rather than minting a new one per call. The spec pins the total
+// on the interpreter, which runs the generic MIR directly. Exit 162.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Named {
+    name: String,
+    score: Int,
+}
+
+fn ident[T](take x: T) -> T {
+    x
+}
+
+fn second[A, B](take a: A, take b: B) -> B {
+    let _first = a;
+    b
+}
+
+fn wrap[T](take x: T) -> Option[T] {
+    Some { value: ident(x) }
+}
+
+fn apply_twice[T](take x: T, take f: fn(take T) -> T) -> T {
+    f(f(x))
+}
+
+fn depth[T](take x: T, take n: Int) -> T {
+    if n == 0 {
+        return x;
+    }
+    depth(x, n - 1)
+}
+
+fn peek[T](in x: T, take tag: Int) -> Int {
+    tag
+}
+
+fn bump(take p: Point) -> Point {
+    Point { x: p.x + 1, y: p.y * 2 }
+}
+
+fn total() -> Int {
+    let a = ident(40);
+    let b = ident(true);
+    let p = second(b, Point { x: 3, y: 4 });
+    let s = ident(std::string::concat("ab", "cd"));
+    let named = second(7, Named { name: std::string::concat("x", "yz"), score: 9 });
+    var xs = std::array::empty();
+    std::array::push(xs, 5);
+    std::array::push(xs, 6);
+    let ys = ident(xs);
+    let w = match wrap(wrap(11)) {
+        Some { value } => match value {
+            Some { value } => value,
+            None => 0,
+        },
+        None => 0,
+    };
+    let q = apply_twice(Point { x: 1, y: 1 }, bump);
+    let d = depth(std::string::concat("de", "ep"), 3);
+    let flag = if ident(b) {
+        1
+    } else {
+        0
+    };
+    let scalars = a + p.x + p.y + w + q.x + q.y + flag;
+    let owned = std::string::len(s) + named.score + std::string::len(named.name);
+    let heap = std::array::get(ys, 1) + std::string::len(d);
+    scalars + owned + heap + peek(ys, 50) + peek(a, 20)
+}
+
+spec total {
+    then total() == 162;
+}
+
+pub fn main() -> Int {
+    total()
+}

@@ -81,29 +81,33 @@ pub fn low8(take value: Int) -> Int {
 ///
 /// The addition every 32-bit hash function is defined over. Plain `+` traps on
 /// overflow, which is correct for ordinary arithmetic and *wrong* here — a
-/// checksum that aborts on carry is not a checksum. Both operands are masked
-/// first, so the intermediate sum cannot exceed 2^33 and never traps in `Int`.
+/// checksum that aborts on carry is not a checksum. Each operand is truncated
+/// to its low 32 bits and added with `std::int::wrapping_add` on `U32`
+/// (ADR-0031); this is the adapter from the `Int`-holding-32-bits convention
+/// the crypto stack uses to that builtin.
 ///
 /// # Example
 /// ```tuo
 /// let wrapped = std::bits::add32(4294967295, 1); // 0
 /// ```
 pub fn add32(take a: Int, take b: Int) -> Int {
-    ((a & 4294967295) + (b & 4294967295)) & 4294967295
+    std::int::wrapping_add(a as U32, b as U32) as Int
 }
 
 /// `a * b` modulo 2^32.
 ///
-/// Used by the multiplicative mixing steps of non-cryptographic hashes. The
-/// operands are masked to 32 bits first; the product of two 32-bit values fits
-/// in 64 bits, so the multiply itself cannot overflow `Int`.
+/// Used by the multiplicative mixing steps of non-cryptographic hashes. Each
+/// operand is truncated to its low 32 bits and multiplied with
+/// `std::int::wrapping_mul` on `U32` (ADR-0031). (Before it, the masked
+/// operands were multiplied in `Int`, which trapped whenever the product
+/// reached 2^63 — for instance `mul32(4294967295, 4294967295)`.)
 ///
 /// # Example
 /// ```tuo
 /// let wrapped = std::bits::mul32(65536, 65536); // 0 — 2^32 mod 2^32
 /// ```
 pub fn mul32(take a: Int, take b: Int) -> Int {
-    ((a & 4294967295) * (b & 4294967295)) & 4294967295
+    std::int::wrapping_mul(a as U32, b as U32) as Int
 }
 
 // ----------------------------------------------------------------------------
@@ -123,15 +127,10 @@ pub fn mul32(take a: Int, take b: Int) -> Int {
 /// let r = std::bits::rotr32(1, 1); // 2147483648 — the low bit wrapped to the top
 /// ```
 pub fn rotr32(take value: Int, take n: Int) -> Int {
-    let masked = value & 4294967295;
     if n <= 0 {
-        return masked;
+        return value & 4294967295;
     }
-    let amount = n % 32;
-    if amount == 0 {
-        return masked;
-    }
-    ((masked >> amount) | (masked << (32 - amount))) & 4294967295
+    std::int::rotate_right(value as U32, n) as Int
 }
 
 /// `value` rotated left by `n` bits, within 32 bits.
@@ -143,15 +142,10 @@ pub fn rotr32(take value: Int, take n: Int) -> Int {
 /// let r = std::bits::rotl32(2147483648, 1); // 1 — the top bit wrapped to the bottom
 /// ```
 pub fn rotl32(take value: Int, take n: Int) -> Int {
-    let masked = value & 4294967295;
     if n <= 0 {
-        return masked;
+        return value & 4294967295;
     }
-    let amount = n % 32;
-    if amount == 0 {
-        return masked;
-    }
-    ((masked << amount) | (masked >> (32 - amount))) & 4294967295
+    std::int::rotate_left(value as U32, n) as Int
 }
 
 /// `value` shifted right by `n` bits, zero-filling, within 32 bits.
@@ -365,6 +359,8 @@ spec add32 {
     then add32(2147483648, 2147483648) == 0;
     // Operands are masked, so an over-wide input cannot leak upward.
     then add32(4294967296, 5) == 5;
+    // Negative operands contribute their low 32 bits (-1 is all ones).
+    then add32(0 - 1, 1) == 0;
 }
 
 spec mul32 {
@@ -374,6 +370,9 @@ spec mul32 {
     then mul32(4294967295, 1) == 4294967295;
     // 0xFFFFFFFF * 2 == 0x1FFFFFFFE, whose low 32 bits are 0xFFFFFFFE.
     then mul32(4294967295, 2) == 4294967294;
+    // (2^32 - 1)^2 == 2^64 - 2^33 + 1, whose low 32 bits are 1. The product
+    // exceeds i64's range, so a multiply in `Int` would trap here.
+    then mul32(4294967295, 4294967295) == 1;
 }
 
 spec rotr32 {

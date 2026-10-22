@@ -268,17 +268,19 @@ the trait system will own.
 | `T0020` | A `#[constant_time]` function calls a function that is not marked (§3.10), so the callee carries no checked guarantee. |
 | `T0021` | Unknown attribute (§3.10). v0 defines exactly one, `#[constant_time]`; an unrecognized name is an error, never a silently-ignored annotation. |
 | `T0022` | **Warning, not an error** — the runnable-core advisory. A `Shared`/`Weak` heap-wrapper **value** (or a `Box` inside an `Array`/`Map` type — a `Box` value itself lowers since ADR-0028 Stage B) in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
-| `T0023` | **Warning, not an error** — the generic-declaration advisory (ADR-0027 Stage A). A generic `fn` is accepted here and executes on the reference interpreter, but `Ty::Param` has no layout until monomorphized, so no native backend lowers it and `tuo build`/`tuo run` refuse it. Reported once per **declaration**, at the span of the generic parameter list, never per call site. |
+| `T0023` | **Retired.** The ADR-0027 Stage A generic-declaration advisory warned that no native backend lowered a generic `fn`; Stage B monomorphizes them on the native path (`specification/mir.md` §9), so the warning was removed rather than left false. The code is not reused. |
 | `T0024` | A method call `receiver.name(args)` (ADR-0032 Stage A). tuonelang has free functions only and no engine executes a method call; it was silently accepted (as poison) before. When exactly one function of that name takes the receiver's type first and is callable by a path from here, the diagnostic carries a **machine-applicable** rewrite to the free call (`xs.len()` → `std::array::len(xs)`); otherwise it lists the candidates. |
 | `T0025` | A qualified interface-member call (`Area::area(p)`, ADR-0032 Stage A): interfaces lower to nothing until ADR-0032 Stage B, so no engine executes the member. |
 | `T0026` | **Warning, not an error** — an `interface` or `impl` declaration (ADR-0032 Stage A) type-checks but lowers to nothing, so none of its members runs. A program declaring one runs today, so refusing it would break it for no gain. |
+| `T0027` | An integer literal outside the range of the type inference gave it (`let x: I8 = 128`, `0x100` as a `U8`, a `200` pattern against an `I8` scrutinee). Checked after inference, so a literal typed by later use is checked at that type. A unary minus applied directly to a literal (through parentheses too) makes one value, so `-128` is an `I8` and each type's minimum is spellable. Before this check such a program was accepted and MIR lowering then dropped the whole function, so its specs failed without a message and `build` reported it absent. |
 
-`T0022`, `T0023`, and `T0026` are the table's only warnings: each reports a program the
+`T0022` and `T0026` are the table's only warnings: each reports a program the
 static semantics **accepts**. They exist because `tuo check` deliberately
 accepts a larger language than the native backends lower, and that gap should
 be visible at the offending construct rather than surfacing later as a
-spanless build failure. They report the two constructs that cause it — a
-heap-wrapper value, and a generic declaration. Because they are warnings they
+spanless build failure. `T0022` reports the construct that causes it — a
+heap-wrapper value (a generic declaration was the second, until ADR-0027
+Stage B closed that gap and retired `T0023`). Because they are warnings they
 never change whether a program is accepted, and the set of programs this
 document defines as well-typed is exactly what it was before either advisory
 existed.
@@ -429,6 +431,27 @@ lends its non-`Copy` parts to the arms, and `get(b)` passed straight to an
 `in` parameter lends the pointee rather than copying it (the copy is
 unobservable there, so it is elided; it is kept when another argument of the
 call is `mut` or a non-`Copy` `take`).
+
+**Integer builtins (`std::int`, ADR-0031)** — generic over an integer type
+`T` witnessed by the arguments (both operands share it); a rotation's amount
+`N` is any integer type of its own, as a shift's is. A non-integer argument is
+`T0006`. None of the eight traps; they are the named exceptions to trapping
+overflow that Constitution §24 promises:
+
+| Signature | Meaning |
+|-----------|---------|
+| `fn wrapping_add(take a: T, take b: T) -> T` | `(a + b) mod 2^w`. |
+| `fn wrapping_sub(take a: T, take b: T) -> T` | `(a - b) mod 2^w`; `wrapping_sub(0, x)` is the wrapping negation. |
+| `fn wrapping_mul(take a: T, take b: T) -> T` | `(a * b) mod 2^w`. |
+| `fn rotate_left(take x: T, take n: N) -> T` | `x`'s bits rotated left by `n` reduced Euclidean mod `w`, so a negative `n` rotates right. |
+| `fn rotate_right(take x: T, take n: N) -> T` | As `rotate_left`, rotating right. |
+| `fn checked_add(take a: T, take b: T) -> Option[T]` | `Some(a + b)` when it fits `T`; `None` exactly where `+` would trap. |
+| `fn checked_sub(take a: T, take b: T) -> Option[T]` | As `checked_add`, for `-`. |
+| `fn checked_mul(take a: T, take b: T) -> Option[T]` | As `checked_add`, for `*`. |
+
+The five wrapping and rotating operations are the builtins a
+`#[constant_time]` function may call (§3.10); the `checked_*` three are not,
+since their `Option` exists to be branched on.
 
 **The recursion boundary (`T0016`, ADR-0016).** A struct or enum that reaches
 itself through its own fields or variant payloads — by value, or through any
@@ -592,11 +615,16 @@ Inside a marked function the checker rejects:
 | `if`, `match`, `while`, `loop`, `for` | `T0017` | control flow branches on data |
 | `xs[i]` | `T0018` | the bounds check is a branch on the index |
 | `+`, `-`, `*`, `/`, `%` (binary or unary) | `T0019` | the overflow check is a branch on the operands |
-| a call to an unmarked function | `T0020` | the callee could contain any of the above |
+| `<<`/`>>` by an amount that is not an integer literal | `T0019` | the amount's range check is a branch on the amount |
+| a call to an unmarked function, or to a builtin other than the five below | `T0020` | the callee could contain any of the above |
 
-What remains is the branchless subset: shifts, the bitwise operators
-(§3.9), comparisons used as values, `let` bindings, literals, and calls to
-other marked functions. `std::ct` is written in exactly this subset.
+What remains is the branchless subset: shifts by a literal amount, the bitwise
+operators (§3.9), comparisons used as values, `let` bindings, literals, calls
+to other marked functions, and calls to `std::int`'s `wrapping_add`,
+`wrapping_sub`, `wrapping_mul`, `rotate_left`, and `rotate_right` (ADR-0031),
+which never trap and so have no check to branch on. A rotation by a variable
+amount is how a marked function rotates. `std::ct` is written in exactly this
+subset.
 
 **The rule is sufficient, not necessary, and that asymmetry is deliberate.**
 Some rejected code is genuinely constant time — a subtraction of halved

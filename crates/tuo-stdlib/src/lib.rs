@@ -128,16 +128,17 @@ pub const SHA512: Module = Module {
     source: include_str!("std/sha512.tuo"),
 };
 
-/// `std::ed25519` — Ed25519 signature **verification** (RFC 8032), the
-/// algorithm a TLS 1.3 server proves its identity with: twisted-Edwards
-/// arithmetic in extended coordinates, point decompression with its curve
-/// check, scalar reduction mod the group order, and `verify`. Entirely
-/// executable; RFC 8032 §7.1's published vectors are pinned **natively**
-/// (`ed25519_matches_rfc_8032`) since one verification exceeds the spec
-/// sandbox's fuel. **Verify only, deliberately** — signing needs the secret
-/// key handled in constant time, which `std::bignum` cannot provide, so
-/// shipping a verifier alone is the honest subset. Not constant time, which
-/// here costs nothing: every input to verification is public.
+/// `std::ed25519` — Ed25519 signatures (RFC 8032), the algorithm a TLS 1.3
+/// server proves its identity with. **Verification** is twisted-Edwards
+/// arithmetic over `std::bignum` (point decompression with its curve check,
+/// scalar reduction mod the group order, `verify`) — not constant time,
+/// which costs nothing there since every input is public. **Signing**
+/// (`sign`, `public_key`) touches the secret key, so since ADR-0022 it runs
+/// on `std::fe25519` points and fixed 21-bit-limb scalars modulo the group
+/// order, every operation the secret passes through `#[constant_time]`.
+/// Entirely executable; RFC 8032 §7.1's published vectors are pinned
+/// natively for both halves (`ed25519_matches_rfc_8032`,
+/// `ed25519_signs_rfc_8032_vectors`, the latter also against OpenSSL).
 pub const ED25519: Module = Module {
     path: "std::ed25519",
     name: "std/ed25519.tuo",
@@ -196,15 +197,29 @@ pub const HKDF: Module = Module {
     source: include_str!("std/hkdf.tuo"),
 };
 
+/// `std::fe25519` — fixed-width arithmetic in GF(2^255 - 19) (ADR-0022): a
+/// ten-limb `Fe` struct (radix 2^25.5) with `add`/`sub`/`mul`/`square`/
+/// `mul_small`/`select`/`freeze` written as straight-line code over
+/// `std::int`'s wrapping operations and marked `#[constant_time]`, so the
+/// compiler verifies they never branch on, index by, or trap on a value;
+/// plus `invert` and the byte conversions, whose loops run fixed counts.
+/// Entirely executable. The constant-time field `std::x25519`'s ladder runs
+/// on, and a separate type from `std::bignum`'s variable-time `Array[Int]`
+/// so the two cannot be confused.
+pub const FE25519: Module = Module {
+    path: "std::fe25519",
+    name: "std/fe25519.tuo",
+    source: include_str!("std/fe25519.tuo"),
+};
+
 /// `std::x25519` — the X25519 Diffie-Hellman function (RFC 7748), TLS 1.3's
-/// key-exchange primitive: field arithmetic mod 2^255 - 19, the Montgomery
-/// ladder, scalar/u decoding with RFC 7748's mandatory clamping, and
-/// `scalar_mult`/`public_key`. Entirely executable. The published RFC vector
-/// is pinned **natively** (`x25519_matches_rfc_7748`) rather than in a spec:
-/// one scalar multiplication is 255 ladder steps of 255-bit bignum
-/// arithmetic, which exceeds the spec sandbox's fuel. **Not constant time**
-/// — the ladder's structure is uniform, but `std::bignum` underneath is not,
-/// so this is correctness without a timing guarantee.
+/// key-exchange primitive: the Montgomery ladder over `std::fe25519`,
+/// RFC 7748's mandatory clamping, and `scalar_mult`/`public_key`, plus the
+/// older `std::bignum` field arithmetic `std::ed25519` builds on. Entirely
+/// executable, with RFC 7748's published vectors asserted in its specs and
+/// natively (`x25519_matches_rfc_7748`). The ladder and its swap are
+/// `#[constant_time]`; the bignum `field_*` functions are variable time and
+/// serve only public values.
 pub const X25519: Module = Module {
     path: "std::x25519",
     name: "std/x25519.tuo",
@@ -220,8 +235,10 @@ pub const X25519: Module = Module {
 /// over AES because ChaCha20 is defined over the add/XOR/rotate operations
 /// ADR-0019 gave the language, so it needs no lookup table and therefore has
 /// no data-dependent memory access; AES in a high-level language is the
-/// textbook cache-timing vulnerability. **Not** marked `#[constant_time]` —
-/// see the module header for the exact scope of that claim.
+/// textbook cache-timing vulnerability. Poly1305 is fixed-limb arithmetic
+/// whose block step and final reduction carry `#[constant_time]` (ADR-0022);
+/// ChaCha20's own functions loop and index, so they stay unmarked — see the
+/// module header for the exact scope of that claim.
 pub const CHACHA: Module = Module {
     path: "std::chacha",
     name: "std/chacha.tuo",
@@ -380,6 +397,7 @@ pub const MODULES: &[Module] = &[
     BITS,
     BIGNUM,
     CHACHA,
+    FE25519,
     X25519,
     HKDF,
     DER,
@@ -430,25 +448,27 @@ pub const DEPENDENCIES: &[(&str, &[&str])] = &[
     // must have one implementation rather than a re-derived copy in the
     // module that most needs it to be right; `std::crypto` in turn brings
     // `std::ct` and `std::bits`.
-    (
-        "std::chacha",
-        &["std::bits", "std::ct", "std::bignum", "std::crypto"],
-    ),
+    ("std::chacha", &["std::bits", "std::ct", "std::crypto"]),
     // `std::ct` for the ladder's conditional swap: exchanging the two points
     // on a bit of the secret scalar is the textbook X25519 timing leak, so the
     // selection is the shared branchless one rather than a re-derived `if`.
-    ("std::x25519", &["std::bignum", "std::ct"]),
+    // The constant-time field takes `std::ct::select` for its swap rather
+    // than a second copy of the mask.
+    ("std::fe25519", &["std::ct"]),
+    ("std::x25519", &["std::bignum", "std::ct", "std::fe25519"]),
     // HKDF is HMAC-SHA256 in a loop, so it depends on `std::crypto` (which
     // brings `std::bits` and `std::ct`) rather than carrying a second copy.
     ("std::hkdf", &["std::bits", "std::ct", "std::crypto"]),
-    // Ed25519 reuses `std::x25519`'s field arithmetic (same prime) rather
-    // than shipping a second copy, and is defined over SHA-512.
+    // Ed25519 reuses `std::x25519`'s bignum field arithmetic (same prime)
+    // for verification and `std::fe25519` for signing, rather than shipping
+    // second copies, and is defined over SHA-512.
     (
         "std::ed25519",
         &[
             "std::bits",
             "std::ct",
             "std::bignum",
+            "std::fe25519",
             "std::x25519",
             "std::sha512",
         ],
@@ -463,6 +483,7 @@ pub const DEPENDENCIES: &[(&str, &[&str])] = &[
             "std::crypto",
             "std::chacha",
             "std::hkdf",
+            "std::fe25519",
             "std::x25519",
         ],
     ),

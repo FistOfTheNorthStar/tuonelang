@@ -1,0 +1,6 @@
+T0027@400..403 integer literal out of range for `I8` | actual name `I8`
+T0027@512..514 integer literal out of range for `U8` | actual name `U8`
+T0027@672..675 integer literal out of range for `I8` | actual name `I8`
+T0027@751..756 integer literal out of range for `U8` | actual name `U8`
+T0027@832..851 integer literal out of range for `I64` | actual name `I64`
+T0027@969..972 integer literal out of range for `I8` | actual name `I8`

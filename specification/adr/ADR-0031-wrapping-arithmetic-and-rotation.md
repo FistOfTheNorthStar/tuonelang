@@ -1,6 +1,6 @@
 # ADR-0031: Wrapping arithmetic and rotation — named non-trapping integer operations (Q-0006)
 
-- **Status:** proposed (Stage A **landed** 2026-10-16; Stages B–D open)
+- **Status:** accepted (2026-10-22 — Stages A–D landed; see Resolution)
 - **Date:** 2026-10-14
 
 ## Context
@@ -307,6 +307,81 @@ the same machine in the same session.
    table, and the rest of the lab.
 6. **Interpreter**: Finding 2's digest spec and the `std::crypto` spec suite's
    wall time, recorded with no figure promised.
+
+## Resolution (2026-10-22)
+
+All four stages landed. The benchmark plan was run as written, and two of its
+predictions missed; both misses are recorded below with their causes rather
+than re-scoped after the fact.
+
+**Stage B.** `std::int` holds the five builtins, generic over the integer type
+(a rotation's amount its own integer type), as MIR `BinOp::WrappingAdd`/
+`WrappingSub`/`WrappingMul`/`RotateLeft`/`RotateRight`: Cranelift's
+`iadd`/`isub`/`imul`/`rotl`/`rotr`, LLVM's flag-free `add`/`sub`/`mul` and
+`llvm.fshl`/`llvm.fshr`, and the interpreter's width-wrapped `i128`
+arithmetic. `int_wrapping` pins them three-way at every width, including
+`U64::MAX * U64::MAX` and rotations by `0`, `w`, `-1`, and `w + 1`. They are
+`T0020`'s allowlist, and `tuo-cli/tests/constant_time.rs` disassembles a marked
+use of each on both backends and finds no conditional branch. The brief names
+them and maps `a.wrapping_add(b)` to `std::int::wrapping_add(a, b)`.
+
+**Stage C.** `std::sha512::add64`/`rotr64` and `std::bits::add32`/`mul32`/
+`rotr32`/`rotl32` are adapters over the builtins; the `n <= 0` rule of the
+32-bit rotations is kept. Two defects surfaced: `std::bits::mul32` *trapped*
+whenever its masked product reached 2^63 (`mul32(4294967295, 4294967295)`),
+contrary to its own doc, and is now spec-pinned; and `std::sha512::hash`
+rebuilt its two 80-entry constant tables on **every round**, which is fixed
+(`round_constants`, built once per digest) together with the message schedule
+now made at its size (ADR-0030). The lab's `sha256-hash` is retyped `U32`.
+
+**Stage D.** `checked_add`/`checked_sub`/`checked_mul` return `Option[T]`. MIR
+gains the overflow predicates `BinOp::AddOverflows`/`SubOverflows`/
+`MulOverflows`, each computed from the same flag the trapping operator guards
+on, and the builtin lowers to a branch building `None` or `Some` of the
+wrapping result. `int_checked` pins both sides of every boundary three-way.
+`std::str::parse_int` accumulates toward the sign through them, so
+`"99999999999999999999"` is an `Err` and `"-9223372036854775808"` parses. The
+`checked_*` three are not on the constant-time allowlist: their `Option` is
+there to be branched on.
+
+Implementing the predicates exposed one more latent defect: the interpreter's
+and the constant folder's `Mul` computed `a * b` in `i128`, which a `U64`
+product can exceed — a host panic in a debug build. Both now use
+`checked_mul`. And a dead out-of-range shift was deleted by `dead_locals` on
+the native path while the interpreter trapped; shifts are now treated as
+trapping there (`bitwise_dead_shift_trap`).
+
+Measured on an Apple M4, release builds, fastest of 11 runs, every pair
+interleaved in one session on a quiet machine:
+
+| Plan item | Before | After | Prediction | |
+|---|---|---|---|---|
+| 1. `wrapping-add64` (lab workload) | 60.0 ms (1.68x C) | 36.0 ms (1.01x C) | ≤ 1.05x | met |
+| 2. `std::sha512`, 10,000 64-byte digests, as specified | 118 ms | ~120 ms (builtins only) | ≥ 1.3x | **missed: ~1.0x** |
+| 2. the same, constant table hoisted, 100,000 digests | 119.9 ms | 92.5 ms | | 1.30x |
+| 2. all of Stage C together, 10,000 digests | 118.3 ms | 10.2 ms | | 11.6x |
+| 3a. `sha256-hash` retyped `U32`, today's spelling (20,000 rounds) | 10.3 ms (1.43x C) | 8.5 ms (1.17x C) | ≈ 1.17x | met |
+| 3b. … moved onto the builtins | 8.5 ms | 8.55 ms (1.18x C) | within ±3% of 3a | met (+0.6%) |
+| 4. `std::chacha::apply`, 32 × 64 KiB | 13.1 ms | 12.9 ms | ≥ 1.1x (low confidence) | **missed: 1.02x** |
+| 5. X25519 public key ×20 | 65.8 ms | 67.6 ms | ±3% | met |
+| 5. Ed25519 verify ×5 | 99.9 ms | 98.4 ms | ±3% | met |
+
+Item 2 missed because its premise was wrong: the prediction assumed the
+digest's time was the round arithmetic, and the profile showed it was the
+constant tables rebuilt each round (malloc and free outweighed the
+compression function more than 8 to 1). With the tables out of the way the
+builtins give exactly the predicted 1.30x, and the whole stage 11.6x — but the
+plan's own figure, taken on the module as it stood, is ~1.0x, and that is the
+one recorded as the outcome. Item 4 missed for the reason the plan flagged as
+its low confidence: ChaCha's time is in array access and per-byte `push`, not
+in the quarter round. The debug build of 3a/3b, recorded without a target:
+57.1 ms (`Int`) → 41.7 ms (`U32`, today's spelling) → 34.5 ms (builtins).
+
+Item 6, the interpreter (`tuo spec`, whole process, best of 5): `std::sha512`
+470 → 94 ms, `std::chacha` 2.00 → 1.98 s, `std::crypto` 224 → 202 ms.
+
+Q-0006 is marked resolved, and Constitution §24's example now reads
+`std::int::wrapping_add(a, b)`.
 
 ## Consequences
 

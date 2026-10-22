@@ -141,7 +141,7 @@ use tuo_mir::{
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
-    Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
+    Layout, POINTER_SIZE, TagRepr, layout_of, struct_field_offsets, tag_repr, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
 use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult, WrapperKind};
@@ -1679,6 +1679,41 @@ impl<'a> Lowering<'a> {
                 let amount_kind = self.operand_int_kind(rhs)?;
                 Ok(self.checked_shift(kind, amount_kind, l, r, matches!(op, BinOp::Shl)))
             }
+            // ADR-0031. The plain, flag-free instructions never trap.
+            BinOp::WrappingAdd => Ok(self.builder.ins().iadd(l, r)),
+            BinOp::WrappingSub => Ok(self.builder.ins().isub(l, r)),
+            BinOp::WrappingMul => Ok(self.builder.ins().imul(l, r)),
+            BinOp::RotateLeft | BinOp::RotateRight => {
+                // Cranelift reduces a rotation amount modulo the width. The
+                // amount is first brought to the value's width by reducing
+                // or zero-extending, which keeps its low bits — all that a
+                // Euclidean reduction by a power-of-two width reads.
+                let value_ty = self.builder.func.dfg.value_type(l);
+                let amount_ty = self.builder.func.dfg.value_type(r);
+                let amount = if amount_ty.bits() > value_ty.bits() {
+                    self.builder.ins().ireduce(value_ty, r)
+                } else if amount_ty.bits() < value_ty.bits() {
+                    self.builder.ins().uextend(value_ty, r)
+                } else {
+                    r
+                };
+                Ok(if matches!(op, BinOp::RotateLeft) {
+                    self.builder.ins().rotl(l, amount)
+                } else {
+                    self.builder.ins().rotr(l, amount)
+                })
+            }
+            // ADR-0031's overflow predicates: the same flag the trapping
+            // operators guard on, returned instead of trapped on. Cranelift's
+            // flag is already an `i8` 0/1, the backend's `Bool`.
+            BinOp::AddOverflows | BinOp::SubOverflows | BinOp::MulOverflows => {
+                let arith = match op {
+                    BinOp::AddOverflows => ArithOp::Add,
+                    BinOp::SubOverflows => ArithOp::Sub,
+                    _ => ArithOp::Mul,
+                };
+                Ok(self.arith_with_overflow(kind, l, r, arith).1)
+            }
             // Comparisons handled above; reaching here is impossible.
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => Err(
                 CodegenError::backend("comparison fell through arithmetic path"),
@@ -1713,11 +1748,24 @@ impl<'a> Lowering<'a> {
             BinOp::Sub => self.builder.ins().fsub(l, r),
             BinOp::Mul => self.builder.ins().fmul(l, r),
             BinOp::Div => self.builder.ins().fdiv(l, r),
-            // ADR-0019's bitwise operators are integers-only, so the type
-            // checker rejects them on floats and this arm is unreachable.
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            // The bitwise operators (ADR-0019) and `std::int`'s (ADR-0031)
+            // are integers-only, so the type checker rejects them on floats
+            // and this arm is unreachable.
+            BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::WrappingAdd
+            | BinOp::WrappingSub
+            | BinOp::WrappingMul
+            | BinOp::RotateLeft
+            | BinOp::RotateRight
+            | BinOp::AddOverflows
+            | BinOp::SubOverflows
+            | BinOp::MulOverflows => {
                 return Err(CodegenError::backend(
-                    "bitwise operator reached the float path",
+                    "integer-only operator reached the float path",
                 ));
             }
             BinOp::Rem => {
@@ -1767,19 +1815,32 @@ impl<'a> Lowering<'a> {
         r: ClifValue,
         op: ArithOp,
     ) -> ClifValue {
+        let (result, overflow) = self.arith_with_overflow(kind, l, r, op);
+        self.guard(overflow, TrapCode::IntegerOverflow);
+        result
+    }
+
+    /// The wrapped result of `l op r` and its overflow flag, shared by the
+    /// trapping operators and ADR-0031's overflow predicates so the two
+    /// cannot disagree about what overflows.
+    fn arith_with_overflow(
+        &mut self,
+        kind: IntKind,
+        l: ClifValue,
+        r: ClifValue,
+        op: ArithOp,
+    ) -> (ClifValue, ClifValue) {
         let signed = is_signed(kind);
         // Use Cranelift's carry/overflow-producing instructions where the
         // register width matches the kind width (the common case for i8..i64).
-        let (result, overflow) = match (op, signed) {
+        match (op, signed) {
             (ArithOp::Add, true) => self.builder.ins().sadd_overflow(l, r),
             (ArithOp::Add, false) => self.builder.ins().uadd_overflow(l, r),
             (ArithOp::Sub, true) => self.builder.ins().ssub_overflow(l, r),
             (ArithOp::Sub, false) => self.builder.ins().usub_overflow(l, r),
             (ArithOp::Mul, true) => self.builder.ins().smul_overflow(l, r),
             (ArithOp::Mul, false) => self.builder.ins().umul_overflow(l, r),
-        };
-        self.guard(overflow, TrapCode::IntegerOverflow);
-        result
+        }
     }
 
     /// Lower a trapping div (`is_div`) or rem: trap on a zero divisor, and on
@@ -2237,11 +2298,11 @@ impl<'a> Lowering<'a> {
         // whole-aggregate slot).
         let base = self.aggregate_dest_address(dest)?;
 
-        // Enum-like: store the u32 tag at offset 0. Struct/tuple: no tag.
+        // Enum-like: record the variant (see `store_variant_tag`).
+        // Struct/tuple: no tag.
         let enum_like = matches!(ty, Ty::Enum(..) | Ty::Option(_) | Ty::Result(..));
         if enum_like {
-            let tag = self.builder.ins().iconst(types::I32, i64::from(variant));
-            self.builder.ins().store(MemFlags::trusted(), tag, base, 0);
+            self.store_variant_tag(base, &ty, variant);
         }
 
         // Field offsets: struct/tuple vs enum variant.
@@ -2353,8 +2414,8 @@ impl<'a> Lowering<'a> {
         Ok(addr)
     }
 
-    /// Lower `Rvalue::Discriminant`: load the u32 tag at offset 0 of the enum
-    /// value and zero-extend it to a `Usize` (i64), matching the interpreter's
+    /// Lower `Rvalue::Discriminant`: read the variant (see `load_variant_tag`)
+    /// and zero-extend it to a `Usize` (i64), matching the interpreter's
     /// `Value::Int(discr, Usize)`.
     fn lower_discriminant(&mut self, place: &Place) -> Result<ClifValue, CodegenError> {
         let base = if place.projection.is_empty() {
@@ -2375,12 +2436,58 @@ impl<'a> Lowering<'a> {
             let (addr, _leaf) = self.place_address(place)?;
             addr
         };
-        // Load the u32 tag, then zero-extend to i64 (Usize). Never truncate.
-        let tag = self
-            .builder
-            .ins()
-            .load(types::I32, MemFlags::trusted(), base, 0);
+        // Read the u32 variant, then zero-extend to i64 (Usize). Never truncate.
+        let ty = self.place_type(place);
+        let tag = self.load_variant_tag(base, &ty);
         Ok(self.builder.ins().uextend(types::I64, tag))
+    }
+
+    /// Record that `variant` is live in the enum-shaped `ty` at `base`. A
+    /// tagged type stores the `u32` index at offset 0. A niche-packed one
+    /// (`Option[Box[T]]`, ABI 15) stores null for its null variant and
+    /// nothing otherwise, since the payload stored at offset 0 is the value.
+    fn store_variant_tag(&mut self, base: ClifValue, ty: &Ty, variant: u32) {
+        match tag_repr(ty) {
+            TagRepr::Tag => {
+                let tag = self.builder.ins().iconst(types::I32, i64::from(variant));
+                self.builder.ins().store(MemFlags::trusted(), tag, base, 0);
+            }
+            TagRepr::NullPointer { null_variant } => {
+                if variant == null_variant {
+                    let null = self.builder.ins().iconst(self.pointer_type, 0);
+                    self.builder.ins().store(MemFlags::trusted(), null, base, 0);
+                }
+            }
+        }
+    }
+
+    /// The live variant of the enum-shaped `ty` at `base`, as an `i32`: the
+    /// tag at offset 0, or for a niche-packed type, whether its pointer is
+    /// null.
+    fn load_variant_tag(&mut self, base: ClifValue, ty: &Ty) -> ClifValue {
+        match tag_repr(ty) {
+            TagRepr::Tag => self
+                .builder
+                .ins()
+                .load(types::I32, MemFlags::trusted(), base, 0),
+            TagRepr::NullPointer { null_variant } => {
+                let pointer =
+                    self.builder
+                        .ins()
+                        .load(self.pointer_type, MemFlags::trusted(), base, 0);
+                let is_null = self.builder.ins().icmp_imm(IntCC::Equal, pointer, 0);
+                // Two variants: the one the null stands for, and the other.
+                let null_tag = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, i64::from(null_variant));
+                let other_tag = self
+                    .builder
+                    .ins()
+                    .iconst(types::I32, i64::from(1 - null_variant));
+                self.builder.ins().select(is_null, null_tag, other_tag)
+            }
+        }
     }
 
     // ----- strings & effects (ADR-0006 Stage B) -----
@@ -3569,6 +3676,11 @@ impl<'a> Lowering<'a> {
         let one = self.builder.ins().iconst(types::I64, 1);
         let tag64 = self.builder.ins().isub(one, found);
         let tag = self.builder.ins().ireduce(types::I32, tag64);
+        if tag_repr(&dest_ty) != TagRepr::Tag {
+            return Err(CodegenError::backend(
+                "a map value is never a box, so its Option is never niche-packed",
+            ));
+        }
         self.builder
             .ins()
             .store(MemFlags::trusted(), tag, dest_base, 0);
@@ -4062,10 +4174,7 @@ impl<'a> Lowering<'a> {
         // None = variant 1, empty payload: store the tag only.
         self.builder.switch_to_block(none_block);
         self.builder.seal_block(none_block);
-        let none_tag = self.builder.ins().iconst(types::I32, 1);
-        self.builder
-            .ins()
-            .store(MemFlags::trusted(), none_tag, dest_base, 0);
+        self.store_variant_tag(dest_base, &dest_ty, 1);
         self.builder.ins().jump(join, &[]);
 
         // Some = variant 0, payload at the ABI offset: len -= 1, load the last
@@ -4078,10 +4187,7 @@ impl<'a> Lowering<'a> {
             .store(MemFlags::trusted(), new_len, header, HDR_LEN_OFFSET);
         let offset = self.builder.ins().imul_imm(new_len, stride);
         let elem_addr = self.builder.ins().iadd(ptr, offset);
-        let some_tag = self.builder.ins().iconst(types::I32, 0);
-        self.builder
-            .ins()
-            .store(MemFlags::trusted(), some_tag, dest_base, 0);
+        self.store_variant_tag(dest_base, &dest_ty, 0);
         let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
             .map_err(|error| self.layout_error(error))?;
         let payload_offset = *payload_offsets
@@ -4359,10 +4465,7 @@ impl<'a> Lowering<'a> {
         glue: HeapGlue,
     ) -> Result<(), CodegenError> {
         let payloads = self.variant_payloads(ty)?;
-        let disc = self
-            .builder
-            .ins()
-            .load(types::I32, MemFlags::trusted(), addr, 0);
+        let disc = self.load_variant_tag(addr, ty);
         let join = self.builder.create_block();
         for (variant, fields) in payloads.iter().enumerate() {
             let heap_fields: Vec<(i64, Ty)> = {
@@ -4890,7 +4993,15 @@ fn comparison_code(op: BinOp, signed: bool) -> Option<IntCC> {
         | BinOp::BitOr
         | BinOp::BitXor
         | BinOp::Shl
-        | BinOp::Shr => return None,
+        | BinOp::Shr
+        | BinOp::WrappingAdd
+        | BinOp::WrappingSub
+        | BinOp::WrappingMul
+        | BinOp::RotateLeft
+        | BinOp::RotateRight
+        | BinOp::AddOverflows
+        | BinOp::SubOverflows
+        | BinOp::MulOverflows => return None,
     })
 }
 
@@ -4915,7 +5026,15 @@ fn float_comparison_code(op: BinOp) -> Option<FloatCC> {
         | BinOp::BitOr
         | BinOp::BitXor
         | BinOp::Shl
-        | BinOp::Shr => return None,
+        | BinOp::Shr
+        | BinOp::WrappingAdd
+        | BinOp::WrappingSub
+        | BinOp::WrappingMul
+        | BinOp::RotateLeft
+        | BinOp::RotateRight
+        | BinOp::AddOverflows
+        | BinOp::SubOverflows
+        | BinOp::MulOverflows => return None,
     })
 }
 

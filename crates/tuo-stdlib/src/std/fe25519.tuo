@@ -1,0 +1,867 @@
+// std::fe25519 — fixed-width arithmetic in GF(2^255 - 19), the field X25519
+// works in, written so its running time does not depend on the values
+// (ADR-0022).
+//
+// This module is entirely executable: every function is pure computation over
+// a ten-limb `Fe` struct, and the specs below pin it, including the field's
+// defining identity 2^255 = 19.
+//
+// WHY A SECOND IMPLEMENTATION. `std::bignum` is variable time by design — it
+// trims zero limbs, skips zero products, and divides — and ADR-0022 records
+// that no amount of `std::ct::select` fixes that, because the loop bounds
+// themselves are data. This module is the "different implementation" the ADR
+// called for: every value has exactly ten limbs, nothing is normalized,
+// nothing is skipped, and reduction is a fixed carry chain rather than a
+// division. It is a separate module with a separate type, so nobody holding
+// an `Array[Int]` bignum can believe they have the constant-time one.
+//
+// THE REPRESENTATION. An element is h0 + 2^26 h1 + 2^51 h2 + 2^77 h3 +
+// 2^102 h4 + 2^128 h5 + 2^153 h6 + 2^179 h7 + 2^204 h8 + 2^230 h9: limbs of
+// alternately 26 and 25 bits (radix 2^25.5, the layout of Bernstein's ref10).
+// Limbs are signed and need not be canonical; `freeze` produces the unique
+// canonical form when a value leaves the module. Since 2^255 = 19 in this
+// field, a product's limbs that land past 2^255 fold back multiplied by 19.
+//
+// WHAT THE COMPILER VERIFIES. `zero`, `one`, `from_int`, `add`, `sub`, `mul`,
+// `square`, `mul_small`, `select`, and `freeze` carry `#[constant_time]`, so
+// the compiler checks each body has no branch, no indexing, no trapping
+// arithmetic, no shift by a variable amount, and no call to an unmarked
+// function (ADR-0020's `T0017`-`T0021`). They are straight-line code over
+// `std::int`'s wrapping operations (ADR-0031), which is what made this module
+// writable: before them every `+` and `*` was a trap check, and a trap is a
+// branch on the operands. `invert`, `from_bytes`, and `to_bytes` are not
+// marked, because they loop: `invert` runs a fixed chain of 254 squarings and
+// 11 multiplications whatever its input, and the byte conversions walk the
+// 32 positions in order. Their control flow depends only on those fixed
+// counts, never on a value, but the attribute cannot yet say so (ADR-0021's
+// question on public-length loops), so they go unmarked rather than claimed.
+//
+// THE BOUND THAT REPLACES THE TRAP. Wrapping arithmetic cannot trap, so it
+// also cannot report overflow, and a wrapped product would be a silently
+// wrong field element. The limb sizes are chosen so it never happens: an
+// operand of `mul`, `square`, or `mul_small` may be any output of this
+// module, or one `add`/`sub` of two outputs, and every intermediate then
+// stays below 2^60 in magnitude (2^59 measured over the full X25519 ladder
+// and 3000 random and extreme-limb operands, against 2^63 available). Deeper
+// unreduced sums (an `add` of two `add`s) are outside that contract — pass
+// them through `mul_small(x, 1)` to carry first.
+//
+// WHAT IS NOT CLAIMED. The attribute checks the source, and an optimizer may
+// still emit a branch the source never wrote; the disassembly test
+// `field_arithmetic_is_branch_free_as_emitted` checks the marked functions'
+// emitted code on both backends, as `std::ct`'s primitives are checked, but
+// only for the build it runs. Whether the emitted instructions run in
+// data-independent time is a property of the processor. So this is
+// verified-branchless source, not a guarantee about wall time — the same
+// claim `std::ct` makes, at the same level.
+
+module std::fe25519;
+
+/// A field element: ten signed limbs, alternately 26 and 25 bits wide.
+///
+/// Every element has all ten limbs whatever its value, which is the property
+/// the constant-time claim rests on. A limb may exceed its nominal width
+/// between operations; `freeze` returns the canonical form.
+///
+/// # Example
+/// ```tuo
+/// let two = std::fe25519::add(std::fe25519::one(), std::fe25519::one());
+/// ```
+pub struct Fe {
+    l0: Int,
+    l1: Int,
+    l2: Int,
+    l3: Int,
+    l4: Int,
+    l5: Int,
+    l6: Int,
+    l7: Int,
+    l8: Int,
+    l9: Int,
+}
+
+/// The additive identity.
+///
+/// # Example
+/// ```tuo
+/// let z = std::fe25519::zero();
+/// ```
+#[constant_time]
+pub fn zero() -> Fe {
+    Fe {
+        l0: 0,
+        l1: 0,
+        l2: 0,
+        l3: 0,
+        l4: 0,
+        l5: 0,
+        l6: 0,
+        l7: 0,
+        l8: 0,
+        l9: 0,
+    }
+}
+
+/// The multiplicative identity.
+///
+/// # Example
+/// ```tuo
+/// let o = std::fe25519::one();
+/// ```
+#[constant_time]
+pub fn one() -> Fe {
+    Fe {
+        l0: 1,
+        l1: 0,
+        l2: 0,
+        l3: 0,
+        l4: 0,
+        l5: 0,
+        l6: 0,
+        l7: 0,
+        l8: 0,
+        l9: 0,
+    }
+}
+
+/// The element `n`, for a non-negative `n`.
+///
+/// An `Int` is at most 63 bits, so it fills the first three limbs; the rest
+/// are zero. A negative `n` is outside the contract.
+///
+/// # Example
+/// ```tuo
+/// let a24 = std::fe25519::from_int(121665);
+/// ```
+#[constant_time]
+pub fn from_int(take n: Int) -> Fe {
+    Fe {
+        l0: n & 67108863,
+        l1: (n >> 26) & 33554431,
+        l2: n >> 51,
+        l3: 0,
+        l4: 0,
+        l5: 0,
+        l6: 0,
+        l7: 0,
+        l8: 0,
+        l9: 0,
+    }
+}
+
+/// `f + g`, limb by limb, with no carry.
+///
+/// The result is a valid operand for `mul`/`square`/`mul_small` when `f` and
+/// `g` are themselves outputs of this module (see the module header's bound).
+///
+/// # Example
+/// ```tuo
+/// let s = std::fe25519::add(a, b);
+/// ```
+#[constant_time]
+pub fn add(take f: Fe, take g: Fe) -> Fe {
+    Fe {
+        l0: std::int::wrapping_add(f.l0, g.l0),
+        l1: std::int::wrapping_add(f.l1, g.l1),
+        l2: std::int::wrapping_add(f.l2, g.l2),
+        l3: std::int::wrapping_add(f.l3, g.l3),
+        l4: std::int::wrapping_add(f.l4, g.l4),
+        l5: std::int::wrapping_add(f.l5, g.l5),
+        l6: std::int::wrapping_add(f.l6, g.l6),
+        l7: std::int::wrapping_add(f.l7, g.l7),
+        l8: std::int::wrapping_add(f.l8, g.l8),
+        l9: std::int::wrapping_add(f.l9, g.l9),
+    }
+}
+
+/// `f - g`, limb by limb, with no carry. Limbs are signed, so no borrow from
+/// the prime is needed: the negative limbs are still a representation of
+/// `f - g` modulo p.
+///
+/// # Example
+/// ```tuo
+/// let d = std::fe25519::sub(a, b);
+/// ```
+#[constant_time]
+pub fn sub(take f: Fe, take g: Fe) -> Fe {
+    Fe {
+        l0: std::int::wrapping_sub(f.l0, g.l0),
+        l1: std::int::wrapping_sub(f.l1, g.l1),
+        l2: std::int::wrapping_sub(f.l2, g.l2),
+        l3: std::int::wrapping_sub(f.l3, g.l3),
+        l4: std::int::wrapping_sub(f.l4, g.l4),
+        l5: std::int::wrapping_sub(f.l5, g.l5),
+        l6: std::int::wrapping_sub(f.l6, g.l6),
+        l7: std::int::wrapping_sub(f.l7, g.l7),
+        l8: std::int::wrapping_sub(f.l8, g.l8),
+        l9: std::int::wrapping_sub(f.l9, g.l9),
+    }
+}
+
+/// Carry every limb into its nominal width (rounding to the centered range),
+/// folding the carry out of the top limb back into the bottom one times 19.
+///
+/// This is the whole of reduction: a fixed sequence of twelve carries, the
+/// same for every input.
+#[constant_time]
+fn carry(take h: Fe) -> Fe {
+    var h0 = h.l0;
+    var h1 = h.l1;
+    var h2 = h.l2;
+    var h3 = h.l3;
+    var h4 = h.l4;
+    var h5 = h.l5;
+    var h6 = h.l6;
+    var h7 = h.l7;
+    var h8 = h.l8;
+    var h9 = h.l9;
+    var c = 0;
+    c = std::int::wrapping_add(h0, 33554432) >> 26;
+    h1 = std::int::wrapping_add(h1, c);
+    h0 = std::int::wrapping_sub(h0, c << 26);
+    c = std::int::wrapping_add(h4, 33554432) >> 26;
+    h5 = std::int::wrapping_add(h5, c);
+    h4 = std::int::wrapping_sub(h4, c << 26);
+    c = std::int::wrapping_add(h1, 16777216) >> 25;
+    h2 = std::int::wrapping_add(h2, c);
+    h1 = std::int::wrapping_sub(h1, c << 25);
+    c = std::int::wrapping_add(h5, 16777216) >> 25;
+    h6 = std::int::wrapping_add(h6, c);
+    h5 = std::int::wrapping_sub(h5, c << 25);
+    c = std::int::wrapping_add(h2, 33554432) >> 26;
+    h3 = std::int::wrapping_add(h3, c);
+    h2 = std::int::wrapping_sub(h2, c << 26);
+    c = std::int::wrapping_add(h6, 33554432) >> 26;
+    h7 = std::int::wrapping_add(h7, c);
+    h6 = std::int::wrapping_sub(h6, c << 26);
+    c = std::int::wrapping_add(h3, 16777216) >> 25;
+    h4 = std::int::wrapping_add(h4, c);
+    h3 = std::int::wrapping_sub(h3, c << 25);
+    c = std::int::wrapping_add(h7, 16777216) >> 25;
+    h8 = std::int::wrapping_add(h8, c);
+    h7 = std::int::wrapping_sub(h7, c << 25);
+    c = std::int::wrapping_add(h4, 33554432) >> 26;
+    h5 = std::int::wrapping_add(h5, c);
+    h4 = std::int::wrapping_sub(h4, c << 26);
+    c = std::int::wrapping_add(h8, 33554432) >> 26;
+    h9 = std::int::wrapping_add(h9, c);
+    h8 = std::int::wrapping_sub(h8, c << 26);
+    c = std::int::wrapping_add(h9, 16777216) >> 25;
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(c, 19));
+    h9 = std::int::wrapping_sub(h9, c << 25);
+    c = std::int::wrapping_add(h0, 33554432) >> 26;
+    h1 = std::int::wrapping_add(h1, c);
+    h0 = std::int::wrapping_sub(h0, c << 26);
+    Fe {
+        l0: h0,
+        l1: h1,
+        l2: h2,
+        l3: h3,
+        l4: h4,
+        l5: h5,
+        l6: h6,
+        l7: h7,
+        l8: h8,
+        l9: h9,
+    }
+}
+
+/// `f * g`: all one hundred limb products, none skipped, then one carry
+/// chain.
+///
+/// Limb `k` of the product collects `f_i * g_j` for every `i + j = k`
+/// (mod 10). A pair of 25-bit limbs contributes twice, since their positions
+/// sum to one bit short of the target limb's; a pair landing past 2^255
+/// contributes 19 times, since 2^255 = 19 here.
+///
+/// # Example
+/// ```tuo
+/// let p = std::fe25519::mul(a, b);
+/// ```
+#[constant_time]
+pub fn mul(take f: Fe, take g: Fe) -> Fe {
+    let g1_19 = std::int::wrapping_mul(g.l1, 19);
+    let g2_19 = std::int::wrapping_mul(g.l2, 19);
+    let g3_19 = std::int::wrapping_mul(g.l3, 19);
+    let g4_19 = std::int::wrapping_mul(g.l4, 19);
+    let g5_19 = std::int::wrapping_mul(g.l5, 19);
+    let g6_19 = std::int::wrapping_mul(g.l6, 19);
+    let g7_19 = std::int::wrapping_mul(g.l7, 19);
+    let g8_19 = std::int::wrapping_mul(g.l8, 19);
+    let g9_19 = std::int::wrapping_mul(g.l9, 19);
+    let f1_2 = std::int::wrapping_mul(f.l1, 2);
+    let f3_2 = std::int::wrapping_mul(f.l3, 2);
+    let f5_2 = std::int::wrapping_mul(f.l5, 2);
+    let f7_2 = std::int::wrapping_mul(f.l7, 2);
+    let f9_2 = std::int::wrapping_mul(f.l9, 2);
+    var h0 = std::int::wrapping_mul(f.l0, g.l0);
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f1_2, g9_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f.l2, g8_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f3_2, g7_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f.l4, g6_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f5_2, g5_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f.l6, g4_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f7_2, g3_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f.l8, g2_19));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(f9_2, g1_19));
+    var h1 = std::int::wrapping_mul(f.l0, g.l1);
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l1, g.l0));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l2, g9_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l3, g8_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l4, g7_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l5, g6_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l6, g5_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l7, g4_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l8, g3_19));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(f.l9, g2_19));
+    var h2 = std::int::wrapping_mul(f.l0, g.l2);
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f1_2, g.l1));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f.l2, g.l0));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f3_2, g9_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f.l4, g8_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f5_2, g7_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f.l6, g6_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f7_2, g5_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f.l8, g4_19));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(f9_2, g3_19));
+    var h3 = std::int::wrapping_mul(f.l0, g.l3);
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l1, g.l2));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l2, g.l1));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l3, g.l0));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l4, g9_19));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l5, g8_19));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l6, g7_19));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l7, g6_19));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l8, g5_19));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(f.l9, g4_19));
+    var h4 = std::int::wrapping_mul(f.l0, g.l4);
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f1_2, g.l3));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f.l2, g.l2));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f3_2, g.l1));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f.l4, g.l0));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f5_2, g9_19));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f.l6, g8_19));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f7_2, g7_19));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f.l8, g6_19));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f9_2, g5_19));
+    var h5 = std::int::wrapping_mul(f.l0, g.l5);
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l1, g.l4));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l2, g.l3));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l3, g.l2));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l4, g.l1));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l5, g.l0));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l6, g9_19));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l7, g8_19));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l8, g7_19));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(f.l9, g6_19));
+    var h6 = std::int::wrapping_mul(f.l0, g.l6);
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f1_2, g.l5));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f.l2, g.l4));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f3_2, g.l3));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f.l4, g.l2));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f5_2, g.l1));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f.l6, g.l0));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f7_2, g9_19));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f.l8, g8_19));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(f9_2, g7_19));
+    var h7 = std::int::wrapping_mul(f.l0, g.l7);
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l1, g.l6));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l2, g.l5));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l3, g.l4));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l4, g.l3));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l5, g.l2));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l6, g.l1));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l7, g.l0));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l8, g9_19));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(f.l9, g8_19));
+    var h8 = std::int::wrapping_mul(f.l0, g.l8);
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f1_2, g.l7));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f.l2, g.l6));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f3_2, g.l5));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f.l4, g.l4));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f5_2, g.l3));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f.l6, g.l2));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f7_2, g.l1));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f.l8, g.l0));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f9_2, g9_19));
+    var h9 = std::int::wrapping_mul(f.l0, g.l9);
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l1, g.l8));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l2, g.l7));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l3, g.l6));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l4, g.l5));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l5, g.l4));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l6, g.l3));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l7, g.l2));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l8, g.l1));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(f.l9, g.l0));
+    carry(Fe {
+        l0: h0,
+        l1: h1,
+        l2: h2,
+        l3: h3,
+        l4: h4,
+        l5: h5,
+        l6: h6,
+        l7: h7,
+        l8: h8,
+        l9: h9,
+    })
+}
+
+/// `f * f`, with the symmetric products computed once and doubled — 55
+/// products instead of `mul`'s 100.
+///
+/// # Example
+/// ```tuo
+/// let s = std::fe25519::square(a);
+/// ```
+#[constant_time]
+pub fn square(take f: Fe) -> Fe {
+    var h0 = std::int::wrapping_mul(f.l0, f.l0);
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l9), 76));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l8), 38));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l7), 76));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(std::int::wrapping_mul(f.l4, f.l6), 38));
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(std::int::wrapping_mul(f.l5, f.l5), 38));
+    var h1 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l1), 2);
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l9), 38));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l8), 38));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(std::int::wrapping_mul(f.l4, f.l7), 38));
+    h1 = std::int::wrapping_add(h1, std::int::wrapping_mul(std::int::wrapping_mul(f.l5, f.l6), 38));
+    var h2 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l2), 2);
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l1), 2));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l9), 76));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(std::int::wrapping_mul(f.l4, f.l8), 38));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(std::int::wrapping_mul(f.l5, f.l7), 76));
+    h2 = std::int::wrapping_add(h2, std::int::wrapping_mul(std::int::wrapping_mul(f.l6, f.l6), 19));
+    var h3 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l3), 2);
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l2), 2));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(std::int::wrapping_mul(f.l4, f.l9), 38));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(std::int::wrapping_mul(f.l5, f.l8), 38));
+    h3 = std::int::wrapping_add(h3, std::int::wrapping_mul(std::int::wrapping_mul(f.l6, f.l7), 38));
+    var h4 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l4), 2);
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l3), 4));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(f.l2, f.l2));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(std::int::wrapping_mul(f.l5, f.l9), 76));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(std::int::wrapping_mul(f.l6, f.l8), 38));
+    h4 = std::int::wrapping_add(h4, std::int::wrapping_mul(std::int::wrapping_mul(f.l7, f.l7), 38));
+    var h5 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l5), 2);
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l4), 2));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l3), 2));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(std::int::wrapping_mul(f.l6, f.l9), 38));
+    h5 = std::int::wrapping_add(h5, std::int::wrapping_mul(std::int::wrapping_mul(f.l7, f.l8), 38));
+    var h6 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l6), 2);
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l5), 4));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l4), 2));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l3), 2));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(std::int::wrapping_mul(f.l7, f.l9), 76));
+    h6 = std::int::wrapping_add(h6, std::int::wrapping_mul(std::int::wrapping_mul(f.l8, f.l8), 19));
+    var h7 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l7), 2);
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l6), 2));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l5), 2));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l4), 2));
+    h7 = std::int::wrapping_add(h7, std::int::wrapping_mul(std::int::wrapping_mul(f.l8, f.l9), 38));
+    var h8 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l8), 2);
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l7), 4));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l6), 2));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l5), 4));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(f.l4, f.l4));
+    h8 = std::int::wrapping_add(h8, std::int::wrapping_mul(std::int::wrapping_mul(f.l9, f.l9), 38));
+    var h9 = std::int::wrapping_mul(std::int::wrapping_mul(f.l0, f.l9), 2);
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(std::int::wrapping_mul(f.l1, f.l8), 2));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(std::int::wrapping_mul(f.l2, f.l7), 2));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(std::int::wrapping_mul(f.l3, f.l6), 2));
+    h9 = std::int::wrapping_add(h9, std::int::wrapping_mul(std::int::wrapping_mul(f.l4, f.l5), 2));
+    carry(Fe {
+        l0: h0,
+        l1: h1,
+        l2: h2,
+        l3: h3,
+        l4: h4,
+        l5: h5,
+        l6: h6,
+        l7: h7,
+        l8: h8,
+        l9: h9,
+    })
+}
+
+/// `f * n` for a small non-negative constant `n` (below 2^20), such as
+/// X25519's `a24 = 121665`; also `mul_small(f, 1)` carries `f`.
+///
+/// # Example
+/// ```tuo
+/// let t = std::fe25519::mul_small(e, 121665);
+/// ```
+#[constant_time]
+pub fn mul_small(take f: Fe, take n: Int) -> Fe {
+    carry(Fe {
+        l0: std::int::wrapping_mul(f.l0, n),
+        l1: std::int::wrapping_mul(f.l1, n),
+        l2: std::int::wrapping_mul(f.l2, n),
+        l3: std::int::wrapping_mul(f.l3, n),
+        l4: std::int::wrapping_mul(f.l4, n),
+        l5: std::int::wrapping_mul(f.l5, n),
+        l6: std::int::wrapping_mul(f.l6, n),
+        l7: std::int::wrapping_mul(f.l7, n),
+        l8: std::int::wrapping_mul(f.l8, n),
+        l9: std::int::wrapping_mul(f.l9, n),
+    })
+}
+
+/// `a` when `c` is 1 and `b` when `c` is 0, chosen limb by limb with
+/// `std::ct::select`: both are read, and the bit decides only a mask.
+///
+/// This is X25519's conditional swap. `c` is a bit of the secret scalar, so
+/// a branch here would be the textbook timing leak.
+///
+/// # Example
+/// ```tuo
+/// let x = std::fe25519::select(bit, a, b);
+/// ```
+#[constant_time]
+pub fn select(take c: Int, take a: Fe, take b: Fe) -> Fe {
+    Fe {
+        l0: std::ct::select(c, a.l0, b.l0),
+        l1: std::ct::select(c, a.l1, b.l1),
+        l2: std::ct::select(c, a.l2, b.l2),
+        l3: std::ct::select(c, a.l3, b.l3),
+        l4: std::ct::select(c, a.l4, b.l4),
+        l5: std::ct::select(c, a.l5, b.l5),
+        l6: std::ct::select(c, a.l6, b.l6),
+        l7: std::ct::select(c, a.l7, b.l7),
+        l8: std::ct::select(c, a.l8, b.l8),
+        l9: std::ct::select(c, a.l9, b.l9),
+    }
+}
+
+/// The canonical form of `f`: each limb in `[0, 2^width)` and the value below
+/// p, so two equal elements have equal limbs.
+///
+/// It computes how many times p fits (0 or 1, for a carried input) as a
+/// carry out of `f + 19`, subtracts that many p's, and carries without
+/// rounding — branch-free throughout. `f` must be a carried value: an output
+/// of `mul`, `square`, or `mul_small`.
+///
+/// # Example
+/// ```tuo
+/// let c = std::fe25519::freeze(std::fe25519::mul(a, b));
+/// ```
+#[constant_time]
+pub fn freeze(take f: Fe) -> Fe {
+    var h0 = f.l0;
+    var h1 = f.l1;
+    var h2 = f.l2;
+    var h3 = f.l3;
+    var h4 = f.l4;
+    var h5 = f.l5;
+    var h6 = f.l6;
+    var h7 = f.l7;
+    var h8 = f.l8;
+    var h9 = f.l9;
+    var q = std::int::wrapping_add(std::int::wrapping_mul(h9, 19), 16777216) >> 25;
+    q = std::int::wrapping_add(h0, q) >> 26;
+    q = std::int::wrapping_add(h1, q) >> 25;
+    q = std::int::wrapping_add(h2, q) >> 26;
+    q = std::int::wrapping_add(h3, q) >> 25;
+    q = std::int::wrapping_add(h4, q) >> 26;
+    q = std::int::wrapping_add(h5, q) >> 25;
+    q = std::int::wrapping_add(h6, q) >> 26;
+    q = std::int::wrapping_add(h7, q) >> 25;
+    q = std::int::wrapping_add(h8, q) >> 26;
+    q = std::int::wrapping_add(h9, q) >> 25;
+    h0 = std::int::wrapping_add(h0, std::int::wrapping_mul(q, 19));
+    var c = 0;
+    c = h0 >> 26;
+    h1 = std::int::wrapping_add(h1, c);
+    h0 = std::int::wrapping_sub(h0, c << 26);
+    c = h1 >> 25;
+    h2 = std::int::wrapping_add(h2, c);
+    h1 = std::int::wrapping_sub(h1, c << 25);
+    c = h2 >> 26;
+    h3 = std::int::wrapping_add(h3, c);
+    h2 = std::int::wrapping_sub(h2, c << 26);
+    c = h3 >> 25;
+    h4 = std::int::wrapping_add(h4, c);
+    h3 = std::int::wrapping_sub(h3, c << 25);
+    c = h4 >> 26;
+    h5 = std::int::wrapping_add(h5, c);
+    h4 = std::int::wrapping_sub(h4, c << 26);
+    c = h5 >> 25;
+    h6 = std::int::wrapping_add(h6, c);
+    h5 = std::int::wrapping_sub(h5, c << 25);
+    c = h6 >> 26;
+    h7 = std::int::wrapping_add(h7, c);
+    h6 = std::int::wrapping_sub(h6, c << 26);
+    c = h7 >> 25;
+    h8 = std::int::wrapping_add(h8, c);
+    h7 = std::int::wrapping_sub(h7, c << 25);
+    c = h8 >> 26;
+    h9 = std::int::wrapping_add(h9, c);
+    h8 = std::int::wrapping_sub(h8, c << 26);
+    c = h9 >> 25;
+    h9 = std::int::wrapping_sub(h9, c << 25);
+    Fe {
+        l0: h0,
+        l1: h1,
+        l2: h2,
+        l3: h3,
+        l4: h4,
+        l5: h5,
+        l6: h6,
+        l7: h7,
+        l8: h8,
+        l9: h9,
+    }
+}
+
+/// `f` squared `n` times.
+fn square_times(take f: Fe, take n: Int) -> Fe {
+    var out = f;
+    var i = 0;
+    while i < n {
+        out = square(out);
+        i = i + 1;
+    }
+    out
+}
+
+/// `f^(p - 2)`, the multiplicative inverse of `f` (and zero for zero), by
+/// Fermat's little theorem.
+///
+/// The exponent is fixed, so this is a fixed addition chain — 254 squarings
+/// and 11 multiplications for every input. It loops over those fixed counts,
+/// which is why it cannot carry `#[constant_time]`; nothing in its control
+/// flow depends on `f`.
+///
+/// # Example
+/// ```tuo
+/// let x = std::fe25519::mul(x2, std::fe25519::invert(z2));
+/// ```
+pub fn invert(take f: Fe) -> Fe {
+    // z^2, z^9, z^11, then z^(2^k - 1) for k = 5, 10, 20, 40, 50, 100, 200,
+    // 250, and finally z^(2^255 - 21) = z^(p - 2).
+    let z2 = square(f);
+    let z9 = mul(f, square_times(z2, 2));
+    let z11 = mul(z2, z9);
+    let z_5_0 = mul(z9, square(z11));
+    let z_10_0 = mul(square_times(z_5_0, 5), z_5_0);
+    let z_20_0 = mul(square_times(z_10_0, 10), z_10_0);
+    let z_40_0 = mul(square_times(z_20_0, 20), z_20_0);
+    let z_50_0 = mul(square_times(z_40_0, 10), z_10_0);
+    let z_100_0 = mul(square_times(z_50_0, 50), z_50_0);
+    let z_200_0 = mul(square_times(z_100_0, 100), z_100_0);
+    let z_250_0 = mul(square_times(z_200_0, 50), z_50_0);
+    mul(square_times(z_250_0, 5), z11)
+}
+
+/// The element encoded by 32 little-endian bytes, ignoring the top bit of
+/// the last byte (RFC 7748 §5: a u-coordinate is 255 bits, and a value at or
+/// above p is accepted and used as its residue).
+///
+/// It walks the bytes in order, so its control flow depends on positions,
+/// never on the bytes' values. `bytes` must hold at least 32 entries.
+///
+/// # Example
+/// ```tuo
+/// let u = std::fe25519::from_bytes(peer_public);
+/// ```
+pub fn from_bytes(in bytes: Array[Int]) -> Fe {
+    var limbs = [0; 10];
+    var acc = 0;
+    var bits = 0;
+    var next = 0;
+    var limb = 0;
+    while limb < 10 {
+        let width = 26 - limb % 2;
+        while bits < width {
+            var byte = std::array::get(bytes, next) & 255;
+            if next == 31 {
+                byte = byte & 127;
+            }
+            acc = acc | (byte << bits);
+            bits = bits + 8;
+            next = next + 1;
+        }
+        limbs[limb as Usize] = acc & ((1 << width) - 1);
+        acc = acc >> width;
+        bits = bits - width;
+        limb = limb + 1;
+    }
+    Fe {
+        l0: limbs[0],
+        l1: limbs[1],
+        l2: limbs[2],
+        l3: limbs[3],
+        l4: limbs[4],
+        l5: limbs[5],
+        l6: limbs[6],
+        l7: limbs[7],
+        l8: limbs[8],
+        l9: limbs[9],
+    }
+}
+
+/// The canonical 32-byte little-endian encoding of `f`.
+///
+/// `f` is frozen first, so equal elements encode identically. Like
+/// `from_bytes` it walks positions in order. `f` must be a carried value
+/// (see `freeze`).
+///
+/// # Example
+/// ```tuo
+/// let shared = std::fe25519::to_bytes(std::fe25519::mul(x2, inverse));
+/// ```
+pub fn to_bytes(take f: Fe) -> Array[Int] {
+    let h = freeze(f);
+    let limbs = [h.l0, h.l1, h.l2, h.l3, h.l4, h.l5, h.l6, h.l7, h.l8, h.l9];
+    var out = std::array::empty();
+    var acc = 0;
+    var bits = 0;
+    var limb = 0;
+    while limb < 10 {
+        acc = acc | (limbs[limb as Usize] << bits);
+        bits = bits + 26 - limb % 2;
+        while bits >= 8 {
+            std::array::push(out, acc & 255);
+            acc = acc >> 8;
+            bits = bits - 8;
+        }
+        limb = limb + 1;
+    }
+    // 255 bits fill 31 bytes and leave 7 for the last.
+    std::array::push(out, acc);
+    out
+}
+
+// --- Specs ------------------------------------------------------------------
+
+/// The canonical value of a small element, for the specs: valid when the
+/// element is below 2^63.
+fn small(take f: Fe) -> Int {
+    let h = freeze(mul_small(f, 1));
+    h.l0 | (h.l1 << 26) | (h.l2 << 51)
+}
+
+/// p itself, limb by limb: 2^255 - 19, the element that must freeze to zero.
+fn prime_limbs() -> Fe {
+    Fe {
+        l0: 67108845,
+        l1: 33554431,
+        l2: 67108863,
+        l3: 33554431,
+        l4: 67108863,
+        l5: 33554431,
+        l6: 67108863,
+        l7: 33554431,
+        l8: 67108863,
+        l9: 33554431,
+    }
+}
+
+/// p - 1, the field's -1.
+fn minus_one() -> Fe {
+    sub(zero(), one())
+}
+
+/// 2^51, a power of two straddling the second and third limbs.
+fn two_51() -> Fe {
+    from_int(2251799813685248)
+}
+
+/// p - 12345: every limb in use, for checking `square` against `mul`.
+fn wide() -> Fe {
+    sub(prime_limbs(), from_int(12345))
+}
+
+/// 32 bytes, each `value`.
+fn repeated(take value: Int) -> Array[Int] {
+    std::array::filled(32, value)
+}
+
+spec zero {
+    then small(zero()) == 0;
+}
+
+spec one {
+    then small(one()) == 1;
+}
+
+spec from_int {
+    then small(from_int(42)) == 42;
+    // Spans all three limbs it fills.
+    then small(from_int(9223372036854775807)) == 9223372036854775807;
+}
+
+spec add {
+    then small(add(from_int(2), from_int(3))) == 5;
+    // (p - 1) + 2 wraps to 1: the sum is taken modulo p.
+    then small(add(minus_one(), from_int(2))) == 1;
+}
+
+spec sub {
+    then small(sub(from_int(5), from_int(3))) == 2;
+    // 3 - 5 is p - 2, which plus 2 is zero: negative limbs still represent
+    // the right residue.
+    then small(add(sub(from_int(3), from_int(5)), from_int(2))) == 0;
+}
+
+spec mul {
+    then small(mul(from_int(6), from_int(7))) == 42;
+    then small(mul(minus_one(), minus_one())) == 1;
+    // The field's defining identity: (2^51)^5 = 2^255 = 19. The products
+    // land past 2^255, so this is the fold by 19 being right.
+    then small(mul(mul(two_51(), two_51()), mul(mul(two_51(), two_51()), two_51()))) == 19;
+}
+
+spec square {
+    then small(square(from_int(9))) == 81;
+    then small(square(minus_one())) == 1;
+    // `square` must agree with `mul` on an operand using every limb.
+    then small(sub(square(wide()), mul(wide(), wide()))) == 0;
+    then small(sub(square(two_51()), mul(two_51(), two_51()))) == 0;
+}
+
+spec mul_small {
+    then small(mul_small(from_int(6), 7)) == 42;
+    // -121665 + 121665 = 0.
+    then small(add(mul_small(minus_one(), 121665), from_int(121665))) == 0;
+}
+
+spec select {
+    then small(select(1, from_int(3), from_int(4))) == 3;
+    then small(select(0, from_int(3), from_int(4))) == 4;
+}
+
+spec freeze {
+    // p and 0 are the same element, and freeze must say so limb by limb.
+    then freeze(prime_limbs()).l0 == 0;
+    then freeze(prime_limbs()).l9 == 0;
+    // p + 1 freezes to 1, and p - 1 stays p - 1 (its low limb 2^26 - 20).
+    then freeze(add(prime_limbs(), one())).l0 == 1;
+    then freeze(mul_small(minus_one(), 1)).l0 == 67108844;
+    then freeze(mul_small(minus_one(), 1)).l9 == 33554431;
+}
+
+spec invert {
+    then small(mul(from_int(7), invert(from_int(7)))) == 1;
+    then small(invert(one())) == 1;
+    then small(invert(zero())) == 0;
+    then small(mul(minus_one(), invert(minus_one()))) == 1;
+}
+
+spec from_bytes {
+    then small(from_bytes(std::fe25519::to_bytes(from_int(1234567)))) == 1234567;
+    // All 0xff: the top bit is dropped, leaving 2^255 - 1, which is 18.
+    then small(from_bytes(repeated(255))) == 18;
+}
+
+spec to_bytes {
+    then std::array::len(to_bytes(from_int(9))) == 32;
+    then std::array::get(to_bytes(from_int(9)), 0) == 9;
+    then std::array::get(to_bytes(from_int(9)), 31) == 0;
+    // p encodes as zero: the encoding is canonical.
+    then std::ct::bytes_eq(to_bytes(prime_limbs()), repeated(0)) == 1;
+    // A full-width value round-trips byte for byte.
+    then std::ct::bytes_eq(to_bytes(from_bytes(repeated(85))), repeated(85)) == 1;
+}

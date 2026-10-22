@@ -216,7 +216,7 @@ enum Failure {
         stage: &'static str,
         message: String,
         unsupported: bool,
-        /// The located `T0022`/`T0023` runnable-core advisories of this program, if
+        /// The located `T0022` runnable-core advisories of this program, if
         /// any. A backend refuses an unlowerable construct at
         /// storage-classification time, where it knows the function but not
         /// the span; the front end already computed exactly which written
@@ -285,6 +285,25 @@ fn compile_and_finish(
     mir::retain_reachable(&mut program, ENTRY, |f| {
         !crate::stdlib_input::is_library(map, f.span.source())
     });
+    // A generic function has no layout until it is instantiated (ADR-0027):
+    // clone one copy per concrete type-argument list a call reaches, then
+    // re-verify, since the instances are new MIR a backend will consume.
+    if let Err(error) = mir::monomorphize(&mut program, &check.types, &check.resolution) {
+        return Err(Failure::Step {
+            stage: "codegen",
+            message: error.message,
+            unsupported: true,
+            advisories: runnable_core_advisories(&check.diagnostics),
+        });
+    }
+    if !mir::verify(&program, &check.types).is_empty() {
+        return Err(Failure::Step {
+            stage: "codegen",
+            message: "internal: monomorphized MIR failed verification".to_owned(),
+            unsupported: false,
+            advisories: Vec::new(),
+        });
+    }
     emit_progress(
         &mut emitter,
         mode,
@@ -405,6 +424,16 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
     mir::retain_reachable(&mut program, ENTRY, |f| {
         !crate::stdlib_input::is_library(map, f.span.source())
     });
+    if let Err(error) = mir::monomorphize(&mut program, &check.types, &check.resolution) {
+        return NativeRunResult::Failed {
+            reason: format!("codegen: {}", error.message),
+        };
+    }
+    if !mir::verify(&program, &check.types).is_empty() {
+        return NativeRunResult::Failed {
+            reason: "monomorphized MIR failed verification".to_owned(),
+        };
+    }
     let _opt = mir::optimize(&mut program, &check.types);
 
     let target = TargetSpec::host();
@@ -442,12 +471,11 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
 /// naming exactly which constructs the native backends cannot lower (see
 /// `tuo_compiler`'s `native_core`).
 ///
-/// Two codes carry them, one per construct that causes the gap: `T0022` for
-/// a heap-wrapper **value** in storage position, and `T0023` for a generic
-/// declaration, whose `Ty::Param` has no layout until monomorphized
-/// (ADR-0027). Both are warnings, and both exist so a backend's
-/// storage-classification refusal — which knows the offending function but
-/// not the span — can be reported at the construct that caused it.
+/// `T0022` carries them: a heap-wrapper **value** in storage position. It is
+/// a warning, and exists so a backend's storage-classification refusal —
+/// which knows the offending function but not the span — can be reported at
+/// the construct that caused it. (`T0023`, the generic-declaration advisory,
+/// retired when ADR-0027 Stage B monomorphized generic functions.)
 fn runnable_core_advisories(
     diagnostics: &[diagnostics::Diagnostic],
 ) -> Vec<diagnostics::Diagnostic> {
@@ -455,7 +483,7 @@ fn runnable_core_advisories(
         .iter()
         .filter(|diagnostic| {
             let code = diagnostic.code.to_string();
-            code == "T0022" || code == "T0023"
+            code == "T0022"
         })
         .cloned()
         .collect()
@@ -463,7 +491,7 @@ fn runnable_core_advisories(
 
 /// Map a [`CodegenError`] to a reportable failure, preserving "unsupported".
 ///
-/// `advisories` are the program's located `T0022`/`T0023` diagnostics. A backend
+/// `advisories` are the program's located `T0022` diagnostics. A backend
 /// refuses an unlowerable construct at storage-classification time, where it
 /// knows the offending function but not the span; carrying the front end's
 /// advisories lets the report point at the written type instead.

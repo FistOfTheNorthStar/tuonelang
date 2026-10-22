@@ -140,7 +140,7 @@ use tuo_mir::{
 };
 use tuo_resolve::SymbolId;
 use tuo_runtime::abi::{
-    Layout, POINTER_SIZE, layout_of, struct_field_offsets, variant_field_offsets,
+    Layout, POINTER_SIZE, TagRepr, layout_of, struct_field_offsets, tag_repr, variant_field_offsets,
 };
 use tuo_runtime::{TRAP_SYMBOL, TrapCode, alloc, effect, map};
 use tuo_types::{FloatKind, IntKind, ParamMode, Ty, TypeckResult, WrapperKind};
@@ -447,6 +447,7 @@ pub(crate) fn lower_program<'ctx>(
     types: &TypeckResult,
 ) -> Result<HashMap<SymbolId, FunctionValue<'ctx>>, CodegenError> {
     link_gep_helper(ctx, module)?;
+    link_alloc_seam(ctx, module)?;
 
     // Pass 1: declare every function so direct calls can reference them before
     // their bodies are defined.
@@ -657,6 +658,103 @@ fn link_gep_helper<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> Result<()
         .get_function(GEP_HELPER)
         .ok_or_else(|| CodegenError::backend("the GEP helper did not link"))?
         .set_linkage(Linkage::Internal);
+    Ok(())
+}
+
+/// The allocation boundary's body as textual IR: the same branches as
+/// [`alloc::alloc_runtime_c_source`], from the same constants, so the two
+/// definitions of the seam cannot drift apart. NUL-terminated, as LLVM's IR
+/// parser requires of its buffer.
+fn alloc_seam_ir() -> String {
+    let alloc_fn = alloc::ALLOC_SYMBOL;
+    let dealloc_fn = alloc::DEALLOC_SYMBOL;
+    let sentinel = alloc::ZERO_SIZE_SENTINEL;
+    let malloc_align = alloc::MALLOC_ALIGN;
+    let min_align = size_of::<usize>();
+    let failure = alloc::ALLOC_FAILURE_TRAP.as_i32();
+    format!(
+        "declare ptr @malloc(i64)
+declare ptr @aligned_alloc(i64, i64)
+declare void @free(ptr)
+declare void @{TRAP_SYMBOL}(i32)
+
+define ptr @{alloc_fn}(i64 %size, i64 %align) {{
+entry:
+  %empty = icmp eq i64 %size, 0
+  br i1 %empty, label %sentinel, label %real
+sentinel:
+  ret ptr inttoptr (i64 {sentinel} to ptr)
+real:
+  %small = icmp ult i64 %align, {min_align}
+  %a = select i1 %small, i64 {min_align}, i64 %align
+  %a_minus_1 = sub i64 %a, 1
+  %sum = add i64 %size, %a_minus_1
+  %mask = xor i64 %a_minus_1, -1
+  %rounded = and i64 %sum, %mask
+  %plain = icmp ule i64 %a, {malloc_align}
+  br i1 %plain, label %by_malloc, label %by_aligned_alloc
+by_malloc:
+  %p_malloc = call ptr @malloc(i64 %rounded)
+  br label %got
+by_aligned_alloc:
+  %p_aligned = call ptr @aligned_alloc(i64 %a, i64 %rounded)
+  br label %got
+got:
+  %p = phi ptr [ %p_malloc, %by_malloc ], [ %p_aligned, %by_aligned_alloc ]
+  %failed = icmp eq ptr %p, null
+  br i1 %failed, label %oom, label %ok
+oom:
+  call void @{TRAP_SYMBOL}(i32 {failure})
+  unreachable
+ok:
+  ret ptr %p
+}}
+
+define void @{dealloc_fn}(ptr %ptr, i64 %size, i64 %align) {{
+entry:
+  %is_null = icmp eq ptr %ptr, null
+  %is_sentinel = icmp eq ptr %ptr, inttoptr (i64 {sentinel} to ptr)
+  %nothing = or i1 %is_null, %is_sentinel
+  br i1 %nothing, label %done, label %release
+release:
+  call void @free(ptr %ptr)
+  br label %done
+done:
+  ret void
+}}
+\0"
+    )
+}
+
+/// Give the optimizer the allocation boundary's body, so a hot allocation is
+/// a `malloc` call rather than a call to a function that calls `malloc`.
+///
+/// The seam stays the C shim: it is still the one definition linked into the
+/// binary. This copy is `available_externally` — LLVM may inline it and must
+/// otherwise call the external symbol, and it never emits a body of its own —
+/// so an unoptimized build calls the shim exactly as before. Inlining matters
+/// on allocation-bound code: on `binary-trees`, which allocates and frees
+/// some fifteen million nodes, the out-of-line pair cost about a tenth of the
+/// run. `specification/abi.md` ("Memory allocation boundary") records the
+/// rule this relaxes.
+fn link_alloc_seam<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) -> Result<(), CodegenError> {
+    let ir = alloc_seam_ir();
+    let buffer = MemoryBuffer::create_from_memory_range_copy(ir.as_bytes(), "tuo.alloc");
+    let seam = ctx
+        .create_module_from_ir(buffer)
+        .map_err(|error| CodegenError::backend(format!("parsing the allocator body: {error}")))?;
+    module
+        .link_in_module(seam)
+        .map_err(|error| CodegenError::backend(format!("linking the allocator body: {error}")))?;
+    // Linked as ordinary definitions (the IR linker would drop an unreferenced
+    // `available_externally` one), then demoted so no symbol is emitted and
+    // the C shim's definition is the one the binary links against.
+    for symbol in [alloc::ALLOC_SYMBOL, alloc::DEALLOC_SYMBOL] {
+        module
+            .get_function(symbol)
+            .ok_or_else(|| CodegenError::backend(format!("`{symbol}` did not link")))?
+            .set_linkage(Linkage::AvailableExternally);
+    }
     Ok(())
 }
 
@@ -1602,6 +1700,35 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 let amount_kind = self.operand_int_kind(rhs)?;
                 self.checked_shift(kind, amount_kind, l, r, matches!(op, BinOp::Shl))?
             }
+            // ADR-0031. Plain `add`/`sub`/`mul` — no `nsw`/`nuw`, so LLVM
+            // may not assume the result did not wrap — never trap.
+            BinOp::WrappingAdd => self
+                .builder
+                .build_int_add(l, r, "wrapping_add")
+                .map_err(builder_err("emitting a wrapping add"))?,
+            BinOp::WrappingSub => self
+                .builder
+                .build_int_sub(l, r, "wrapping_sub")
+                .map_err(builder_err("emitting a wrapping sub"))?,
+            BinOp::WrappingMul => self
+                .builder
+                .build_int_mul(l, r, "wrapping_mul")
+                .map_err(builder_err("emitting a wrapping mul"))?,
+            BinOp::RotateLeft | BinOp::RotateRight => {
+                self.rotate(l, r, matches!(op, BinOp::RotateLeft))?
+            }
+            BinOp::AddOverflows | BinOp::SubOverflows | BinOp::MulOverflows => {
+                let arith = match op {
+                    BinOp::AddOverflows => ArithOp::Add,
+                    BinOp::SubOverflows => ArithOp::Sub,
+                    _ => ArithOp::Mul,
+                };
+                let (_, overflow) = self.arith_with_overflow(kind, l, r, arith)?;
+                // Widen the `i1` flag to the backend's `Bool` (i8, 0/1).
+                self.builder
+                    .build_int_z_extend(overflow, self.ctx.i8_type(), "overflows")
+                    .map_err(builder_err("widening an overflow flag"))?
+            }
             // Comparisons handled above; reaching here is impossible.
             BinOp::Eq | BinOp::Ne | BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge => {
                 return Err(CodegenError::backend(
@@ -1661,11 +1788,24 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 .builder
                 .build_float_rem(l, r, "frem")
                 .map_err(builder_err("emitting float remainder"))?,
-            // ADR-0019's bitwise operators are integers-only, so the type
-            // checker rejects them on floats and this arm is unreachable.
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            // The bitwise operators (ADR-0019) and `std::int`'s (ADR-0031)
+            // are integers-only, so the type checker rejects them on floats
+            // and this arm is unreachable.
+            BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::WrappingAdd
+            | BinOp::WrappingSub
+            | BinOp::WrappingMul
+            | BinOp::RotateLeft
+            | BinOp::RotateRight
+            | BinOp::AddOverflows
+            | BinOp::SubOverflows
+            | BinOp::MulOverflows => {
                 return Err(CodegenError::backend(
-                    "bitwise operator reached the float path",
+                    "integer-only operator reached the float path",
                 ));
             }
             // Comparisons handled above; reaching here is impossible.
@@ -1676,6 +1816,39 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             }
         }
         .into())
+    }
+
+    /// Rotate `value` by `amount` (ADR-0031) as a funnel shift of the value
+    /// with itself, which LLVM defines for every amount: it is taken
+    /// unsigned modulo the width. The amount is first brought to the value's
+    /// width by truncating or zero-extending, which keeps its low bits; the
+    /// width is a power of two dividing `2^bits` of either type, so those
+    /// bits are all the Euclidean reduction the interpreter performs reads.
+    fn rotate(
+        &mut self,
+        value: IntValue<'ctx>,
+        amount: IntValue<'ctx>,
+        left: bool,
+    ) -> Result<IntValue<'ctx>, CodegenError> {
+        let value_ty = value.get_type();
+        let amount = self
+            .builder
+            .build_int_cast_sign_flag(amount, value_ty, false, "rotate_amount")
+            .map_err(builder_err("sizing a rotation amount"))?;
+        let name = if left { "llvm.fshl" } else { "llvm.fshr" };
+        let intrinsic = Intrinsic::find(name)
+            .ok_or_else(|| CodegenError::backend(format!("missing LLVM intrinsic {name}")))?;
+        let decl = intrinsic
+            .get_declaration(self.module, &[value_ty.into()])
+            .ok_or_else(|| CodegenError::backend(format!("declaring LLVM intrinsic {name}")))?;
+        let call = self
+            .builder
+            .build_call(decl, &[value.into(), value.into(), amount.into()], "rotate")
+            .map_err(builder_err("emitting a rotation"))?;
+        match call.try_as_basic_value() {
+            inkwell::values::ValueKind::Basic(rotated) => Ok(rotated.into_int_value()),
+            _ => Err(CodegenError::backend(format!("{name} returned no value"))),
+        }
     }
 
     /// Lower a trapping add/sub/mul: use LLVM's overflow-checking intrinsic,
@@ -1689,6 +1862,22 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         r: IntValue<'ctx>,
         op: ArithOp,
     ) -> Result<IntValue<'ctx>, CodegenError> {
+        let (result, overflow) = self.arith_with_overflow(kind, l, r, op)?;
+        self.guard(overflow, TrapCode::IntegerOverflow)?;
+        Ok(result)
+    }
+
+    /// The wrapped result of `l op r` and its `i1` overflow flag, from LLVM's
+    /// `*.with.overflow` intrinsic for the kind's signedness. Shared by the
+    /// trapping operators and ADR-0031's overflow predicates, so the two
+    /// cannot disagree about what overflows.
+    fn arith_with_overflow(
+        &mut self,
+        kind: IntKind,
+        l: IntValue<'ctx>,
+        r: IntValue<'ctx>,
+        op: ArithOp,
+    ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), CodegenError> {
         let signed = is_signed(kind);
         let ty = int_type(self.ctx, kind);
         let intrinsic_name = match (op, signed) {
@@ -1717,13 +1906,12 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .build_extract_value(agg, 1, "arith_ovf")
             .map_err(builder_err("extracting the overflow flag"))?
             .into_int_value();
-        self.guard(overflow, TrapCode::IntegerOverflow)?;
         let result = self
             .builder
             .build_extract_value(agg, 0, "arith_val")
             .map_err(builder_err("extracting the arithmetic result"))?
             .into_int_value();
-        Ok(result)
+        Ok((result, overflow))
     }
 
     /// Lower a trapping div (`is_div`) or rem: trap on a zero divisor, and on
@@ -2287,13 +2475,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         let base = self.aggregate_dest_address(dest)?;
 
-        // Enum-like: store the u32 tag at offset 0. Struct/tuple: no tag.
+        // Enum-like: record the variant (see `store_variant_tag`).
+        // Struct/tuple: no tag.
         let enum_like = matches!(ty, Ty::Enum(..) | Ty::Option(_) | Ty::Result(..));
         if enum_like {
-            let tag = self.ctx.i32_type().const_int(u64::from(variant), false);
-            self.builder
-                .build_store(base, tag)
-                .map_err(builder_err("storing an enum discriminant"))?;
+            self.store_variant_tag(base, &ty, variant)?;
         }
 
         let offsets = if enum_like {
@@ -2396,8 +2582,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         Ok(addr)
     }
 
-    /// Lower `Rvalue::Discriminant`: load the u32 tag at offset 0 and zero-extend
-    /// to a `Usize` (i64), matching the interpreter's `Value::Int(discr, Usize)`.
+    /// Lower `Rvalue::Discriminant`: read the variant (see
+    /// `load_variant_tag`) and zero-extend it to a `Usize` (i64), matching the
+    /// interpreter's `Value::Int(discr, Usize)`.
     fn lower_discriminant(&mut self, place: &Place) -> Result<IntValue<'ctx>, CodegenError> {
         let base = if place.projection.is_empty() {
             match &self.kinds[place.local.0 as usize] {
@@ -2415,14 +2602,76 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             let (addr, _leaf) = self.place_address(place)?;
             addr
         };
-        let tag = self
-            .builder
-            .build_load(self.ctx.i32_type(), base, "discr")
-            .map_err(builder_err("loading a discriminant"))?
-            .into_int_value();
+        let ty = self.place_type(place);
+        let tag = self.load_variant_tag(base, &ty)?;
         self.builder
             .build_int_z_extend(tag, self.ctx.i64_type(), "discr_usize")
             .map_err(builder_err("zero-extending a discriminant"))
+    }
+
+    /// Record that `variant` is live in the enum-shaped `ty` at `base`. A
+    /// tagged type stores the `u32` index at offset 0. A niche-packed one
+    /// (`Option[Box[T]]`, ABI 15) stores null for its null variant and
+    /// nothing otherwise, since the payload stored at offset 0 is the value.
+    fn store_variant_tag(
+        &self,
+        base: PointerValue<'ctx>,
+        ty: &Ty,
+        variant: u32,
+    ) -> Result<(), CodegenError> {
+        match tag_repr(ty) {
+            TagRepr::Tag => {
+                let tag = self.ctx.i32_type().const_int(u64::from(variant), false);
+                self.builder
+                    .build_store(base, tag)
+                    .map_err(builder_err("storing an enum discriminant"))?;
+            }
+            TagRepr::NullPointer { null_variant } => {
+                if variant == null_variant {
+                    self.builder
+                        .build_store(base, self.ptr_ty.const_null())
+                        .map_err(builder_err("storing a null niche"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The live variant of the enum-shaped `ty` at `base`, as an `i32`: the
+    /// tag at offset 0, or for a niche-packed type, whether its pointer is
+    /// null.
+    fn load_variant_tag(
+        &self,
+        base: PointerValue<'ctx>,
+        ty: &Ty,
+    ) -> Result<IntValue<'ctx>, CodegenError> {
+        let i32_ty = self.ctx.i32_type();
+        match tag_repr(ty) {
+            TagRepr::Tag => Ok(self
+                .builder
+                .build_load(i32_ty, base, "discr")
+                .map_err(builder_err("loading a discriminant"))?
+                .into_int_value()),
+            TagRepr::NullPointer { null_variant } => {
+                let pointer = self
+                    .builder
+                    .build_load(self.ptr_ty, base, "niche")
+                    .map_err(builder_err("loading a niche pointer"))?
+                    .into_pointer_value();
+                let is_null = self
+                    .builder
+                    .build_is_null(pointer, "niche_is_null")
+                    .map_err(builder_err("testing a niche pointer"))?;
+                // Two variants: the one the null stands for, and the other.
+                let null_tag = i32_ty.const_int(u64::from(null_variant), false);
+                let other_tag = i32_ty.const_int(u64::from(1 - null_variant), false);
+                Ok(self
+                    .builder
+                    .build_select(is_null, null_tag, other_tag, "niche_discr")
+                    .map_err(builder_err("selecting a niche discriminant"))?
+                    .into_int_value())
+            }
+        }
     }
 
     // ----- strings & effects (ADR-0006 Stage B) -----
@@ -3808,6 +4057,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .builder
             .build_int_truncate(tag64, self.ctx.i32_type(), "map_tag")
             .map_err(builder_err("narrowing the Option tag"))?;
+        if tag_repr(&dest_ty) != TagRepr::Tag {
+            return Err(CodegenError::backend(
+                "a map value is never a box, so its Option is never niche-packed",
+            ));
+        }
         self.builder
             .build_store(dest_base, tag)
             .map_err(builder_err("storing the Option tag"))?;
@@ -4320,10 +4574,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
 
         // None = variant 1, empty payload.
         self.builder.position_at_end(none_block);
-        let none_tag = self.ctx.i32_type().const_int(1, false);
-        self.builder
-            .build_store(dest_base, none_tag)
-            .map_err(builder_err("storing the None tag"))?;
+        self.store_variant_tag(dest_base, &dest_ty, 1)?;
         self.builder
             .build_unconditional_branch(join)
             .map_err(builder_err("joining the None arm"))?;
@@ -4340,10 +4591,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .build_store(len_addr, new_len)
             .map_err(builder_err("storing the decremented length"))?;
         let elem_addr = self.dynamic_byte_gep(ptr, new_len, stride)?;
-        let some_tag = self.ctx.i32_type().const_zero();
-        self.builder
-            .build_store(dest_base, some_tag)
-            .map_err(builder_err("storing the Some tag"))?;
+        self.store_variant_tag(dest_base, &dest_ty, 0)?;
         let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
             .map_err(|error| self.layout_error(error))?;
         let payload_offset = *payload_offsets
@@ -4755,11 +5003,7 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         glue: HeapGlue,
     ) -> Result<(), CodegenError> {
         let payloads = self.variant_payloads(ty)?;
-        let disc = self
-            .builder
-            .build_load(self.ctx.i32_type(), addr, "glue_disc")
-            .map_err(builder_err("loading the glue discriminant"))?
-            .into_int_value();
+        let disc = self.load_variant_tag(addr, ty)?;
         let join = self.ctx.append_basic_block(self.value, "glue_join");
         for (variant, fields) in payloads.iter().enumerate() {
             let heap_fields: Vec<(u64, Ty)> = {
@@ -5450,7 +5694,15 @@ fn comparison_pred(op: BinOp, signed: bool) -> Option<IntPredicate> {
         | BinOp::BitOr
         | BinOp::BitXor
         | BinOp::Shl
-        | BinOp::Shr => return None,
+        | BinOp::Shr
+        | BinOp::WrappingAdd
+        | BinOp::WrappingSub
+        | BinOp::WrappingMul
+        | BinOp::RotateLeft
+        | BinOp::RotateRight
+        | BinOp::AddOverflows
+        | BinOp::SubOverflows
+        | BinOp::MulOverflows => return None,
     })
 }
 
@@ -5477,7 +5729,15 @@ fn float_comparison_pred(op: BinOp) -> Option<FloatPredicate> {
         | BinOp::BitOr
         | BinOp::BitXor
         | BinOp::Shl
-        | BinOp::Shr => return None,
+        | BinOp::Shr
+        | BinOp::WrappingAdd
+        | BinOp::WrappingSub
+        | BinOp::WrappingMul
+        | BinOp::RotateLeft
+        | BinOp::RotateRight
+        | BinOp::AddOverflows
+        | BinOp::SubOverflows
+        | BinOp::MulOverflows => return None,
     })
 }
 
@@ -5564,8 +5824,11 @@ mod tests {
     use tuo_source::{SourceId, Span, TextRange};
     use tuo_types::{IntKind, Ty, TypeckResult};
 
-    use super::{GEP_HELPER, lower_program};
+    use inkwell::module::Linkage;
     use tuo_mir::PassMode;
+    use tuo_runtime::{TRAP_SYMBOL, alloc};
+
+    use super::{GEP_HELPER, lower_program};
 
     /// Borrow-mode parameters are `noalias`; by-value ones are not. Programs
     /// behave identically either way, so only the declaration can show it.
@@ -5692,9 +5955,47 @@ mod tests {
             ir.contains("getelementptr i8"),
             "the helper is a byte GEP:\n{ir}"
         );
+        // The program's own functions, that is: the allocator's zero-size
+        // sentinel really is an integer, and lives in the linked seam body.
+        let program_code: String = ir
+            .split("\ndefine ")
+            .filter(|definition| definition.contains("@tuo_fn_"))
+            .collect();
         assert!(
-            !ir.contains("inttoptr"),
+            !program_code.contains("inttoptr"),
             "no address may be rebuilt from an integer:\n{ir}"
         );
+    }
+
+    /// The allocation boundary's body is in every module for the optimizer to
+    /// inline, but as `available_externally`: no symbol is emitted for it, so
+    /// the C shim stays the definition the binary links. Inlined or not, a
+    /// program behaves the same, so only the module can show it.
+    #[test]
+    fn the_allocator_body_is_inlinable_but_never_emitted() {
+        let ctx = Context::create();
+        let module = ctx.create_module("seam");
+        lower_program(&ctx, &module, &Program::default(), &TypeckResult::default())
+            .expect("an empty program lowers");
+        module.verify().expect("the module verifies");
+        for symbol in [alloc::ALLOC_SYMBOL, alloc::DEALLOC_SYMBOL] {
+            let function = module.get_function(symbol).expect("the seam is linked");
+            assert_eq!(function.get_linkage(), Linkage::AvailableExternally);
+            assert!(
+                function.get_first_basic_block().is_some(),
+                "`{symbol}` carries its body"
+            );
+        }
+        let ir = module.print_to_string().to_string();
+        // The body is built from the same policy constants as the C shim.
+        assert!(ir.contains(&format!(
+            "inttoptr (i64 {} to ptr)",
+            alloc::ZERO_SIZE_SENTINEL
+        )));
+        assert!(ir.contains(&format!("icmp ule i64 %a, {}", alloc::MALLOC_ALIGN)));
+        assert!(ir.contains(&format!(
+            "call void @{TRAP_SYMBOL}(i32 {})",
+            alloc::ALLOC_FAILURE_TRAP.as_i32()
+        )));
     }
 }

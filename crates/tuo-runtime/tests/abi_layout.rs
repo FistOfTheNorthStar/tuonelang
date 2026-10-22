@@ -145,3 +145,21 @@ fn a_function_value_is_exactly_one_code_pointer() {
     assert_eq!(abi(&ty).size, POINTER_SIZE);
     assert_eq!(abi(&ty).align, POINTER_SIZE);
 }
+
+#[test]
+fn an_optional_box_is_laid_out_as_rust_lays_out_option_box() {
+    // ABI 15: `Option[Box[T]]` is the box's pointer, null for `None` — the
+    // same guaranteed null-pointer optimization Rust's `Option<Box<T>>` has,
+    // so a boxed tree's node `{left, right: Option[Box[Node]]}` is two words.
+    use tuo_types::WrapperKind;
+    let opt_box = Ty::Option(Box::new(Ty::Wrapper(WrapperKind::Box, Box::new(Ty::int()))));
+    assert_eq!(abi(&opt_box), repr_c::<Option<Box<i64>>>());
+    #[allow(dead_code)]
+    #[repr(C)]
+    struct Node {
+        left: Option<Box<Node>>,
+        right: Option<Box<Node>>,
+    }
+    let node = Ty::Tuple(vec![opt_box.clone(), opt_box]);
+    assert_eq!(abi(&node), repr_c::<Node>());
+}

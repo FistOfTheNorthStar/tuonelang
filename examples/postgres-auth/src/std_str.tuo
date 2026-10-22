@@ -502,8 +502,10 @@ pub fn push_int(mut b: String, take n: Int) {
 /// string, a lone `"-"`, and any string with a non-digit byte. Does not skip
 /// surrounding whitespace — `trim` first if the input may be padded.
 ///
-/// Overflow of the accumulator traps (the same honest `*`/`+` contract), so a
-/// caller parsing untrusted extremes should bound the input length first.
+/// A value outside `Int`'s range is an `Err` ("overflow"), never a trap: the
+/// digits accumulate through `std::int::checked_mul`/`checked_add` (ADR-0031),
+/// toward the sign, so `"-9223372036854775808"` parses and untrusted input
+/// needs no length bound.
 ///
 /// # Example
 /// ```tuo
@@ -523,20 +525,34 @@ pub fn parse_int(in s: Str) -> Result[Int, Str] {
             return Err { error: "lone minus" };
         }
     }
+    // Accumulate toward the sign, so `Int::MIN`, whose magnitude has no
+    // positive `Int`, is reachable.
     var acc = 0;
     while i < n {
         let b = std::str::byte_at(s, i);
         if b < 48 || b > 57 {
             return Err { error: "non-digit" };
         }
-        acc = acc * 10 + (b - 48);
+        let scaled = match std::int::checked_mul(acc, 10) {
+            Some { value } => value,
+            None => {
+                return Err { error: "overflow" };
+            }
+        };
+        let next = if neg {
+            std::int::checked_sub(scaled, b - 48)
+        } else {
+            std::int::checked_add(scaled, b - 48)
+        };
+        acc = match next {
+            Some { value } => value,
+            None => {
+                return Err { error: "overflow" };
+            }
+        };
         i = i + 1;
     }
-    if neg {
-        Ok { value: 0 - acc }
-    } else {
-        Ok { value: acc }
-    }
+    Ok { value: acc }
 }
 
 /// The decimal text of `n` as a fresh owned `String`, with a leading `-` for a
@@ -1041,6 +1057,13 @@ spec parse_int {
     then or(parse_int("-"), 999) == 999;
     then or(parse_int("12x"), 999) == 999;
     then or(parse_int("x12"), 999) == 999;
+    // Out of range is an `Err`, not a trap (ADR-0031).
+    then or(parse_int("99999999999999999999"), 999) == 999;
+    then or(parse_int("9223372036854775808"), 999) == 999;
+    then or(parse_int("-9223372036854775809"), 999) == 999;
+    // Both ends of the range parse, `Int::MIN` included.
+    then or(parse_int("9223372036854775807"), 0) == 9223372036854775807;
+    then or(parse_int("-9223372036854775808"), 0) == 0 - 9223372036854775807 - 1;
 }
 
 spec to_string {

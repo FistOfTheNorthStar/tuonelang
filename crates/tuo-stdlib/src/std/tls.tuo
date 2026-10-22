@@ -43,28 +43,32 @@
 // absent rather than stubbed, so nothing here claims a capability the code
 // does not have.
 //
-// NOT CONSTANT TIME, WHICH IS THE LIMITATION THAT MATTERS MOST. This stack
-// completes a real handshake with a real client, which makes it easy to
-// mistake for something deployable. It is not, and the reason is timing
-// rather than any missing feature.
+// TIMING: WHAT IS ESTABLISHED, AND WHAT IS NOT. This stack completes a real
+// handshake with a real client, which makes it easy to mistake for something
+// deployable. Read this before treating it as one.
 //
-// `std::bignum` is variable-time by design — correct for public values,
-// unsafe for secrets — and both the key exchange and signing are built on it.
-// So `std::x25519::scalar_mult` on the server's ephemeral private key, and
-// `std::ed25519::sign` on the long-term key, take value-dependent time. An
-// attacker able to measure that may be able to recover the key. The *shapes*
-// are right where they can be — the Montgomery ladder's conditional swap is
-// branchless, and tag comparison goes through `std::ct::bytes_eq` — but shape
-// is not the guarantee; the arithmetic underneath is.
+// Every operation on secret data now runs on fixed-width arithmetic rather
+// than the variable-time `std::bignum` (ADR-0022): X25519 on the server's
+// ephemeral key (`std::fe25519`), Ed25519 signing on the certificate's key
+// (`std::fe25519` points, fixed-limb scalars modulo the group order), and
+// Poly1305 over each record's one-time key and plaintext (fixed 26-bit
+// limbs). The arithmetic each secret passes through carries the
+// compiler-checked `#[constant_time]` and is disassembly-pinned on both
+// backends; ChaCha20, SHA-256/512, and HKDF have control flow that depends
+// only on lengths. Ed25519 *verification* stays on `std::bignum`, which is
+// sound since its inputs are public, and the server path does not call it.
+// Tag comparison goes through `std::ct::bytes_eq`.
 //
-// Ed25519 **verification** is unaffected, since all of its inputs are public,
-// so certificate checking is sound. It is the two secret-key operations that
-// leak.
-//
-// Closing this means fixed-width field arithmetic that does not route through
-// `std::bignum`, a substantial separate piece of work. Until then, treat this
-// as a demonstration that the protocol is expressible in tuonelang, not as
-// transport security for anything real.
+// What that does not establish: the loops around the marked arithmetic, and
+// every byte-handling function, are unmarked because the attribute cannot
+// yet express a loop over a public length (ADR-0021), so their data
+// independence is argued, not checked; the property is about emitted
+// instructions, and whether those run in data-independent time is the
+// processor's business; no statistical timing test (dudect-style) has been
+// run; and the stack has had no external review. Treat it as a
+// demonstration that the protocol is expressible in tuonelang, with its
+// timing designed and partly verified, not as transport security for
+// anything real.
 
 module std::tls;
 
@@ -1126,11 +1130,10 @@ pub fn failed_handshake() -> Handshake {
 /// all-zero secret whatever the server's key, and RFC 8446 §7.4.2 requires
 /// aborting rather than deriving keys from a value anyone can compute.
 ///
-/// The signature is passed *in* rather than computed here: signing needs the
-/// certificate's private key, and `std::ed25519` deliberately ships no
-/// `sign` (its arithmetic is variable-time, so signing would leak the key).
-/// A server that has a safe signer supplies the signature; one that does not
-/// cannot complete a handshake, which is the honest outcome.
+/// The signature is passed *in* rather than computed here, so the
+/// certificate's private key never enters this module: the caller signs
+/// `signing_content` with `std::ed25519::sign` (or any other signer it
+/// trusts more) and supplies the result.
 ///
 /// # Example
 ///

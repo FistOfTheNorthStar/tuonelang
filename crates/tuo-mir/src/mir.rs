@@ -990,6 +990,74 @@ pub enum BinOp {
     Gt,
     /// Greater-or-equal; same domains and NaN behavior as [`BinOp::Lt`].
     Ge,
+    /// `(a + b) mod 2^w` on two integers of the same type (ADR-0031,
+    /// `std::int::wrapping_add`). Never traps.
+    WrappingAdd,
+    /// `(a - b) mod 2^w` (ADR-0031). Never traps.
+    WrappingSub,
+    /// `(a * b) mod 2^w` (ADR-0031). Never traps.
+    WrappingMul,
+    /// Rotate the left operand's bits left by the right operand reduced
+    /// Euclidean mod its width (ADR-0031). As for a shift, the amount's
+    /// integer type is independent of the value's. Never traps.
+    RotateLeft,
+    /// Rotate right; otherwise as [`BinOp::RotateLeft`]. Never traps.
+    RotateRight,
+    /// Whether `a + b` on two integers of the same type leaves the type's
+    /// range — exactly when [`BinOp::Add`] would trap. A `Bool`; never
+    /// traps. The predicate `std::int::checked_add` branches on (ADR-0031).
+    AddOverflows,
+    /// Whether `a - b` leaves the range; otherwise as
+    /// [`BinOp::AddOverflows`].
+    SubOverflows,
+    /// Whether `a * b` leaves the range; otherwise as
+    /// [`BinOp::AddOverflows`].
+    MulOverflows,
+}
+
+impl BinOp {
+    /// Whether the right operand is an independent bit count whose integer
+    /// type need not match the left operand's: the shifts (ADR-0019) and the
+    /// rotations (ADR-0031).
+    #[must_use]
+    pub const fn has_amount_operand(self) -> bool {
+        matches!(
+            self,
+            Self::Shl | Self::Shr | Self::RotateLeft | Self::RotateRight
+        )
+    }
+
+    /// Whether the operator is defined only on integers: the bitwise
+    /// operators, shifts, and the `std::int` operations.
+    #[must_use]
+    pub const fn is_integer_only(self) -> bool {
+        matches!(
+            self,
+            Self::BitAnd
+                | Self::BitOr
+                | Self::BitXor
+                | Self::Shl
+                | Self::Shr
+                | Self::WrappingAdd
+                | Self::WrappingSub
+                | Self::WrappingMul
+                | Self::RotateLeft
+                | Self::RotateRight
+                | Self::AddOverflows
+                | Self::SubOverflows
+                | Self::MulOverflows
+        )
+    }
+
+    /// Whether the operator is an overflow predicate (ADR-0031): integer
+    /// operands, a `Bool` result.
+    #[must_use]
+    pub const fn is_overflow_predicate(self) -> bool {
+        matches!(
+            self,
+            Self::AddOverflows | Self::SubOverflows | Self::MulOverflows
+        )
+    }
 }
 
 /// The direction of a [`Rvalue::Cast`]. All four are total functions —

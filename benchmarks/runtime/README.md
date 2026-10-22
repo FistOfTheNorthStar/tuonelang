@@ -11,8 +11,8 @@ The catalog (`tuo_bench::lab::runtime::workloads`) has two halves:
 - **Language-feature workloads**: one per runtime capability as it landed
   (startup, integer computation, calls and recursion, fixed arrays, `Str`, the
   allocator, function values, maps, files, sockets, channels, JSON, SHA-256,
-  constant-time comparison, wire decoding, UDP, bounded connects). Each was
-  added with the ADR that made it expressible.
+  constant-time comparison, wrapping 64-bit arithmetic, wire decoding, UDP,
+  bounded connects). Each was added with the ADR that made it expressible.
 - **The Computer Language Benchmarks Game** (`BENCHMARKS_GAME`): `nbody`,
   `spectral-norm`, `fannkuch-redux`, `mandelbrot`, `fasta`, and
   `binary-trees` — the last recorded **unsupported** until ADR-0028 Stage B

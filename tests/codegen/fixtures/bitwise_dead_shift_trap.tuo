@@ -1,0 +1,12 @@
+// A shift whose result nothing reads still traps when its amount is out of
+// range. The native build runs the MIR optimizer, whose dead-local pass once
+// counted a shift as unable to trap and deleted it, so the native binary
+// returned 0 where the interpreter (which runs unoptimized MIR) aborted.
+fn shifted(take n: Int) -> Int {
+    let unused = 1 << n;
+    0
+}
+
+fn main() -> Int {
+    shifted(70)
+}
