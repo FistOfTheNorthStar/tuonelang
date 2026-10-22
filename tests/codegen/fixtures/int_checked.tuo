@@ -1,0 +1,93 @@
+// ADR-0031 Stage D: `std::int::checked_*`, `None` exactly where the trapping
+// operator would trap. Every operand reaches the operation through a
+// parameter, so no engine sees a constant: each boundary is probed on both
+// sides — `I64::MAX + 1`, `I64::MIN - 1`, the largest square that fits in
+// `I64` and the next, a `U8` sum at 255 and 256, `U64::MAX * U64::MAX` (a
+// product beyond `i128`, which the interpreter must report as `None` rather
+// than panic on), `U64` `0 - 1`, and `I8` `-128 * -1`. Each outcome is mapped
+// to a distinct code and summed; the spec pins the sum on the interpreter.
+// Exit 255 (767 mod 256).
+fn add64(take a: Int, take b: Int) -> Int {
+    match std::int::checked_add(a, b) {
+        Some { value } => value % 1000,
+        None => 1,
+    }
+}
+
+fn sub64(take a: Int, take b: Int) -> Int {
+    match std::int::checked_sub(a, b) {
+        Some { value } => value % 1000,
+        None => 2,
+    }
+}
+
+fn mul64(take a: Int, take b: Int) -> Int {
+    match std::int::checked_mul(a, b) {
+        Some { value } => value % 1000,
+        None => 3,
+    }
+}
+
+fn add8(take a: U8, take b: U8) -> Int {
+    match std::int::checked_add(a, b) {
+        Some { value } => value as Int,
+        None => 4,
+    }
+}
+
+fn mul_u64(take a: U64, take b: U64) -> Int {
+    match std::int::checked_mul(a, b) {
+        Some { value } => (value % 1000) as Int,
+        None => 5,
+    }
+}
+
+fn sub_u64(take a: U64, take b: U64) -> Int {
+    match std::int::checked_sub(a, b) {
+        Some { value } => (value % 1000) as Int,
+        None => 6,
+    }
+}
+
+fn mul8(take a: I8, take b: I8) -> Int {
+    match std::int::checked_mul(a, b) {
+        Some { value } => value as Int,
+        None => 7,
+    }
+}
+
+fn total() -> Int {
+    let max: Int = 9223372036854775807;
+    let min: Int = 0 - 9223372036854775807 - 1;
+    let top: U64 = 18446744073709551615;
+    let byte: U8 = 200;
+    let low: I8 = 0 - 127 - 1;
+    let minus_one: I8 = 0 - 1;
+    add64(max, 1) // None: 1
+        + add64(max - 1, 1) // Some(MAX): 807
+        + sub64(min, 1) // None: 2
+        + sub64(min + 1, 1) // Some(MIN): -808
+        + mul64(3037000499, 3037000499) // Some: 1
+        + mul64(3037000500, 3037000500) // None: 3
+        + add8(byte, 55) // Some(255): 255
+        + add8(byte, 56) // None: 4
+        + mul_u64(top, top) // None: 5
+        + mul_u64(top, 1) // Some(U64::MAX): 615
+        + sub_u64(0, 1) // None: 6
+        + mul8(low, minus_one) // None: 7
+        + mul8(low, 1) // Some(-128): -128
+        + add64(40, 2) // Some(42): 42
+        + sub64(5, 8) // Some(-3): -3
+        + mul64(0 - 6, 7) // Some(-42): -42
+}
+
+fn main() -> Int {
+    total() % 256
+}
+
+spec total {
+    then add64(9223372036854775807, 1) == 1;
+    then sub64(0 - 9223372036854775807 - 1, 1) == 2;
+    then mul64(3037000500, 3037000500) == 3;
+    then total() == 767;
+}

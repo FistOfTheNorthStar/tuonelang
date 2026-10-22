@@ -2,8 +2,10 @@
 //!
 //! Every heap allocation a tuonelang program makes — for `Box`, `Shared`,
 //! `String`, and `Array` — passes through two C-ABI runtime symbols, so the
-//! allocator is a single swappable seam and no backend embeds `malloc` calls
-//! directly. See [`specification/abi.md`](../../../specification/abi.md).
+//! allocator is a single seam. The LLVM release backend links a copy of their
+//! bodies for the optimizer to inline (never emitted as a symbol), built from
+//! this module's constants. See
+//! [`specification/abi.md`](../../../specification/abi.md).
 //!
 //! ```text
 //! void *tuo_rt_alloc(size_t size, size_t align);            // never null; traps on OOM
@@ -38,6 +40,19 @@ pub const DEALLOC_SYMBOL: &str = "tuo_rt_dealloc";
 /// sentinel equal to the largest alignment v0 requests (a pointer-word times
 /// eight), so it satisfies any `align` a zero-size layout could carry.
 pub const ZERO_SIZE_SENTINEL: usize = 64;
+
+/// An alignment plain `malloc` guarantees on every supported host: a request
+/// aligned to at most this takes `malloc`, a stricter one `aligned_alloc`.
+///
+/// It is the pointer word, the smallest `_Alignof(max_align_t)` among the
+/// hosts (Apple's arm64 ABI makes `long double` a `double`, so it is 8 there
+/// and 16 elsewhere), and every v0 layout is at most word-aligned. It is a
+/// named number rather than `_Alignof(max_align_t)` read in place because
+/// the boundary has two definitions that must agree: the C shim linked into
+/// every binary, and the copy of its body the LLVM release backend gives the
+/// optimizer to inline (`specification/abi.md`, "Memory allocation
+/// boundary"). The C source asserts the host agrees with it at compile time.
+pub const MALLOC_ALIGN: usize = 8;
 
 /// The fewest bytes a growing `String`/`Array` buffer is given: one cache
 /// line. See [`min_growth_capacity`].
@@ -131,14 +146,15 @@ pub fn alloc_decision(size: usize, align: usize) -> AllocDecision {
 pub fn alloc_runtime_c_source() -> String {
     // `aligned_alloc` (C11) requires `size` be a multiple of `align`; the
     // rounding here matches `alloc_decision`. An alignment `malloc` already
-    // guarantees (`_Alignof(max_align_t)`, 16 on every supported host — and
-    // every v0 layout is at most word-aligned) takes plain `malloc`, the
+    // guarantees (`MALLOC_ALIGN` — and every v0 layout is at most
+    // word-aligned) takes plain `malloc`, the
     // allocator's fast path: `aligned_alloc` goes through the slower
     // memalign route even when the request needs nothing `malloc` lacks. `tuo_rt_trap` is declared by
     // `trap_runtime_c_source`; both C units link together, so the extern
     // resolves against it.
     let sentinel = ZERO_SIZE_SENTINEL;
     let failure = ALLOC_FAILURE_TRAP.as_i32();
+    let malloc_align = MALLOC_ALIGN;
     format!(
         "#include <stdlib.h>\n\
          #include <stddef.h>\n\
@@ -146,12 +162,14 @@ pub fn alloc_runtime_c_source() -> String {
          \n\
          extern void tuo_rt_trap(int code);\n\
          \n\
+         _Static_assert(_Alignof(max_align_t) >= {malloc_align}, \"malloc must guarantee MALLOC_ALIGN\");\n\
+         \n\
          void *tuo_rt_alloc(size_t size, size_t align) {{\n\
          \x20   if (size == 0) return (void *){sentinel};\n\
          \x20   if (align < sizeof(void *)) align = sizeof(void *);\n\
          \x20   size_t rounded = (size + (align - 1)) & ~(align - 1);\n\
-         \x20   void *p = align <= _Alignof(max_align_t) ? malloc(rounded)\n\
-         \x20                                            : aligned_alloc(align, rounded);\n\
+         \x20   void *p = align <= {malloc_align} ? malloc(rounded)\n\
+         \x20                                : aligned_alloc(align, rounded);\n\
          \x20   if (p == NULL) tuo_rt_trap({failure});\n\
          \x20   return p;\n\
          }}\n\
@@ -168,8 +186,8 @@ pub fn alloc_runtime_c_source() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        ALLOC_FAILURE_TRAP, ALLOC_SYMBOL, AllocDecision, DEALLOC_SYMBOL, ZERO_SIZE_SENTINEL,
-        alloc_decision, alloc_runtime_c_source, min_growth_capacity,
+        ALLOC_FAILURE_TRAP, ALLOC_SYMBOL, AllocDecision, DEALLOC_SYMBOL, MALLOC_ALIGN,
+        ZERO_SIZE_SENTINEL, alloc_decision, alloc_runtime_c_source, min_growth_capacity,
     };
 
     #[test]
@@ -227,7 +245,8 @@ mod tests {
         assert!(source.contains(&format!("tuo_rt_trap({});", ALLOC_FAILURE_TRAP.as_i32())));
         assert!(source.contains("aligned_alloc(align, rounded)"));
         // Alignments `malloc` already guarantees take its fast path.
-        assert!(source.contains("align <= _Alignof(max_align_t) ? malloc(rounded)"));
+        assert!(source.contains(&format!("align <= {MALLOC_ALIGN} ? malloc(rounded)")));
+        assert!(source.contains(&format!("_Alignof(max_align_t) >= {MALLOC_ALIGN}")));
         // The zero-size sentinel value matches the Rust policy.
         assert!(source.contains(&format!("return (void *){ZERO_SIZE_SENTINEL};")));
         assert!(source.contains(&format!("ptr == (void *){ZERO_SIZE_SENTINEL}")));

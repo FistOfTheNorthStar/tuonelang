@@ -83,7 +83,10 @@ remains in version control).
 
 ### Q-0006: Named overflow-operation spellings
 
-- **Status:** open
+- **Status:** resolved (→ [ADR-0031](adr/ADR-0031-wrapping-arithmetic-and-rotation.md):
+  free functions in a builtin `std::int` module — `wrapping_add`/`_sub`/`_mul`,
+  `rotate_left`/`_right`, and `checked_add`/`_sub`/`_mul` returning `Option`;
+  `saturating_*` is reserved by the naming rule but not landed)
 - **Area:** types / stdlib
 - **Constitution ref:** §24
 - **Question:** The exact names/forms of opt-in wrapping/saturating/checked

@@ -70,16 +70,16 @@ the replacement, preserving the decision history.
 | [ADR-0019](ADR-0019-bitwise-operations-and-crypto.md) | Bitwise operations and the crypto primitives | accepted |
 | [ADR-0020](ADR-0020-constant-time-code.md) | Constant-time code — the branchless subset and what tuonelang can honestly promise | accepted |
 | [ADR-0021](ADR-0021-secret-taint-tracking.md) | Secret taint tracking — marking data, not just functions | proposed |
-| [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | proposed |
+| [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | accepted (X25519's field landed as `std::fe25519`; Ed25519 signing and Poly1305 moved onto fixed limbs) |
 | [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed (Stages A/B/C landed; B2 open) |
 | [ADR-0024](ADR-0024-capturing-closures.md) | Capturing closures — the four decisions Tier 2 actually requires | proposed |
 | [ADR-0025](ADR-0025-no-exceptions.md) | No exceptions — `Result[T, E]` and the trap are the two failure modes | accepted |
 | [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
-| [ADR-0027](ADR-0027-monomorphization.md) | Monomorphization — making the generics the front end already accepts run natively | proposed |
+| [ADR-0027](ADR-0027-monomorphization.md) | Monomorphization — making the generics the front end already accepts run natively | accepted (Stages A–B landed; Stage C gated on Q6) |
 | [ADR-0028](ADR-0028-heap-wrapper-values.md) | Heap-wrapper values — giving `Box[T]` a constructor, and recursive types a runtime | proposed (Stages A/B landed; C open) |
 | [ADR-0029](ADR-0029-native-square-root.md) | A native, correctly-rounded square root — `std::float::sqrt` | accepted |
 | [ADR-0030](ADR-0030-scratch-buffers.md) | Scratch buffers — indexed assignment, and arrays made at their size | accepted |
-| [ADR-0031](ADR-0031-wrapping-arithmetic-and-rotation.md) | Wrapping arithmetic and rotation — named non-trapping integer operations (Q-0006) | proposed (Stage A landed) |
+| [ADR-0031](ADR-0031-wrapping-arithmetic-and-rotation.md) | Wrapping arithmetic and rotation — named non-trapping integer operations (Q-0006) | accepted (all stages landed) |
 | [ADR-0032](ADR-0032-traits-and-method-dispatch.md) | Interfaces and method dispatch — bounds first, and no `x.f()` until it is measured | proposed (Stage A landed) |
 | [ADR-0033](ADR-0033-function-valued-array-elements.md) | Function-valued array elements — admitting `fn` values to the growable `Array` | proposed |
 | [ADR-0034](ADR-0034-shared-state-across-threads.md) | Shared state across threads — what may cross `par_map`, atomic `Shared`, and one atomic cell | proposed (worker stacks landed) |
@@ -186,11 +186,16 @@ become `-3` (`-1` and `-2` were already spent, and `read_byte_timeout` is the
 call where all four outcomes are simultaneously possible), and the staged
 datagram needed its own `udp_byte_at` indexer rather than reusing
 `read_byte`, which calls `read(2)` directly and cannot see a runtime buffer.
-**Two ADRs remain `proposed`:** ADR-0021 (secret taint tracking) and ADR-0022
-(a constant-time bignum). Both were opened by ADR-0020's outstanding list, and
-both deliberately propose *no implementation yet* — they record the design
-space and the constraints so the gaps are reached deliberately rather than
-forgotten. ADR-0022's central finding is that `std::bignum`'s variable timing
+ADR-0021 (secret taint tracking) and ADR-0022 (a constant-time bignum) were
+both opened by ADR-0020's outstanding list, and both proposed *no
+implementation* at first — they recorded the design space and the constraints
+so the gaps would be reached deliberately rather than forgotten. ADR-0022 was
+accepted on 2026-10-22, once ADR-0031's wrapping operations discharged its
+requirement (5): `std::fe25519` is the fixed-width field X25519 needed,
+`#[constant_time]` throughout its arithmetic, and Ed25519 signing moved onto
+it the same day, with scalars modulo the group order in fixed 21-bit limbs,
+as did Poly1305 (five 26-bit limbs), leaving no secret-dependent
+`std::bignum` use in the TLS stack. ADR-0022's central finding is that `std::bignum`'s variable timing
 is a property of its **algorithms** (zero-limb skipping, value-dependent
 normalization) rather than of the spelling of its operations, so adopting
 `std::ct` there means rewriting them, not substituting calls.
@@ -275,3 +280,8 @@ appear in 4.2% and 0.8% of CPython standard-library functions, against 86.6%
 for method calls — and leaves six questions (instance identity in MIR, pass
 placement, incrementality, recursive instantiation, function values, and
 whether generic aggregates land here) explicitly gating implementation.
+**Stage B landed 2026-10-22**: a post-MIR clone-and-substitute pass on the
+native path only (`tuo_mir::monomorphize`), fresh symbols per instance, a
+growing chain refused by name, and `T0023` retired because it had become
+false. Stage C still waits on Q6 (mode polymorphism), a language decision,
+and on admitting `Array[T]` in a generic body.

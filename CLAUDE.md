@@ -243,6 +243,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   read; `Copy` elements only, `O0012` otherwise) and
   `std::array::filled(n, v)` (one allocation; `HeapOp::ArrayFilled`), which
   took the `sha256-hash` workload and `std::crypto`'s digests 1.5x faster;
+  and — since ADR-0031 — the **non-trapping integer builtins** of `std::int`:
+  `wrapping_add`/`wrapping_sub`/`wrapping_mul` and `rotate_left`/
+  `rotate_right` (generic over the integer type, a rotation's amount its own
+  integer type; each one instruction on both backends — MIR's
+  `BinOp::Wrapping*`/`Rotate*` — and the only builtins a `#[constant_time]`
+  function may call) and `checked_add`/`checked_sub`/`checked_mul` returning
+  `Option[T]` (an overflow predicate, `BinOp::*Overflows`, branched on in MIR,
+  computed from the same flag the trapping operator guards on);
+  `std::sha512`, `std::bits`, and `std::str::parse_int` are built on them and
+  the lab's `wrapping-add64` workload runs at C's speed;
   and — since ADR-0028 Stage B — **`Box[T]` values**: `std::boxed::new`/`get`
   (a copy, deep for a heap-owning pointee)/`into` (`HeapOp::BoxNew`/`BoxGet`/
   `BoxInto`), a box being one pointer-width scalar whose drop and deep-copy
@@ -261,9 +271,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::boxed::get(b)` passed straight to an `in` parameter lends the pointee
   through MIR's `Projection::Deref` instead of copying it (kept a copy when
   another argument is `mut` or a non-`Copy` `take`), so a boxed tree is walked
-  by borrow in O(n) — and *refuse* — never
+  by borrow in O(n); and — since ADR-0027 Stage B — **generic functions**,
+  monomorphized on the native path only (`tuo_mir::monomorphize`, after
+  `retain_reachable` and before the optimizer, then re-verified): one clone
+  per type-argument list a call reaches, each under a freshly minted
+  `SymbolId` and named `f[I64]`, with a `Move` of a now-`Copy` value turned
+  into a `Copy`; the interpreter, incremental engine, and agent keep the
+  generic MIR, and the `T0023` advisory is retired — and *refuse* — never
   mis-compile — anything outside it (the `Shared`/`Weak` heap-wrapper
-  **values**, a `Box` as a growable-array element or map value, and
+  **values**, a `Box` as a growable-array element or map value, a generic
+  function reaching itself at a growing type, and
   **capturing closures** — Tier 2, deferred), refusing at storage-classification time with a message naming
   the type and pointing the user back to the interpreter as the
   reference — and, since the runnable-core advisory landed, **saying so at
@@ -411,7 +428,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   diagnostics, the agent protocol, the corpus, the codegen benchmark). Its five
   sections are assembled from compiler-owned sources: the syntax skeleton
   carries `grammar.ebnf`'s own `GRAMMAR-VERSION`; the standard-library section
-  drives the twenty-three `tuo-stdlib` catalog modules through the **real** front end
+  drives the twenty-four `tuo-stdlib` catalog modules through the **real** front end
   (`check_sources` is the acceptance gate — the brief refuses to describe a
   library that does not compile) and lists each public `fn` as its *declaration*,
   parameter names and written type spellings included, because that is the form
@@ -458,7 +475,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   not timing noise. `lab::runtime` runs compiled programs through a host-injected
   `NativeRunner` seam (the crate names no backend and no `cc`; the CLI wires in the
   real Cranelift+`cc` `tuo run`, mirroring the corpus's `NativeExecutor`). The
-  honesty rule the prompt demands is enforced structurally: all **eighteen**
+  honesty rule the prompt demands is enforced structurally: all **nineteen**
   language-feature runtime workloads (**startup, integer-computation, function-calls,
   recursion**, — since ADR-0004's fixed arrays landed — **collections**, an
   `[Int; 8]` insert/scan with its C peer, — since ADR-0006's `Str` core
@@ -507,7 +524,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   best case (differ at byte 0) and its worst (equal tags) so the gap is not
   measured at one extreme — the C peer using the same sign-smearing mask
   tuonelang is forced into (`0 - bit` traps on `i64::MIN`), the Go peer its
-  standard **`crypto/subtle.ConstantTimeCompare`**) carry a real program and are
+  standard **`crypto/subtle.ConstantTimeCompare`**, and — since ADR-0031 —
+  **wrapping-add64**, 50,000,000 rounds of a wrapping `U64` add and a
+  rotation, the two operations 64-bit hashes are defined in, against C's
+  wrapping `uint64_t` and Go's `math/bits.RotateLeft64`) carry a real program and are
   `Support::Supported` —
   none of them remains `Unsupported`, and the mechanism (an entry with the
   *exact reason* and **no number**, flipping the moment its feature lands)
@@ -788,7 +808,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   Go's `crypto/sha256`) and **`wire-decode`** (against `encoding/binary`) —
   both unwritable before Stage A, taking the lab catalog to seventeen
   workloads with none `Unsupported` (eighteen since ADR-0020 added
-  `constant-time`). `md5` has since landed too — the legacy
+  `constant-time`, nineteen since ADR-0031 added `wrapping-add64`). `md5` has since landed too — the legacy
   `AuthenticationMD5Password` challenge is supported, shipped **documented as
   broken for security** (the ADR's own requirement, since a stdlib that ships
   MD5 without that sentence teaches the wrong thing to exactly this language's
@@ -801,7 +821,7 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   round overturned it: **`std::tls` is a TLS 1.3 server handshake and
   record layer written entirely in tuonelang** over six new catalog
   modules — `std::sha512`, `std::hkdf`, `std::chacha` (ChaCha20-Poly1305),
-  `std::x25519`, `std::ed25519` (verification sound, signing not), and
+  `std::x25519`, `std::ed25519` (verification and signing), and
   `std::der` (X.690 decoding and the X.509 fields; it decodes, it does not
   validate a chain) — each pinned to its RFC's published vectors, the key
   schedule to RFC 8448's, and the whole stack by a real handshake against
@@ -817,10 +837,23 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `tls_rejects_small_order_key_shares`, each confirmed by sabotage to fail
   without its check. Every reader of hostile input is total
   (a failure value, never a trap, since a trap kills the process). Its
-  header states the limitation that matters most: it is **not constant
-  time** — key exchange and signing route through the variable-time
-  `std::bignum` (the gap ADR-0022 names), so it demonstrates the protocol
-  is expressible, not that it is deployable; no resumption, 0-RTT, client
+  header states what its timing does and does not establish: since
+  ADR-0022 landed, no secret passes through the variable-time
+  `std::bignum` — `std::chacha`'s Poly1305 is five 26-bit limbs with a
+  `#[constant_time]` block step and reduction, `std::x25519`'s ladder runs on
+  **`std::fe25519`**, ten-limb GF(2^255-19) arithmetic as straight-line
+  `std::int` wrapping code, and `std::ed25519::sign`/`public_key` run on
+  `CtPoint`s over it plus fixed 21-bit-limb scalars modulo the group order;
+  every operation either secret passes through carries `#[constant_time]`
+  (compiler-checked, and disassembly-pinned on both backends by
+  `tuo-cli/tests/constant_time.rs`). Each is 45-70x faster than the
+  bignum code it replaced, cheap enough that RFC 7748's vectors and RFC
+  8032's first public key now run as specs, and signing is pinned natively
+  against RFC 8032 and OpenSSL (`ed25519_signs_rfc_8032_vectors`). It
+  still demonstrates the protocol is expressible rather than that it is
+  deployable — the public-length loops are unmarked (ADR-0021), no
+  statistical timing test has run, and it has had no review; no
+  resumption, 0-RTT, client
   certificates, HelloRetryRequest, RSA/P-256, or chain validation, each
   absent rather than stubbed. A resolved
   `tdg.lock` records each dependency **relative to the root package**, so a
@@ -924,14 +957,17 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `specification/abi.md` and implemented in the crate's `abi` and `alloc` modules.
   Layouts (`abi::layout_of` → `Layout{size,align}`, computed from `tuo-types` alone;
   `#[repr(C)]` packing, explicit `u32` enum discriminants numbered in declaration
-  order to match the interpreter's `Value::Variant`, no niche packing in v0) carry no
+  order to match the interpreter's `Value::Variant`; the one niche, since ABI 15, is
+  `Option[Box[T]]` as a nullable pointer, read through `abi::tag_repr`) carry no
   Cranelift or LLVM type: a backend *consults* them, never defines its own, so the two
   backends and the interpreter cannot drift into incompatible memory models. The ABI
-  carries an explicit `abi::ABI_VERSION` (currently `0`), bumped on any
+  carries an explicit `abi::ABI_VERSION` (currently `15`), bumped on any
   layout-affecting change in the same commit that moves the pinning tests. The heap
   allocator is one swappable seam — the C-ABI `tuo_rt_alloc`/`tuo_rt_dealloc`
   (`alloc_runtime_c_source`, OOM traps, never returns null) — through which every
-  `Box`/`Shared`/`String`/`Array` allocation flows. ABI layout tests
+  `Box`/`Shared`/`String`/`Array` allocation flows (the LLVM release backend links
+  an `available_externally` copy of its body for inlining, built from the same
+  constants, so swapping the allocator means changing both). ABI layout tests
   (`tuo-runtime/tests/abi_layout.rs`, checked against real `#[repr(C)]` Rust types) and
   interpreter⇄ABI equivalence tests (`tuo-cli/tests/abi_equivalence.rs`) pin the
   contract; the crate stays independent of any concrete backend.
@@ -1058,9 +1094,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   into three honest tiers — executable, effect, and contract — it never
   advertises an effect the compiler cannot perform.** `tuo-stdlib` is a
   *catalog* crate (no
-  compiler machinery, layer 90): each of the twenty-three modules — `std::core`,
+  compiler machinery, layer 90): each of the twenty-four modules — `std::core`,
   `std::collections`, `std::math`, `std::bits`, `std::bignum`, `std::ct`,
-  `std::crypto`, `std::sha512`, `std::hkdf`, `std::chacha`, `std::x25519`,
+  `std::crypto`, `std::sha512`, `std::hkdf`, `std::chacha`, `std::fe25519`,
+  `std::x25519`,
   `std::ed25519`, `std::der`, `std::tls`,
   `std::str`,
   `std::json`, `std::io`,
@@ -1109,10 +1146,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   somewhere equally wrong costs a round trip and is worse than silence
   (pinned by `crates/tuo-types/tests/wrong_module.rs`, whose negative cases
   are as load-bearing as its positive ones). Note the ambiguity is in the
-  **builtins**, not the catalog: 421 of the catalog's 471 public functions
-  have globally unique names and only 50 collide (24 shared names, most of
+  **builtins**, not the catalog: 440 of the catalog's 501 public functions
+  have globally unique names and only 61 collide (28 shared names, most of
   them field-arithmetic vocabulary such as `add`/`mul`/`zero` inside the
-  crypto stack), so the twenty-three-module split is not what makes a name
+  crypto stack), so the twenty-four-module split is not what makes a name
   hard to place. Because **methods are not lowered** (`impl`
   method calls are v0 no-ops pending the trait system), the library is *free
   functions only*, and each module separates an **executable tier** (pure

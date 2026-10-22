@@ -209,6 +209,41 @@ fn an_out_of_range_shift_traps_across_all_three_engines() {
     assert_three_way_agreement("bitwise_shift_trap.tuo");
 }
 
+/// A shift whose result is unread still traps on an out-of-range amount: the
+/// native build's dead-local pass once deleted it, returning where the
+/// interpreter aborted.
+#[test]
+fn an_unread_out_of_range_shift_traps_across_all_three_engines() {
+    assert_three_way_agreement("bitwise_dead_shift_trap.tuo");
+}
+
+/// ADR-0031's `std::int` operations, which never trap: carries out of every
+/// width, signed `MIN`/`MAX`, a 64-bit product beyond `i128`, and rotations
+/// by 0, the width, -1, and the width + 1 with amounts wider and narrower
+/// than the value. Every result feeds the exit byte.
+#[test]
+fn wrapping_and_rotating_operations_agree_across_all_three_engines() {
+    assert_three_way_agreement("int_wrapping.tuo");
+}
+
+/// ADR-0031 Stage D's `std::int::checked_*`: `None` exactly where the trapping
+/// operator traps, probed on both sides of every boundary — including a `U64`
+/// product beyond `i128`, which the interpreter must report rather than panic
+/// on. Each engine must agree on every `Some`/`None` and on every value.
+#[test]
+fn checked_operations_agree_across_all_three_engines() {
+    assert_three_way_agreement("int_checked.tuo");
+}
+
+/// ADR-0027 Stage B: generic functions reach the native backends as one
+/// monomorphized instance per type-argument list, while the interpreter runs
+/// the generic MIR itself. Instances at scalars, a struct, owned `String` and
+/// `Array[Int]` values, nested `Option`s, and a function value must all agree.
+#[test]
+fn generic_instances_agree_across_all_three_engines() {
+    assert_three_way_agreement("generic_instances.tuo");
+}
+
 #[test]
 fn a_deterministic_trap_agrees_across_all_three_engines() {
     // The interpreter traps on division by zero; both native backends must also
@@ -324,7 +359,7 @@ fn scratch_buffers_agree_across_all_three_engines() {
 /// frees and copies every node — agree on all three engines.
 #[test]
 fn boxes_agree_across_all_three_engines() {
-    for name in ["box_values.tuo", "box_recursive.tuo"] {
+    for name in ["box_values.tuo", "box_recursive.tuo", "box_niche.tuo"] {
         assert_three_way_agreement(name);
     }
 }

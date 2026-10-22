@@ -135,7 +135,19 @@ fn run_mir(
     }
     // With `--opt`, apply the optimization passes the native build runs. The
     // driver re-verifies after each pass, so the printed MIR is still verified.
+    // Monomorphization runs first, as it does on the native path, so generic
+    // functions appear as their concrete instances.
     if opt {
+        if let Err(error) = mir::monomorphize(&mut program, &check.types, &check.resolution) {
+            eprintln!("error: {}", error.message);
+            return ExitCode::FAILURE;
+        }
+        let problems = mir::verify(&program, &check.types);
+        if !problems.is_empty() {
+            eprint!("{}", diagnostics::render::render_all(&problems, map));
+            eprintln!("error: internal: monomorphized MIR failed verification");
+            return ExitCode::FAILURE;
+        }
         let _ = mir::optimize(&mut program, &check.types);
     }
     if let Some(name) = filter {

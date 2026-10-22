@@ -166,14 +166,21 @@ fn remove_unreferenced_locals(function: &mut Function) -> bool {
 
 /// Whether an rvalue can trap or otherwise have an effect that must survive
 /// even when its result is unread. Only integer arithmetic that overflows,
-/// division/remainder, and `MIN` negation can trap; everything else is a pure
-/// value computation.
+/// division/remainder, a shift by an out-of-range amount (ADR-0019), and
+/// `MIN` negation can trap; everything else — the `std::int` wrapping and
+/// rotating operations (ADR-0031) included — is a pure value computation.
 fn rvalue_can_trap(rvalue: &Rvalue) -> bool {
     use crate::mir::{BinOp, UnOp};
     match rvalue {
         Rvalue::Binary { op, .. } => matches!(
             op,
-            BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Rem
+            BinOp::Add
+                | BinOp::Sub
+                | BinOp::Mul
+                | BinOp::Div
+                | BinOp::Rem
+                | BinOp::Shl
+                | BinOp::Shr
         ),
         // Integer `Neg` traps on the minimum; bool `Not` cannot. Without the
         // operand type here we conservatively treat `Neg` as trapping.
@@ -539,6 +546,56 @@ mod tests {
         assert!(!changed, "a trapping store must be preserved");
         assert_eq!(function.blocks[0].statements.len(), 1);
         assert_eq!(function.locals.len(), 2);
+    }
+
+    #[test]
+    fn keeps_a_dead_shift_whose_amount_may_be_out_of_range() {
+        // _1 = shl(const 1, _0) — result unread, but a shift by 64 or more
+        // traps `InvalidShift`, so removing it would let a native build
+        // return where the interpreter aborts.
+        let mut function = func(
+            vec![crate::mir::PassMode::Value],
+            vec![local(Ty::int()), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::Binary {
+                        op: BinOp::Shl,
+                        lhs: int(1),
+                        rhs: Operand::Copy(Place::local(LocalId(0))),
+                    },
+                }],
+                terminator: Terminator::Return(int(0)),
+            }],
+            Ty::int(),
+        );
+        let changed = DeadLocals.run(&mut function, &TypeckResult::default());
+        assert!(!changed, "a possibly trapping shift must be preserved");
+        assert_eq!(function.blocks[0].statements.len(), 1);
+    }
+
+    #[test]
+    fn removes_a_dead_wrapping_operation() {
+        // _1 = wrapping_add(_0, const 1) — never traps, so an unread result
+        // is dead like any pure computation.
+        let mut function = func(
+            vec![crate::mir::PassMode::Value],
+            vec![local(Ty::int()), local(Ty::int())],
+            vec![BasicBlock {
+                statements: vec![Statement::Assign {
+                    place: Place::local(LocalId(1)),
+                    rvalue: Rvalue::Binary {
+                        op: BinOp::WrappingAdd,
+                        lhs: Operand::Copy(Place::local(LocalId(0))),
+                        rhs: int(1),
+                    },
+                }],
+                terminator: Terminator::Return(int(0)),
+            }],
+            Ty::int(),
+        );
+        assert!(DeadLocals.run(&mut function, &TypeckResult::default()));
+        assert!(function.blocks[0].statements.is_empty());
     }
 
     #[test]

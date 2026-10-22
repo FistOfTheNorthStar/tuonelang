@@ -425,6 +425,11 @@ const ANTI_PATTERNS: &[(&str, &str)] = &[
         "fn f(in xs: Array[Int]) -> Int { xs.len() }",
         "fn f(in xs: Array[Int]) -> Int { std::array::len(xs) }",
     ),
+    // ADR-0031: §24's example spelling, which a Rust-trained model writes.
+    (
+        "fn f(take a: U32, take b: U32) -> U32 { a.wrapping_add(b) }",
+        "fn f(take a: U32, take b: U32) -> U32 { std::int::wrapping_add(a, b) }",
+    ),
 ];
 
 /// Wrap a fragment into a complete module.
@@ -478,6 +483,7 @@ fn the_brief_shows_every_anti_pattern_it_is_checked_against() {
         "let mut total = 0;",
         "total += 1;",
         "a < b < c",
+        "a.wrapping_add(b)",
     ] {
         assert!(
             brief.contains(marker),
@@ -658,6 +664,7 @@ fn every_builtin_is_callable_as_listed() {
                 .replace(": T", ": Int")
                 .replace(": K", ": Int")
                 .replace(": V", ": Int")
+                .replace(": N", ": Int")
         };
         let ret = match ret {
             "T" | "K" | "V" => "Int".to_owned(),

@@ -343,8 +343,27 @@ fn emit(w: &mut Writer<'_>, node: &SyntaxNode) {
         }
         SyntaxKind::UnaryExpr => unary(w, node),
         SyntaxKind::ImportGroup => import_group(w, node),
+        SyntaxKind::Attribute => attribute(w, node),
         _ => inline(w, node),
     }
+}
+
+/// An item attribute, `#[name]` (ADR-0020 Stage C): its tokens glued, and the
+/// rest of the item on the next line, since an attribute prefixes the item
+/// below it rather than sitting inside it. Before this case, the inline
+/// layout spaced every token and ran the item on, giving
+/// `# [constant_time] pub fn`.
+fn attribute(w: &mut Writer<'_>, node: &SyntaxNode) {
+    for child in &node.children {
+        match child {
+            SyntaxElement::Token(index) => {
+                w.write_token(*index);
+                w.brk = Brk::None;
+            }
+            SyntaxElement::Node(nested) => emit(w, nested),
+        }
+    }
+    w.brk = Brk::Newline;
 }
 
 /// Emit a node's children on one line, applying the pair-spacing rules and

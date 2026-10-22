@@ -608,7 +608,8 @@ Experimental. The authoritative surface grammar is tracked in `grammar.ebnf`.
   - In **release builds**, overflow still traps by default; a program may opt
     specific operations into explicit **wrapping**, **saturating**, or
     **checked** (`-> Option`) arithmetic via named operations
-    (e.g. `a.wrapping_add(b)`, `a.checked_add(b)`), which are the *only* way to
+    (`std::int::wrapping_add(a, b)`, `std::int::checked_add(a, b)`, …; free
+    functions, as everything in v0 is — ADR-0031), which are the *only* way to
     get non-trapping behavior.
   Division by zero and remainder by zero likewise trap deterministically.
 - **Rationale.** Silent two's-complement wraparound is a classic source of

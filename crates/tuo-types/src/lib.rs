@@ -43,6 +43,7 @@ use tuo_source::Span;
 
 pub use ty::{
     FloatKind, FnParam, FnTy, InferVar, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
+    parse_int_literal,
 };
 
 /// The declaration-context shape of one user struct: its type parameters

@@ -1,0 +1,114 @@
+// ADR-0031: the `std::int` operations, which never trap. Every operand
+// reaches the operation through a parameter, so no engine sees a constant:
+// a carry out of every width, signed `MIN`/`MAX`, `U64::MAX * U64::MAX`
+// (a product beyond `i128`, which the interpreter must still wrap rather
+// than panic on), and rotations by 0, the width, -1, and the width + 1,
+// including an `I8` amount on a `U64` and an `Int` amount on a `U8`. Each
+// result is folded into a checksum with the same operations; the spec pins
+// the individual values on the interpreter. Exit 248.
+fn add8(take a: U8, take b: U8) -> U8 {
+    std::int::wrapping_add(a, b)
+}
+
+fn sub16(take a: I16, take b: I16) -> I16 {
+    std::int::wrapping_sub(a, b)
+}
+
+fn add32(take a: U32, take b: U32) -> U32 {
+    std::int::wrapping_add(a, b)
+}
+
+fn mul32(take a: I32, take b: I32) -> I32 {
+    std::int::wrapping_mul(a, b)
+}
+
+fn add64(take a: Int, take b: Int) -> Int {
+    std::int::wrapping_add(a, b)
+}
+
+fn mul64(take a: U64, take b: U64) -> U64 {
+    std::int::wrapping_mul(a, b)
+}
+
+fn rotl64(take x: U64, take n: I8) -> U64 {
+    std::int::rotate_left(x, n)
+}
+
+fn rotr8(take x: U8, take n: Int) -> U8 {
+    std::int::rotate_right(x, n)
+}
+
+fn rotl32(take x: U32, take n: U32) -> U32 {
+    std::int::rotate_left(x, n)
+}
+
+fn mix(take acc: Int, take x: Int) -> Int {
+    std::int::wrapping_add(std::int::wrapping_mul(acc, 1000003), x)
+}
+
+fn checksum() -> Int {
+    var acc = 7;
+    acc = mix(acc, add8(200, 100) as Int);
+    acc = mix(acc, sub16(-32768, 1) as Int);
+    acc = mix(acc, add32(4294967295, 1) as Int);
+    acc = mix(acc, mul32(65536, 65536) as Int);
+    acc = mix(acc, mul32(-2147483648, -1) as Int);
+    acc = mix(acc, add64(9223372036854775807, 1));
+    acc = mix(acc, mul64(18446744073709551615, 18446744073709551615) as Int);
+    acc = mix(acc, rotl64(1, -1) as Int);
+    acc = mix(acc, rotl64(9223372036854775809, 65) as Int);
+    acc = mix(acc, rotr8(1, 0) as Int);
+    acc = mix(acc, rotr8(1, 8) as Int);
+    acc = mix(acc, rotr8(1, 9) as Int);
+    acc = mix(acc, rotl32(2147483649, 32) as Int);
+    acc = mix(acc, rotl32(2147483649, 33) as Int);
+    acc
+}
+
+fn main() -> Int {
+    checksum() & 255
+}
+
+spec add8 {
+    then add8(200, 100) == 44;
+    then add8(255, 1) == 0;
+}
+
+spec sub16 {
+    then sub16(-32768, 1) == 32767;
+}
+
+spec add32 {
+    then add32(4294967295, 1) == 0;
+}
+
+spec mul32 {
+    then mul32(65536, 65536) == 0;
+    then mul32(-2147483648, -1) == -2147483648;
+}
+
+spec add64 {
+    then add64(9223372036854775807, 1) == -9223372036854775808;
+}
+
+spec mul64 {
+    then mul64(18446744073709551615, 18446744073709551615) == 1;
+}
+
+spec rotl64 {
+    then rotl64(1, -1) == 9223372036854775808;
+    then rotl64(9223372036854775809, 65) == 3;
+    then rotl64(5, 64) == 5;
+}
+
+spec rotr8 {
+    then rotr8(1, 0) == 1;
+    then rotr8(1, 8) == 1;
+    then rotr8(1, 9) == 128;
+    then rotr8(1, -1) == 2;
+}
+
+spec rotl32 {
+    then rotl32(2147483649, 32) == 2147483649;
+    then rotl32(2147483649, 33) == 3;
+}

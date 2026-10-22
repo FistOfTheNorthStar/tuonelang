@@ -1895,7 +1895,7 @@ impl FnLower<'_> {
             _ => None,
         });
         let ret_ty = self.expr_ty(expr)?;
-        let dest = self.temp(ret_ty, expr.span);
+        let dest = self.temp(ret_ty.clone(), expr.span);
         let dest_place = Place::local(dest);
         let statement = match builtin {
             Builtin::FloatSqrt => {
@@ -1910,6 +1910,34 @@ impl FnLower<'_> {
                         operand,
                     },
                 }
+            }
+            Builtin::IntWrappingAdd
+            | Builtin::IntWrappingSub
+            | Builtin::IntWrappingMul
+            | Builtin::IntRotateLeft
+            | Builtin::IntRotateRight => {
+                let op = match builtin {
+                    Builtin::IntWrappingAdd => BinOp::WrappingAdd,
+                    Builtin::IntWrappingSub => BinOp::WrappingSub,
+                    Builtin::IntWrappingMul => BinOp::WrappingMul,
+                    Builtin::IntRotateLeft => BinOp::RotateLeft,
+                    _ => BinOp::RotateRight,
+                };
+                let mut operands = operands.into_iter();
+                let (Some(lhs), Some(rhs)) = (operands.next(), operands.next()) else {
+                    return Err(format!("{} takes two operands", builtin.qualified_name()));
+                };
+                Statement::Assign {
+                    place: dest_place.clone(),
+                    rvalue: Rvalue::Binary { op, lhs, rhs },
+                }
+            }
+            Builtin::IntCheckedAdd | Builtin::IntCheckedSub | Builtin::IntCheckedMul => {
+                // Control flow rather than one statement: see
+                // `checked_int_call`.
+                self.checked_int_call(builtin, operands, &ret_ty, &dest_place, expr.span)?;
+                self.uninit.remove(&dest);
+                return Ok(Some(Value::Place(dest_place)));
             }
             Builtin::StrLen | Builtin::StrByteAt | Builtin::StrSlice => {
                 let op = match builtin {
@@ -2081,6 +2109,88 @@ impl FnLower<'_> {
         self.push(statement);
         self.uninit.remove(&dest);
         Ok(Some(Value::Place(dest_place)))
+    }
+
+    /// `std::int::checked_*` (ADR-0031 Stage D): branch on the overflow
+    /// predicate, storing `None` where the trapping operator would trap and
+    /// `Some` of the wrapped result — then exact — everywhere else, so
+    /// neither path can trap.
+    fn checked_int_call(
+        &mut self,
+        builtin: Builtin,
+        operands: Vec<Operand>,
+        ret_ty: &Ty,
+        dest: &Place,
+        span: Span,
+    ) -> Result<(), Skip> {
+        let (predicate, wrapping) = match builtin {
+            Builtin::IntCheckedAdd => (BinOp::AddOverflows, BinOp::WrappingAdd),
+            Builtin::IntCheckedSub => (BinOp::SubOverflows, BinOp::WrappingSub),
+            _ => (BinOp::MulOverflows, BinOp::WrappingMul),
+        };
+        let mut operands = operands.into_iter();
+        let (Some(lhs), Some(rhs)) = (operands.next(), operands.next()) else {
+            return Err(format!("{} takes two operands", builtin.qualified_name()));
+        };
+        let Ty::Option(value_ty) = ret_ty else {
+            return Err(format!(
+                "{} must return an `Option`",
+                builtin.qualified_name()
+            ));
+        };
+        // Both operands are integers, so `Copy`: each is read twice.
+        let overflows = self.assign_temp(
+            Rvalue::Binary {
+                op: predicate,
+                lhs: lhs.clone(),
+                rhs: rhs.clone(),
+            },
+            Ty::Bool,
+            span,
+        )?;
+        let none_block = self.new_block();
+        let some_block = self.new_block();
+        let join = self.new_block();
+        self.terminate(Terminator::Branch {
+            cond: Operand::Copy(overflows),
+            then_block: none_block,
+            else_block: some_block,
+        });
+        self.switch_to(none_block);
+        self.store(
+            dest,
+            Rvalue::Aggregate {
+                kind: AggregateKind::Adt {
+                    ty: ret_ty.clone(),
+                    variant: 1,
+                },
+                fields: Vec::new(),
+            },
+        )?;
+        self.terminate(Terminator::Goto(join));
+        self.switch_to(some_block);
+        let value = self.assign_temp(
+            Rvalue::Binary {
+                op: wrapping,
+                lhs,
+                rhs,
+            },
+            (**value_ty).clone(),
+            span,
+        )?;
+        self.store(
+            dest,
+            Rvalue::Aggregate {
+                kind: AggregateKind::Adt {
+                    ty: ret_ty.clone(),
+                    variant: 0,
+                },
+                fields: vec![Operand::Copy(value)],
+            },
+        )?;
+        self.terminate(Terminator::Goto(join));
+        self.switch_to(join);
+        Ok(())
     }
 
     fn index_expr(&mut self, base: &Expr, index: &Expr) -> Lowered {
@@ -3577,28 +3687,17 @@ fn literal_const(expr: &Expr, ty: &Ty) -> Result<Const, Skip> {
     }
 }
 
-/// The value range of an integer kind (`Isize`/`Usize` are 64-bit in v0).
-fn int_range(kind: IntKind) -> (i128, i128) {
-    match kind {
-        IntKind::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
-        IntKind::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
-        IntKind::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
-        IntKind::I64 | IntKind::Isize => (i128::from(i64::MIN), i128::from(i64::MAX)),
-        IntKind::U8 => (0, i128::from(u8::MAX)),
-        IntKind::U16 => (0, i128::from(u16::MAX)),
-        IntKind::U32 => (0, i128::from(u32::MAX)),
-        IntKind::U64 | IntKind::Usize => (0, i128::from(u64::MAX)),
-    }
-}
-
 fn lit_const(lit: &Lit, ty: &Ty, negated: bool) -> Result<Const, Skip> {
     match (lit, ty) {
         (Lit::Unit, _) => Ok(Const::Unit),
         (Lit::Bool(value), _) => Ok(Const::Bool(*value)),
         (Lit::Int(digits), Ty::Int(kind)) => {
-            let magnitude = parse_int(digits)?;
+            let magnitude = tuo_types::parse_int_literal(digits)
+                .ok_or_else(|| "unparsable integer literal".to_owned())?;
             let value = if negated { -magnitude } else { magnitude };
-            let (min, max) = int_range(*kind);
+            // `T0027` rejects an out-of-range literal at check time; this
+            // stays as the backstop for MIR built from unchecked input.
+            let (min, max) = kind.range();
             if value < min || value > max {
                 return Err(format!(
                     "integer literal out of range for `{}`",
@@ -3617,28 +3716,6 @@ fn lit_const(lit: &Lit, ty: &Ty, negated: bool) -> Result<Const, Skip> {
         (Lit::Str(text), _) => Ok(Const::Str(decode_str(text)?)),
         _ => Err("literal does not match its type".to_owned()),
     }
-}
-
-fn parse_int(digits: &str) -> Result<i128, Skip> {
-    let parsed = if let Some(hex) = digits
-        .strip_prefix("0x")
-        .or_else(|| digits.strip_prefix("0X"))
-    {
-        i128::from_str_radix(hex, 16)
-    } else if let Some(bin) = digits
-        .strip_prefix("0b")
-        .or_else(|| digits.strip_prefix("0B"))
-    {
-        i128::from_str_radix(bin, 2)
-    } else if let Some(oct) = digits
-        .strip_prefix("0o")
-        .or_else(|| digits.strip_prefix("0O"))
-    {
-        i128::from_str_radix(oct, 8)
-    } else {
-        digits.parse()
-    };
-    parsed.map_err(|_| "unparsable integer literal".to_owned())
 }
 
 /// Decode the contents of a character literal (between the quotes).

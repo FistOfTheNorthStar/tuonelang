@@ -5,9 +5,10 @@
 //! **deterministic**: equal MIR renders identically, so golden tests can
 //! diff it. Spans are deliberately omitted.
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 
-use tuo_resolve::Resolution;
+use tuo_resolve::{Resolution, SymbolId};
 
 use crate::mir::{
     AggregateKind, Arg, BasicBlock, Callee, Const, Function, Operand, PassMode, Place, Program,
@@ -28,17 +29,29 @@ pub fn render(program: &Program, resolution: &Resolution) -> String {
     if !program.skipped.is_empty() && !program.functions.is_empty() {
         out.push('\n');
     }
+    // A call names its callee by the program's own function name first: a
+    // monomorphized instance's symbol is minted, not the resolver's.
+    let names: HashMap<SymbolId, &str> = program
+        .functions
+        .iter()
+        .map(|function| (function.symbol, function.name.as_str()))
+        .collect();
     for (index, function) in program.functions.iter().enumerate() {
         if index > 0 {
             out.push('\n');
         }
-        render_function(&mut out, function, resolution);
+        render_function(&mut out, function, resolution, &names);
     }
     out
 }
 
 /// Render one function.
-pub(crate) fn render_function(out: &mut String, function: &Function, resolution: &Resolution) {
+fn render_function(
+    out: &mut String,
+    function: &Function,
+    resolution: &Resolution,
+    names: &HashMap<SymbolId, &str>,
+) {
     let params: Vec<String> = function
         .params
         .iter()
@@ -79,19 +92,32 @@ pub(crate) fn render_function(out: &mut String, function: &Function, resolution:
     }
     for (index, block) in function.blocks.iter().enumerate() {
         let _ = writeln!(out, "bb{index}:");
-        render_block(out, block, resolution);
+        render_block(out, block, resolution, names);
     }
     out.push_str("}\n");
 }
 
-fn render_block(out: &mut String, block: &BasicBlock, resolution: &Resolution) {
+fn render_block(
+    out: &mut String,
+    block: &BasicBlock,
+    resolution: &Resolution,
+    names: &HashMap<SymbolId, &str>,
+) {
     for statement in &block.statements {
-        let _ = writeln!(out, "    {}", render_statement(statement, resolution));
+        let _ = writeln!(
+            out,
+            "    {}",
+            render_statement(statement, resolution, names)
+        );
     }
     let _ = writeln!(out, "    {}", render_terminator(&block.terminator));
 }
 
-fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
+fn render_statement(
+    statement: &Statement,
+    resolution: &Resolution,
+    names: &HashMap<SymbolId, &str>,
+) -> String {
     match statement {
         Statement::Assign { place, rvalue } => {
             format!(
@@ -103,7 +129,10 @@ fn render_statement(statement: &Statement, resolution: &Resolution) -> String {
         Statement::Call { dest, callee, args } => {
             let args: Vec<String> = args.iter().map(render_arg).collect();
             let target = match callee {
-                Callee::Direct(symbol) => resolution.symbol(*symbol).name.clone(),
+                Callee::Direct(symbol) => names.get(symbol).map_or_else(
+                    || resolution.symbol(*symbol).name.clone(),
+                    |name| (*name).to_owned(),
+                ),
                 Callee::Indirect(operand) => render_operand(operand),
             };
             format!(
@@ -179,6 +208,14 @@ fn render_rvalue(rvalue: &Rvalue, resolution: &Resolution) -> String {
                 crate::mir::BinOp::BitXor => "bitxor",
                 crate::mir::BinOp::Shl => "shl",
                 crate::mir::BinOp::Shr => "shr",
+                crate::mir::BinOp::WrappingAdd => "wrapping_add",
+                crate::mir::BinOp::WrappingSub => "wrapping_sub",
+                crate::mir::BinOp::WrappingMul => "wrapping_mul",
+                crate::mir::BinOp::RotateLeft => "rotate_left",
+                crate::mir::BinOp::RotateRight => "rotate_right",
+                crate::mir::BinOp::AddOverflows => "add_overflows",
+                crate::mir::BinOp::SubOverflows => "sub_overflows",
+                crate::mir::BinOp::MulOverflows => "mul_overflows",
             };
             format!("{name}({}, {})", render_operand(lhs), render_operand(rhs))
         }

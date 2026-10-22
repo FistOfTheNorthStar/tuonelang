@@ -327,6 +327,318 @@ fn ct_primitives_have_no_data_dependent_branch_under_cranelift() {
     assert_branch_free(false, false);
 }
 
+/// ADR-0031's five `std::int` operations — the builtins a `#[constant_time]`
+/// function may call — compile to no conditional branch and no trap edge, on
+/// **both** backends, strictly: unlike `+`, none of them has a trap check for
+/// even an unoptimizing backend to keep. Each sits alone in a marked function
+/// over parameters, so no operand is a constant either engine could fold.
+#[expect(
+    clippy::print_stderr,
+    reason = "records a skip when the host has no disassembler; a silent pass would \
+claim a property that was never checked"
+)]
+#[test]
+fn the_integer_builtins_compile_without_branches_on_both_backends() {
+    const OPS: [(&str, &str); 5] = [
+        ("wrapping_add", "U64"),
+        ("wrapping_sub", "U64"),
+        ("wrapping_mul", "U64"),
+        ("rotate_left", "Int"),
+        ("rotate_right", "Int"),
+    ];
+    for release in [true, false] {
+        let label = if release { "release" } else { "debug" };
+        let dir = scratch_dir(&format!("int_builtins_{label}"));
+        let mut program = String::new();
+        for (op, amount) in OPS {
+            program.push_str(&format!(
+                "#[constant_time]\nfn {op}_ct(take x: U64, take n: {amount}) -> U64 {{\n    \
+                 std::int::{op}(x, n)\n}}\n\n"
+            ));
+        }
+        program.push_str(
+            "fn main() -> Int {\n    let x: U64 = 3;\n    (wrapping_add_ct(x, 4) as Int) & 1\n}\n",
+        );
+        let source = dir.join("int_ops.tuo");
+        std::fs::write(&source, program).expect("write the probe");
+        let binary = dir.join("probe");
+        build(&[source], &binary, release);
+        let Some(disassembly) = disassemble(&binary) else {
+            eprintln!("SKIPPED ({label}): no objdump on this host; the property is untested.");
+            return;
+        };
+        // Symbols follow declaration order, so the five marked functions are
+        // the first five generated ones (`main`, declared last, may be
+        // inlined into the entry shim).
+        let functions = tuonelang_functions(&disassembly);
+        assert!(
+            functions.len() >= OPS.len(),
+            "{label}: expected the five probes, found {} functions",
+            functions.len()
+        );
+        for ((symbol, body), (op, _)) in functions.iter().zip(OPS) {
+            for line in body {
+                assert!(
+                    !is_conditional_branch(&mnemonic(line)),
+                    "{label}: `{symbol}` (std::int::{op}) contains a conditional branch:\n  {}",
+                    line.trim()
+                );
+            }
+            assert!(
+                !reaches_a_trap(body),
+                "{label}: `{symbol}` (std::int::{op}) reaches a trap, which it never may"
+            );
+        }
+    }
+}
+
+/// `std::fe25519`'s marked arithmetic — the field X25519's secret scalar is
+/// multiplied in (ADR-0022) — is branch-free as emitted, held to the same two
+/// rules as `std::ct`'s primitives: strictly on LLVM, and on Cranelift with no
+/// branch except a trap guard.
+///
+/// The module is written first so its functions take the first `tuo_fn_<n>`
+/// symbols, in declaration order; the marked ones are declared before the
+/// first unmarked one (`square_times`), so they are exactly the leading
+/// `FE_MARKED.len()` symbols.
+#[expect(
+    clippy::print_stderr,
+    reason = "records a skip when the host has no disassembler; a silent pass would \
+claim a property that was never checked"
+)]
+#[test]
+fn field_arithmetic_is_branch_free_as_emitted() {
+    const FE_MARKED: [&str; 11] = [
+        "zero",
+        "one",
+        "from_int",
+        "add",
+        "sub",
+        "carry",
+        "mul",
+        "square",
+        "mul_small",
+        "select",
+        "freeze",
+    ];
+    let fe = tuo_stdlib::module("std::fe25519").expect("std::fe25519 is a catalog module");
+    let declared: Vec<&str> = fe
+        .source
+        .lines()
+        .filter_map(|line| {
+            let line = line.strip_prefix("pub ").unwrap_or(line);
+            let name = line.strip_prefix("fn ")?;
+            Some(&name[..name.find('(')?])
+        })
+        .collect();
+    assert_eq!(
+        &declared[..FE_MARKED.len()],
+        FE_MARKED,
+        "the marked functions must lead the module, in this order"
+    );
+    for (release, strict) in [(true, true), (false, false)] {
+        let label = if release { "release" } else { "debug" };
+        let dir = scratch_dir(&format!("fe25519_{label}"));
+        let fe_file = dir.join("std_fe25519.tuo");
+        std::fs::write(&fe_file, fe.source).expect("write std::fe25519");
+        let ct = tuo_stdlib::module("std::ct").expect("std::ct is a catalog module");
+        let ct_file = dir.join("std_ct.tuo");
+        std::fs::write(&ct_file, ct.source).expect("write std::ct");
+        let driver = dir.join("driver.tuo");
+        std::fs::write(
+            &driver,
+            "fn main() -> Int {\n    let x = std::fe25519::mul(std::fe25519::from_int(3), \
+             std::fe25519::one());\n    std::array::get(std::fe25519::to_bytes(x), 0)\n}\n",
+        )
+        .expect("write the driver");
+        let binary = dir.join("probe");
+        build(&[fe_file, ct_file, driver], &binary, release);
+        let Some(disassembly) = disassemble(&binary) else {
+            eprintln!("SKIPPED ({label}): no objdump on this host; the property is untested.");
+            return;
+        };
+        let functions = tuonelang_functions(&disassembly);
+        assert!(
+            functions.len() > FE_MARKED.len(),
+            "{label}: expected the field functions in the disassembly, found {}",
+            functions.len()
+        );
+        for ((symbol, body), name) in functions.iter().zip(FE_MARKED) {
+            let trap_guarded = !strict && reaches_a_trap(body);
+            for line in body {
+                let mnemonic = mnemonic(line);
+                assert!(
+                    !is_conditional_branch(&mnemonic) || trap_guarded,
+                    "{label}: `{symbol}` (std::fe25519::{name}) contains the conditional \
+                     branch `{mnemonic}`:\n  {}",
+                    line.trim()
+                );
+            }
+            assert!(
+                !strict || !reaches_a_trap(body),
+                "{label}: `{symbol}` (std::fe25519::{name}) reaches a trap"
+            );
+        }
+    }
+}
+
+/// The source text of the top-level item that starts at the line `head`
+/// (and any `#[...]` line just above it), through its closing `}` in
+/// column 0.
+fn item_text<'a>(source: &'a str, head: &str) -> &'a str {
+    let start = source
+        .find(&format!("\n{head}"))
+        .unwrap_or_else(|| panic!("`{head}` is declared"))
+        + 1;
+    let start = source[..start - 1]
+        .rfind('\n')
+        .filter(|&line| source[line + 1..start - 1].starts_with("#["))
+        .map_or(start, |line| line + 1);
+    let end = start
+        + source[start..]
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("`{head}` is closed"))
+        + 3;
+    &source[start..end]
+}
+
+/// Compile a cut-down copy of the catalog module `module` holding only the
+/// `structs` and the `marked` functions — each item's text copied verbatim,
+/// and each function checked to carry `#[constant_time]` — together with
+/// `dependencies` and `driver`, on both backends, and hold the marked
+/// functions' emitted code to the same two rules as `std::fe25519`'s:
+/// strictly branch- and trap-free on LLVM, and on Cranelift free of every
+/// branch but a trap guard.
+///
+/// The cut-down module is written first, so its functions take the leading
+/// `tuo_fn_<n>` symbols in declaration order; that is what lets a module that
+/// interleaves marked and unmarked functions be checked at all.
+#[expect(
+    clippy::print_stderr,
+    reason = "records a skip when the host has no disassembler; a silent pass would \
+claim a property that was never checked"
+)]
+fn assert_marked_items_branch_free(
+    module: &str,
+    structs: &[&str],
+    marked: &[&str],
+    dependencies: &[&str],
+    driver: &str,
+) {
+    let catalog = tuo_stdlib::module(module).expect("a catalog module");
+    let mut probe = format!("module {module};\n\n");
+    for name in structs {
+        probe.push_str(item_text(catalog.source, &format!("pub struct {name} {{")));
+        probe.push('\n');
+    }
+    for name in marked {
+        let public = format!("pub fn {name}(");
+        let head = if catalog.source.contains(&format!("\n{public}")) {
+            public
+        } else {
+            format!("fn {name}(")
+        };
+        let text = item_text(catalog.source, &head);
+        assert!(
+            text.starts_with("#[constant_time]\n"),
+            "{module}::{name} must carry #[constant_time]"
+        );
+        probe.push_str(text);
+        probe.push('\n');
+    }
+    let slug = module.replace("::", "_");
+    for (release, strict) in [(true, true), (false, false)] {
+        let label = if release { "release" } else { "debug" };
+        let dir = scratch_dir(&format!("{slug}_{label}"));
+        let probe_file = dir.join(format!("{slug}.tuo"));
+        std::fs::write(&probe_file, &probe).expect("write the probe module");
+        let mut files = vec![probe_file];
+        for dependency in dependencies {
+            let source = tuo_stdlib::module(dependency)
+                .expect("a catalog module")
+                .source;
+            let file = dir.join(format!("{}.tuo", dependency.replace("::", "_")));
+            std::fs::write(&file, source).expect("write a dependency");
+            files.push(file);
+        }
+        let driver_file = dir.join("driver.tuo");
+        std::fs::write(&driver_file, driver).expect("write the driver");
+        files.push(driver_file);
+        let binary = dir.join("probe");
+        build(&files, &binary, release);
+        let Some(disassembly) = disassemble(&binary) else {
+            eprintln!("SKIPPED ({label}): no objdump on this host; the property is untested.");
+            return;
+        };
+        let functions = tuonelang_functions(&disassembly);
+        assert!(
+            functions.len() > marked.len(),
+            "{label}: expected the {module} functions in the disassembly, found {}",
+            functions.len()
+        );
+        for ((symbol, body), name) in functions.iter().zip(marked) {
+            let trap_guarded = !strict && reaches_a_trap(body);
+            for line in body {
+                let mnemonic = mnemonic(line);
+                assert!(
+                    !is_conditional_branch(&mnemonic) || trap_guarded,
+                    "{label}: `{symbol}` ({module}::{name}) contains the conditional \
+                     branch `{mnemonic}`:\n  {}",
+                    line.trim()
+                );
+            }
+            assert!(
+                !strict || !reaches_a_trap(body),
+                "{label}: `{symbol}` ({module}::{name}) reaches a trap"
+            );
+        }
+    }
+}
+
+/// `std::ed25519`'s marked signing arithmetic — the Edwards point operations
+/// and the scalar reduction modulo L that the secret key and nonce pass
+/// through (ADR-0022) — is branch-free as emitted.
+#[test]
+fn signing_arithmetic_is_branch_free_as_emitted() {
+    assert_marked_items_branch_free(
+        "std::ed25519",
+        &["CtPoint", "Scalar", "WideScalar"],
+        &[
+            "ct_identity",
+            "ct_base_point",
+            "two_d",
+            "ct_add",
+            "ct_double",
+            "ct_select",
+            "ct_step",
+            "reduce_wide",
+            "mul_add",
+        ],
+        &["std::fe25519", "std::ct"],
+        "fn main() -> Int {\n    let p = std::ed25519::ct_step(std::ed25519::ct_identity(), 1);\n    \
+         let s = std::ed25519::mul_add(scalar(), scalar(), scalar());\n    \
+         std::array::get(std::fe25519::to_bytes(p.y), 0) + s.s0\n}\n\n\
+         fn scalar() -> std::ed25519::Scalar {\n    std::ed25519::Scalar { s0: 7, s1: 0, \
+         s2: 0, s3: 0, s4: 0, s5: 0, s6: 0, s7: 0, s8: 0, s9: 0, s10: 0, s11: 0 }\n}\n",
+    );
+}
+
+/// `std::chacha`'s Poly1305 block step and final reduction — the arithmetic
+/// over the per-record one-time key and the plaintext (ADR-0022) — are
+/// branch-free as emitted.
+#[test]
+fn poly1305_arithmetic_is_branch_free_as_emitted() {
+    assert_marked_items_branch_free(
+        "std::chacha",
+        &["Poly"],
+        &["poly_zero", "poly_step", "poly_finish"],
+        &["std::ct"],
+        "fn main() -> Int {\n    let r = std::chacha::Poly { l0: 3, l1: 0, l2: 0, l3: 0, \
+         l4: 0 };\n    let h = std::chacha::poly_step(std::chacha::poly_zero(), r, r);\n    \
+         std::chacha::poly_finish(h, r).l0\n}\n",
+    );
+}
+
 /// The array scans agree with their specification on early-differing,
 /// late-differing, and equal inputs.
 ///
@@ -714,45 +1026,41 @@ fn main() -> Int {
     );
 }
 
-/// The Montgomery ladder's conditional swap contains no `if`.
+/// The Montgomery ladder's conditional swap and step are compiler-verified
+/// constant time.
 ///
-/// This is a **source-structural** test rather than a behavioural one, and it
-/// has to be: exchanging two points with an `if` and exchanging them with a
+/// Behaviour cannot guard this: exchanging two points with an `if` and with a
 /// mask compute exactly the same function, so every spec, every RFC 7748
-/// vector, and every live handshake passes either way. That was verified, not
-/// assumed — reintroducing the branch leaves the whole suite green.
+/// vector, and every live handshake passes either way (verified when this was
+/// a text check: reintroducing the branch left the whole suite green). The
+/// swap was once written with exactly that `if` while its comment claimed
+/// otherwise.
 ///
-/// Which means nothing else in this repository can catch the regression. The
-/// branch is the textbook X25519 timing leak: `condition` is a bit of the
-/// secret scalar, and the two paths move different data.
-///
-/// `conditional_swap` cannot carry `#[constant_time]` — it scans limb arrays,
-/// and the checker refuses loops and indexing, exactly as it does for
-/// `select_array` and `bytes_eq`. So the compiler cannot guard this one, and
-/// a text check is what is left. It is deliberately narrow: it asserts the
-/// absence of the one construct that reintroduces the leak, not any broader
-/// property the text cannot support.
+/// Since `std::fe25519` (ADR-0022), both functions are straight-line code and
+/// carry `#[constant_time]`, so a branch on the scalar bit is a compile error
+/// (`T0017`) and the stdlib suite's compile of the module is the guard. What
+/// is left to pin is that the attribute stays — deleting it would silently
+/// return the guard to nothing — and that the swap still selects all four
+/// coordinates rather than being "branch-free" because the exchange was
+/// deleted.
 #[test]
-fn the_ladders_conditional_swap_does_not_branch_on_the_scalar_bit() {
+fn the_ladder_is_compiler_verified_constant_time() {
     let module = tuo_stdlib::module("std::x25519").expect("std::x25519 is a catalog module");
+    for header in ["pub fn conditional_swap(", "pub fn ladder_step("] {
+        let marked = format!("#[constant_time]\n{header}");
+        assert!(
+            module.source.contains(&marked),
+            "`std::x25519::{header}` must carry `#[constant_time]`: its inputs are bits of \
+             the secret scalar, and no spec or RFC vector can tell a branching version from \
+             a branchless one"
+        );
+    }
     let body = function_body(module.source, "pub fn conditional_swap(")
         .expect("std::x25519 defines conditional_swap");
-
-    assert!(
-        !body.contains("if "),
-        "`std::x25519::conditional_swap` contains an `if`, which reintroduces the X25519 \
-         timing leak this function exists to avoid: `condition` is a bit of the secret \
-         scalar. Select with `std::ct::select_bytes` instead. Note that no spec or RFC \
-         vector will catch this — the branching and branchless forms compute the same \
-         function.\n\nbody:\n{body}"
-    );
-    // The positive half: it must really be using the branchless selection,
-    // not merely be free of `if` because someone deleted the exchange.
-    assert!(
-        body.matches("std::ct::select_bytes(").count() == 4,
-        "`std::x25519::conditional_swap` must select all four coordinates with \
-         `std::ct::select_bytes`; found {} call(s).\n\nbody:\n{body}",
-        body.matches("std::ct::select_bytes(").count()
+    assert_eq!(
+        body.matches("std::fe25519::select(").count(),
+        4,
+        "`std::x25519::conditional_swap` must select all four coordinates.\n\nbody:\n{body}"
     );
 }
 

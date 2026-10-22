@@ -130,13 +130,17 @@ amount outside 0..width TRAPS rather than wrapping, so `x << 64` is an abort,
 not `x`. Note `|` does double duty: alternation inside a match pattern,
 bitwise-or everywhere else. There is NO compound assignment (`+=`, `|=`), and
 comparisons DO NOT chain (`a < b < c` is a parse error). Integer overflow
-TRAPS — wraparound does not exist. That is right for arithmetic and WRONG for
-a checksum or hash, which is *defined* modulo 2^32: `a + b` on two large
-values aborts the program rather than wrapping. When you want wraparound, say
-so — `std::bits::add32(a, b)` and `std::bits::mul32(a, b)` are the modular
-operations, and they are what every hash, checksum, and digest in
-`std::crypto` is built from. Reach for them whenever the arithmetic is
-supposed to overflow.
+TRAPS: `+ - *` never wrap. That is right for arithmetic and WRONG for a
+checksum or hash, which is *defined* modulo 2^w: `a + b` on two large values
+aborts the program rather than wrapping. When you want wraparound, say so —
+`std::int::wrapping_add(a, b)`, `wrapping_sub`, and `wrapping_mul` work on
+any integer type (`U32` for a 32-bit hash, `U64` or `Int` for 64-bit), and
+`std::int::rotate_left(x, n)` / `rotate_right` rotate by any amount (reduced
+mod the width; unlike a shift, never a trap). When overflow is an input
+error rather than intended, `std::int::checked_add(a, b)` (and
+`checked_sub`, `checked_mul`) returns `None` exactly where `+` would trap.
+None of these ever traps. They are free functions: `a.wrapping_add(b)` is
+method syntax and is refused.
 
 --------------------------------------------------------------------------------
 2. STANDARD LIBRARY — the real exported surface
@@ -157,7 +161,9 @@ and these declarations use the one the library authors chose.
 
 Built into the compiler (no module file; always available). `T` is the
 element type — Int, Float, Bool, Str, String, or a struct or enum of those; a
-map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str.
+map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str. In
+`std::int`, `T` is any integer type (both operands share it) and a rotation's
+amount `N` is any integer type of its own.
 
 std::str
   fn len(in s: Str) -> Int
@@ -200,6 +206,16 @@ std::boxed
   fn new(take value: T) -> Box[T]
   fn get(in b: Box[T]) -> T
   fn into(take b: Box[T]) -> T
+
+std::int
+  fn wrapping_add(take a: T, take b: T) -> T
+  fn wrapping_sub(take a: T, take b: T) -> T
+  fn wrapping_mul(take a: T, take b: T) -> T
+  fn rotate_left(take x: T, take n: N) -> T
+  fn rotate_right(take x: T, take n: N) -> T
+  fn checked_add(take a: T, take b: T) -> Option[T]
+  fn checked_sub(take a: T, take b: T) -> Option[T]
+  fn checked_mul(take a: T, take b: T) -> Option[T]
 
 The library's own modules, written in tuonelang:
 
@@ -339,12 +355,13 @@ std::chacha
   fn byte_or_zero(in bytes: Array[Int], take index: Int) -> Int
   fn block(in key: Array[Int], take counter: Int, in nonce: Array[Int]) -> Array[Int]
   fn apply(in key: Array[Int], take counter: Int, in nonce: Array[Int], in data: Array[Int]) -> Array[Int]
-  fn poly_prime() -> Array[Int]
   fn poly_clamp_r(in key: Array[Int]) -> Array[Int]
-  fn le_bytes_to_num(in bytes: Array[Int]) -> Array[Int]
-  fn num_to_le_bytes(in value: Array[Int], take count: Int) -> Array[Int]
+  fn poly_limbs(in bytes: Array[Int]) -> Poly
+  fn poly_bytes(take f: Poly) -> Array[Int]
+  fn poly_zero() -> Poly
+  fn poly_step(take h: Poly, take r: Poly, take m: Poly) -> Poly
+  fn poly_finish(take h: Poly, take s: Poly) -> Poly
   fn poly1305(in key: Array[Int], in message: Array[Int]) -> Array[Int]
-  fn poly_mod(in value: Array[Int], in prime: Array[Int]) -> Array[Int]
   fn poly_key_gen(in key: Array[Int], in nonce: Array[Int]) -> Array[Int]
   fn push_le64(mut out: Array[Int], take value: Int) -> Int
   fn pad16(mut out: Array[Int]) -> Int
@@ -352,6 +369,21 @@ std::chacha
   fn aead_seal(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in plaintext: Array[Int]) -> Array[Int]
   fn aead_tag(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in ciphertext: Array[Int]) -> Array[Int]
   fn aead_open(in key: Array[Int], in nonce: Array[Int], in aad: Array[Int], in sealed: Array[Int]) -> Option[Array[Int]]
+
+std::fe25519
+  fn zero() -> Fe
+  fn one() -> Fe
+  fn from_int(take n: Int) -> Fe
+  fn add(take f: Fe, take g: Fe) -> Fe
+  fn sub(take f: Fe, take g: Fe) -> Fe
+  fn mul(take f: Fe, take g: Fe) -> Fe
+  fn square(take f: Fe) -> Fe
+  fn mul_small(take f: Fe, take n: Int) -> Fe
+  fn select(take c: Int, take a: Fe, take b: Fe) -> Fe
+  fn freeze(take f: Fe) -> Fe
+  fn invert(take f: Fe) -> Fe
+  fn from_bytes(in bytes: Array[Int]) -> Fe
+  fn to_bytes(take f: Fe) -> Array[Int]
 
 std::x25519
   fn prime() -> Array[Int]
@@ -371,9 +403,7 @@ std::x25519
   fn le_to_num(in bytes: Array[Int]) -> Array[Int]
   fn num_to_le(in value: Array[Int]) -> Array[Int]
   fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder
-  fn common_width(in state: Ladder) -> Int
-  fn padded_to(in value: Array[Int], take width: Int) -> Array[Int]
-  fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Ladder
+  fn ladder_step(take state: Ladder, take x1: std::fe25519::Fe, take bit: Int) -> Ladder
   fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int]
   fn base_point() -> Array[Int]
   fn public_key(in private_key: Array[Int]) -> Array[Int]
@@ -435,6 +465,7 @@ std::sha512
   fn small_sigma0(take x: Int) -> Int
   fn small_sigma1(take x: Int) -> Int
   fn round_constant(take index: Int) -> Int
+  fn round_constants() -> Array[Int]
   fn round_constant_hi(take index: Int) -> Int
   fn round_constant_lo(take index: Int) -> Int
   fn initial_hash(take index: Int) -> Int
@@ -471,6 +502,20 @@ std::ed25519
   fn verify(in public_key: Array[Int], in message: Array[Int], in signature: Array[Int]) -> Bool
   fn encode_point(in p: Point) -> Array[Int]
   fn expand_seed(in seed: Array[Int], take half: Int) -> Array[Int]
+  fn ct_identity() -> CtPoint
+  fn ct_base_point() -> CtPoint
+  fn ct_add(take p: CtPoint, take q: CtPoint) -> CtPoint
+  fn ct_double(take p: CtPoint) -> CtPoint
+  fn ct_select(take c: Int, take a: CtPoint, take b: CtPoint) -> CtPoint
+  fn ct_step(take acc: CtPoint, take bit: Int) -> CtPoint
+  fn ct_base_mult(in k: Array[Int]) -> CtPoint
+  fn ct_encode(take p: CtPoint) -> Array[Int]
+  fn reduce_wide(take w: WideScalar) -> Scalar
+  fn mul_add(take a: Scalar, take b: Scalar, take c: Scalar) -> Scalar
+  fn scalar_limbs(in bytes: Array[Int]) -> Scalar
+  fn wide_limbs(in bytes: Array[Int]) -> WideScalar
+  fn scalar_bytes(take s: Scalar) -> Array[Int]
+  fn scalar_reduce(in bytes: Array[Int]) -> Array[Int]
   fn public_key(in seed: Array[Int]) -> Array[Int]
   fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int]
 
@@ -744,6 +789,10 @@ Runs everywhere (check, interpreter, and native):
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly
+  * generic FUNCTIONS, `fn ident[T](take x: T) -> T`, compiled once per type
+    they are called at. Inside the body `T` is owned, never `Copy`: move each
+    `T` value exactly once. A generic is called, never passed as a value
+    (T0015)
   * `Box[T]`, the one heap wrapper with values: `std::boxed::new(v)` boxes,
     `std::boxed::get(b)` copies the pointee out, `std::boxed::into(b)` moves it
     out. A recursive type holds itself behind one: `next: Option[Box[Node]]`.
@@ -798,6 +847,7 @@ free function to call instead. Write the free function.
   fn f() -> Int { true }         fn f() -> Bool { true }
   if a < b < c                   if a < b && b < c
   xs.len()                       std::array::len(xs)
+  a.wrapping_add(b)              std::int::wrapping_add(a, b)
 
 Further traps, in the order they usually bite:
 

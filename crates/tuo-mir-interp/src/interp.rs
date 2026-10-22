@@ -901,8 +901,8 @@ impl Machine<'_, '_> {
                 // rule exempts it (`check_shift_types`). Every other operator
                 // still has its operands unified by the type checker.
                 debug_assert!(
-                    ka == kb || matches!(op, BinOp::Shl | BinOp::Shr),
-                    "verifier guarantees matching operand kinds (except a shift amount)"
+                    ka == kb || op.has_amount_operand(),
+                    "verifier guarantees matching operand kinds (except an amount)"
                 );
                 self.int_binary(function, op, a, b, ka)
             }
@@ -970,7 +970,9 @@ impl Machine<'_, '_> {
         match op {
             BinOp::Add => checked(a + b, self),
             BinOp::Sub => checked(a - b, self),
-            BinOp::Mul => checked(a * b, self),
+            // A product of two `U64`s can exceed `i128`; that is an
+            // overflow of the operand type too, never a host panic.
+            BinOp::Mul => checked(a.checked_mul(b).unwrap_or(i128::MAX), self),
             BinOp::Div => {
                 if b == 0 {
                     return Err(self.abort(
@@ -1036,6 +1038,28 @@ impl Machine<'_, '_> {
                     Ok(Value::Int(wrap_int(a >> b, kind), kind))
                 }
             }
+            // ADR-0031: the reference semantics of `std::int`. Each wraps
+            // the exact result into the width, and none traps. `i128` holds
+            // any 64-bit sum or difference exactly; a 64-bit product can
+            // exceed it (`U64::MAX * U64::MAX`), so the product is taken on
+            // the bit patterns mod 2^128, which 2^w divides — never a host
+            // panic, which `tuo-fuzz` would count as an internal error.
+            BinOp::WrappingAdd => Ok(Value::Int(wrap_int(a + b, kind), kind)),
+            BinOp::WrappingSub => Ok(Value::Int(wrap_int(a - b, kind), kind)),
+            BinOp::WrappingMul => Ok(Value::Int(
+                from_bits(int_bits(a, kind).wrapping_mul(int_bits(b, kind)), kind),
+                kind,
+            )),
+            BinOp::RotateLeft => Ok(Value::Int(rotate_int(a, b, kind, true), kind)),
+            BinOp::RotateRight => Ok(Value::Int(rotate_int(a, b, kind, false), kind)),
+            // ADR-0031's overflow predicates: true exactly when `Add`/`Sub`/
+            // `Mul` above would trap. They never trap themselves.
+            BinOp::AddOverflows => Ok(Value::Bool(!(min..=max).contains(&(a + b)))),
+            BinOp::SubOverflows => Ok(Value::Bool(!(min..=max).contains(&(a - b)))),
+            BinOp::MulOverflows => Ok(Value::Bool(
+                a.checked_mul(b)
+                    .is_none_or(|product| !(min..=max).contains(&product)),
+            )),
         }
     }
 
@@ -1064,10 +1088,22 @@ impl Machine<'_, '_> {
             // so reaching here means the MIR is malformed. Surface it as
             // the interpreter's own impossible-state signal rather than
             // inventing a bit pattern for an IEEE-754 value.
-            BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+            BinOp::BitAnd
+            | BinOp::BitOr
+            | BinOp::BitXor
+            | BinOp::Shl
+            | BinOp::Shr
+            | BinOp::WrappingAdd
+            | BinOp::WrappingSub
+            | BinOp::WrappingMul
+            | BinOp::RotateLeft
+            | BinOp::RotateRight
+            | BinOp::AddOverflows
+            | BinOp::SubOverflows
+            | BinOp::MulOverflows => {
                 return Err(self.type_bug(
                     function,
-                    "bitwise operator on a Float",
+                    "integer-only operator on a Float",
                     &Value::Float(a, kind),
                 ));
             }
@@ -1856,6 +1892,46 @@ fn int_bounds(kind: IntKind) -> (i128, i128) {
         IntKind::U32 => (0, i128::from(u32::MAX)),
         IntKind::U64 | IntKind::Usize => (0, i128::from(u64::MAX)),
     }
+}
+
+/// The `w`-bit two's-complement pattern of `value`, as an unsigned number.
+#[expect(
+    clippy::cast_sign_loss,
+    reason = "the two's-complement pattern of a negative value is the point"
+)]
+fn int_bits(value: i128, kind: IntKind) -> u128 {
+    (value as u128) & width_mask(kind)
+}
+
+/// The value of `kind` whose pattern is `bits`' low `w` bits.
+#[expect(
+    clippy::cast_possible_wrap,
+    reason = "at most 64 bits survive the mask, which fits an i128"
+)]
+fn from_bits(bits: u128, kind: IntKind) -> i128 {
+    wrap_int((bits & width_mask(kind)) as i128, kind)
+}
+
+fn width_mask(kind: IntKind) -> u128 {
+    (1u128 << int_width_bits(kind)) - 1
+}
+
+/// Rotate `value`'s `w`-bit pattern by `amount` reduced Euclidean mod `w`
+/// (ADR-0031): `n + w` is the same rotation as `n`, and a negative amount
+/// rotates the other way.
+fn rotate_int(value: i128, amount: i128, kind: IntKind, left: bool) -> i128 {
+    let width = int_width_bits(kind);
+    let bits = int_bits(value, kind);
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rem_euclid by the width is in 0..width"
+    )]
+    let by = amount.rem_euclid(i128::from(width)) as u32;
+    let by = if left { by } else { (width - by) % width };
+    if by == 0 {
+        return from_bits(bits, kind);
+    }
+    from_bits((bits << by) | (bits >> (width - by)), kind)
 }
 
 /// Wrap `value` into `kind`'s range (two's-complement truncation), for casts.

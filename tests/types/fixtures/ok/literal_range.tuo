@@ -1,0 +1,34 @@
+// The boundary values of `T0027` that must stay accepted: a negated literal
+// is one value, so each type's minimum is spelled directly.
+
+fn i8_min() -> I8 {
+    -128
+}
+
+fn i8_max() -> I8 {
+    127
+}
+
+fn i8_min_grouped() -> I8 {
+    -(128)
+}
+
+fn u8_max() -> U8 {
+    0xFF
+}
+
+fn i64_min() -> Int {
+    -9223372036854775808
+}
+
+fn u64_max() -> U64 {
+    18446744073709551615
+}
+
+fn separated() -> U16 {
+    65_535
+}
+
+fn main() -> Int {
+    0
+}

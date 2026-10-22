@@ -191,6 +191,44 @@ fn a_marked_callee_is_accepted() {
     );
 }
 
+/// The five `std::int` operations are the builtins a marked function may
+/// call (ADR-0031): none of them traps, so none has a trap check to branch
+/// on. A rotation by a variable amount is how a marked function rotates.
+#[test]
+fn the_non_trapping_integer_builtins_are_allowed() {
+    for call in [
+        "std::int::wrapping_add(a, b)",
+        "std::int::wrapping_sub(a, b)",
+        "std::int::wrapping_mul(a, b)",
+        "std::int::rotate_left(a, b)",
+        "std::int::rotate_right(a, b)",
+    ] {
+        let source =
+            format!("#[constant_time]\nfn f(take a: Int, take b: Int) -> Int {{ {call} }}\n");
+        assert_eq!(codes(&source), Vec::<String>::new(), "`{call}`");
+    }
+}
+
+/// Every other builtin is refused like an unmarked function: the allowlist is
+/// exactly the five, not "any builtin". The `checked_*` three never trap
+/// either, but their `Option` exists to be branched on, so they stay out.
+#[test]
+fn other_builtins_are_still_refused() {
+    for (params, ret, call) in [
+        ("take x: Float", "Float", "std::float::sqrt(x)"),
+        ("in s: Str", "Int", "std::str::len(s)"),
+        ("take x: Int", "Option[Int]", "std::int::checked_add(x, 1)"),
+        ("take x: Int", "Option[Int]", "std::int::checked_mul(x, x)"),
+    ] {
+        let source = format!("#[constant_time]\nfn f({params}) -> {ret} {{ {call} }}\n");
+        assert!(
+            codes(&source).contains(&"T0020".to_string()),
+            "`{call}` got {:?}",
+            codes(&source)
+        );
+    }
+}
+
 /// An unmarked function is not checked at all.
 ///
 /// The attribute is what carries the guarantee, so its absence must mean

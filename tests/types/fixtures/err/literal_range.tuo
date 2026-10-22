@@ -1,0 +1,43 @@
+// `T0027`: an integer literal its inferred type cannot hold. The check runs
+// after inference, so a literal typed by later use is checked at the type it
+// really got. Before it landed these were accepted, and MIR lowering then
+// dropped the whole function: its specs failed without a message and `build`
+// reported no `main`.
+
+// One past the top of the annotated type.
+fn too_big() -> I8 {
+    128
+}
+
+// Below zero for an unsigned type is a negative literal, not a wrap.
+fn negative_unsigned() -> U8 {
+    -1
+}
+
+// The literal is typed `I8` by the subtraction, and `128` alone is out of
+// range even though `0 - 128` would not be.
+fn typed_by_use() -> I8 {
+    0 - 128
+}
+
+// A hex literal is checked by its value.
+fn hex_overflow() -> U8 {
+    0x100
+}
+
+// Past `I64`, the default integer type.
+fn past_default() -> Int {
+    9223372036854775808
+}
+
+// A literal pattern is checked against the scrutinee's type.
+fn pattern(in x: I8) -> Int {
+    match x {
+        200 => 1,
+        _ => 0,
+    }
+}
+
+fn main() -> Int {
+    0
+}

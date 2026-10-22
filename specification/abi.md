@@ -49,12 +49,12 @@ a future artifact detect a mismatch instead of silently reinterpreting bytes.
    Sizes that are "pointer-width" resolve to the host pointer width (8 bytes on
    the supported 64-bit hosts). `Isize`/`Usize` are pointer-width by definition;
    the interpreter models them as 64-bit, which agrees on those hosts.
-4. **`#[repr(C)]`, no niche tricks in v0.** Aggregates are laid out in
-   declaration order with natural alignment and tail padding — the C rule — so
-   the layout is obvious, inspectable, and identical across backends. Optional
-   values do **not** use pointer niches in v0; `Option[T]` is an ordinary
-   two-variant enum with an explicit discriminant. Niche optimization is a later,
-   version-bumping change.
+4. **`#[repr(C)]`, one niche.** Aggregates are laid out in declaration order
+   with natural alignment and tail padding — the C rule — so the layout is
+   obvious, inspectable, and identical across backends. `Option[T]` is an
+   ordinary two-variant enum with an explicit discriminant, with one exception
+   since ABI 15: `Option[Box[T]]` is the box's pointer, null for `None` (see
+   "Aggregates" below). Any further niche is a version-bumping change.
 
 ## Primitive ABI
 
@@ -402,7 +402,18 @@ struct tuo_weak { tuo_shared_block[T] *ptr; }   // one word, never null
   to the interpreter's `Value::Variant { variant, .. }`. `Option[T]` is
   `{ 0 => Some(T), 1 => None }`; `Result[T,E]` is `{ 0 => Ok(T), 1 => Err(E) }`,
   matching declaration order and the interpreter/MIR numbering (`Some`/`Ok` = 0).
-  No niche/pointer packing in v0.
+- **`Option[Box[T]]` is niche-packed** (ABI 15): a box is never null, so the
+  value is one pointer word, null for `None` and the box itself for `Some`,
+  with no discriminant (Rust's `Option<Box<T>>` has the same layout, which
+  `tuo-runtime/tests/abi_layout.rs` checks). It is the only niche-packed
+  type: an `Option` of anything else, a `Result` holding a box, and an
+  `Option[Option[Box[T]]]` (whose outer `None` would need a second
+  impossible pointer) keep their tag. The variant numbering is unchanged; a
+  backend reads and writes the live variant only through
+  `tuo_runtime::abi::tag_repr`. Before ABI 15 the tag and a padded pointer
+  took 16 bytes, which doubled every node of a boxed tree: `binary-trees`
+  went from 155 to 145 ms (C 145 ms) when its nodes shrank from 32 to 16
+  bytes.
 
 ## Panic / trap behavior
 
@@ -768,8 +779,8 @@ together with the pins (`tuo-runtime`'s `effect` tests and
 ## Memory allocation boundary
 
 All heap memory (`Box`, `Shared`, `String`, `Array`) is acquired and released
-through **two C-ABI runtime symbols**, so the allocator is a single, swappable
-seam and no backend embeds `malloc` calls directly. (A `[T; N]` fixed-size
+through **two C-ABI runtime symbols**, so the allocator is a single seam:
+generated code calls these two symbols and nothing else to get or free memory. (A `[T; N]` fixed-size
 array never participates: its storage is inline and it never touches
 `tuo_rt_alloc`.)
 
@@ -807,6 +818,20 @@ same observable behavior in its deterministic sandbox (growth counts against its
 `MemoryBudget`); the native path and the interpreter agree on everything a
 program can observe (length, contents, and `pop`'s `Option`), never on
 buffer identity or capacity, which nothing observes.
+
+**The release backend inlines the seam.** The LLVM backend links a copy of
+both bodies into every module as `available_externally` IR
+(`tuo-codegen-llvm`'s `link_alloc_seam`), built from the same constants as the
+C source (`ZERO_SIZE_SENTINEL`, `MALLOC_ALIGN`, `ALLOC_FAILURE_TRAP`). The
+optimizer may inline it, so a hot `Box` allocation becomes a direct `malloc`
+call. No symbol is emitted for the copy, so the C shim remains the one
+definition linked into the binary, and an unoptimized build calls it as
+before. On `binary-trees`, which allocates and frees about fifteen million
+nodes, the out-of-line pair cost about a tenth of the run (174 → 153 ms, C
+144 ms, measured 2026-10-22). The price: replacing the allocator now means
+changing **both** definitions. `alloc.rs`'s tests pin the C source to the
+policy constants, and `lower.rs`'s `the_allocator_body_is_inlinable_but_never_emitted`
+pins the IR to the same constants.
 
 ## Destruction
 

@@ -70,6 +70,51 @@ impl IntKind {
             Self::I8 | Self::I16 | Self::I32 | Self::I64 | Self::Isize
         )
     }
+
+    /// The inclusive range of values this kind holds (`Isize`/`Usize` are
+    /// 64-bit in v0).
+    #[must_use]
+    pub fn range(self) -> (i128, i128) {
+        match self {
+            Self::I8 => (i128::from(i8::MIN), i128::from(i8::MAX)),
+            Self::I16 => (i128::from(i16::MIN), i128::from(i16::MAX)),
+            Self::I32 => (i128::from(i32::MIN), i128::from(i32::MAX)),
+            Self::I64 | Self::Isize => (i128::from(i64::MIN), i128::from(i64::MAX)),
+            Self::U8 => (0, i128::from(u8::MAX)),
+            Self::U16 => (0, i128::from(u16::MAX)),
+            Self::U32 => (0, i128::from(u32::MAX)),
+            Self::U64 | Self::Usize => (0, i128::from(u64::MAX)),
+        }
+    }
+}
+
+/// The value of an integer literal's digits — decimal, or `0x`/`0b`/`0o`
+/// prefixed, separators already removed (as HIR's `Lit::Int` holds them) —
+/// or `None` when they do not parse or exceed `i128`.
+///
+/// The one parser both the checker's range check (`T0027`) and MIR lowering
+/// use, so a literal the checker accepts is one lowering can represent.
+#[must_use]
+pub fn parse_int_literal(digits: &str) -> Option<i128> {
+    let (body, radix) = if let Some(hex) = digits
+        .strip_prefix("0x")
+        .or_else(|| digits.strip_prefix("0X"))
+    {
+        (hex, 16)
+    } else if let Some(bin) = digits
+        .strip_prefix("0b")
+        .or_else(|| digits.strip_prefix("0B"))
+    {
+        (bin, 2)
+    } else if let Some(oct) = digits
+        .strip_prefix("0o")
+        .or_else(|| digits.strip_prefix("0O"))
+    {
+        (oct, 8)
+    } else {
+        (digits, 10)
+    };
+    i128::from_str_radix(body, radix).ok()
 }
 
 /// A floating-point type (IEEE-754, bit-reproducible across backends, §11).

@@ -1,0 +1,49 @@
+// ABI 15: `Option[Box[T]]` is a nullable pointer. These are the shapes around
+// that one niche: an option of an option of a box (the outer keeps its tag,
+// the inner is the pointer inside its payload), a `Result` holding a box
+// (tagged), an optional box matched through an `in` borrow, returned from a
+// function, and reassigned from `Some` to `None` (dropping the old box).
+// Exit 90.
+fn peek(in slot: Option[Box[Int]]) -> Int {
+    match slot {
+        Some { value } => std::boxed::get(value),
+        None => -1,
+    }
+}
+
+fn maybe(take n: Int) -> Option[Box[Int]] {
+    if n > 0 {
+        return Some { value: std::boxed::new(n) };
+    }
+    None
+}
+
+fn depth(take nested: Option[Option[Box[Int]]]) -> Int {
+    match nested {
+        Some { value } => match value {
+            Some { value } => std::boxed::into(value),
+            None => 2,
+        },
+        None => 1,
+    }
+}
+
+fn unwrap_or(take r: Result[Box[Int], Int]) -> Int {
+    match r {
+        Ok { value } => std::boxed::into(value),
+        Err { error } => error,
+    }
+}
+
+fn main() -> Int {
+    var slot = maybe(40);
+    let first = peek(slot);
+    slot = maybe(0);
+    let second = peek(slot);
+    let a = depth(Some { value: Some { value: std::boxed::new(30) } });
+    let b = depth(Some { value: None });
+    let c = depth(None);
+    let d = unwrap_or(Ok { value: std::boxed::new(16) });
+    let e = unwrap_or(Err { error: 2 });
+    first + second + a + b + c + d + e
+}

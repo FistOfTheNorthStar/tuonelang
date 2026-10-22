@@ -26,6 +26,7 @@ use crate::TypeckResult;
 use crate::infer::{InferCtx, VarClass};
 use crate::ty::{
     FloatKind, FnParam, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
+    parse_int_literal,
 };
 
 /// The type checker's diagnostic codes (the reserved `Txxxx` namespace).
@@ -71,12 +72,9 @@ use crate::ty::{
 ///   **declarations** (a struct field, an enum payload) are deliberately not
 ///   reported: they lower fine, and `T0016` recommends exactly that
 ///   indirection to break a recursive type.
-/// - `T0023` — **warning**, not an error: the generic-declaration advisory
-///   (ADR-0027 Stage A). A generic `fn` type-checks, ownership-checks, and
-///   runs on the reference interpreter, but `Ty::Param` has no layout until
-///   monomorphized (`tuo_runtime::abi::layout_of`), so no native backend
-///   lowers it. Emitted from the same `native_core` seam as `T0022`, once
-///   per declaration at the span of the generic parameter list.
+/// - `T0023` — **retired**: the ADR-0027 Stage A generic-declaration
+///   advisory, removed when Stage B monomorphized generic functions on the
+///   native path. The code is never reused.
 /// - `T0024` — a method call (ADR-0032 Stage A): free functions only, and no
 ///   engine executes one. Carries a machine-applicable rewrite to the free
 ///   call when exactly one function fits.
@@ -84,6 +82,9 @@ use crate::ty::{
 ///   engine executes until ADR-0032 Stage B.
 /// - `T0026` — **warning**: an `interface`/`impl` declaration type-checks but
 ///   lowers to nothing.
+/// - `T0027` — an integer literal outside its inferred type's range (`let x:
+///   I8 = 128`), checked after inference; a negated literal is one value, so
+///   `-128` is an `I8`.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -150,6 +151,27 @@ struct Frame {
     break_ty: Ty,
 }
 
+/// One integer literal in the body being checked, for the post-inference
+/// range check (`T0027`).
+struct IntLiteralUse {
+    /// The literal's span — the unary minus's, when it is negated.
+    span: Span,
+    /// Its type as recorded, possibly an unsolved inference variable.
+    ty: Ty,
+    /// Its digits, separators removed.
+    digits: String,
+    /// Whether a unary minus applies to it.
+    negated: bool,
+}
+
+/// `expr` with any grouping parentheses removed.
+fn ungrouped(expr: Expr<'_>) -> Expr<'_> {
+    match expr {
+        Expr::Group(group) => group.inner().map_or(expr, ungrouped),
+        other => other,
+    }
+}
+
 pub(crate) struct Checker<'a> {
     resolution: &'a Resolution,
     /// Name-use span → resolved symbol.
@@ -174,6 +196,10 @@ pub(crate) struct Checker<'a> {
     /// Types of the current body's expressions, recorded raw (inference
     /// variables unresolved) and published — applied — by [`finish_body`].
     body_exprs: Vec<(Span, Ty)>,
+    /// The current body's integer literals, range-checked against their
+    /// inferred type by [`Self::finish_body`] once inference has run
+    /// (`T0027`).
+    int_literals: Vec<IntLiteralUse>,
     /// Map-builtin call sites whose `(key, value)` pair was still an unsolved
     /// inference variable when the call was checked, re-examined by
     /// [`Self::finish_body`] once inference has run. Without this, a pair
@@ -228,6 +254,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         expr_types: HashMap::new(),
         icx: InferCtx::default(),
         body_exprs: Vec::new(),
+        int_literals: Vec::new(),
         deferred_map_pairs: Vec::new(),
         locals: HashMap::new(),
         ret: Ty::Unit,
@@ -316,6 +343,22 @@ fn builtin_first_param_accepts(candidate: Builtin, actual: &Ty) -> bool {
         (Ty::Str, Ty::Str) | (Ty::String, Ty::String) => true,
         (a, b) => a == b,
     }
+}
+
+/// The builtins a `#[constant_time]` function may call (`T0020`'s allowlist):
+/// exactly the five `std::int` operations (ADR-0031), which never trap, so
+/// they have no trap check to branch on. Every other builtin is refused, as
+/// an unmarked function is: `std::float::sqrt` included, and the
+/// `checked_*` three, whose `Option` must be branched on.
+fn constant_time_builtin(builtin: Builtin) -> bool {
+    matches!(
+        builtin,
+        Builtin::IntWrappingAdd
+            | Builtin::IntWrappingSub
+            | Builtin::IntWrappingMul
+            | Builtin::IntRotateLeft
+            | Builtin::IntRotateRight
+    )
 }
 
 fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
@@ -419,6 +462,16 @@ fn builtin_signature(builtin: Builtin) -> (Vec<Ty>, Ty) {
         // these `Int` shapes are only the installed seed (as for `Array`).
         Builtin::BoxNew => (vec![Ty::int()], int_box()),
         Builtin::BoxGet | Builtin::BoxInto => (vec![int_box()], Ty::int()),
+        // Generic over the integer type; checked by `check_int_builtin_call`,
+        // so these `Int` shapes are only the installed seed.
+        Builtin::IntWrappingAdd
+        | Builtin::IntWrappingSub
+        | Builtin::IntWrappingMul
+        | Builtin::IntRotateLeft
+        | Builtin::IntRotateRight => (vec![Ty::int(), Ty::int()], Ty::int()),
+        Builtin::IntCheckedAdd | Builtin::IntCheckedSub | Builtin::IntCheckedMul => {
+            (vec![Ty::int(), Ty::int()], Ty::Option(Box::new(Ty::int())))
+        }
     }
 }
 
@@ -778,7 +831,8 @@ impl<'a> Checker<'a> {
                         )
                         .with_primary_label("trapping arithmetic")
                         .with_help(
-                            "use the shift and bitwise operators, which cannot trap; a mask is \
+                            "use `std::int::wrapping_add`/`wrapping_sub`/`wrapping_mul` or the \
+                             shift and bitwise operators, which cannot trap; a mask is \
                              `(bit << 63) >> 63` rather than `0 - bit`",
                         )
                         .with_actual(StructuredValue::Name(op.to_string())),
@@ -806,8 +860,8 @@ impl<'a> Checker<'a> {
                         .with_primary_label("shift by a variable amount")
                         .with_help(
                             "shift by an integer literal, whose range check cannot depend on \
-                             the data; a data-dependent rotation must compute every amount and \
-                             combine them with `std::ct::select`",
+                             the data; a rotation by a variable amount is \
+                             `std::int::rotate_left`/`rotate_right`, which cannot trap",
                         )
                         .with_actual(StructuredValue::Name(op.to_string())),
                     );
@@ -826,7 +880,13 @@ impl<'a> Checker<'a> {
             && let Some(name) = path.segment_names().last()
         {
             let callee = self.resolution.resolved_at(name.span);
-            let allowed = callee.is_some_and(|symbol| marked.contains(&symbol));
+            let allowed = callee.is_some_and(|symbol| {
+                marked.contains(&symbol)
+                    || self
+                        .resolution
+                        .builtin(symbol)
+                        .is_some_and(constant_time_builtin)
+            });
             if !allowed {
                 let target = callee.map_or_else(
                     || name.text.to_string(),
@@ -1546,6 +1606,7 @@ impl<'a> Checker<'a> {
     fn begin_body(&mut self, ret: Ty, fallback: Span) {
         self.icx = InferCtx::default();
         self.body_exprs = Vec::new();
+        self.int_literals = Vec::new();
         self.deferred_map_pairs = Vec::new();
         self.locals = HashMap::new();
         self.ret = ret;
@@ -1577,6 +1638,7 @@ impl<'a> Checker<'a> {
             }
             self.check_map_pair(&key, &value, span);
         }
+        self.check_int_literal_ranges();
         let locals = std::mem::take(&mut self.locals);
         for (symbol, ty) in locals {
             let ty = self.icx.apply(&ty);
@@ -1586,6 +1648,47 @@ impl<'a> Checker<'a> {
         for (span, ty) in exprs {
             let ty = self.icx.apply(&ty);
             self.expr_types.insert(span, ty);
+        }
+    }
+
+    /// `T0027`: an integer literal whose value its inferred type cannot hold.
+    ///
+    /// Run after inference, so a literal typed by later use (`let x: I8 =
+    /// 0 - 128` types both literals `I8`) is checked at the type it really
+    /// got. A literal under a unary minus is checked as the negative value,
+    /// so `-128` is an `I8` and `128` is not. Before this check such a
+    /// program was accepted, and MIR lowering then dropped the whole function
+    /// — its specs failing without a message and `build` reporting it absent.
+    fn check_int_literal_ranges(&mut self) {
+        for literal in std::mem::take(&mut self.int_literals) {
+            let Ty::Int(kind) = self.icx.apply(&literal.ty) else {
+                continue;
+            };
+            let (min, max) = kind.range();
+            let value = parse_int_literal(&literal.digits).map(|magnitude| {
+                if literal.negated {
+                    -magnitude
+                } else {
+                    magnitude
+                }
+            });
+            if value.is_some_and(|value| (min..=max).contains(&value)) {
+                continue;
+            }
+            let name = kind.name();
+            self.push(
+                Diagnostic::error(
+                    code(27),
+                    format!("integer literal out of range for `{name}`"),
+                    literal.span,
+                )
+                .with_primary_label(format!("`{name}` holds {min} to {max}"))
+                .with_help(
+                    "use a value in range, or annotate a wider integer type where \
+                     this literal's type is decided",
+                )
+                .with_actual(StructuredValue::Name(name.to_owned())),
+            );
         }
     }
 
@@ -1791,7 +1894,16 @@ impl<'a> Checker<'a> {
 
     fn literal_pattern_ty(&mut self, literal: LiteralPat<'_>, span: Span) -> Ty {
         match literal.token_kind() {
-            Some(TokenKind::IntLiteral) => self.icx.fresh(VarClass::Integer, span),
+            Some(TokenKind::IntLiteral) => {
+                let ty = self.icx.fresh(VarClass::Integer, span);
+                self.int_literals.push(IntLiteralUse {
+                    span,
+                    ty: ty.clone(),
+                    digits: literal.text().replace('_', ""),
+                    negated: false,
+                });
+                ty
+            }
             Some(TokenKind::FloatLiteral) => self.icx.fresh(VarClass::Float, span),
             Some(TokenKind::BoolLiteral) => Ty::Bool,
             Some(TokenKind::CharLiteral) => Ty::Char,
@@ -2195,7 +2307,16 @@ impl<'a> Checker<'a> {
         let span = self.at(expr.span());
         match expr {
             Expr::Literal(literal) => match literal.token_kind() {
-                Some(TokenKind::IntLiteral) => self.icx.fresh(VarClass::Integer, span),
+                Some(TokenKind::IntLiteral) => {
+                    let ty = self.icx.fresh(VarClass::Integer, span);
+                    self.int_literals.push(IntLiteralUse {
+                        span,
+                        ty: ty.clone(),
+                        digits: literal.text().replace('_', ""),
+                        negated: false,
+                    });
+                    ty
+                }
                 Some(TokenKind::FloatLiteral) => self.icx.fresh(VarClass::Float, span),
                 Some(TokenKind::BoolLiteral) => Ty::Bool,
                 Some(TokenKind::CharLiteral) => Ty::Char,
@@ -2208,6 +2329,21 @@ impl<'a> Checker<'a> {
             Expr::ArrayLiteral(literal) => self.array_literal(literal, span),
             Expr::Unary(unary) => {
                 let operand = unary.operand().map_or(Ty::Error, |inner| self.expr(inner));
+                if unary.op() == Some("-")
+                    && let Some(Expr::Literal(literal)) = unary.operand().map(ungrouped)
+                {
+                    // `-128` is one value, not the out-of-range `128` negated.
+                    let inner = self.at(literal.span());
+                    if let Some(entry) = self
+                        .int_literals
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.span == inner)
+                    {
+                        entry.negated = true;
+                        entry.span = span;
+                    }
+                }
                 match unary.op() {
                     Some("-") => {
                         let applied = self.icx.apply(&operand);
@@ -3067,6 +3203,63 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// Check a `std::int` builtin call (ADR-0031), generic over the integer
+    /// type `T` its operands share — as `+` is — and, for a rotation, over the
+    /// amount's own integer type `N`, as a shift's is. A non-integer `T` or
+    /// `N` (a `Float`, a float literal) is the same `T0006` the operator
+    /// reports. Returns `None` for any other builtin.
+    fn check_int_builtin_call(
+        &mut self,
+        builtin: Builtin,
+        args: &[Expr<'_>],
+        span: Span,
+    ) -> Option<Ty> {
+        let (rotation, checked) = match builtin {
+            Builtin::IntWrappingAdd | Builtin::IntWrappingSub | Builtin::IntWrappingMul => {
+                (false, false)
+            }
+            Builtin::IntRotateLeft | Builtin::IntRotateRight => (true, false),
+            Builtin::IntCheckedAdd | Builtin::IntCheckedSub | Builtin::IntCheckedMul => {
+                (false, true)
+            }
+            _ => return None,
+        };
+        let value = self.fresh(span);
+        let amount = if rotation {
+            self.fresh(span)
+        } else {
+            value.clone()
+        };
+        self.check_args(&[value.clone(), amount.clone()], args, span);
+        let name = builtin.qualified_name();
+        for ty in [&value, &amount] {
+            let applied = self.icx.apply(ty);
+            let integer = match applied {
+                Ty::Int(_) | Ty::Error | Ty::Never => true,
+                Ty::Var(_) => self.icx.literal_class(&applied) != Some(VarClass::Float),
+                _ => false,
+            };
+            if !integer {
+                let rendered = self.render(&applied);
+                self.push(
+                    Diagnostic::error(
+                        code(6),
+                        format!("`{name}` takes integers, not `{rendered}`"),
+                        span,
+                    )
+                    .with_help("`std::int` operations act on the bits of an integer type")
+                    .with_actual(StructuredValue::Type(rendered)),
+                );
+                return Some(Ty::Error);
+            }
+        }
+        Some(if checked {
+            Ty::Option(Box::new(value))
+        } else {
+            value
+        })
+    }
+
     fn check_map_builtin_call(
         &mut self,
         builtin: Builtin,
@@ -3492,7 +3685,8 @@ impl<'a> Checker<'a> {
                             Some(ret) => Some(ret),
                             None => self
                                 .check_map_builtin_call(builtin, &args, span)
-                                .or_else(|| self.check_box_builtin_call(builtin, &args, span)),
+                                .or_else(|| self.check_box_builtin_call(builtin, &args, span))
+                                .or_else(|| self.check_int_builtin_call(builtin, &args, span)),
                         };
                         self.current_callee = outer;
                         if let Some(ret) = ret {

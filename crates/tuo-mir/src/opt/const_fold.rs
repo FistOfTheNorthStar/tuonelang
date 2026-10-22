@@ -122,12 +122,13 @@ fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
 fn fold_binary(op: BinOp, lhs: &Const, rhs: &Const) -> Option<Const> {
     match (lhs, rhs) {
         (Const::Int(a, ka), Const::Int(b, kb)) => {
-            // A shift's amount is an independent bit count (ADR-0019), so it
-            // is the one binary op whose operand kinds may differ — the
-            // verifier exempts it from the same-type rule too.
+            // A shift's or rotation's amount is an independent bit count
+            // (ADR-0019, ADR-0031), so those are the binary ops whose operand
+            // kinds may differ — the verifier exempts them from the same-type
+            // rule too.
             debug_assert!(
-                ka == kb || matches!(op, BinOp::Shl | BinOp::Shr),
-                "verifier guarantees matching integer kinds (except a shift amount)"
+                ka == kb || op.has_amount_operand(),
+                "verifier guarantees matching integer kinds (except an amount)"
             );
             fold_int_binary(op, *a, *b, *ka)
         }
@@ -160,11 +161,15 @@ fn fold_int_binary(op: BinOp, a: i128, b: i128, kind: IntKind) -> Option<Const> 
     let in_range = |value: i128| (min..=max).contains(&value);
     match op {
         // Arithmetic: fold only if the exact result is in range (no overflow
-        // trap). `i128` cannot overflow for any tuonelang integer width, so
-        // the range check is the whole overflow test.
+        // trap). `i128` holds any sum or difference of two 64-bit values, so
+        // the range check is the whole overflow test there; a product of two
+        // `U64`s can exceed `i128`, which `checked_mul` reports as overflow.
         BinOp::Add => in_range(a + b).then_some(Const::Int(a + b, kind)),
         BinOp::Sub => in_range(a - b).then_some(Const::Int(a - b, kind)),
-        BinOp::Mul => in_range(a * b).then_some(Const::Int(a * b, kind)),
+        BinOp::Mul => a
+            .checked_mul(b)
+            .filter(|product| in_range(*product))
+            .map(|product| Const::Int(product, kind)),
         BinOp::Div => {
             // Trap on zero divisor and on `MIN / -1`; otherwise truncate
             // toward zero (Rust's `/` on i128 truncates toward zero).
@@ -221,7 +226,51 @@ fn fold_int_binary(op: BinOp, a: i128, b: i128, kind: IntKind) -> Option<Const> 
                 Some(Const::Int(wrap_int(a >> b, kind), kind))
             }
         }
+        // ADR-0031. None of these traps, so they always fold. `i128` holds
+        // any sum or difference of two 64-bit values; a 64-bit product can
+        // exceed it, so the product wraps mod 2^128 first — which 2^w
+        // divides, so `wrap_int` still yields the product mod 2^w.
+        BinOp::WrappingAdd => Some(Const::Int(wrap_int(a + b, kind), kind)),
+        BinOp::WrappingSub => Some(Const::Int(wrap_int(a - b, kind), kind)),
+        BinOp::WrappingMul => Some(Const::Int(wrap_int(a.wrapping_mul(b), kind), kind)),
+        BinOp::RotateLeft => Some(Const::Int(rotate_int(a, b, kind, true), kind)),
+        BinOp::RotateRight => Some(Const::Int(rotate_int(a, b, kind, false), kind)),
+        // ADR-0031's overflow predicates: exactly when the trapping
+        // operator above declines to fold. Never trap, so always fold.
+        BinOp::AddOverflows => Some(Const::Bool(!in_range(a + b))),
+        BinOp::SubOverflows => Some(Const::Bool(!in_range(a - b))),
+        BinOp::MulOverflows => Some(Const::Bool(
+            a.checked_mul(b).is_none_or(|product| !in_range(product)),
+        )),
     }
+}
+
+/// Rotate `value`'s `w`-bit pattern by `amount` reduced Euclidean mod `w`
+/// (ADR-0031), mirroring the interpreter's `rotate_int`.
+fn rotate_int(value: i128, amount: i128, kind: IntKind, left: bool) -> i128 {
+    let width = int_width_bits(kind);
+    let mask = (1u128 << width) - 1;
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "the two's-complement pattern of a negative value is the point"
+    )]
+    let bits = (value as u128) & mask;
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "rem_euclid by the width is in 0..width"
+    )]
+    let by = amount.rem_euclid(i128::from(width)) as u32;
+    let by = if left { by } else { (width - by) % width };
+    let rotated = if by == 0 {
+        bits
+    } else {
+        ((bits << by) | (bits >> (width - by))) & mask
+    };
+    #[expect(
+        clippy::cast_possible_wrap,
+        reason = "a pattern of at most 64 bits fits an i128"
+    )]
+    wrap_int(rotated as i128, kind)
 }
 
 /// The width in bits of an integer kind — the shift-amount bound (ADR-0019).
@@ -252,7 +301,19 @@ fn fold_float_binary(op: BinOp, a: f64, b: f64, kind: FloatKind) -> Option<Const
         // them on floats), so they are unreachable here. Leaving the
         // operation unfolded is the conservative, meaning-preserving
         // answer for any MIR that somehow carries one.
-        BinOp::BitAnd | BinOp::BitOr | BinOp::BitXor | BinOp::Shl | BinOp::Shr => {
+        BinOp::BitAnd
+        | BinOp::BitOr
+        | BinOp::BitXor
+        | BinOp::Shl
+        | BinOp::Shr
+        | BinOp::WrappingAdd
+        | BinOp::WrappingSub
+        | BinOp::WrappingMul
+        | BinOp::RotateLeft
+        | BinOp::RotateRight
+        | BinOp::AddOverflows
+        | BinOp::SubOverflows
+        | BinOp::MulOverflows => {
             return None;
         }
     })

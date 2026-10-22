@@ -823,8 +823,22 @@ impl Verifier<'_> {
             // independent of the shifted value's type, so `U32 << Int` is
             // well-formed by construction. Both must still be integers,
             // which `check_shift_types` enforces.
-            if matches!(op, BinOp::Shl | BinOp::Shr) {
+            if op.has_amount_operand() {
                 self.check_shift_types(block, *op, lhs, rhs);
+            } else if op.is_integer_only()
+                && let Some(ty) = self.operand_ty(lhs)
+                && !matches!(ty, Ty::Int(_) | Ty::Error)
+            {
+                // The bitwise and wrapping operators (ADR-0019, ADR-0031)
+                // have no meaning on a float's or a `Bool`'s representation.
+                let name = self.fn_name().to_owned();
+                self.error(
+                    code::TYPE_MISMATCH,
+                    format!(
+                        "fn `{name}`: bb{block} applies {} to a non-integer",
+                        bin_name(*op)
+                    ),
+                );
             } else if let (Some(l), Some(r)) = (self.operand_ty(lhs), self.operand_ty(rhs))
                 && !types_agree(&l, &r)
             {
@@ -1777,7 +1791,7 @@ fn map_pair(ty: &Ty) -> Option<(Ty, Ty)> {
     }
 }
 
-fn const_ty(constant: &crate::mir::Const) -> Ty {
+pub(crate) fn const_ty(constant: &crate::mir::Const) -> Ty {
     use crate::mir::Const;
     match constant {
         Const::Unit => Ty::Unit,
@@ -1811,6 +1825,14 @@ fn bin_name(op: BinOp) -> &'static str {
         BinOp::BitXor => "bitxor",
         BinOp::Shl => "shl",
         BinOp::Shr => "shr",
+        BinOp::WrappingAdd => "wrapping_add",
+        BinOp::WrappingSub => "wrapping_sub",
+        BinOp::WrappingMul => "wrapping_mul",
+        BinOp::RotateLeft => "rotate_left",
+        BinOp::RotateRight => "rotate_right",
+        BinOp::AddOverflows => "add_overflows",
+        BinOp::SubOverflows => "sub_overflows",
+        BinOp::MulOverflows => "mul_overflows",
     }
 }
 

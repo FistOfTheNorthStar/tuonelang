@@ -1,30 +1,33 @@
-// std::ed25519 — Ed25519 signature verification (RFC 8032), the signature
-// algorithm a TLS 1.3 server proves its identity with.
+// std::ed25519 — Ed25519 signatures (RFC 8032), the signature algorithm a
+// TLS 1.3 server proves its identity with: verification, and signing.
 //
-// This module is entirely executable, and the published RFC 8032 §7.1 vectors
-// are pinned **natively** (`ed25519_matches_rfc_8032`) rather than in a spec:
-// one verification is two scalar multiplications over a 255-bit field, far
-// past the spec sandbox's instruction fuel — the same wall `std::x25519` and
-// `std::crypto`'s PBKDF2 hit.
+// This module is entirely executable. RFC 8032 §7.1's published vectors are
+// pinned natively for both halves (`ed25519_matches_rfc_8032`,
+// `ed25519_signs_rfc_8032_vectors`, the latter also against signatures
+// OpenSSL produced), and the signing path is cheap enough that test 1's
+// public key runs as a spec below.
 //
-// VERIFY ONLY, DELIBERATELY. There is no `sign` here. A TLS *client* only
-// ever verifies, and signing needs the secret key handled with care this
-// module cannot provide: `std::bignum` is variable-time, so a signing
-// operation would leak the key through timing. Shipping a verifier alone is
-// the honest subset — adding `sign` would invite exactly the use this
-// arithmetic cannot safely support.
+// TWO HALVES, TWO ARITHMETICS, ON PURPOSE.
+//
+// Verification (`verify`, `scalar_mult`, `Point`, `Extended`) runs on
+// `std::bignum` through `std::x25519`'s `field_*` functions. It is not
+// constant time, and there that costs nothing: the signature, the message,
+// and the public key are all things an attacker already has.
+//
+// Signing (`sign`, `public_key`) touches the secret key, so since ADR-0022 it
+// runs on separate, fixed-width arithmetic: points are `CtPoint`s over
+// `std::fe25519`, scalars modulo the group order are fixed 21-bit limbs, and
+// every operation the secret passes through carries the compiler-checked
+// `#[constant_time]`, disassembly-pinned on both backends by
+// `tuo-cli/tests/constant_time.rs`. Before that, signing ran on the bignum
+// path and branched on the key's bits. See the signing section's header for
+// exactly what is and is not claimed.
 //
 // THE CURVE. Ed25519 is a twisted Edwards curve over the same field as
-// X25519 (2^255 - 19), with the unified addition formula below: one formula
-// handles every case including doubling and the identity, with no special
-// cases to get wrong and no branch on secret data. That is why Edwards
-// curves are used for signatures.
-//
-// NOT CONSTANT TIME, and here that is *fine*. Verification operates entirely
-// on public values — the signature, the message, and the public key are all
-// things an attacker already has — so timing leaks nothing. This is the one
-// place in this TLS stack where `std::bignum`'s variable-time arithmetic
-// costs nothing at all.
+// X25519 (2^255 - 19), with a unified addition formula: one formula handles
+// every case including doubling and the identity, with no special cases to
+// get wrong and no branch on secret data. That is why Edwards curves are used
+// for signatures.
 
 module std::ed25519;
 
@@ -786,23 +789,38 @@ fn zero_bytes(take count: Int) -> Array[Int] {
 
 // --- Signing (RFC 8032 §5.1.6) ----------------------------------------------
 //
-// ⚠️  SIGNING TOUCHES THE SECRET KEY, AND THIS ARITHMETIC IS NOT CONSTANT
-// TIME. `std::bignum` is documented as variable-time, and `scalar_mult`
-// branches on the bits of its scalar. A local attacker who can measure this
-// function's timing may be able to recover the private key.
+// Signing touches the secret key twice: the clamped scalar `a` multiplies the
+// base point (the public key), and the secret nonce `r` multiplies it again
+// (the commitment R); then `S = r + h * a mod L` combines them. Everything
+// that sees `a` or `r` is written so its control flow and memory accesses do
+// not depend on their values (ADR-0022):
 //
-// It exists because a TLS server cannot complete a handshake without it: the
-// CertificateVerify signature covers the *live* transcript, so a precomputed
-// signature is not an option. Verification alone was the honest subset until
-// something needed to sign; pretending otherwise would just push every caller
-// to write their own, worse, version.
+// - Points are `CtPoint`s, extended coordinates over `std::fe25519`, whose
+//   addition, doubling, and selection are `#[constant_time]`.
+// - `ct_base_mult` performs the same double, add, and select for every one of
+//   the scalar's 255 bit positions, keeping or discarding the sum by mask
+//   rather than by an `if` on the bit.
+// - Arithmetic modulo the group order L is `Scalar`/`WideScalar`, fixed
+//   21-bit limbs reduced by a fixed sequence of folds and carries (the shape
+//   of ref10's `sc_reduce`/`sc_muladd`), never by a division whose length
+//   depends on the value.
 //
-// Use it for test servers, development, and protocols whose keys are not
-// worth attacking from the same machine. Do not use it to hold a production
-// certificate's private key on a host where untrusted code runs.
+// The functions that loop — `ct_base_mult`, the byte loaders and stores, and
+// `std::fe25519::invert` — loop over fixed counts and read bytes by position,
+// which the attribute cannot yet express (ADR-0021), so they are unmarked;
+// what they call per step is marked. The same caveats as `std::fe25519`
+// apply: this is compiler-checked branch-free *source*, an optimizer could in
+// principle emit a branch it does not contain, and the processor has the
+// last word on timing. SHA-512 runs over the secret seed and prefix too; its
+// control flow depends only on the message length.
+//
+// Verification above stays on `std::bignum`, where every input is public.
 
 /// Encode a point in Ed25519's compressed 32-byte form (RFC 8032 §5.1.2):
 /// y little-endian, with x's low bit in the top bit of the last byte.
+///
+/// This is the `std::bignum` form used alongside verification; signing
+/// encodes with `ct_encode`.
 ///
 /// # Example
 ///
@@ -821,7 +839,8 @@ pub fn encode_point(in p: Point) -> Array[Int] {
 /// The secret scalar and prefix an Ed25519 private key expands to
 /// (RFC 8032 §5.1.5): SHA-512 of the 32-byte seed, clamped.
 ///
-/// `half` selects which: 0 for the scalar, 1 for the prefix.
+/// `half` selects which: 0 for the scalar, 1 for the prefix. The two `if`s
+/// below branch on the byte *position*, never on the byte.
 ///
 /// # Example
 ///
@@ -856,7 +875,968 @@ pub fn expand_seed(in seed: Array[Int], take half: Int) -> Array[Int] {
     out
 }
 
-/// The public key for a 32-byte Ed25519 seed.
+/// A curve point in extended coordinates (X : Y : Z : T) over
+/// `std::fe25519`: the affine point is (X/Z, Y/Z), and X*Y = Z*T.
+///
+/// Every coordinate is an output of `std::fe25519` (or a selection between
+/// two), which is the operand contract its multiplication's overflow bound
+/// rests on.
+///
+/// # Example
+/// ```tuo
+/// let b = std::ed25519::ct_base_point();
+/// ```
+pub struct CtPoint {
+    x: std::fe25519::Fe,
+    y: std::fe25519::Fe,
+    z: std::fe25519::Fe,
+    t: std::fe25519::Fe,
+}
+
+/// The identity (0 : 1 : 1 : 0).
+///
+/// # Example
+/// ```tuo
+/// let zero = std::ed25519::ct_identity();
+/// ```
+#[constant_time]
+pub fn ct_identity() -> CtPoint {
+    CtPoint {
+        x: std::fe25519::zero(),
+        y: std::fe25519::one(),
+        z: std::fe25519::one(),
+        t: std::fe25519::zero(),
+    }
+}
+
+/// The base point B (RFC 8032 §5.1), with Z = 1 and T = X*Y, as canonical
+/// limbs. `ct_base_point` is checked against B's published encoding below.
+///
+/// # Example
+/// ```tuo
+/// let b = std::ed25519::ct_base_point();
+/// ```
+#[constant_time]
+pub fn ct_base_point() -> CtPoint {
+    CtPoint {
+        x: std::fe25519::Fe {
+            l0: 52811034,
+            l1: 25909283,
+            l2: 16144682,
+            l3: 17082669,
+            l4: 27570973,
+            l5: 30858332,
+            l6: 40966398,
+            l7: 8378388,
+            l8: 20764389,
+            l9: 8758491,
+        },
+        y: std::fe25519::Fe {
+            l0: 40265304,
+            l1: 26843545,
+            l2: 13421772,
+            l3: 20132659,
+            l4: 26843545,
+            l5: 6710886,
+            l6: 53687091,
+            l7: 13421772,
+            l8: 40265318,
+            l9: 26843545,
+        },
+        z: std::fe25519::one(),
+        t: std::fe25519::Fe {
+            l0: 28827043,
+            l1: 27438313,
+            l2: 39759291,
+            l3: 244362,
+            l4: 8635006,
+            l5: 11264893,
+            l6: 19351346,
+            l7: 13413597,
+            l8: 16611511,
+            l9: 27139452,
+        },
+    }
+}
+
+/// 2d, twice the curve constant d = -121665/121666, as canonical limbs.
+#[constant_time]
+fn two_d() -> std::fe25519::Fe {
+    std::fe25519::Fe {
+        l0: 45281625,
+        l1: 27714825,
+        l2: 36363642,
+        l3: 13898781,
+        l4: 229458,
+        l5: 15978800,
+        l6: 54557047,
+        l7: 27058993,
+        l8: 29715967,
+        l9: 9444199,
+    }
+}
+
+/// The sum of two points (the unified "add-2008-hwcd-3" formula for
+/// a = -1): nine multiplications, no inversion, and no case split — it is
+/// correct for doubling and for the identity too, so nothing about the
+/// operands selects a different path.
+///
+/// # Example
+/// ```tuo
+/// let s = std::ed25519::ct_add(p, q);
+/// ```
+#[constant_time]
+pub fn ct_add(take p: CtPoint, take q: CtPoint) -> CtPoint {
+    let a = std::fe25519::mul(std::fe25519::sub(p.y, p.x), std::fe25519::sub(q.y, q.x));
+    let b = std::fe25519::mul(std::fe25519::add(p.y, p.x), std::fe25519::add(q.y, q.x));
+    let c = std::fe25519::mul(std::fe25519::mul(p.t, two_d()), q.t);
+    let d = std::fe25519::mul_small(std::fe25519::mul(p.z, q.z), 2);
+    let e = std::fe25519::sub(b, a);
+    let f = std::fe25519::sub(d, c);
+    let g = std::fe25519::add(d, c);
+    let h = std::fe25519::add(b, a);
+    CtPoint {
+        x: std::fe25519::mul(e, f),
+        y: std::fe25519::mul(g, h),
+        z: std::fe25519::mul(f, g),
+        t: std::fe25519::mul(e, h),
+    }
+}
+
+/// Twice a point ("dbl-2008-hwcd" for a = -1): four squarings and four
+/// multiplications, cheaper than `ct_add(p, p)`.
+///
+/// The formula's E = (X+Y)^2 - A - B and F = (B - A) - 2Z^2 would each be a
+/// sum of three outputs, past `std::fe25519`'s operand contract, so A + B
+/// and B - A are carried first (`mul_small(_, 1)`). With a = -1 the formula's
+/// H and F are then both negated, which negates all four output coordinates
+/// — the same projective point.
+///
+/// # Example
+/// ```tuo
+/// let twice = std::ed25519::ct_double(p);
+/// ```
+#[constant_time]
+pub fn ct_double(take p: CtPoint) -> CtPoint {
+    let a = std::fe25519::square(p.x);
+    let b = std::fe25519::square(p.y);
+    let c = std::fe25519::mul_small(std::fe25519::square(p.z), 2);
+    let s = std::fe25519::square(std::fe25519::add(p.x, p.y));
+    let h = std::fe25519::mul_small(std::fe25519::add(a, b), 1);
+    let g = std::fe25519::mul_small(std::fe25519::sub(b, a), 1);
+    let e = std::fe25519::sub(s, h);
+    let f = std::fe25519::sub(c, g);
+    CtPoint {
+        x: std::fe25519::mul(e, f),
+        y: std::fe25519::mul(g, h),
+        z: std::fe25519::mul(f, g),
+        t: std::fe25519::mul(e, h),
+    }
+}
+
+/// `a` when `c` is 1, `b` when it is 0 (the `std::ct::select` convention),
+/// by masking every limb of every coordinate — both points are read either
+/// way.
+///
+/// # Example
+/// ```tuo
+/// let chosen = std::ed25519::ct_select(1, p, q); // p
+/// ```
+#[constant_time]
+pub fn ct_select(take c: Int, take a: CtPoint, take b: CtPoint) -> CtPoint {
+    CtPoint {
+        x: std::fe25519::select(c, a.x, b.x),
+        y: std::fe25519::select(c, a.y, b.y),
+        z: std::fe25519::select(c, a.z, b.z),
+        t: std::fe25519::select(c, a.t, b.t),
+    }
+}
+
+/// One step of `ct_base_mult`: double the accumulator, add the base point,
+/// and keep the sum only when `bit` is 1. The addition runs whatever the bit,
+/// so the step does the same work for every scalar.
+///
+/// # Example
+/// ```tuo
+/// let next = std::ed25519::ct_step(acc, 1);
+/// ```
+#[constant_time]
+pub fn ct_step(take acc: CtPoint, take bit: Int) -> CtPoint {
+    let doubled = ct_double(acc);
+    ct_select(bit, ct_add(doubled, ct_base_point()), doubled)
+}
+
+/// `[k]B` for a 32-byte little-endian scalar `k` below 2^255 — a clamped
+/// secret scalar or a reduced nonce.
+///
+/// Walks bit positions 254 down to 0, the same 255 `ct_step`s for every `k`;
+/// the byte read is chosen by the position, never by a bit's value.
+///
+/// # Example
+/// ```tuo
+/// let a_point = std::ed25519::ct_base_mult(scalar);
+/// ```
+pub fn ct_base_mult(in k: Array[Int]) -> CtPoint {
+    var acc = ct_identity();
+    var t = 254;
+    while t >= 0 {
+        let bit = (std::array::get(k, t >> 3) >> (t & 7)) & 1;
+        acc = ct_step(acc, bit);
+        t = t - 1;
+    }
+    acc
+}
+
+/// The compressed 32-byte encoding of a point (RFC 8032 §5.1.2): y, with
+/// x's parity in the top bit. One fixed-chain inversion returns to affine.
+///
+/// # Example
+/// ```tuo
+/// let public = std::ed25519::ct_encode(std::ed25519::ct_base_mult(scalar));
+/// ```
+pub fn ct_encode(take p: CtPoint) -> Array[Int] {
+    let inverse = std::fe25519::invert(p.z);
+    var out = std::fe25519::to_bytes(std::fe25519::mul(p.y, inverse));
+    let x = std::fe25519::to_bytes(std::fe25519::mul(p.x, inverse));
+    // OR in the parity rather than branching on it.
+    std::array::set(out, 31, std::array::get(out, 31) | ((std::array::get(x, 0) & 1) << 7));
+    out
+}
+
+/// A scalar in twelve 21-bit limbs (252 bits; the top limb may hold more
+/// between operations).
+///
+/// # Example
+/// ```tuo
+/// let s = std::ed25519::scalar_limbs(bytes);
+/// ```
+pub struct Scalar {
+    s0: Int,
+    s1: Int,
+    s2: Int,
+    s3: Int,
+    s4: Int,
+    s5: Int,
+    s6: Int,
+    s7: Int,
+    s8: Int,
+    s9: Int,
+    s10: Int,
+    s11: Int,
+}
+
+/// A double-width scalar — a SHA-512 output or a product — in twenty-four
+/// 21-bit limbs, before reduction modulo L.
+///
+/// # Example
+/// ```tuo
+/// let w = std::ed25519::wide_limbs(digest);
+/// ```
+pub struct WideScalar {
+    s0: Int,
+    s1: Int,
+    s2: Int,
+    s3: Int,
+    s4: Int,
+    s5: Int,
+    s6: Int,
+    s7: Int,
+    s8: Int,
+    s9: Int,
+    s10: Int,
+    s11: Int,
+    s12: Int,
+    s13: Int,
+    s14: Int,
+    s15: Int,
+    s16: Int,
+    s17: Int,
+    s18: Int,
+    s19: Int,
+    s20: Int,
+    s21: Int,
+    s22: Int,
+    s23: Int,
+}
+
+/// Reduce a double-width scalar modulo the group order L = 2^252 + c,
+/// returning canonical limbs (each in [0, 2^21), value below L).
+///
+/// Since 2^252 = -c (mod L), and -c is six signed 21-bit digits
+/// (666643, 470296, 654183, -997805, 136657, -683901), each limb at or above
+/// 2^252 folds down into the six limbs twelve places lower. The folds and
+/// carries are a fixed sequence (ref10's `sc_reduce`); every intermediate
+/// stays below 2^50 in magnitude, proven by interval analysis over all
+/// inputs, so the wrapping operations never wrap.
+///
+/// # Example
+/// ```tuo
+/// let s = std::ed25519::reduce_wide(std::ed25519::wide_limbs(digest));
+/// ```
+#[constant_time]
+pub fn reduce_wide(take w: WideScalar) -> Scalar {
+    var s0 = w.s0;
+    var s1 = w.s1;
+    var s2 = w.s2;
+    var s3 = w.s3;
+    var s4 = w.s4;
+    var s5 = w.s5;
+    var s6 = w.s6;
+    var s7 = w.s7;
+    var s8 = w.s8;
+    var s9 = w.s9;
+    var s10 = w.s10;
+    var s11 = w.s11;
+    var s12 = w.s12;
+    var s13 = w.s13;
+    var s14 = w.s14;
+    var s15 = w.s15;
+    var s16 = w.s16;
+    var s17 = w.s17;
+    var s18 = w.s18;
+    var s19 = w.s19;
+    var s20 = w.s20;
+    var s21 = w.s21;
+    var s22 = w.s22;
+    var s23 = w.s23;
+    var c = 0;
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(s23, 666643));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(s23, 470296));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(s23, 654183));
+    s14 = std::int::wrapping_sub(s14, std::int::wrapping_mul(s23, 997805));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(s23, 136657));
+    s16 = std::int::wrapping_sub(s16, std::int::wrapping_mul(s23, 683901));
+    s23 = 0;
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(s22, 666643));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(s22, 470296));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(s22, 654183));
+    s13 = std::int::wrapping_sub(s13, std::int::wrapping_mul(s22, 997805));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(s22, 136657));
+    s15 = std::int::wrapping_sub(s15, std::int::wrapping_mul(s22, 683901));
+    s22 = 0;
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(s21, 666643));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(s21, 470296));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(s21, 654183));
+    s12 = std::int::wrapping_sub(s12, std::int::wrapping_mul(s21, 997805));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(s21, 136657));
+    s14 = std::int::wrapping_sub(s14, std::int::wrapping_mul(s21, 683901));
+    s21 = 0;
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(s20, 666643));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(s20, 470296));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(s20, 654183));
+    s11 = std::int::wrapping_sub(s11, std::int::wrapping_mul(s20, 997805));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(s20, 136657));
+    s13 = std::int::wrapping_sub(s13, std::int::wrapping_mul(s20, 683901));
+    s20 = 0;
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(s19, 666643));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(s19, 470296));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(s19, 654183));
+    s10 = std::int::wrapping_sub(s10, std::int::wrapping_mul(s19, 997805));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(s19, 136657));
+    s12 = std::int::wrapping_sub(s12, std::int::wrapping_mul(s19, 683901));
+    s19 = 0;
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(s18, 666643));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(s18, 470296));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(s18, 654183));
+    s9 = std::int::wrapping_sub(s9, std::int::wrapping_mul(s18, 997805));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(s18, 136657));
+    s11 = std::int::wrapping_sub(s11, std::int::wrapping_mul(s18, 683901));
+    s18 = 0;
+    c = std::int::wrapping_add(s6, 1048576) >> 21;
+    s7 = std::int::wrapping_add(s7, c);
+    s6 = std::int::wrapping_sub(s6, c << 21);
+    c = std::int::wrapping_add(s8, 1048576) >> 21;
+    s9 = std::int::wrapping_add(s9, c);
+    s8 = std::int::wrapping_sub(s8, c << 21);
+    c = std::int::wrapping_add(s10, 1048576) >> 21;
+    s11 = std::int::wrapping_add(s11, c);
+    s10 = std::int::wrapping_sub(s10, c << 21);
+    c = std::int::wrapping_add(s12, 1048576) >> 21;
+    s13 = std::int::wrapping_add(s13, c);
+    s12 = std::int::wrapping_sub(s12, c << 21);
+    c = std::int::wrapping_add(s14, 1048576) >> 21;
+    s15 = std::int::wrapping_add(s15, c);
+    s14 = std::int::wrapping_sub(s14, c << 21);
+    c = std::int::wrapping_add(s16, 1048576) >> 21;
+    s17 = std::int::wrapping_add(s17, c);
+    s16 = std::int::wrapping_sub(s16, c << 21);
+    c = std::int::wrapping_add(s7, 1048576) >> 21;
+    s8 = std::int::wrapping_add(s8, c);
+    s7 = std::int::wrapping_sub(s7, c << 21);
+    c = std::int::wrapping_add(s9, 1048576) >> 21;
+    s10 = std::int::wrapping_add(s10, c);
+    s9 = std::int::wrapping_sub(s9, c << 21);
+    c = std::int::wrapping_add(s11, 1048576) >> 21;
+    s12 = std::int::wrapping_add(s12, c);
+    s11 = std::int::wrapping_sub(s11, c << 21);
+    c = std::int::wrapping_add(s13, 1048576) >> 21;
+    s14 = std::int::wrapping_add(s14, c);
+    s13 = std::int::wrapping_sub(s13, c << 21);
+    c = std::int::wrapping_add(s15, 1048576) >> 21;
+    s16 = std::int::wrapping_add(s16, c);
+    s15 = std::int::wrapping_sub(s15, c << 21);
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(s17, 666643));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(s17, 470296));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(s17, 654183));
+    s8 = std::int::wrapping_sub(s8, std::int::wrapping_mul(s17, 997805));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(s17, 136657));
+    s10 = std::int::wrapping_sub(s10, std::int::wrapping_mul(s17, 683901));
+    s17 = 0;
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s16, 666643));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(s16, 470296));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(s16, 654183));
+    s7 = std::int::wrapping_sub(s7, std::int::wrapping_mul(s16, 997805));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(s16, 136657));
+    s9 = std::int::wrapping_sub(s9, std::int::wrapping_mul(s16, 683901));
+    s16 = 0;
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(s15, 666643));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s15, 470296));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(s15, 654183));
+    s6 = std::int::wrapping_sub(s6, std::int::wrapping_mul(s15, 997805));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(s15, 136657));
+    s8 = std::int::wrapping_sub(s8, std::int::wrapping_mul(s15, 683901));
+    s15 = 0;
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(s14, 666643));
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(s14, 470296));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s14, 654183));
+    s5 = std::int::wrapping_sub(s5, std::int::wrapping_mul(s14, 997805));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(s14, 136657));
+    s7 = std::int::wrapping_sub(s7, std::int::wrapping_mul(s14, 683901));
+    s14 = 0;
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(s13, 666643));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(s13, 470296));
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(s13, 654183));
+    s4 = std::int::wrapping_sub(s4, std::int::wrapping_mul(s13, 997805));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(s13, 136657));
+    s6 = std::int::wrapping_sub(s6, std::int::wrapping_mul(s13, 683901));
+    s13 = 0;
+    s0 = std::int::wrapping_add(s0, std::int::wrapping_mul(s12, 666643));
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(s12, 470296));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(s12, 654183));
+    s3 = std::int::wrapping_sub(s3, std::int::wrapping_mul(s12, 997805));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s12, 136657));
+    s5 = std::int::wrapping_sub(s5, std::int::wrapping_mul(s12, 683901));
+    s12 = 0;
+    c = std::int::wrapping_add(s0, 1048576) >> 21;
+    s1 = std::int::wrapping_add(s1, c);
+    s0 = std::int::wrapping_sub(s0, c << 21);
+    c = std::int::wrapping_add(s2, 1048576) >> 21;
+    s3 = std::int::wrapping_add(s3, c);
+    s2 = std::int::wrapping_sub(s2, c << 21);
+    c = std::int::wrapping_add(s4, 1048576) >> 21;
+    s5 = std::int::wrapping_add(s5, c);
+    s4 = std::int::wrapping_sub(s4, c << 21);
+    c = std::int::wrapping_add(s6, 1048576) >> 21;
+    s7 = std::int::wrapping_add(s7, c);
+    s6 = std::int::wrapping_sub(s6, c << 21);
+    c = std::int::wrapping_add(s8, 1048576) >> 21;
+    s9 = std::int::wrapping_add(s9, c);
+    s8 = std::int::wrapping_sub(s8, c << 21);
+    c = std::int::wrapping_add(s10, 1048576) >> 21;
+    s11 = std::int::wrapping_add(s11, c);
+    s10 = std::int::wrapping_sub(s10, c << 21);
+    c = std::int::wrapping_add(s1, 1048576) >> 21;
+    s2 = std::int::wrapping_add(s2, c);
+    s1 = std::int::wrapping_sub(s1, c << 21);
+    c = std::int::wrapping_add(s3, 1048576) >> 21;
+    s4 = std::int::wrapping_add(s4, c);
+    s3 = std::int::wrapping_sub(s3, c << 21);
+    c = std::int::wrapping_add(s5, 1048576) >> 21;
+    s6 = std::int::wrapping_add(s6, c);
+    s5 = std::int::wrapping_sub(s5, c << 21);
+    c = std::int::wrapping_add(s7, 1048576) >> 21;
+    s8 = std::int::wrapping_add(s8, c);
+    s7 = std::int::wrapping_sub(s7, c << 21);
+    c = std::int::wrapping_add(s9, 1048576) >> 21;
+    s10 = std::int::wrapping_add(s10, c);
+    s9 = std::int::wrapping_sub(s9, c << 21);
+    c = std::int::wrapping_add(s11, 1048576) >> 21;
+    s12 = std::int::wrapping_add(s12, c);
+    s11 = std::int::wrapping_sub(s11, c << 21);
+    s0 = std::int::wrapping_add(s0, std::int::wrapping_mul(s12, 666643));
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(s12, 470296));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(s12, 654183));
+    s3 = std::int::wrapping_sub(s3, std::int::wrapping_mul(s12, 997805));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s12, 136657));
+    s5 = std::int::wrapping_sub(s5, std::int::wrapping_mul(s12, 683901));
+    s12 = 0;
+    c = s0 >> 21;
+    s1 = std::int::wrapping_add(s1, c);
+    s0 = std::int::wrapping_sub(s0, c << 21);
+    c = s1 >> 21;
+    s2 = std::int::wrapping_add(s2, c);
+    s1 = std::int::wrapping_sub(s1, c << 21);
+    c = s2 >> 21;
+    s3 = std::int::wrapping_add(s3, c);
+    s2 = std::int::wrapping_sub(s2, c << 21);
+    c = s3 >> 21;
+    s4 = std::int::wrapping_add(s4, c);
+    s3 = std::int::wrapping_sub(s3, c << 21);
+    c = s4 >> 21;
+    s5 = std::int::wrapping_add(s5, c);
+    s4 = std::int::wrapping_sub(s4, c << 21);
+    c = s5 >> 21;
+    s6 = std::int::wrapping_add(s6, c);
+    s5 = std::int::wrapping_sub(s5, c << 21);
+    c = s6 >> 21;
+    s7 = std::int::wrapping_add(s7, c);
+    s6 = std::int::wrapping_sub(s6, c << 21);
+    c = s7 >> 21;
+    s8 = std::int::wrapping_add(s8, c);
+    s7 = std::int::wrapping_sub(s7, c << 21);
+    c = s8 >> 21;
+    s9 = std::int::wrapping_add(s9, c);
+    s8 = std::int::wrapping_sub(s8, c << 21);
+    c = s9 >> 21;
+    s10 = std::int::wrapping_add(s10, c);
+    s9 = std::int::wrapping_sub(s9, c << 21);
+    c = s10 >> 21;
+    s11 = std::int::wrapping_add(s11, c);
+    s10 = std::int::wrapping_sub(s10, c << 21);
+    c = s11 >> 21;
+    s12 = std::int::wrapping_add(s12, c);
+    s11 = std::int::wrapping_sub(s11, c << 21);
+    s0 = std::int::wrapping_add(s0, std::int::wrapping_mul(s12, 666643));
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(s12, 470296));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(s12, 654183));
+    s3 = std::int::wrapping_sub(s3, std::int::wrapping_mul(s12, 997805));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(s12, 136657));
+    s5 = std::int::wrapping_sub(s5, std::int::wrapping_mul(s12, 683901));
+    s12 = 0;
+    c = s0 >> 21;
+    s1 = std::int::wrapping_add(s1, c);
+    s0 = std::int::wrapping_sub(s0, c << 21);
+    c = s1 >> 21;
+    s2 = std::int::wrapping_add(s2, c);
+    s1 = std::int::wrapping_sub(s1, c << 21);
+    c = s2 >> 21;
+    s3 = std::int::wrapping_add(s3, c);
+    s2 = std::int::wrapping_sub(s2, c << 21);
+    c = s3 >> 21;
+    s4 = std::int::wrapping_add(s4, c);
+    s3 = std::int::wrapping_sub(s3, c << 21);
+    c = s4 >> 21;
+    s5 = std::int::wrapping_add(s5, c);
+    s4 = std::int::wrapping_sub(s4, c << 21);
+    c = s5 >> 21;
+    s6 = std::int::wrapping_add(s6, c);
+    s5 = std::int::wrapping_sub(s5, c << 21);
+    c = s6 >> 21;
+    s7 = std::int::wrapping_add(s7, c);
+    s6 = std::int::wrapping_sub(s6, c << 21);
+    c = s7 >> 21;
+    s8 = std::int::wrapping_add(s8, c);
+    s7 = std::int::wrapping_sub(s7, c << 21);
+    c = s8 >> 21;
+    s9 = std::int::wrapping_add(s9, c);
+    s8 = std::int::wrapping_sub(s8, c << 21);
+    c = s9 >> 21;
+    s10 = std::int::wrapping_add(s10, c);
+    s9 = std::int::wrapping_sub(s9, c << 21);
+    c = s10 >> 21;
+    s11 = std::int::wrapping_add(s11, c);
+    s10 = std::int::wrapping_sub(s10, c << 21);
+    Scalar {
+        s0: s0,
+        s1: s1,
+        s2: s2,
+        s3: s3,
+        s4: s4,
+        s5: s5,
+        s6: s6,
+        s7: s7,
+        s8: s8,
+        s9: s9,
+        s10: s10,
+        s11: s11,
+    }
+}
+
+/// `(a * b + c) mod L` (ref10's `sc_muladd`): a schoolbook product into
+/// twenty-three limbs, a carry pass, and `reduce_wide`. Operands are any
+/// 32-byte values, so the top limb may hold 25 bits; every intermediate
+/// stays below 2^51.
+///
+/// # Example
+/// ```tuo
+/// let s = std::ed25519::mul_add(h, a, r);
+/// ```
+#[constant_time]
+pub fn mul_add(take a: Scalar, take b: Scalar, take c: Scalar) -> Scalar {
+    var s0 = c.s0;
+    s0 = std::int::wrapping_add(s0, std::int::wrapping_mul(a.s0, b.s0));
+    var s1 = c.s1;
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(a.s0, b.s1));
+    s1 = std::int::wrapping_add(s1, std::int::wrapping_mul(a.s1, b.s0));
+    var s2 = c.s2;
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(a.s0, b.s2));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(a.s1, b.s1));
+    s2 = std::int::wrapping_add(s2, std::int::wrapping_mul(a.s2, b.s0));
+    var s3 = c.s3;
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(a.s0, b.s3));
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(a.s1, b.s2));
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(a.s2, b.s1));
+    s3 = std::int::wrapping_add(s3, std::int::wrapping_mul(a.s3, b.s0));
+    var s4 = c.s4;
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(a.s0, b.s4));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(a.s1, b.s3));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(a.s2, b.s2));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(a.s3, b.s1));
+    s4 = std::int::wrapping_add(s4, std::int::wrapping_mul(a.s4, b.s0));
+    var s5 = c.s5;
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s0, b.s5));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s1, b.s4));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s2, b.s3));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s3, b.s2));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s4, b.s1));
+    s5 = std::int::wrapping_add(s5, std::int::wrapping_mul(a.s5, b.s0));
+    var s6 = c.s6;
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s0, b.s6));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s1, b.s5));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s2, b.s4));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s3, b.s3));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s4, b.s2));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s5, b.s1));
+    s6 = std::int::wrapping_add(s6, std::int::wrapping_mul(a.s6, b.s0));
+    var s7 = c.s7;
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s0, b.s7));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s1, b.s6));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s2, b.s5));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s3, b.s4));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s4, b.s3));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s5, b.s2));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s6, b.s1));
+    s7 = std::int::wrapping_add(s7, std::int::wrapping_mul(a.s7, b.s0));
+    var s8 = c.s8;
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s0, b.s8));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s1, b.s7));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s2, b.s6));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s3, b.s5));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s4, b.s4));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s5, b.s3));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s6, b.s2));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s7, b.s1));
+    s8 = std::int::wrapping_add(s8, std::int::wrapping_mul(a.s8, b.s0));
+    var s9 = c.s9;
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s0, b.s9));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s1, b.s8));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s2, b.s7));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s3, b.s6));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s4, b.s5));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s5, b.s4));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s6, b.s3));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s7, b.s2));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s8, b.s1));
+    s9 = std::int::wrapping_add(s9, std::int::wrapping_mul(a.s9, b.s0));
+    var s10 = c.s10;
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s0, b.s10));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s1, b.s9));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s2, b.s8));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s3, b.s7));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s4, b.s6));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s5, b.s5));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s6, b.s4));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s7, b.s3));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s8, b.s2));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s9, b.s1));
+    s10 = std::int::wrapping_add(s10, std::int::wrapping_mul(a.s10, b.s0));
+    var s11 = c.s11;
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s0, b.s11));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s1, b.s10));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s2, b.s9));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s3, b.s8));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s4, b.s7));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s5, b.s6));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s6, b.s5));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s7, b.s4));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s8, b.s3));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s9, b.s2));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s10, b.s1));
+    s11 = std::int::wrapping_add(s11, std::int::wrapping_mul(a.s11, b.s0));
+    var s12 = std::int::wrapping_mul(a.s1, b.s11);
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s2, b.s10));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s3, b.s9));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s4, b.s8));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s5, b.s7));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s6, b.s6));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s7, b.s5));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s8, b.s4));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s9, b.s3));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s10, b.s2));
+    s12 = std::int::wrapping_add(s12, std::int::wrapping_mul(a.s11, b.s1));
+    var s13 = std::int::wrapping_mul(a.s2, b.s11);
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s3, b.s10));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s4, b.s9));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s5, b.s8));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s6, b.s7));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s7, b.s6));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s8, b.s5));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s9, b.s4));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s10, b.s3));
+    s13 = std::int::wrapping_add(s13, std::int::wrapping_mul(a.s11, b.s2));
+    var s14 = std::int::wrapping_mul(a.s3, b.s11);
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s4, b.s10));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s5, b.s9));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s6, b.s8));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s7, b.s7));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s8, b.s6));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s9, b.s5));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s10, b.s4));
+    s14 = std::int::wrapping_add(s14, std::int::wrapping_mul(a.s11, b.s3));
+    var s15 = std::int::wrapping_mul(a.s4, b.s11);
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s5, b.s10));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s6, b.s9));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s7, b.s8));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s8, b.s7));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s9, b.s6));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s10, b.s5));
+    s15 = std::int::wrapping_add(s15, std::int::wrapping_mul(a.s11, b.s4));
+    var s16 = std::int::wrapping_mul(a.s5, b.s11);
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s6, b.s10));
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s7, b.s9));
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s8, b.s8));
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s9, b.s7));
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s10, b.s6));
+    s16 = std::int::wrapping_add(s16, std::int::wrapping_mul(a.s11, b.s5));
+    var s17 = std::int::wrapping_mul(a.s6, b.s11);
+    s17 = std::int::wrapping_add(s17, std::int::wrapping_mul(a.s7, b.s10));
+    s17 = std::int::wrapping_add(s17, std::int::wrapping_mul(a.s8, b.s9));
+    s17 = std::int::wrapping_add(s17, std::int::wrapping_mul(a.s9, b.s8));
+    s17 = std::int::wrapping_add(s17, std::int::wrapping_mul(a.s10, b.s7));
+    s17 = std::int::wrapping_add(s17, std::int::wrapping_mul(a.s11, b.s6));
+    var s18 = std::int::wrapping_mul(a.s7, b.s11);
+    s18 = std::int::wrapping_add(s18, std::int::wrapping_mul(a.s8, b.s10));
+    s18 = std::int::wrapping_add(s18, std::int::wrapping_mul(a.s9, b.s9));
+    s18 = std::int::wrapping_add(s18, std::int::wrapping_mul(a.s10, b.s8));
+    s18 = std::int::wrapping_add(s18, std::int::wrapping_mul(a.s11, b.s7));
+    var s19 = std::int::wrapping_mul(a.s8, b.s11);
+    s19 = std::int::wrapping_add(s19, std::int::wrapping_mul(a.s9, b.s10));
+    s19 = std::int::wrapping_add(s19, std::int::wrapping_mul(a.s10, b.s9));
+    s19 = std::int::wrapping_add(s19, std::int::wrapping_mul(a.s11, b.s8));
+    var s20 = std::int::wrapping_mul(a.s9, b.s11);
+    s20 = std::int::wrapping_add(s20, std::int::wrapping_mul(a.s10, b.s10));
+    s20 = std::int::wrapping_add(s20, std::int::wrapping_mul(a.s11, b.s9));
+    var s21 = std::int::wrapping_mul(a.s10, b.s11);
+    s21 = std::int::wrapping_add(s21, std::int::wrapping_mul(a.s11, b.s10));
+    var s22 = std::int::wrapping_mul(a.s11, b.s11);
+    var s23 = 0;
+    var carry = 0;
+    carry = std::int::wrapping_add(s0, 1048576) >> 21;
+    s1 = std::int::wrapping_add(s1, carry);
+    s0 = std::int::wrapping_sub(s0, carry << 21);
+    carry = std::int::wrapping_add(s2, 1048576) >> 21;
+    s3 = std::int::wrapping_add(s3, carry);
+    s2 = std::int::wrapping_sub(s2, carry << 21);
+    carry = std::int::wrapping_add(s4, 1048576) >> 21;
+    s5 = std::int::wrapping_add(s5, carry);
+    s4 = std::int::wrapping_sub(s4, carry << 21);
+    carry = std::int::wrapping_add(s6, 1048576) >> 21;
+    s7 = std::int::wrapping_add(s7, carry);
+    s6 = std::int::wrapping_sub(s6, carry << 21);
+    carry = std::int::wrapping_add(s8, 1048576) >> 21;
+    s9 = std::int::wrapping_add(s9, carry);
+    s8 = std::int::wrapping_sub(s8, carry << 21);
+    carry = std::int::wrapping_add(s10, 1048576) >> 21;
+    s11 = std::int::wrapping_add(s11, carry);
+    s10 = std::int::wrapping_sub(s10, carry << 21);
+    carry = std::int::wrapping_add(s12, 1048576) >> 21;
+    s13 = std::int::wrapping_add(s13, carry);
+    s12 = std::int::wrapping_sub(s12, carry << 21);
+    carry = std::int::wrapping_add(s14, 1048576) >> 21;
+    s15 = std::int::wrapping_add(s15, carry);
+    s14 = std::int::wrapping_sub(s14, carry << 21);
+    carry = std::int::wrapping_add(s16, 1048576) >> 21;
+    s17 = std::int::wrapping_add(s17, carry);
+    s16 = std::int::wrapping_sub(s16, carry << 21);
+    carry = std::int::wrapping_add(s18, 1048576) >> 21;
+    s19 = std::int::wrapping_add(s19, carry);
+    s18 = std::int::wrapping_sub(s18, carry << 21);
+    carry = std::int::wrapping_add(s20, 1048576) >> 21;
+    s21 = std::int::wrapping_add(s21, carry);
+    s20 = std::int::wrapping_sub(s20, carry << 21);
+    carry = std::int::wrapping_add(s22, 1048576) >> 21;
+    s23 = std::int::wrapping_add(s23, carry);
+    s22 = std::int::wrapping_sub(s22, carry << 21);
+    carry = std::int::wrapping_add(s1, 1048576) >> 21;
+    s2 = std::int::wrapping_add(s2, carry);
+    s1 = std::int::wrapping_sub(s1, carry << 21);
+    carry = std::int::wrapping_add(s3, 1048576) >> 21;
+    s4 = std::int::wrapping_add(s4, carry);
+    s3 = std::int::wrapping_sub(s3, carry << 21);
+    carry = std::int::wrapping_add(s5, 1048576) >> 21;
+    s6 = std::int::wrapping_add(s6, carry);
+    s5 = std::int::wrapping_sub(s5, carry << 21);
+    carry = std::int::wrapping_add(s7, 1048576) >> 21;
+    s8 = std::int::wrapping_add(s8, carry);
+    s7 = std::int::wrapping_sub(s7, carry << 21);
+    carry = std::int::wrapping_add(s9, 1048576) >> 21;
+    s10 = std::int::wrapping_add(s10, carry);
+    s9 = std::int::wrapping_sub(s9, carry << 21);
+    carry = std::int::wrapping_add(s11, 1048576) >> 21;
+    s12 = std::int::wrapping_add(s12, carry);
+    s11 = std::int::wrapping_sub(s11, carry << 21);
+    carry = std::int::wrapping_add(s13, 1048576) >> 21;
+    s14 = std::int::wrapping_add(s14, carry);
+    s13 = std::int::wrapping_sub(s13, carry << 21);
+    carry = std::int::wrapping_add(s15, 1048576) >> 21;
+    s16 = std::int::wrapping_add(s16, carry);
+    s15 = std::int::wrapping_sub(s15, carry << 21);
+    carry = std::int::wrapping_add(s17, 1048576) >> 21;
+    s18 = std::int::wrapping_add(s18, carry);
+    s17 = std::int::wrapping_sub(s17, carry << 21);
+    carry = std::int::wrapping_add(s19, 1048576) >> 21;
+    s20 = std::int::wrapping_add(s20, carry);
+    s19 = std::int::wrapping_sub(s19, carry << 21);
+    carry = std::int::wrapping_add(s21, 1048576) >> 21;
+    s22 = std::int::wrapping_add(s22, carry);
+    s21 = std::int::wrapping_sub(s21, carry << 21);
+    reduce_wide(WideScalar {
+        s0: s0,
+        s1: s1,
+        s2: s2,
+        s3: s3,
+        s4: s4,
+        s5: s5,
+        s6: s6,
+        s7: s7,
+        s8: s8,
+        s9: s9,
+        s10: s10,
+        s11: s11,
+        s12: s12,
+        s13: s13,
+        s14: s14,
+        s15: s15,
+        s16: s16,
+        s17: s17,
+        s18: s18,
+        s19: s19,
+        s20: s20,
+        s21: s21,
+        s22: s22,
+        s23: s23,
+    })
+}
+
+/// Limb `index` (21 bits from bit 21 * index) of a little-endian byte
+/// string, or every bit from there up when `top` is true. Reads at most
+/// four bytes, chosen by position.
+fn limb_at(in bytes: Array[Int], take index: Int, take top: Bool) -> Int {
+    let bit = index * 21;
+    let first = bit >> 3;
+    var acc = 0;
+    var k = 0;
+    while k < 4 && first + k < std::array::len(bytes) {
+        acc = acc | ((std::array::get(bytes, first + k) & 255) << (k * 8));
+        k = k + 1;
+    }
+    let shifted = acc >> (bit & 7);
+    if top {
+        return shifted;
+    }
+    shifted & 2097151
+}
+
+/// A 32-byte little-endian scalar as limbs; the top limb takes every bit
+/// from 231 up, so a clamped secret scalar (below 2^255) fits unreduced.
+///
+/// # Example
+/// ```tuo
+/// let s = std::ed25519::scalar_limbs(bytes);
+/// ```
+pub fn scalar_limbs(in bytes: Array[Int]) -> Scalar {
+    Scalar {
+        s0: limb_at(bytes, 0, false),
+        s1: limb_at(bytes, 1, false),
+        s2: limb_at(bytes, 2, false),
+        s3: limb_at(bytes, 3, false),
+        s4: limb_at(bytes, 4, false),
+        s5: limb_at(bytes, 5, false),
+        s6: limb_at(bytes, 6, false),
+        s7: limb_at(bytes, 7, false),
+        s8: limb_at(bytes, 8, false),
+        s9: limb_at(bytes, 9, false),
+        s10: limb_at(bytes, 10, false),
+        s11: limb_at(bytes, 11, true),
+    }
+}
+
+/// A 64-byte little-endian value (a SHA-512 digest) as wide limbs.
+///
+/// # Example
+/// ```tuo
+/// let w = std::ed25519::wide_limbs(digest);
+/// ```
+pub fn wide_limbs(in bytes: Array[Int]) -> WideScalar {
+    WideScalar {
+        s0: limb_at(bytes, 0, false),
+        s1: limb_at(bytes, 1, false),
+        s2: limb_at(bytes, 2, false),
+        s3: limb_at(bytes, 3, false),
+        s4: limb_at(bytes, 4, false),
+        s5: limb_at(bytes, 5, false),
+        s6: limb_at(bytes, 6, false),
+        s7: limb_at(bytes, 7, false),
+        s8: limb_at(bytes, 8, false),
+        s9: limb_at(bytes, 9, false),
+        s10: limb_at(bytes, 10, false),
+        s11: limb_at(bytes, 11, false),
+        s12: limb_at(bytes, 12, false),
+        s13: limb_at(bytes, 13, false),
+        s14: limb_at(bytes, 14, false),
+        s15: limb_at(bytes, 15, false),
+        s16: limb_at(bytes, 16, false),
+        s17: limb_at(bytes, 17, false),
+        s18: limb_at(bytes, 18, false),
+        s19: limb_at(bytes, 19, false),
+        s20: limb_at(bytes, 20, false),
+        s21: limb_at(bytes, 21, false),
+        s22: limb_at(bytes, 22, false),
+        s23: limb_at(bytes, 23, true),
+    }
+}
+
+/// The 32-byte little-endian encoding of canonical limbs.
+///
+/// # Example
+/// ```tuo
+/// let bytes = std::ed25519::scalar_bytes(s);
+/// ```
+pub fn scalar_bytes(take s: Scalar) -> Array[Int] {
+    let limbs = [s.s0, s.s1, s.s2, s.s3, s.s4, s.s5, s.s6, s.s7, s.s8, s.s9, s.s10, s.s11];
+    var out = std::array::empty();
+    var acc = 0;
+    var bits = 0;
+    var limb = 0;
+    while limb < 12 {
+        acc = acc | (limbs[limb as Usize] << bits);
+        bits = bits + 21;
+        while bits >= 8 {
+            std::array::push(out, acc & 255);
+            acc = acc >> 8;
+            bits = bits - 8;
+        }
+        limb = limb + 1;
+    }
+    // 252 bits fill 31 bytes and leave 4 for the last.
+    std::array::push(out, acc);
+    out
+}
+
+/// A 64-byte little-endian value reduced modulo L, as 32 bytes — how RFC
+/// 8032 turns a SHA-512 digest into a scalar.
+///
+/// # Example
+/// ```tuo
+/// let r = std::ed25519::scalar_reduce(std::sha512::hash(input));
+/// ```
+pub fn scalar_reduce(in bytes: Array[Int]) -> Array[Int] {
+    scalar_bytes(reduce_wide(wide_limbs(bytes)))
+}
+
+/// The public key for a 32-byte Ed25519 seed: the encoding of `[a]B` for
+/// the seed's clamped scalar `a`. Constant time in the seed (see the section
+/// header).
 ///
 /// # Example
 ///
@@ -864,17 +1844,18 @@ pub fn expand_seed(in seed: Array[Int], take half: Int) -> Array[Int] {
 /// let public = std::ed25519::public_key(seed);
 /// ```
 pub fn public_key(in seed: Array[Int]) -> Array[Int] {
-    let scalar = std::x25519::le_to_num(expand_seed(seed, 0));
-    encode_point(scalar_mult(base_point(), scalar))
+    ct_encode(ct_base_mult(expand_seed(seed, 0)))
 }
 
-/// Sign `message` with a 32-byte Ed25519 seed (RFC 8032 §5.1.6).
+/// Sign `message` with a 32-byte Ed25519 seed (RFC 8032 §5.1.6), returning
+/// the 64-byte signature R || S, or an empty array for a seed of the wrong
+/// length.
 ///
-/// **Not constant time** — see the section header. The nonce is derived
-/// deterministically from the key and message, exactly as RFC 8032 specifies,
-/// so signing the same message twice yields the same signature and no
-/// randomness source is needed (which also removes a whole class of
-/// catastrophic nonce-reuse bug).
+/// Constant time in the seed and the derived nonce (see the section header).
+/// The nonce is derived deterministically from the key and message, exactly
+/// as RFC 8032 specifies, so signing the same message twice yields the same
+/// signature and no randomness source is needed (which also removes a whole
+/// class of catastrophic nonce-reuse bug).
 ///
 /// # Example
 ///
@@ -885,10 +1866,9 @@ pub fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int] {
     if std::array::len(seed) != 32 {
         return std::array::empty();
     }
-    let scalar_bytes = expand_seed(seed, 0);
+    let scalar = expand_seed(seed, 0);
     let prefix = expand_seed(seed, 1);
-    let scalar = std::x25519::le_to_num(scalar_bytes);
-    let public = encode_point(scalar_mult(base_point(), scalar));
+    let public = ct_encode(ct_base_mult(scalar));
 
     // r = SHA-512(prefix || message), reduced mod L.
     var r_input = std::array::empty();
@@ -902,8 +1882,8 @@ pub fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int] {
         std::array::push(r_input, std::array::get(message, m) & 255);
         m = m + 1;
     }
-    let r = reduce_scalar(std::sha512::hash(r_input));
-    let r_point = encode_point(scalar_mult(base_point(), r));
+    let r = scalar_reduce(std::sha512::hash(r_input));
+    let r_point = ct_encode(ct_base_mult(r));
 
     // h = SHA-512(R || A || message), reduced mod L.
     var h_input = std::array::empty();
@@ -922,23 +1902,113 @@ pub fn sign(in seed: Array[Int], in message: Array[Int]) -> Array[Int] {
         std::array::push(h_input, std::array::get(message, n) & 255);
         n = n + 1;
     }
-    let h = reduce_scalar(std::sha512::hash(h_input));
+    let h = scalar_reduce(std::sha512::hash(h_input));
 
-    // S = (r + h * scalar) mod L.
-    let s = mod_by(std::bignum::add(r, std::bignum::mul(h, scalar)), group_order());
+    // S = (r + h * a) mod L.
+    let s = scalar_bytes(mul_add(scalar_limbs(h), scalar_limbs(scalar), scalar_limbs(r)));
     var signature = std::array::empty();
     var a = 0;
     while a < 32 {
         std::array::push(signature, std::array::get(r_point, a));
         a = a + 1;
     }
-    let s_bytes = std::x25519::num_to_le(s);
     var b = 0;
     while b < 32 {
-        std::array::push(signature, std::array::get(s_bytes, b));
+        std::array::push(signature, std::array::get(s, b));
         b = b + 1;
     }
     signature
+}
+
+/// 32 bytes from 64 lowercase hex digits, for the specs below.
+fn hex32(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        let hi = hex_digit(std::str::byte_at(text, i));
+        let lo = hex_digit(std::str::byte_at(text, i + 1));
+        std::array::push(out, hi * 16 + lo);
+        i = i + 2;
+    }
+    out
+}
+
+/// The value of one lowercase hex digit.
+fn hex_digit(take c: Int) -> Int {
+    if c >= 97 {
+        return c - 87;
+    }
+    c - 48
+}
+
+/// Whether two byte arrays are equal, for the specs below.
+fn same_bytes(in a: Array[Int], in b: Array[Int]) -> Bool {
+    if std::array::len(a) != std::array::len(b) {
+        return false;
+    }
+    var i = 0;
+    while i < std::array::len(a) {
+        if std::array::get(a, i) != std::array::get(b, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+/// A little-endian byte string of `count` bytes holding `value`.
+fn int_bytes(take value: Int, take count: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var v = value;
+    var i = 0;
+    while i < count {
+        std::array::push(out, v & 255);
+        v = v >> 8;
+        i = i + 1;
+    }
+    out
+}
+
+/// L, the group order, as 32 little-endian bytes.
+fn order_bytes() -> Array[Int] {
+    hex32("edd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+}
+
+/// L - 1.
+fn order_minus_one() -> Array[Int] {
+    hex32("ecd3f55c1a631258d69cf7a2def9de1400000000000000000000000000000010")
+}
+
+/// `bytes` followed by `count` zero bytes.
+fn padded(in bytes: Array[Int], take count: Int) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(bytes) {
+        std::array::push(out, std::array::get(bytes, i));
+        i = i + 1;
+    }
+    var j = 0;
+    while j < count {
+        std::array::push(out, 0);
+        j = j + 1;
+    }
+    out
+}
+
+/// 64 bytes of 0xff: 2^512 - 1, the largest digest.
+fn all_ones_64() -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        std::array::push(out, 255);
+        i = i + 1;
+    }
+    out
+}
+
+/// The encoding of a point, through the constant-time path.
+fn encoded(take p: CtPoint) -> Array[Int] {
+    ct_encode(p)
 }
 
 spec encode_point {
@@ -965,18 +2035,145 @@ spec expand_seed {
             != std::array::get(expand_seed(zero_bytes(32), 1), 2);
 }
 
+spec ct_identity {
+    // The identity encodes as y = 1 with x even.
+    then same_bytes(encoded(ct_identity()), padded(int_bytes(1, 1), 31));
+}
+
+spec ct_base_point {
+    // B's published encoding (RFC 8032 §5.1): y = 4/5, x even.
+    then same_bytes(
+        encoded(ct_base_point()),
+        hex32("5866666666666666666666666666666666666666666666666666666666666666"),
+    );
+}
+
+spec ct_add {
+    // The identity is neutral, on either side.
+    then same_bytes(encoded(ct_add(ct_base_point(), ct_identity())), encoded(ct_base_point()));
+    then same_bytes(encoded(ct_add(ct_identity(), ct_base_point())), encoded(ct_base_point()));
+    // The unified formula doubles too: B + B = 2B.
+    then same_bytes(
+        encoded(ct_add(ct_base_point(), ct_base_point())),
+        hex32("c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022"),
+    );
+}
+
+spec ct_double {
+    // 2B, against its published encoding, and against the addition formula.
+    then same_bytes(
+        encoded(ct_double(ct_base_point())),
+        hex32("c9a3f86aae465f0e56513864510f3997561fa2c9e85ea21dc2292309f3cd6022"),
+    );
+    then same_bytes(encoded(ct_double(ct_identity())), encoded(ct_identity()));
+}
+
+spec ct_select {
+    then same_bytes(encoded(ct_select(1, ct_identity(), ct_base_point())), encoded(ct_identity()));
+    then same_bytes(encoded(ct_select(0, ct_identity(), ct_base_point())), encoded(ct_base_point()));
+}
+
+spec ct_step {
+    // From the identity, a 1 bit gives B and a 0 bit stays put.
+    then same_bytes(encoded(ct_step(ct_identity(), 1)), encoded(ct_base_point()));
+    then same_bytes(encoded(ct_step(ct_identity(), 0)), encoded(ct_identity()));
+    // From B, a 1 bit gives 2B + B = 3B.
+    then same_bytes(
+        encoded(ct_step(ct_base_point(), 1)),
+        hex32("d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"),
+    );
+}
+
+spec ct_base_mult {
+    // [0]B is the identity, [1]B is B, [3]B as above.
+    then same_bytes(encoded(ct_base_mult(zero_bytes(32))), encoded(ct_identity()));
+    then same_bytes(encoded(ct_base_mult(padded(int_bytes(1, 1), 31))), encoded(ct_base_point()));
+    then same_bytes(
+        encoded(ct_base_mult(padded(int_bytes(3, 1), 31))),
+        hex32("d4b4f5784868c3020403246717ec169ff79e26608ea126a1ab69ee77d1b16712"),
+    );
+    // [L]B is the identity: B has order L.
+    then same_bytes(encoded(ct_base_mult(order_bytes())), encoded(ct_identity()));
+}
+
+spec ct_encode {
+    then std::array::len(ct_encode(ct_base_point())) == 32;
+    // x's parity lands in the top bit: -B has B's y and the odd x.
+    then same_bytes(encoded(ct_base_mult(order_minus_one())), hex32("58666666666666666666666666666666666666666666666666666666666666e6"));
+}
+
+spec reduce_wide {
+    // Small values pass through; L and 2L reduce to zero.
+    then same_bytes(scalar_bytes(reduce_wide(wide_limbs(padded(int_bytes(42, 1), 63)))), padded(int_bytes(42, 1), 31));
+    then same_bytes(scalar_bytes(reduce_wide(wide_limbs(padded(order_bytes(), 32)))), zero_bytes(32));
+    then same_bytes(scalar_bytes(reduce_wide(wide_limbs(padded(order_minus_one(), 32)))), order_minus_one());
+    // The largest digest, against Python's big-integer `(2^512 - 1) % L`.
+    then same_bytes(scalar_bytes(reduce_wide(wide_limbs(all_ones_64()))), hex32("000f9c44e31106a447938568a71b0ed065bef517d273ecce3d9a307c1b419903"));
+}
+
+spec mul_add {
+    // 6 * 7 + 5 = 47.
+    then same_bytes(
+        scalar_bytes(mul_add(scalar_limbs(padded(int_bytes(6, 1), 31)), scalar_limbs(padded(int_bytes(7, 1), 31)), scalar_limbs(padded(int_bytes(5, 1), 31)))),
+        padded(int_bytes(47, 1), 31),
+    );
+    // (L - 1)^2 + 0 = 1 (mod L), and (L - 1) * 1 + 1 = 0.
+    then same_bytes(
+        scalar_bytes(mul_add(scalar_limbs(order_minus_one()), scalar_limbs(order_minus_one()), scalar_limbs(zero_bytes(32)))),
+        padded(int_bytes(1, 1), 31),
+    );
+    then same_bytes(
+        scalar_bytes(mul_add(scalar_limbs(order_minus_one()), scalar_limbs(padded(int_bytes(1, 1), 31)), scalar_limbs(padded(int_bytes(1, 1), 31)))),
+        zero_bytes(32),
+    );
+}
+
+spec scalar_limbs {
+    // Limb 0 is the low 21 bits; the top limb keeps bits 231 and up.
+    then scalar_limbs(padded(int_bytes(2097153, 3), 29)).s0 == 1;
+    then scalar_limbs(padded(int_bytes(2097153, 3), 29)).s1 == 1;
+    then scalar_limbs(all_ones_32()).s11 == 33554431;
+}
+
+spec wide_limbs {
+    then wide_limbs(all_ones_64()).s0 == 2097151;
+    // The top limb holds bits 483 to 511: 29 bits.
+    then wide_limbs(all_ones_64()).s23 == 536870911;
+}
+
+spec scalar_bytes {
+    then same_bytes(scalar_bytes(scalar_limbs(order_minus_one())), order_minus_one());
+}
+
+spec scalar_reduce {
+    then same_bytes(scalar_reduce(padded(order_bytes(), 32)), zero_bytes(32));
+    then same_bytes(scalar_reduce(all_ones_64()), hex32("000f9c44e31106a447938568a71b0ed065bef517d273ecce3d9a307c1b419903"));
+}
+
+spec public_key {
+    // RFC 8032 §7.1, test 1.
+    then same_bytes(
+        public_key(hex32("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")),
+        hex32("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"),
+    );
+}
+
 spec sign {
     // A wrong-length seed is refused rather than trapping or producing a
     // signature that cannot be verified.
     then std::array::len(sign(std::array::empty(), std::array::empty())) == 0;
     then std::array::len(sign(zero_bytes(31), std::array::empty())) == 0;
     // RFC 8032's published signatures are pinned natively
-    // (`ed25519_signs_rfc_8032_vectors`): signing is two scalar
-    // multiplications, past the spec sandbox's fuel.
+    // (`ed25519_signs_rfc_8032_vectors`), and against OpenSSL.
 }
 
-spec public_key {
-    // A wrong-length seed still answers rather than trapping. The real
-    // derivation is pinned natively.
-    then std::array::len(zero_bytes(32)) == 32;
+/// 32 bytes of 0xff.
+fn all_ones_32() -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 32 {
+        std::array::push(out, 255);
+        i = i + 1;
+    }
+    out
 }

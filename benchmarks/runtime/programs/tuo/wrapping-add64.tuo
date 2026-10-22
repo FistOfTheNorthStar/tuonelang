@@ -1,0 +1,29 @@
+// The wrapping-add64 workload (ADR-0031): modular 64-bit arithmetic at the
+// cost of the hardware instruction.
+//
+// SHA-512, BLAKE2b, xxHash and every other 64-bit mixing function is defined
+// in additions modulo 2^64 and rotations. Before ADR-0031 tuonelang could
+// spell neither: `+` traps on the carry a hash requires, and `std::sha512`
+// rebuilt both out of 32-bit halves and masks (`add64`, `rotr64`). This loop
+// is the smallest program that is nothing but those two operations, so its
+// gap to C is the cost of the spelling and nothing else.
+//
+// WHAT IS MEASURED. 50,000,000 rounds of `x = x + y (mod 2^64)` followed by
+// `y = rotr(y ^ x, 29)` on `U64` — one `std::int::wrapping_add` and one
+// `std::int::rotate_right` per round, each a single instruction on both
+// backends. The exit byte is the low byte of `x ^ y`, so every round feeds
+// the answer and nothing can be optimized away.
+//
+// The C peer uses `uint64_t`, whose `+` already wraps, and the rotate idiom
+// compilers recognize; the Go peer uses `uint64` and `math/bits.RotateLeft64`.
+fn main() -> Int {
+    var x: U64 = 1;
+    var y: U64 = 11400714819323198485;
+    var i = 0;
+    while i < 50000000 {
+        x = std::int::wrapping_add(x, y);
+        y = std::int::rotate_right(y ^ x, 29);
+        i = i + 1;
+    }
+    ((x ^ y) & 255) as Int
+}

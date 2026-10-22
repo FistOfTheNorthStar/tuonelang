@@ -29,7 +29,8 @@
 //! - **The allocation boundary** ([`alloc`]) — the two C-ABI symbols
 //!   ([`alloc::ALLOC_SYMBOL`], [`alloc::DEALLOC_SYMBOL`]) through which every
 //!   heap allocation (`Box`, `Shared`, `String`, `Array`) flows, so the
-//!   allocator is one swappable seam.
+//!   allocator is one seam (the LLVM release backend inlines a copy of its
+//!   body built from the same constants).
 //! - **The effect boundary** ([`effect`], ADR-0006 Stage B) — the three C-ABI
 //!   symbols ([`effect::WRITE_SYMBOL`], [`effect::READ_BYTE_SYMBOL`],
 //!   [`effect::EXIT_SYMBOL`]) through which every host effect (the `std::rt`

@@ -4,7 +4,8 @@
 //! `Option`/`Some`/`None` resolve without one: the **effect builtins** of
 //! `std::rt`, the **pure `Str` builtins** of `std::str` (ADR-0006), and the
 //! **pure allocator-core builtins** of `std::string` and `std::array`
-//! (ADR-0009), and the **pure float builtin** `std::float::sqrt` (ADR-0029).
+//! (ADR-0009), the **pure float builtin** `std::float::sqrt` (ADR-0029), and
+//! the **non-trapping integer builtins** of `std::int` (ADR-0031).
 //! They are installed by [`resolve`](crate::resolve) as real
 //! symbols in real, always-present modules — reached by ordinary path
 //! resolution — and have **no tuonelang bodies**: the type checker knows
@@ -321,6 +322,37 @@ pub enum Builtin {
     /// `std::boxed::into(take b: Box[T]) -> T` — move the value out of the box
     /// and free the allocation. Pure. (ADR-0028 Stage B.)
     BoxInto,
+    /// `std::int::wrapping_add(take a: T, take b: T) -> T` — `(a + b) mod
+    /// 2^w` for any integer type `T` of width `w`, as a two's-complement bit
+    /// pattern. Pure; **never traps** (`+` does). (ADR-0031.)
+    IntWrappingAdd,
+    /// `std::int::wrapping_sub(take a: T, take b: T) -> T` — `(a - b) mod
+    /// 2^w`; `wrapping_sub(0, x)` is the wrapping negation. Pure; never
+    /// traps. (ADR-0031.)
+    IntWrappingSub,
+    /// `std::int::wrapping_mul(take a: T, take b: T) -> T` — `(a * b) mod
+    /// 2^w`. Pure; never traps. (ADR-0031.)
+    IntWrappingMul,
+    /// `std::int::rotate_left(take x: T, take n: N) -> T` — rotate `x`'s `w`
+    /// bits left by `n` reduced Euclidean mod `w`, so a negative amount
+    /// rotates the other way and `n + w` is the same rotation as `n`. The
+    /// amount's integer type `N` is independent of `T`, as a shift's is.
+    /// Pure; never traps (a shift by `w` does). (ADR-0031.)
+    IntRotateLeft,
+    /// `std::int::rotate_right(take x: T, take n: N) -> T` — as
+    /// [`Self::IntRotateLeft`], rotating right. Pure; never traps.
+    /// (ADR-0031.)
+    IntRotateRight,
+    /// `std::int::checked_add(take a: T, take b: T) -> Option[T]` — the sum
+    /// when it fits `T`, `None` exactly where `+` would trap. Pure; never
+    /// traps. (ADR-0031 Stage D.)
+    IntCheckedAdd,
+    /// `std::int::checked_sub(take a: T, take b: T) -> Option[T]` — as
+    /// [`Self::IntCheckedAdd`], for `-`. Pure; never traps.
+    IntCheckedSub,
+    /// `std::int::checked_mul(take a: T, take b: T) -> Option[T]` — as
+    /// [`Self::IntCheckedAdd`], for `*`. Pure; never traps.
+    IntCheckedMul,
 }
 
 /// How one builtin parameter receives its argument (the surface
@@ -351,7 +383,7 @@ impl BuiltinParamMode {
 
 impl Builtin {
     /// Every builtin, in a fixed installation order.
-    pub const ALL: [Self; 63] = [
+    pub const ALL: [Self; 71] = [
         Self::RtWrite,
         Self::RtReadByte,
         Self::RtExit,
@@ -415,6 +447,14 @@ impl Builtin {
         Self::BoxNew,
         Self::BoxGet,
         Self::BoxInto,
+        Self::IntWrappingAdd,
+        Self::IntWrappingSub,
+        Self::IntWrappingMul,
+        Self::IntRotateLeft,
+        Self::IntRotateRight,
+        Self::IntCheckedAdd,
+        Self::IntCheckedSub,
+        Self::IntCheckedMul,
     ];
 
     /// The path of the module the builtin lives in.
@@ -480,6 +520,14 @@ impl Builtin {
             | Self::MapKeys => &["std", "map"],
             Self::FloatSqrt => &["std", "float"],
             Self::BoxNew | Self::BoxGet | Self::BoxInto => &["std", "boxed"],
+            Self::IntWrappingAdd
+            | Self::IntWrappingSub
+            | Self::IntWrappingMul
+            | Self::IntRotateLeft
+            | Self::IntRotateRight
+            | Self::IntCheckedAdd
+            | Self::IntCheckedSub
+            | Self::IntCheckedMul => &["std", "int"],
         }
     }
 
@@ -542,6 +590,14 @@ impl Builtin {
             Self::BoxNew => "new",
             Self::BoxGet => "get",
             Self::BoxInto => "into",
+            Self::IntWrappingAdd => "wrapping_add",
+            Self::IntWrappingSub => "wrapping_sub",
+            Self::IntWrappingMul => "wrapping_mul",
+            Self::IntRotateLeft => "rotate_left",
+            Self::IntRotateRight => "rotate_right",
+            Self::IntCheckedAdd => "checked_add",
+            Self::IntCheckedSub => "checked_sub",
+            Self::IntCheckedMul => "checked_mul",
         }
     }
 
@@ -612,6 +668,14 @@ impl Builtin {
             Self::BoxNew => "std::boxed::new",
             Self::BoxGet => "std::boxed::get",
             Self::BoxInto => "std::boxed::into",
+            Self::IntWrappingAdd => "std::int::wrapping_add",
+            Self::IntWrappingSub => "std::int::wrapping_sub",
+            Self::IntWrappingMul => "std::int::wrapping_mul",
+            Self::IntRotateLeft => "std::int::rotate_left",
+            Self::IntRotateRight => "std::int::rotate_right",
+            Self::IntCheckedAdd => "std::int::checked_add",
+            Self::IntCheckedSub => "std::int::checked_sub",
+            Self::IntCheckedMul => "std::int::checked_mul",
         }
     }
 
@@ -660,8 +724,9 @@ impl Builtin {
     }
 
     /// How a caller writes the builtin: each parameter's name and type
-    /// spelling, and the return type's — `T` an array element or box pointee,
-    /// `K`/`V` a map's key and value. `None` for the `std::rt` primitives,
+    /// spelling, and the return type's — `T` an array element or box pointee
+    /// (or, in `std::int`, any integer type), `K`/`V` a map's key and value,
+    /// `N` a rotation amount's integer type. `None` for the `std::rt` primitives,
     /// which programs reach through the library's `std::io`/`std::fs`/... .
     ///
     /// The checker's own signatures ([`Self::param_modes`] aside) are
@@ -710,6 +775,13 @@ impl Builtin {
             Self::FloatSqrt => (&[("x", "Float")], "Float"),
             Self::BoxNew => (&[("value", "T")], "Box[T]"),
             Self::BoxGet | Self::BoxInto => (&[("b", "Box[T]")], "T"),
+            Self::IntWrappingAdd | Self::IntWrappingSub | Self::IntWrappingMul => {
+                (&[("a", "T"), ("b", "T")], "T")
+            }
+            Self::IntRotateLeft | Self::IntRotateRight => (&[("x", "T"), ("n", "N")], "T"),
+            Self::IntCheckedAdd | Self::IntCheckedSub | Self::IntCheckedMul => {
+                (&[("a", "T"), ("b", "T")], "Option[T]")
+            }
             _ => return None,
         };
         Some(shape)
@@ -787,6 +859,14 @@ impl Builtin {
             Self::ArrayFilled => &[Take, Take],
             Self::BoxNew | Self::BoxInto => &[Take],
             Self::BoxGet => &[In],
+            Self::IntWrappingAdd
+            | Self::IntWrappingSub
+            | Self::IntWrappingMul
+            | Self::IntRotateLeft
+            | Self::IntRotateRight
+            | Self::IntCheckedAdd
+            | Self::IntCheckedSub
+            | Self::IntCheckedMul => &[Take, Take],
         }
     }
 }

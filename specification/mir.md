@@ -397,9 +397,9 @@ value of a statically known type.
 ### 5.3 Binary operations (`BinOp`)
 
 Both operands of a binary operation have the same type, with one deliberate
-exception: a shift's amount (`Shl`/`Shr`, ADR-0019) is an integer independent of
-the shifted value's type, since it is a bit count rather than a value of that
-type. Integer arithmetic is
+exception: a shift's or rotation's amount (`Shl`/`Shr`, ADR-0019;
+`RotateLeft`/`RotateRight`, ADR-0031) is an integer independent of the shifted
+value's type, since it is a bit count rather than a value of that type. Integer arithmetic is
 two's complement with **trapping overflow** (Constitution §24): a trap is a
 deterministic abort, exactly as if a failed `Assert` were reached. Float
 arithmetic is IEEE 754 (round to nearest even) and **never traps**.
@@ -422,9 +422,23 @@ arithmetic is IEEE 754 (round to nearest even) and **never traps**.
 | `BitXor` (ADR-0019) | bitwise xor | *(rejected by the front end)* |
 | `Shl` (ADR-0019) | left shift; **traps `InvalidShift`** when the amount is negative or `>=` the left operand's width in bits | *(rejected by the front end)* |
 | `Shr` (ADR-0019) | right shift — **arithmetic** (sign-extending) on a signed type, **logical** (zero-filling) on an unsigned one; traps as `Shl` | *(rejected by the front end)* |
+| `WrappingAdd` (ADR-0031) | `(a + b) mod 2^w`; never traps | *(rejected by the front end)* |
+| `WrappingSub` (ADR-0031) | `(a - b) mod 2^w`; never traps | *(rejected by the front end)* |
+| `WrappingMul` (ADR-0031) | `(a * b) mod 2^w`; never traps | *(rejected by the front end)* |
+| `RotateLeft` (ADR-0031) | rotate the bits left by the amount reduced Euclidean mod the width (so a negative amount rotates right); never traps | *(rejected by the front end)* |
+| `RotateRight` (ADR-0031) | as `RotateLeft`, rotating right | *(rejected by the front end)* |
+| `AddOverflows` (ADR-0031) | a `Bool`: whether `Add` on the same operands would trap; never traps | *(rejected by the front end)* |
+| `SubOverflows` (ADR-0031) | as `AddOverflows`, for `Sub` | *(rejected by the front end)* |
+| `MulOverflows` (ADR-0031) | as `AddOverflows`, for `Mul` | *(rejected by the front end)* |
 
-The bitwise operators are integers-only: the type checker rejects them on floats,
-so a backend reaching its float path with one has been handed malformed MIR. The
+The bitwise operators and ADR-0031's operators are integers-only: the type
+checker rejects them on floats, so a backend reaching its float path with one has
+been handed malformed MIR. The `std::int` builtins lower to them directly, except
+`checked_add`/`checked_sub`/`checked_mul`, which lower to control flow: the
+overflow predicate, a `Branch` on it, and on each edge an `Option` aggregate —
+`None`, or `Some` of the wrapping result (exact on that edge). Each backend
+computes the predicate from the same overflow flag its trapping `Add`/`Sub`/`Mul`
+guards on, so the two cannot disagree about what overflows. The
 shift bound is checked rather than masked, so the result never depends on a
 target's shift-masking behavior (x86 masks to 6 bits; the trap makes every engine
 agree).
@@ -741,6 +755,40 @@ panic:
   changes is that an unused library function outside the native subset — the
   generic `std::collections::pair` — no longer refuses a build the interpreter
   would have run, while a user's own unsupported function still does.
+- **Generic functions are monomorphized on the native path** (ADR-0027 Stage
+  B). Lowering emits one MIR function per generic `fn`, its locals typed with
+  `Ty::Param`; the interpreter executes that body directly, since a value
+  carries its own shape. A backend cannot: `Ty::Param` has no layout. So after
+  `retain_reachable` and before optimizing, `tuo_mir::monomorphize` clones
+  each generic function once per distinct type-argument list a call reaches,
+  substitutes the arguments into every type the body carries (return, locals,
+  `Cast` targets, aggregate types), and rewrites the call to name the clone.
+  The rules:
+  - **Inference.** A call's type arguments are read off the callee's own
+    parameter and return types, matched against the caller's argument and
+    destination types; an instance's calls are instantiated in turn, so a
+    generic calling a generic is closed transitively.
+  - **Identity.** Each instance gets a fresh `SymbolId` (counted down from
+    `u32::MAX`, never a resolver id) and the name `f[I64]` / `f[A, B]`.
+    Identical argument lists share one instance, so recursion at a fixed type
+    reuses its own clone.
+  - **Copy.** A type parameter is never `Copy`, so a generic body moves every
+    `T`. Where the argument is `Copy` the clone reads it by `Copy` instead
+    (the verifier's `M0009` holds a `Copy` value to that); a `Drop` of such a
+    value is left in place, being a no-op on a type with no heap.
+  - **Refusal.** A function that reaches itself at a strictly larger type
+    (`f[T]` calling `f[Option[T]]`) has no finite native form; the pass
+    refuses the build, naming the chain, and the program still runs under
+    `tuo spec`/`tuo verify`. The pass is all-or-nothing: on refusal the
+    program is left unchanged.
+  - **Generic functions are dropped** once instantiated: an uninstantiated
+    generic is unreachable code on the native path.
+
+  The result is re-verified before optimization. Generic `struct`/`enum`
+  declarations need no pass — a `Ty::Struct`/`Ty::Enum` already carries its
+  arguments — and a generic function is never a value (`T0015`), so no
+  `Const::Fn` names one. The incremental engine, the agent, and the
+  interpreter all see the generic MIR, unchanged.
 
 ---
 

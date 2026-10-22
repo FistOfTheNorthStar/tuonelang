@@ -1,6 +1,6 @@
 # ADR-0027: Monomorphization — making the generics the front end already accepts run natively
 
-- **Status:** proposed
+- **Status:** accepted (2026-10-22 — Stages A and B landed; Stage C gated on Q6; see Resolution)
 - **Date:** 2026-09-15
 
 ## Context
@@ -315,3 +315,70 @@ and 24.8% for `try`/`except`. ADR-0024 should be amended to cite the measured
 figures, so its priority argument rests on data rather than on impression. This
 does not change any of ADR-0024's four design questions, which stand on their
 own merits.
+
+## Resolution (2026-10-22)
+
+**Stage A** landed as specified and is now **retired** with Stage B: a
+warning that generic functions do not build natively stopped being true, and
+a stale advisory is worse than none, since it tells the reader to hand-write
+per-type copies for no reason. `T0023` is not reused.
+
+**Stage B landed.** The questions it depended on were answered as follows.
+
+- **Q1 — identity.** Each instance gets a **fresh `SymbolId`**, minted
+  counting down from `u32::MAX` so it can never collide with a resolver id,
+  and is named `f[I64]` / `f[A, B]`. No new IR concept: `Function.symbol`
+  and `Callee::Direct` keep their meaning, so the verifier, both backends,
+  and the golden fixtures needed no change. The one consumer that looked a
+  callee up in the resolver, the MIR printer, now names a callee from the
+  program's own function list first.
+- **Q2 — placement.** **After lowering**, as a clone-and-substitute pass over
+  MIR, on the native path only: `tuo build`/`tuo run`, the corpus's native
+  executor, and `tuo debug mir --opt`, between `retain_reachable` and the
+  optimizer, followed by a mandatory re-verify. Generic MIR already verified
+  (the verifier treats `Ty::Param` as an opaque, non-`Copy` type), so the
+  "must either verify or never exist" constraint was already met. Type
+  arguments are inferred per call by matching the callee's parameter and
+  return types against the caller's argument and destination types, and an
+  instance's own calls are instantiated in turn. After substitution a `Move`
+  of a now-`Copy` value is rewritten to a `Copy` (`M0009`); a `Drop` of one
+  is left, being a no-op on a type with no heap.
+- **Q3 — incrementality.** **Unaffected.** The incremental engine, the agent,
+  the LSP, and the interpreter all consume the generic MIR, which the
+  interpreter executes directly; instances exist only on the way to a
+  backend. No sixth edit scenario was needed, because no query result
+  changed shape.
+- **Q4 — recursive instantiation.** A function that reaches itself at a
+  strictly larger type (`f[T]` calling `f[Option[T]]`) is **refused at build
+  time, naming the chain** (`grow[I64]` leads to `grow[Option[I64]]`), and
+  the program still runs under `tuo spec`. The pass is all-or-nothing: on
+  refusal it leaves the program unchanged. Recursion at a fixed type reuses
+  its instance.
+- **Q5 — function values.** **Out of scope.** `T0015` still refuses a generic
+  as a value; no syntax names an instantiation.
+- **Q7 — generic aggregates.** **Nothing to do.** A generic `struct`/`enum`
+  is already concrete at every use (`Ty::Struct` carries its arguments), and
+  the stdlib's `Pair[Int, Int]` lowers today.
+
+Pinned by `crates/tuo-mir/tests/mono.rs` (instances and their names,
+transitive instantiation, reuse under recursion, dropping uninstantiated
+generics, the growing-chain refusal leaving the program alone, a monomorphic
+program untouched), by `tests/codegen/fixtures/generic_instances.tuo` in the
+three-way differential (instances at scalars, a struct, owned `String` and
+`Array[Int]` values whose drop glue the generic body only implied, nested
+`Option`s, a function-value argument, and an `in` borrow, the interpreter on
+generic MIR agreeing with Cranelift and LLVM on the instances), and by
+`crates/tuo-compiler/tests/native_core.rs`, which now pins that a generic
+draws **no** advisory.
+
+**Stage C is not landed.** It needs two things this resolution does not
+decide. The first is **Q6**, unchanged: `fold` and `fold_strings` differ in
+the mode of the step function's element parameter, and a mode derived from
+`Copy`-ness would be a new kind of implicitness, so it is a language
+decision. The second surfaced while scoping it: the checker refuses
+`Array[T]` with `T` a type parameter (`T0001`, the ADR-0012 element set), so
+even `map_into`, the one pair whose modes already agree, cannot be written
+generically. Admitting a parameter element, checked against the element set
+at each instantiation, is the prerequisite. The `generic-instantiation`
+compiler-lab entry stays with Stage C, since what it measures is the
+collapse.

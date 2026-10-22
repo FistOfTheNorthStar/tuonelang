@@ -16,20 +16,24 @@
 // square root, and full point validation to be safe; X25519 accepts any
 // 32-byte string as a public key by construction.
 //
-// PERFORMANCE, STATED PLAINLY. One `scalar_mult` is 255 ladder steps, each
-// several 255-bit modular multiplications over `std::bignum`'s 28-bit limbs.
-// That is roughly a second natively and far longer under the interpreter —
-// orders of magnitude slower than a C implementation using 64-bit limbs and
-// a specialized reduction. It is correct, not fast, and the specs below
-// exercise a reduced ladder for that reason (the full vector is pinned by the
-// native CLI test, where the cost is affordable).
+// TWO FIELD IMPLEMENTATIONS, ON PURPOSE. The key exchange — `scalar_mult`
+// and the ladder under it — runs on `std::fe25519`, fixed-width ten-limb
+// arithmetic whose operations carry `#[constant_time]` (ADR-0022). The
+// `field_*` functions below are the older `std::bignum` arithmetic over
+// `Array[Int]`, kept because `std::ed25519` builds its point arithmetic on
+// them; they are variable time, which is sound for Ed25519 verification
+// (every input is public) and is not used for anything secret here.
 //
-// NOT CONSTANT TIME. `std::bignum` is documented as variable time, and this
-// builds on it. The ladder's *structure* is uniform — `conditional_swap`
-// selects with `std::ct::select_bytes` and branches on nothing — but the
-// underlying arithmetic is not, so this does not deliver the timing guarantee
-// X25519 is normally chosen for. That is a real limitation of building on a
-// variable-time bignum, and it is stated here rather than implied away.
+// WHAT IS CONSTANT TIME, AND WHAT VERIFIES IT. Everything the secret scalar
+// touches is straight-line code the compiler has checked: `ladder_step` and
+// `conditional_swap` are `#[constant_time]`, and so is every `std::fe25519`
+// operation they call, so a branch on a scalar bit, an index computed from
+// one, or a trapping operation on secret data is a compile error rather than
+// a code-review finding. `scalar_mult` itself is not marked: it loops 255
+// times and reads the scalar's bytes by position (`scalar_bit`), which the
+// attribute cannot yet express (ADR-0021), though neither depends on the
+// scalar's value. The same caveats as `std::fe25519` apply: an optimizer may
+// emit a branch the source does not have, and the hardware has the last word.
 //
 // The swap was not always branchless, and the history is worth keeping. It
 // was originally written with an early-returning `if condition == 0` while
@@ -37,13 +41,16 @@
 // — the code and the comment disagreed for as long as both existed. Nothing
 // in the test suite could notice: the two forms compute the same function, so
 // every spec, RFC 7748's vectors, and a live OpenSSL handshake pass either
-// way (verified by reintroducing the branch — the suite stayed green). The
-// guard is therefore a source-structural one,
-// `the_ladders_conditional_swap_does_not_branch_on_the_scalar_bit` in
-// `tuo-cli/tests/constant_time.rs`, because behaviour cannot distinguish the
-// two. Closing the remaining gap means fixed-width field arithmetic that does
-// not go through `std::bignum` at all, which is a separate piece of work and
-// is not pretended here.
+// way. A source-structural test guarded it then; now the compiler does, since
+// an `if` in a `#[constant_time]` function is `T0017`. The ladder step also
+// turned its `Bool` bit into an `Int` with an `if`, a second branch on the
+// scalar the old arithmetic had hidden among its own.
+//
+// PERFORMANCE. One `scalar_mult` is 255 ladder steps of about ten field
+// operations, plus a fixed 265-operation inversion, all on stack values with
+// no allocation. Natively that is a fraction of a millisecond; under the
+// interpreter it fits the spec sandbox, so the published RFC 7748 vectors are
+// asserted below as well as natively.
 
 module std::x25519;
 
@@ -407,170 +414,92 @@ pub fn num_to_le(in value: Array[Int]) -> Array[Int] {
 // bit's value — swapping the two points when the bit says to. The swap is
 // arithmetic rather than a branch, which is what gives X25519 its uniform
 // structure.
-//
-// v0 has no tuples and no multiple return values, so the ladder's five
-// working values live in one `Array[Array[Int]]`-shaped state encoded as a
-// struct. A struct of bignums is an ordinary ADR-0009 value.
 
 /// The ladder's working state: two projective points (x2 : z2) and (x3 : z3),
 /// plus the swap flag carried between iterations.
 struct Ladder {
-    x2: Array[Int],
-    z2: Array[Int],
-    x3: Array[Int],
-    z3: Array[Int],
+    x2: std::fe25519::Fe,
+    z2: std::fe25519::Fe,
+    x3: std::fe25519::Fe,
+    z3: std::fe25519::Fe,
     swap: Int,
 }
 
-/// Conditionally exchange the two points, without branching on `condition`.
+/// Exchange the two points when `condition` is 1, keep them when it is 0,
+/// without branching on it.
 ///
 /// `condition` is derived from a bit of the secret scalar, so an `if` here is
 /// the textbook X25519 timing leak: the two paths move different data, and
-/// which one ran is what the attacker wants to know. Instead every limb of
-/// all four coordinates is passed through `std::ct::select_bytes`, which
-/// computes both alternatives and combines them with a mask — the same work,
-/// in the same order, whichever way the bit goes.
-///
-/// This was previously written with an early-returning `if` while this
-/// comment already claimed it was branchless; the comment was the wrong half.
-///
-/// The claim carried here is deliberately weaker than `#[constant_time]`, and
-/// this function cannot carry that attribute: it scans limb arrays, and the
-/// checker refuses loops (`T0017`) and indexing (`T0018`), exactly as it does
-/// for `std::ct::select_array` and `std::ct::bytes_eq`. What it promises is
-/// what those scans promise — **no branch depends on the scalar bit or on any
-/// coordinate's value**, only on limb-array lengths, which are public. The
-/// bignum arithmetic *underneath* remains variable-time (see the module
-/// header), so this is the ladder's own structure being uniform, not an
-/// end-to-end guarantee.
-///
-/// The limb arrays must be equal width for the selection to be total, which
-/// is what the `padded_to` normalization below establishes.
-///
-/// **Cost:** selecting both alternatives instead of taking one branch, plus
-/// the width normalization, measured about 8% on a full `scalar_mult`
-/// (~13.3ms to ~14.3ms natively, 20-round average). That is the expected
-/// price of not branching, and it is the right trade: a primitive that is 8%
-/// slower and does not leak the scalar beats a faster one that does.
+/// which one ran is what the attacker wants to know. Each coordinate is
+/// chosen with `std::fe25519::select`, which reads both and masks — the same
+/// work, in the same order, whichever way the bit goes. The attribute makes
+/// that a compiler-checked property rather than a comment.
 ///
 /// # Example
 ///
 /// ```tuo
 /// let swapped = std::x25519::conditional_swap(state, 1);
 /// ```
+#[constant_time]
 pub fn conditional_swap(take state: Ladder, take condition: Int) -> Ladder {
-    // Normalizing every coordinate to one common width first is what makes
-    // the element-wise selection below total: `select_bytes` refuses a length
-    // mismatch, and two field elements can differ in limb count whenever one
-    // happens to have fewer significant limbs than the other.
-    let width = common_width(state);
-    let x2 = padded_to(state.x2, width);
-    let z2 = padded_to(state.z2, width);
-    let x3 = padded_to(state.x3, width);
-    let z3 = padded_to(state.z3, width);
-    // 1 selects the exchanged coordinate, 0 keeps the original.
-    let take_swapped = std::ct::nonzero(condition);
+    let c = std::ct::nonzero(condition);
     Ladder {
-        x2: std::ct::select_bytes(x3, x2, take_swapped),
-        z2: std::ct::select_bytes(z3, z2, take_swapped),
-        x3: std::ct::select_bytes(x2, x3, take_swapped),
-        z3: std::ct::select_bytes(z2, z3, take_swapped),
+        x2: std::fe25519::select(c, state.x3, state.x2),
+        z2: std::fe25519::select(c, state.z3, state.z2),
+        x3: std::fe25519::select(c, state.x2, state.x3),
+        z3: std::fe25519::select(c, state.z2, state.z3),
         swap: state.swap,
     }
 }
 
-/// The widest limb count among the ladder state's four coordinates.
-///
-/// Only the *lengths* of the limb arrays are inspected, never their contents,
-/// so this reveals nothing about the values being exchanged.
-///
-/// # Example
-///
-/// ```tuo
-/// let w = std::x25519::common_width(state);
-/// ```
-pub fn common_width(in state: Ladder) -> Int {
-    var width = std::array::len(state.x2);
-    if std::array::len(state.z2) > width {
-        width = std::array::len(state.z2);
-    }
-    if std::array::len(state.x3) > width {
-        width = std::array::len(state.x3);
-    }
-    if std::array::len(state.z3) > width {
-        width = std::array::len(state.z3);
-    }
-    width
-}
-
-/// `value`'s limbs extended with leading zeros to exactly `width` limbs.
-///
-/// A bignum's value is unchanged by zero limbs above its most significant one
-/// — limbs are least significant first — so this is a representation change
-/// only. Padding is what lets the conditional swap select element-wise across
-/// coordinates whose natural limb counts differ.
-///
-/// # Example
-///
-/// ```tuo
-/// let padded = std::x25519::padded_to(limbs, 10);
-/// ```
-pub fn padded_to(in value: Array[Int], take width: Int) -> Array[Int] {
-    var out = std::array::empty();
-    var i = 0;
-    while i < width {
-        var limb = 0;
-        if i < std::array::len(value) {
-            limb = std::array::get(value, i);
-        }
-        std::array::push(out, limb);
-        i = i + 1;
-    }
-    out
-}
-
 /// One ladder step: a differential add and a double (RFC 7748 §5's inner
-/// loop), for the scalar bit `bit` with base `x1`.
+/// loop), for the scalar bit `bit` (0 or 1) with base `x1`.
 ///
 /// # Example
 ///
 /// ```tuo
-/// let next = std::x25519::ladder_step(state, x1, true);
+/// let next = std::x25519::ladder_step(state, x1, 1);
 /// ```
-pub fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Ladder {
-    var bit_value = 0;
-    if bit {
-        bit_value = 1;
-    }
+#[constant_time]
+pub fn ladder_step(take state: Ladder, take x1: std::fe25519::Fe, take bit: Int) -> Ladder {
     // Swap when this bit differs from the last, so the points are in the
     // order the arithmetic below expects.
-    var current = conditional_swap(state, state.swap ^ bit_value);
-    current = Ladder {
-        x2: current.x2,
-        z2: current.z2,
-        x3: current.x3,
-        z3: current.z3,
-        swap: bit_value,
-    };
-
-    let a = field_add(current.x2, current.z2);
-    let aa = field_square(a);
-    let b = field_sub(current.x2, current.z2);
-    let bb = field_square(b);
-    let e = field_sub(aa, bb);
-    let c = field_add(current.x3, current.z3);
-    let d = field_sub(current.x3, current.z3);
-    let da = field_mul(d, a);
-    let cb = field_mul(c, b);
-    let x3 = field_square(field_add(da, cb));
-    let z3 = field_mul(x1, field_square(field_sub(da, cb)));
-    let x2 = field_mul(aa, bb);
+    let current = conditional_swap(state, state.swap ^ bit);
+    let a = std::fe25519::add(current.x2, current.z2);
+    let aa = std::fe25519::square(a);
+    let b = std::fe25519::sub(current.x2, current.z2);
+    let bb = std::fe25519::square(b);
+    let e = std::fe25519::sub(aa, bb);
+    let c = std::fe25519::add(current.x3, current.z3);
+    let d = std::fe25519::sub(current.x3, current.z3);
+    let da = std::fe25519::mul(d, a);
+    let cb = std::fe25519::mul(c, b);
+    let x3 = std::fe25519::square(std::fe25519::add(da, cb));
+    let z3 = std::fe25519::mul(x1, std::fe25519::square(std::fe25519::sub(da, cb)));
+    let x2 = std::fe25519::mul(aa, bb);
     // RFC 7748: z2 = E * (AA + a24 * E). The first operand is AA, not BB —
     // using BB here produced a correct x2/x3/z3 and a wrong z2, which is
     // exactly the kind of single-term slip a published test vector catches
     // and self-consistent reasoning does not.
-    let z2 = field_mul(e, field_add(aa, field_mul_small(e, a24())));
-    Ladder { x2: x2, z2: z2, x3: x3, z3: z3, swap: current.swap }
+    let z2 = std::fe25519::mul(e, std::fe25519::add(aa, std::fe25519::mul_small(e, 121665)));
+    Ladder { x2: x2, z2: z2, x3: x3, z3: z3, swap: bit }
+}
+
+/// Bit `t` of the clamped scalar encoded by the 32 bytes `k`.
+///
+/// Clamping (RFC 7748 §5) clears the low three bits and bit 255 and sets
+/// bit 254. The byte read is chosen by `t`, a public loop position, and the
+/// two clamping cases branch on that position only — never on the byte.
+fn scalar_bit(in k: Array[Int], take t: Int) -> Int {
+    let index = t >> 3;
+    var byte = std::array::get(k, index) & 255;
+    if index == 0 {
+        byte = byte & 248;
+    }
+    if index == 31 {
+        byte = (byte & 127) | 64;
+    }
+    (byte >> (t & 7)) & 1
 }
 
 /// The X25519 function: multiply the base point `u` by the scalar `k`, both
@@ -580,29 +509,23 @@ pub fn ladder_step(take state: Ladder, in x1: Array[Int], take bit: Bool) -> Lad
 /// This is the whole key exchange: each side calls it with its own private
 /// scalar and the peer's public value, and both arrive at the same result.
 ///
-/// **Cost:** 255 ladder steps plus a modular inversion — roughly a second
-/// natively, far longer interpreted. See the module header.
-///
 /// # Example
 ///
 /// ```tuo
 /// let shared = std::x25519::scalar_mult(my_private, peer_public);
 /// ```
 pub fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int] {
-    let scalar = decode_scalar(k);
-    let x1 = decode_u(u);
+    let x1 = std::fe25519::from_bytes(u);
     var state = Ladder {
-        // The struct takes ownership of its own copy of the base point; `x1`
-        // stays borrowable for every ladder step below.
-        x2: std::bignum::from_int(1),
-        z2: std::bignum::from_int(0),
-        x3: decode_u(u),
-        z3: std::bignum::from_int(1),
+        x2: std::fe25519::one(),
+        z2: std::fe25519::zero(),
+        x3: x1,
+        z3: std::fe25519::one(),
         swap: 0,
     };
     var t = 254;
     while t >= 0 {
-        state = ladder_step(state, x1, bit_at(scalar, t));
+        state = ladder_step(state, x1, scalar_bit(k, t));
         t = t - 1;
     }
     // One last swap to undo the final iteration's ordering. The flag is read
@@ -610,7 +533,7 @@ pub fn scalar_mult(in k: Array[Int], in u: Array[Int]) -> Array[Int] {
     // `state.swap` in the same call would be a use-after-move.
     let final_swap = state.swap;
     state = conditional_swap(state, final_swap);
-    num_to_le(field_mul(state.x2, field_invert(state.z2)))
+    std::fe25519::to_bytes(std::fe25519::mul(state.x2, std::fe25519::invert(state.z2)))
 }
 
 /// The curve's base point, u = 9 — the value both sides multiply their
@@ -645,18 +568,36 @@ pub fn public_key(in private_key: Array[Int]) -> Array[Int] {
 
 // --- Specs ------------------------------------------------------------------
 //
-// The full RFC 7748 §5.2 vector is NOT asserted here. One `scalar_mult` is
-// 255 ladder steps of 255-bit bignum arithmetic, which exceeds the spec
-// sandbox's instruction fuel by a wide margin — the same reason
-// `std::crypto`'s PBKDF2 vector is pinned natively rather than in a spec. So
-// the sandbox checks the field arithmetic and the decoding (where a bug is
-// just as fatal and the cost is affordable), and the published vector is
-// pinned by the native CLI test `x25519_matches_rfc_7748`.
+// RFC 7748 §5.2's published vectors are asserted here, in the spec sandbox,
+// now that the ladder runs on fixed-width arithmetic; the bignum ladder it
+// replaced exceeded the sandbox's instruction fuel by a wide margin. The
+// native CLI test `x25519_matches_rfc_7748` pins the same vector on both
+// backends.
 //
-// That split is deliberate and worth stating: it is the *vector* that catches
-// a real error. A `z2` term written as `BB` instead of `AA` left x2, x3 and
-// z3 all correct — every self-consistent check passed — and only RFC 7748's
-// published output revealed it.
+// It is the *vector* that catches a real error. A `z2` term written as `BB`
+// instead of `AA` left x2, x3 and z3 all correct — every self-consistent check
+// passed — and only RFC 7748's published output revealed it.
+
+/// 32 bytes from a lowercase hex string, for the vectors below.
+fn hex32(in text: Str) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < 64 {
+        let hi = hex_digit(std::str::byte_at(text, i));
+        let lo = hex_digit(std::str::byte_at(text, i + 1));
+        std::array::push(out, hi * 16 + lo);
+        i = i + 2;
+    }
+    out
+}
+
+/// The value of one lowercase hex digit.
+fn hex_digit(take c: Int) -> Int {
+    if c >= 97 {
+        return c - 87;
+    }
+    c - 48
+}
 
 /// A 32-byte little-endian value, for the specs below: byte `i` is `i`.
 fn counting_bytes() -> Array[Int] {
@@ -868,101 +809,103 @@ spec base_point {
     then std::array::get(base_point(), 1) == 0;
 }
 
-spec padded_to {
-    // Padding adds leading zero limbs, which do not change the value: limbs
-    // are least significant first, so the zeros land above the number.
-    then std::array::len(padded_to(std::bignum::from_int(1), 4)) == 4;
-    then std::bignum::int_or(
-        std::bignum::to_int(std::bignum::normalized(padded_to(std::bignum::from_int(7), 5))),
-        0 - 1,
-    ) == 7;
-    then std::array::get(padded_to(std::bignum::from_int(7), 3), 1) == 0;
-    // Padding to a width at or below the current one truncates to that width
-    // rather than growing; the ladder only ever pads upward.
-    then std::array::len(padded_to(std::bignum::from_int(1), 0)) == 0;
-    // Zero pads to all-zero limbs.
-    then std::array::get(padded_to(std::bignum::from_int(0), 2), 0) == 0;
+spec scalar_mult {
+    // RFC 7748 §5.2, first vector.
+    then std::ct::bytes_eq(
+        scalar_mult(
+            hex32("a546e36bf0527c9d3b16154b82465edd62144c0ac1fc5a18506a2244ba449ac4"),
+            hex32("e6db6867583030db3594c1a424b15f7c726624ec26b3353b10a903a6d0ab1c4c"),
+        ),
+        hex32("c3da55379de9c6908e94ea4df28d084f32eccf03491c71f754b4075577a28552"),
+    ) == 1;
+    // Second vector: its u has the top bit set, which must be ignored.
+    then std::ct::bytes_eq(
+        scalar_mult(
+            hex32("4b66e9d4d1b4673c5ad22691957d6af5c11b6421e0ea01d42ca4169e7918ba0d"),
+            hex32("e5210f12786811d3f4b7959d0538ae2c31dbe7106fc03c3efc4cd549c715a493"),
+        ),
+        hex32("95cbde9476e8907d7aade45cb4b873f88b595a68799fa152e6f8f7647aac7957"),
+    ) == 1;
 }
 
-spec common_width {
-    // The widest of the four coordinates wins, whichever one it is.
-    then common_width(Ladder {
-        x2: padded_to(std::bignum::from_int(1), 6),
-        z2: std::bignum::from_int(2),
-        x3: std::bignum::from_int(3),
-        z3: std::bignum::from_int(4),
-        swap: 0,
-    }) == 6;
-    then common_width(Ladder {
-        x2: std::bignum::from_int(1),
-        z2: std::bignum::from_int(2),
-        x3: std::bignum::from_int(3),
-        z3: padded_to(std::bignum::from_int(4), 9),
-        swap: 0,
-    }) == 9;
+spec public_key {
+    // RFC 7748 §6.1: Alice's public key from her private key.
+    then std::ct::bytes_eq(
+        public_key(hex32("77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a")),
+        hex32("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a"),
+    ) == 1;
+}
+
+spec scalar_bit {
+    // Clamping: the low three bits and bit 255 read clear, bit 254 reads set,
+    // whatever the bytes hold.
+    then scalar_bit(std::array::filled(32, 255), 0) == 0;
+    then scalar_bit(std::array::filled(32, 255), 2) == 0;
+    then scalar_bit(std::array::filled(32, 255), 3) == 1;
+    then scalar_bit(std::array::filled(32, 0), 254) == 1;
+    then scalar_bit(std::array::filled(32, 255), 255) == 0;
 }
 
 spec conditional_swap {
     // A zero condition leaves the points alone; a one exchanges them.
-    then std::bignum::int_or(
-        std::bignum::to_int(
+    then std::array::get(
+        std::fe25519::to_bytes(
             conditional_swap(
                 Ladder {
-                    x2: std::bignum::from_int(1),
-                    z2: std::bignum::from_int(2),
-                    x3: std::bignum::from_int(3),
-                    z3: std::bignum::from_int(4),
+                    x2: std::fe25519::from_int(1),
+                    z2: std::fe25519::from_int(2),
+                    x3: std::fe25519::from_int(3),
+                    z3: std::fe25519::from_int(4),
                     swap: 0,
                 },
                 0,
             )
             .x2,
         ),
-        0 - 1,
+        0,
     ) == 1;
-    then std::bignum::int_or(
-        std::bignum::to_int(
+    then std::array::get(
+        std::fe25519::to_bytes(
             conditional_swap(
                 Ladder {
-                    x2: std::bignum::from_int(1),
-                    z2: std::bignum::from_int(2),
-                    x3: std::bignum::from_int(3),
-                    z3: std::bignum::from_int(4),
+                    x2: std::fe25519::from_int(1),
+                    z2: std::fe25519::from_int(2),
+                    x3: std::fe25519::from_int(3),
+                    z3: std::fe25519::from_int(4),
                     swap: 0,
                 },
                 1,
             )
             .x2,
         ),
-        0 - 1,
+        0,
     ) == 3;
 }
 
 spec ladder_step {
-    // One step from the identity start must leave the state well-formed and
-    // record the bit it consumed as the next swap flag.
+    // One step records the bit it consumed as the next swap flag.
     then ladder_step(
         Ladder {
-            x2: std::bignum::from_int(1),
-            z2: std::bignum::from_int(0),
-            x3: std::bignum::from_int(9),
-            z3: std::bignum::from_int(1),
+            x2: std::fe25519::one(),
+            z2: std::fe25519::zero(),
+            x3: std::fe25519::from_int(9),
+            z3: std::fe25519::one(),
             swap: 0,
         },
-        std::bignum::from_int(9),
-        true,
+        std::fe25519::from_int(9),
+        1,
     )
     .swap == 1;
     then ladder_step(
         Ladder {
-            x2: std::bignum::from_int(1),
-            z2: std::bignum::from_int(0),
-            x3: std::bignum::from_int(9),
-            z3: std::bignum::from_int(1),
+            x2: std::fe25519::one(),
+            z2: std::fe25519::zero(),
+            x3: std::fe25519::from_int(9),
+            z3: std::fe25519::one(),
             swap: 0,
         },
-        std::bignum::from_int(9),
-        false,
+        std::fe25519::from_int(9),
+        0,
     )
     .swap == 0;
 }
