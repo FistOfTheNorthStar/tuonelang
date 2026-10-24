@@ -1,0 +1,11 @@
+task = """
+Write `fnv1a32(in s: Str) -> U32`, the 32-bit FNV-1a hash of the bytes of \
+`s`: start from the offset basis 2166136261 and, for each byte, XOR the byte \
+into the hash and then multiply by the FNV prime 16777619, modulo 2^32."""
+notes = """
+The multiply is meant to wrap, and `*` traps on overflow, so the step is \
+`std::int::wrapping_mul` on a `U32` — the type itself supplies the modulus. \
+FNV-1a XORs before multiplying; swapping the two steps is the older FNV-1, \
+a different hash."""
+tier = "executable"
+difficulty = 2

@@ -1,0 +1,12 @@
+task = """
+Write `balanced(in text: Str) -> Bool` that reports whether the brackets \
+`()`, `[]` and `{}` in `text` are balanced and properly nested. Every other \
+byte is ignored, and a text with no brackets (including the empty text) is \
+balanced. Use a growable `Array[Int]` as a stack of the open brackets seen \
+so far."""
+notes = """
+`std::array::pop` returns `Option[T]`, so an unmatched closer shows up as \
+`None` rather than a trap. The stack must also be empty at the end: \
+`\"((\"` never sees a wrong closer but is still unbalanced."""
+tier = "executable"
+difficulty = 3

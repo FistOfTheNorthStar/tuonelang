@@ -1,0 +1,32 @@
+fn is_active(in doc: std::json::Json, take node: Int) -> Bool {
+    let flag = std::json::member(doc, node, "active");
+    flag >= 0 && std::json::kind_of(doc, flag) == std::json::kind_true()
+}
+
+fn count_active(in text: Str) -> Int {
+    match std::json::parse(text) {
+        Ok { value } => {
+            var count = 0;
+            var node = std::json::first_child(value, std::json::root());
+            while node >= 0 {
+                if is_active(value, node) {
+                    count = count + 1;
+                }
+                node = std::json::next_sibling(value, node);
+            }
+            count
+        },
+        Err { error } => 0 - 1,
+    }
+}
+
+spec count_active {
+    then count_active("[{\"id\": 1, \"active\": true}, {\"id\": 2, \"active\": false}, {\"id\": 3, \"active\": true}]") == 2;
+    then count_active("[]") == 0;
+}
+
+spec "count_active skips missing and non-boolean flags" {
+    then count_active("[{\"id\": 1}, {\"active\": \"yes\"}, {\"active\": null}]") == 0;
+    then count_active("[{\"user\": {\"active\": true}}]") == 0;
+    then count_active("[{\"active\": true]") == 0 - 1;
+}

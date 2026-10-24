@@ -1,0 +1,28 @@
+struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+fn swap_pair[A, B](take p: Pair[A, B]) -> Pair[B, A] {
+    let a = p.first;
+    let b = p.second;
+    Pair { first: b, second: a }
+}
+
+fn label_of(in p: Pair[Str, Int]) -> Str {
+    p.first
+}
+
+fn count_of(in p: Pair[Str, Int]) -> Int {
+    p.second
+}
+
+fn fst(in p: Pair[Int, Int]) -> Int {
+    p.first
+}
+
+spec swap_pair {
+    then label_of(swap_pair(Pair { first: 3, second: "apples" })) == "apples";
+    then count_of(swap_pair(Pair { first: 3, second: "apples" })) == 3;
+    then fst(swap_pair(swap_pair(Pair { first: 1, second: 2 }))) == 1;
+}

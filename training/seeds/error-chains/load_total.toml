@@ -1,0 +1,19 @@
+task = """
+A two-line ledger file has one amount per line. Write \
+`parse_amount(in text: Str) -> Result[Int, Array[String]]`, which parses a \
+line with `std::str::parse_int` and, on failure, returns an error chain \
+whose root is \"not a number\"; \
+`load_total(in first: Str, in second: Str) -> Result[Int, Array[String]]`, \
+which adds the two amounts and wraps a failure with the context \
+\"line 1\" or \"line 2\" naming the line that failed (the first failure \
+wins); and `report(in first: Str, in second: Str) -> String`, which renders \
+the total in decimal or, on failure, the whole chain with \
+`std::core::error_message` (e.g. \"line 2: not a number\")."""
+notes = """
+Each layer adds only what it knows: the parser knows the text was not a \
+number, the loader knows which line it was reading. Matching an \
+`Err { error }` and returning `Err { error: std::core::error_wrap(error, ...) }` \
+is how context is propagated, since there is no `?` operator."""
+tier = "executable"
+difficulty = 4
+stdlib_deps = ["core", "str"]

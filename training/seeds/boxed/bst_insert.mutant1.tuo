@@ -1,0 +1,79 @@
+struct Bst {
+    key: Int,
+    left: Option[Box[Bst]],
+    right: Option[Box[Bst]],
+}
+
+fn bst_insert(take tree: Option[Box[Bst]], take key: Int) -> Option[Box[Bst]] {
+    match tree {
+        None => Some { value: std::boxed::new(Bst { key, left: None, right: None }) },
+        Some { value } => {
+            let node = std::boxed::into(value);
+            let here = node.key;
+            var left = node.left;
+            var right = node.right;
+            if key < here {
+                left = bst_insert(left, key);
+            } else {
+                right = bst_insert(right, key);
+            }
+            Some { value: std::boxed::new(Bst { key: here, left, right }) }
+        },
+    }
+}
+
+fn node_contains(in n: Bst, take key: Int) -> Bool {
+    if key == n.key {
+        true
+    } else if key < n.key {
+        bst_contains(n.left, key)
+    } else {
+        bst_contains(n.right, key)
+    }
+}
+
+fn bst_contains(in tree: Option[Box[Bst]], take key: Int) -> Bool {
+    match tree {
+        Some { value } => node_contains(std::boxed::get(value), key),
+        None => false,
+    }
+}
+
+fn node_size(in n: Bst) -> Int {
+    1 + bst_size(n.left) + bst_size(n.right)
+}
+
+fn bst_size(in tree: Option[Box[Bst]]) -> Int {
+    match tree {
+        Some { value } => node_size(std::boxed::get(value)),
+        None => 0,
+    }
+}
+
+fn sample() -> Option[Box[Bst]] {
+    var t = None;
+    t = bst_insert(t, 50);
+    t = bst_insert(t, 30);
+    t = bst_insert(t, 70);
+    t = bst_insert(t, 40);
+    t = bst_insert(t, 30);
+    t
+}
+
+spec bst_insert {
+    then bst_size(sample()) == 4;
+    then bst_size(bst_insert(None, 1)) == 1;
+    then bst_contains(bst_insert(sample(), 65), 65);
+}
+
+spec bst_contains {
+    then bst_contains(sample(), 40);
+    then bst_contains(sample(), 70);
+    then !bst_contains(sample(), 60);
+    then !bst_contains(None, 1);
+}
+
+spec bst_size {
+    then bst_size(None) == 0;
+    then bst_size(bst_insert(bst_insert(sample(), 10), 90)) == 6;
+}

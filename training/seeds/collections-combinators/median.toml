@@ -1,0 +1,13 @@
+task = """
+Write `median(in xs: Array[Int]) -> Option[Int]` returning the median of \
+the values: the middle element of the sorted values for an odd count, the \
+integer mean of the two middle elements (rounded toward zero) for an even \
+count, and `None` for an empty array. Do not modify the input."""
+notes = """
+`std::collections::sorted_ascending` returns a NEW sorted array and only \
+borrows its input, so the caller's order is untouched. Forgetting to sort \
+gives the middle of the input order, which happens to be right for \
+already-sorted test data."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["collections", "core"]

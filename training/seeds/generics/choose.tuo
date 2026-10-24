@@ -1,0 +1,16 @@
+fn choose[T](take use_override: Bool, take override: T, take default: T) -> T {
+    if use_override {
+        let _ = default;
+        override
+    } else {
+        let _ = override;
+        default
+    }
+}
+
+spec choose {
+    then choose(true, 8080, 80) == 8080;
+    then choose(false, 8080, 80) == 80;
+    then choose(true, "debug", "info") == "debug";
+    then choose(false, "debug", "info") == "info";
+}

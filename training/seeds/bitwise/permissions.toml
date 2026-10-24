@@ -1,0 +1,14 @@
+task = """
+Model file permissions as a bit set with `const READ: Int = 1`, \
+`const WRITE: Int = 2`, and `const EXECUTE: Int = 4`. Write \
+`grant(take perms: Int, take flag: Int) -> Int` (set the flag bits), \
+`revoke(take perms: Int, take flag: Int) -> Int` (clear them, leaving the \
+others alone, even if they were not set), and \
+`allows(take perms: Int, take flag: Int) -> Bool` (true only when every bit \
+of `flag` is set, so a combined flag like `READ | WRITE` needs both)."""
+notes = """
+Clearing is `perms & ~flag`; `perms ^ flag` toggles, which *grants* a \
+permission that was not held. Testing `(perms & flag) == flag` rather than \
+`!= 0` makes a multi-bit flag require all of its bits."""
+tier = "executable"
+difficulty = 2

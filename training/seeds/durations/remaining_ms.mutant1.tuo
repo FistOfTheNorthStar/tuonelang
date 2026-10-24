@@ -1,0 +1,16 @@
+fn remaining_ms(in steps_ms: [Int; 4], take budget_secs: Int) -> Int {
+    var used = std::time::zero();
+    for step in steps_ms {
+        used = std::time::add(used, std::time::from_millis(step));
+    }
+    let budget = std::time::from_secs(budget_secs);
+    std::time::as_millis(budget) - std::time::as_millis(used)
+}
+
+spec remaining_ms {
+    then remaining_ms([200, 300, 250, 50], 1) == 200;
+    then remaining_ms([1000, 1000, 500, 0], 5) == 2500;
+    then remaining_ms([400, 300, 200, 100], 1) == 0;
+    then remaining_ms([900, 900, 900, 900], 2) == 0;
+    then remaining_ms([0, 0, 0, 0], 0) == 0;
+}

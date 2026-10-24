@@ -1,0 +1,38 @@
+fn is_alnum(take b: Int) -> Bool {
+    (b >= 48 && b <= 57) || (b >= 97 && b <= 122)
+}
+
+fn slugify(in title: Str) -> String {
+    var out = std::string::empty();
+    var pending_dash = false;
+    var i = 0;
+    while i < std::str::len(title) {
+        var b = std::str::byte_at(title, i);
+        if b >= 65 && b <= 90 {
+            b = b + 32;
+        }
+        if is_alnum(b) {
+            if pending_dash {
+                std::string::push_byte(out, 45);
+            }
+            pending_dash = false;
+            std::string::push_byte(out, b);
+        } else {
+            pending_dash = true;
+        }
+        i = i + 1;
+    }
+    out
+}
+
+spec slugify {
+    then std::string::as_str(slugify("Hello, World!")) == "hello-world";
+    then std::string::as_str(slugify("Rust 2024 Edition")) == "rust-2024-edition";
+}
+
+spec "slugify trims and collapses separators" {
+    then std::string::as_str(slugify("  --Tips & Tricks--  ")) == "tips-tricks";
+    then std::string::as_str(slugify("a...b")) == "a-b";
+    then std::string::len(slugify("!!!")) == 0;
+    then std::string::len(slugify("")) == 0;
+}

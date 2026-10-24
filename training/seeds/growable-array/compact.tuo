@@ -1,0 +1,26 @@
+fn compact(in readings: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    var i = 0;
+    while i < std::array::len(readings) {
+        let r = std::array::get(readings, i);
+        if r >= 0 {
+            std::array::push(out, r);
+        }
+        i = i + 1;
+    }
+    out
+}
+
+spec compact {
+    when var log = std::array::empty();
+    when std::array::push(log, 12);
+    when std::array::push(log, 0 - 1);
+    when std::array::push(log, 0);
+    when std::array::push(log, 7);
+    when std::array::push(log, 0 - 1);
+    then std::array::len(compact(log)) == 3;
+    then std::array::get(compact(log), 0) == 12;
+    then std::array::get(compact(log), 1) == 0;
+    then std::array::get(compact(log), 2) == 7;
+    then std::array::len(compact(std::array::empty())) == 0;
+}

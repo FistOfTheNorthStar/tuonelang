@@ -1,0 +1,13 @@
+task = """
+Write `read_status(take b: Int) -> Str` that names what one call to \
+`std::net::read_byte_timeout` returned: \"byte\" for a byte value (0..=255), \
+\"eof\" for -1 (the peer closed the connection), \"timeout\" for the \
+timeout sentinel, and \"error\" for any other negative value. Use \
+`std::net::is_timeout` for the timeout check."""
+notes = """
+On the stream seam -1 means end of input, not failure: the peer closing is \
+the normal way a conversation ends. -3 is the distinct timeout sentinel, so \
+check it through `std::net::is_timeout` rather than a bare number."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["net"]

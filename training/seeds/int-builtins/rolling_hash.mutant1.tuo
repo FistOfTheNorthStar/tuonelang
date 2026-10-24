@@ -1,0 +1,20 @@
+fn rolling_hash(in s: Str) -> U32 {
+    var h: U32 = 0;
+    var i = 0;
+    while i < std::str::len(s) {
+        h = h << 5 ^ (std::str::byte_at(s, i) as U32);
+        i = i + 1;
+    }
+    h
+}
+
+spec rolling_hash {
+    then rolling_hash("") == 0;
+    then rolling_hash("a") == 97;
+    then rolling_hash("ab") == 3138;
+}
+
+spec "rolling_hash keeps the bits that rotate past the top" {
+    then rolling_hash("tuonelang") == 443022868;
+    then rolling_hash("the quick brown fox") == 1438509246;
+}

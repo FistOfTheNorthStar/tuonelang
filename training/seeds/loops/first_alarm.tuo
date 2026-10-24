@@ -1,0 +1,23 @@
+fn first_alarm(in readings: [Int; 6], take limit: Int) -> Int {
+    var i = 0;
+    var found = 0 - 1;
+    loop {
+        if i >= 6 {
+            break;
+        }
+        if readings[i as Usize] > limit {
+            found = i;
+            break;
+        }
+        i = i + 1;
+    }
+    found
+}
+
+spec first_alarm {
+    then first_alarm([20, 21, 35, 22, 40, 19], 30) == 2;
+    then first_alarm([31, 20, 20, 20, 20, 20], 30) == 0;
+    then first_alarm([20, 20, 20, 20, 20, 45], 30) == 5;
+    then first_alarm([30, 30, 30, 30, 30, 30], 30) == 0 - 1;
+    then first_alarm([0 - 5, 0 - 4, 0 - 3, 0 - 2, 0 - 1, 0], 0 - 3) == 3;
+}

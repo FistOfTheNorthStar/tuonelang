@@ -1,0 +1,42 @@
+fn rename(mut roster: Array[String], in old: Str, in new_name: Str) -> Bool {
+    var i = 0;
+    while i < std::array::len(roster) {
+        let name = std::array::get(roster, i);
+        if std::string::as_str(name) == old {
+            std::array::set(roster, i, std::string::from_str(new_name));
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+fn roster() -> Array[String] {
+    var r = std::array::empty();
+    std::array::push(r, std::string::from_str("ann"));
+    std::array::push(r, std::string::from_str("bob"));
+    std::array::push(r, std::string::from_str("bob"));
+    r
+}
+
+fn name_is(in r: Array[String], take i: Int, in expected: Str) -> Bool {
+    let name = std::array::get(r, i);
+    std::string::as_str(name) == expected
+}
+
+spec rename {
+    when var r = roster();
+    when let replaced = rename(r, "bob", "bea");
+    then replaced;
+    then name_is(r, 1, "bea");
+    then name_is(r, 2, "bob");
+    then std::array::len(r) == 3;
+}
+
+spec "rename of an absent name changes nothing" {
+    when var r = roster();
+    when let replaced = rename(r, "cy", "dee");
+    then !replaced;
+    then name_is(r, 0, "ann");
+    then name_is(r, 1, "bob");
+}

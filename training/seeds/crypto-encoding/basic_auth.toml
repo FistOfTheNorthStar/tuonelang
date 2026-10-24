@@ -1,0 +1,13 @@
+task = """
+Write `basic_auth(in user: Str, in password: Str) -> String` returning an \
+HTTP Basic `Authorization` header value: `Basic ` followed by the standard \
+padded Base64 encoding of `user:password`. The colon is always present, \
+even when either part is empty."""
+notes = """
+`std::crypto::base64_encode` takes bytes, so the text goes through \
+`std::crypto::bytes_of_str` first; build `user:password` in one owned \
+`String` and encode it once. Calling the library is the point — a \
+hand-written Base64 encoder is where padding bugs live."""
+stdlib_deps = ["crypto"]
+tier = "executable"
+difficulty = 2

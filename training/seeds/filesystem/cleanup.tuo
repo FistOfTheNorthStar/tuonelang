@@ -1,0 +1,47 @@
+module app;
+
+fn main() -> Int {
+    let path = "tuo_seed_cleanup.lock";
+    match std::fs::write(path, "lock") {
+        Ok { value } => {},
+        Err { error } => {
+            return 1;
+        },
+    }
+    match std::fs::exists(path) {
+        Ok { value } => {
+            if !value {
+                return 2;
+            }
+        },
+        Err { error } => {
+            return 2;
+        },
+    }
+    match std::fs::remove(path) {
+        Ok { value } => {},
+        Err { error } => {
+            return 3;
+        },
+    }
+    match std::fs::exists(path) {
+        Ok { value } => {
+            if value {
+                return 4;
+            }
+        },
+        Err { error } => {
+            return 4;
+        },
+    }
+    match std::fs::read(path) {
+        Ok { value } => 5,
+        Err { error } => {
+            if std::fs::is_not_found(error) {
+                7
+            } else {
+                5
+            }
+        },
+    }
+}

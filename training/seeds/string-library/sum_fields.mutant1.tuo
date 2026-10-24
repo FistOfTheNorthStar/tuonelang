@@ -1,0 +1,29 @@
+fn sum_fields(in line: Str) -> Option[Int] {
+    let fields = std::str::split(line, ",");
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(fields) {
+        let field = std::array::get(fields, i);
+        match std::str::parse_int(std::str::trim(std::string::as_str(field))) {
+            Ok { value } => {
+                total = total + value;
+            },
+            Err { error } => {},
+        }
+        i = i + 1;
+    }
+    Some { value: total }
+}
+
+spec sum_fields {
+    then std::core::unwrap_or(sum_fields("1,2,3"), 0 - 1) == 6;
+    then std::core::unwrap_or(sum_fields(" 10 , -4,  7"), 0 - 1) == 13;
+    then std::core::unwrap_or(sum_fields("42"), 0 - 1) == 42;
+}
+
+spec "sum_fields rejects empty and malformed fields" {
+    then std::core::is_none(sum_fields(""));
+    then std::core::is_none(sum_fields("1,,2"));
+    then std::core::is_none(sum_fields("1,two,3"));
+    then std::core::is_none(sum_fields("1,2,"));
+}

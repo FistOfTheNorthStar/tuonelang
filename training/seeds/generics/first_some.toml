@@ -1,0 +1,12 @@
+task = """
+Write a generic `first_some[T](take primary: Option[T], take fallback: \
+Option[T]) -> Option[T]` that returns `primary` when it holds a value and \
+`fallback` otherwise — for example a cached lookup that falls back to a \
+default source. When both hold values, `primary` wins; when neither does, \
+the result is `None`."""
+notes = """
+On the branch that returns the primary's value, the unused `fallback` is \
+still owned and must be consumed with `let _ = fallback;` — a generic \
+parameter is moved exactly once on every path."""
+tier = "executable"
+difficulty = 3

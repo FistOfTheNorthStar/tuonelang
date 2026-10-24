@@ -1,0 +1,26 @@
+fn median(in xs: Array[Int]) -> Option[Int] {
+    let n = std::array::len(xs);
+    if n == 0 {
+        return None;
+    }
+    let sorted = std::collections::sorted_ascending(xs);
+    let mid = n / 2;
+    if n % 2 == 1 {
+        Some { value: std::array::get(sorted, mid) }
+    } else {
+        Some { value: (std::array::get(sorted, mid - 1) + std::array::get(sorted, mid)) / 2 }
+    }
+}
+
+spec median {
+    then std::core::unwrap_or(median(std::collections::of3(9, 1, 5)), 0) == 5;
+    then std::core::unwrap_or(median(std::collections::singleton(7)), 0) == 7;
+    when var four = std::array::empty();
+    when std::array::push(four, 10);
+    when std::array::push(four, 2);
+    when std::array::push(four, 8);
+    when std::array::push(four, 3);
+    then std::core::unwrap_or(median(four), 0) == 5;
+    then std::array::get(four, 0) == 10;
+    then std::core::is_none(median(std::array::empty()));
+}

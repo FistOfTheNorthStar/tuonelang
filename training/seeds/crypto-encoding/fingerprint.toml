@@ -1,0 +1,11 @@
+task = """
+Write `fingerprint(in data: Str) -> String` returning a short content \
+fingerprint: the first 8 characters of the lowercase hex SHA-256 digest of \
+`data` (so `abc` gives `ba7816bf`)."""
+notes = """
+`std::crypto::sha256` already returns the 64-character lowercase hex \
+digest as an owned `String`; calling it and slicing is the whole job. Never \
+re-implement a hash function in application code."""
+stdlib_deps = ["crypto"]
+tier = "executable"
+difficulty = 1

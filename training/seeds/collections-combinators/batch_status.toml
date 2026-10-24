@@ -1,0 +1,16 @@
+task = """
+A batch of temperature readings is an `Array[Int]`. A reading is valid when \
+it lies in 0..=150 and is an alarm when it is above 100. Write \
+`alarm_count(in readings: Array[Int]) -> Int` returning how many readings \
+are alarms, and `batch_status(in readings: Array[Int]) -> Int` returning 0 \
+when ANY reading is invalid, otherwise 2 when at least one reading is an \
+alarm, otherwise 1 (an empty batch is 1). Use the `std::collections` \
+combinators `all`, `any`, and `filter_into` with named predicate \
+functions."""
+notes = """
+`all` is true for the empty array and `any` is false, which is exactly the \
+behaviour an empty batch needs. Each predicate is a top-level \
+`fn(take Int) -> Bool` passed by name."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["collections"]

@@ -1,0 +1,49 @@
+fn visit_summary(in visitors: Array[Str]) -> String {
+    var tally = std::map::empty();
+    var i = 0;
+    while i < std::array::len(visitors) {
+        let name = std::array::get(visitors, i);
+        let seen = match std::map::get(tally, name) {
+            Some { value } => value,
+            None => 0,
+        };
+        let _ = std::map::insert(tally, name, seen + 1);
+        i = i + 1;
+    }
+    let names = std::map::keys(tally);
+    var out = std::str::builder();
+    var k = 0;
+    while k < std::array::len(names) {
+        let name = std::array::get(names, k);
+        std::str::push(out, name);
+        std::str::push(out, "=");
+        std::str::push_int(out, std::core::unwrap_or(std::map::get(tally, name), 0));
+        std::str::push(out, ",");
+        k = k + 1;
+    }
+    out
+}
+
+fn summary_is(in visitors: Array[Str], in expected: Str) -> Bool {
+    let s = visit_summary(visitors);
+    std::string::as_str(s) == expected
+}
+
+spec visit_summary {
+    when var log = std::array::empty();
+    when std::array::push(log, "ann");
+    when std::array::push(log, "bob");
+    when std::array::push(log, "ann");
+    when std::array::push(log, "cy");
+    when std::array::push(log, "bob");
+    when std::array::push(log, "ann");
+    then summary_is(log, "ann=3,bob=2,cy=1");
+    then summary_is(std::array::empty(), "");
+}
+
+spec "visit_summary keeps first-seen order" {
+    when var log = std::array::empty();
+    when std::array::push(log, "zed");
+    when std::array::push(log, "amy");
+    then summary_is(log, "zed=1,amy=1");
+}

@@ -1,0 +1,19 @@
+fn fetch_error(take status: Int) -> Array[String] {
+    let root = if status == 404 {
+        std::core::error_new("not found")
+    } else if status == 408 || status == 504 {
+        std::core::error_new("timeout")
+    } else {
+        std::core::error_new("server error")
+    };
+    std::core::error_wrap(root, "fetch users")
+}
+
+spec fetch_error {
+    then std::string::as_str(std::core::error_message(fetch_error(404))) == "fetch users: not found";
+    then std::string::as_str(std::core::error_message(fetch_error(408))) == "fetch users: timeout";
+    then std::string::as_str(std::core::error_message(fetch_error(504))) == "fetch users: timeout";
+    then std::string::as_str(std::core::error_message(fetch_error(500))) == "fetch users: server error";
+    then std::string::as_str(std::core::error_root(fetch_error(404))) == "not found";
+    then std::array::len(fetch_error(503)) == 2;
+}

@@ -1,0 +1,50 @@
+fn normalize(in xs: Array[Float]) -> Array[Float] {
+    var out = std::array::empty();
+    let n = std::array::len(xs);
+    if n == 0 {
+        return out;
+    }
+    var lo = std::array::get(xs, 0);
+    var hi = lo;
+    var i = 1;
+    while i < n {
+        let x = std::array::get(xs, i);
+        lo = std::math::fmin(lo, x);
+        hi = std::math::fmax(hi, x);
+        i = i + 1;
+    }
+    let range = hi - lo;
+    var j = 0;
+    while j < n {
+        if range == 0.0 {
+            std::array::push(out, 0.0);
+        } else {
+            std::array::push(out, (std::array::get(xs, j) - lo) / range);
+        }
+        j = j + 1;
+    }
+    out
+}
+
+fn readings() -> Array[Float] {
+    var xs = std::array::empty();
+    std::array::push(xs, 6.0);
+    std::array::push(xs, 2.0);
+    std::array::push(xs, 4.0);
+    xs
+}
+
+spec normalize {
+    then std::array::get(normalize(readings()), 0) == 1.0;
+    then std::array::get(normalize(readings()), 1) == 0.0;
+    then std::array::get(normalize(readings()), 2) == 0.5;
+    then std::array::len(normalize(std::array::empty())) == 0;
+}
+
+spec "normalize of a flat series" {
+    when var flat = std::array::empty();
+    when std::array::push(flat, 7.5);
+    when std::array::push(flat, 7.5);
+    then std::array::get(normalize(flat), 0) == 0.0;
+    then std::array::get(normalize(flat), 1) == 0.0;
+}

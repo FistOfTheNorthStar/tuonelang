@@ -1,0 +1,41 @@
+fn first_passing(take check: fn(take Int) -> Bool, take limit: Int) -> Int {
+    var attempt = 1;
+    while attempt <= limit {
+        if check(attempt) {
+            return attempt;
+        }
+        attempt = attempt + 1;
+    }
+    0 - 1
+}
+
+fn is_square(take n: Int) -> Bool {
+    var r = 2;
+    while r * r < n {
+        r = r + 1;
+    }
+    r * r == n
+}
+
+fn over_fifty(take n: Int) -> Bool {
+    n > 50
+}
+
+spec first_passing {
+    then first_passing(is_square, 10) == 4;
+    then first_passing(is_square, 3) == 0 - 1;
+    then first_passing(over_fifty, 51) == 51;
+    then first_passing(over_fifty, 50) == 0 - 1;
+    then first_passing(over_fifty, 0) == 0 - 1;
+}
+
+spec is_square {
+    then is_square(9);
+    then !is_square(1);
+    then !is_square(10);
+}
+
+spec over_fifty {
+    then over_fifty(51);
+    then !over_fifty(50);
+}

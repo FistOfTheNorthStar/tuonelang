@@ -1,0 +1,12 @@
+task = """
+Write `field_at(in line: Str, take index: Int) -> Str` returning the \
+`index`-th (0-based) comma-separated field of `line` as a slice of it, \
+without copying. Fields may be empty (`a,,c` has three). Return the empty \
+string when `index` is negative or past the last field."""
+notes = """
+`std::str::slice` returns a borrowed view, so no `String` is allocated. The \
+end of the line terminates the last field just like a comma does: looping \
+`while i <= n` and testing `i == n` first (so `byte_at` is never called past \
+the end) handles both in one place."""
+tier = "executable"
+difficulty = 3

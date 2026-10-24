@@ -1,0 +1,35 @@
+fn parse_port(in field: Str) -> Result[Int, Str] {
+    match std::str::parse_int(field) {
+        Ok { value } => {
+            if value < 0 || value > 65535 {
+                Err { error: "port out of range" }
+            } else {
+                Ok { value }
+            }
+        },
+        Err { error } => Err { error },
+    }
+}
+
+fn error_of(in r: Result[Int, Str]) -> Str {
+    match r {
+        Ok { value } => "",
+        Err { error } => error,
+    }
+}
+
+spec parse_port {
+    then std::core::ok_or(parse_port("8080"), 0) == 8080;
+    then std::core::ok_or(parse_port("1"), 0) == 1;
+    then std::core::ok_or(parse_port("65535"), 0) == 65535;
+    then error_of(parse_port("0")) == "port out of range";
+    then error_of(parse_port("65536")) == "port out of range";
+    then error_of(parse_port("-80")) == "port out of range";
+    then error_of(parse_port("http")) == "non-digit";
+    then error_of(parse_port("")) == "empty";
+}
+
+spec error_of {
+    then error_of(Ok { value: 5 }) == "";
+    then error_of(Err { error: "bad" }) == "bad";
+}

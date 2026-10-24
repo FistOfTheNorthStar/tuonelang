@@ -1,0 +1,36 @@
+module app;
+
+fn bowling_score(in rolls: [Int; 21]) -> Int {
+    var total = 0;
+    var i = 0;
+    var frame = 0;
+    while frame < 10 {
+        let first = rolls[i as Usize];
+        if first == 10 {
+            total = total + 10 + rolls[(i + 1) as Usize] + rolls[(i + 2) as Usize];
+            i = i + 1;
+        } else {
+            let pair = first + rolls[(i + 1) as Usize];
+            if pair == 10 {
+                total = total + 10 + rolls[(i + 2) as Usize];
+            } else {
+                total = total + pair;
+            }
+            i = i + 2;
+        }
+        frame = frame + 1;
+    }
+    total
+}
+
+spec bowling_score {
+    then bowling_score([0; 21]) == 0;
+    then bowling_score([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0]) == 20;
+    then bowling_score([10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 300;
+    then bowling_score([5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5]) == 150;
+}
+
+fn main() -> Int {
+    let game: [Int; 21] = [1, 4, 4, 5, 6, 4, 5, 5, 10, 0, 1, 7, 3, 6, 4, 10, 2, 8, 6, 0, 0];
+    bowling_score(game)
+}

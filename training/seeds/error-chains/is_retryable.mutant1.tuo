@@ -1,0 +1,12 @@
+fn is_retryable(in chain: Array[String]) -> Bool {
+    let root = std::core::error_root(chain);
+    std::string::as_str(root) == "timeout" || std::string::as_str(root) == "connection refused"
+}
+
+spec is_retryable {
+    then is_retryable(std::core::error_new("timeout"));
+    then is_retryable(std::core::error_wrap(std::core::error_new("connection refused"), "dial db"));
+    then is_retryable(std::core::error_wrap(std::core::error_wrap(std::core::error_new("read failed"), "timeout"), "sync"));
+    then !is_retryable(std::core::error_wrap(std::core::error_new("permission denied"), "open log"));
+    then !is_retryable(std::core::error_new("timeouts"));
+}

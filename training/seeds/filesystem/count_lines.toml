@@ -1,0 +1,16 @@
+task = """
+Write a runnable program that writes a three-line inventory file \
+(\"apples 4\\nbananas 12\\ncherries 7\\n\") to `tuo_seed_inventory.txt`, \
+reads it back with `std::fs::read`, removes it, and analyses the text with \
+`count_lines(in text: Str) -> Int` (the number of newline bytes) and \
+`longest_line(in text: Str) -> Int` (the length of the longest line, not \
+counting its newline). `main` returns `count_lines * 10 + longest_line`, \
+or 1..3 when writing, reading or removing fails."""
+notes = """
+`std::fs::read` yields an owned `String`; `std::string::as_str` lends it as \
+a `Str` so the byte-level `std::str` helpers can scan it without copying. \
+Removing the scratch file before returning keeps a re-run clean."""
+run_exit = 40
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["fs"]

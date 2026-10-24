@@ -1,0 +1,25 @@
+fn tag_for(in key: Str, in message: Str) -> Array[Int] {
+    std::crypto::hmac_sha256(std::crypto::bytes_of_str(key), std::crypto::bytes_of_str(message))
+}
+
+fn is_authentic(in key: Str, in message: Str, in tag: Array[Int]) -> Bool {
+    let expected = tag_for(key, message);
+    std::crypto::verify(expected, tag)
+}
+
+spec tag_for {
+    then std::string::as_str(std::crypto::to_hex(tag_for("key", "The quick brown fox jumps over the lazy dog"))) == "f7bc83f430538424b13298e6aa6fb143ef4d59a14946175997479dbc2d1a3cd8";
+}
+
+spec is_authentic {
+    when let tag = tag_for("secret", "amount=100");
+    then is_authentic("secret", "amount=100", tag);
+    then !is_authentic("secret", "amount=900", tag);
+    then !is_authentic("guess", "amount=100", tag);
+}
+
+spec "is_authentic rejects a truncated tag" {
+    when var short = std::array::empty();
+    when std::array::push(short, 1);
+    then !is_authentic("secret", "amount=100", short);
+}

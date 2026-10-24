@@ -1,0 +1,32 @@
+fn first_some[T](take primary: Option[T], take fallback: Option[T]) -> Option[T] {
+    match fallback {
+        Some { value } => {
+            let _ = primary;
+            Some { value }
+        },
+        None => primary,
+    }
+}
+
+fn int_or(take o: Option[Int], take default: Int) -> Int {
+    match o {
+        Some { value } => value,
+        None => default,
+    }
+}
+
+fn str_or(take o: Option[Str], in default: Str) -> Str {
+    match o {
+        Some { value } => value,
+        None => default,
+    }
+}
+
+spec first_some {
+    then int_or(first_some(Some { value: 1 }, Some { value: 2 }), 0) == 1;
+    then int_or(first_some(None, Some { value: 2 }), 0) == 2;
+    then int_or(first_some(Some { value: 1 }, None), 0) == 1;
+    then int_or(first_some(None, None), 0 - 1) == 0 - 1;
+    then str_or(first_some(None, Some { value: "disk" }), "none") == "disk";
+    then str_or(first_some(Some { value: "cache" }, Some { value: "disk" }), "none") == "cache";
+}

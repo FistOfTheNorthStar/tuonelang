@@ -1,0 +1,14 @@
+task = """
+A client retries a failed request with exponential backoff: it waits 100 ms \
+before the first retry, and each later wait is twice the previous one. \
+Write `backoff_total(take retries: Int) -> std::time::Duration` returning \
+the total time spent waiting across `retries` retries (zero for 0 retries), \
+built with `std::time::from_millis` and `std::time::add`."""
+notes = """
+`std::time::Duration` is the one representation of a span of time; build it \
+with a constructor and combine with `add` rather than passing bare Ints of \
+unknown unit around. A struct is not compared in a spec, so the spec \
+extracts `std::time::as_millis`."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["time"]

@@ -1,0 +1,10 @@
+task = """
+Write `prefix_sums(in xs: [Int; 5]) -> [Int; 5]` returning the running \
+totals of `xs`: element `i` of the result is `xs[0] + ... + xs[i]` \
+(inclusive), so the last element is the sum of the whole array."""
+notes = """
+A fixed array is filled in place with an indexed write `out[i] = v` on a \
+`var` binding — start from the repeat literal `[0; 5]` rather than \
+building a growable array."""
+tier = "executable"
+difficulty = 2

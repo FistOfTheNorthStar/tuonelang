@@ -1,0 +1,12 @@
+fn latency_label(take start_ns: Int, take end_ns: Int) -> String {
+    let span = std::time::elapsed(std::time::instant_at(start_ns), std::time::instant_at(end_ns));
+    std::time::render(span)
+}
+
+spec latency_label {
+    then std::string::as_str(latency_label(1000, 2000001000)) == "2s";
+    then std::string::as_str(latency_label(0, 1500000000)) == "1500ms";
+    then std::string::as_str(latency_label(100, 250100)) == "250us";
+    then std::string::as_str(latency_label(3, 40)) == "37ns";
+    then std::string::as_str(latency_label(42, 42)) == "0s";
+}

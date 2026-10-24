@@ -1,0 +1,15 @@
+task = """
+Two buses leave the depot together and then every `a` and every `b` \
+minutes. Write `common_cycle(take a: Int, take b: Int) -> Int`, the number \
+of minutes until they next leave together (0 when either interval is not \
+positive). Also write `ratio_terms(take width: Int, take height: Int) -> \
+Int`, the larger term of the reduced aspect ratio (1920x1080 is 16:9, so \
+16), or 0 when both sides are 0. Use `std::math` and `std::core` rather \
+than hand-written loops."""
+notes = """
+`std::math::lcm` and `std::math::gcd` are the one obvious spelling of these \
+two classic loops; `gcd(0, 0)` is conventionally 0, so the zero case is \
+guarded before dividing by it."""
+stdlib_deps = ["math", "core"]
+tier = "executable"
+difficulty = 2

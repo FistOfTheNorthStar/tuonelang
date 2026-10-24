@@ -1,0 +1,13 @@
+task = """
+A binary tree is `enum Tree { Leaf, Branch { left: Box[Tree], value: Int, \
+right: Box[Tree] } }`. Write `depth(in t: Tree) -> Int` returning the \
+number of `Branch` nodes on the longest path from the root down to a \
+`Leaf` (0 for a lone `Leaf`), and `total(in t: Tree) -> Int` returning the \
+sum of every branch's value."""
+notes = """
+An enum variant can hold its children behind `Box` directly. The match \
+on an `in` parameter lends `left` and `right`, so recursing with \
+`depth(std::boxed::get(left))` walks the tree by borrow."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["core"]

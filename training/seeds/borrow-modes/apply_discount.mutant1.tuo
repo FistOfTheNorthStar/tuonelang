@@ -1,0 +1,47 @@
+fn apply_discount(mut prices: Array[Int], take percent: Int) -> () {
+    var i = 0;
+    while i < std::array::len(prices) {
+        let p = std::array::get(prices, i);
+        std::array::set(prices, i, p / 100 * (100 - percent));
+        i = i + 1;
+    }
+}
+
+fn discounted_total(in prices: Array[Int], take percent: Int) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(prices) {
+        total = total + std::array::get(prices, i) * (100 - percent) / 100;
+        i = i + 1;
+    }
+    total
+}
+
+spec apply_discount {
+    when var basket = std::array::empty();
+    when std::array::push(basket, 250);
+    when std::array::push(basket, 99);
+    when std::array::push(basket, 1000);
+    when apply_discount(basket, 10);
+    then std::array::get(basket, 0) == 225;
+    then std::array::get(basket, 1) == 89;
+    then std::array::get(basket, 2) == 900;
+    then std::array::len(basket) == 3;
+}
+
+spec "a zero discount leaves prices alone" {
+    when var basket = std::array::empty();
+    when std::array::push(basket, 37);
+    when apply_discount(basket, 0);
+    then std::array::get(basket, 0) == 37;
+}
+
+spec discounted_total {
+    when var basket = std::array::empty();
+    when std::array::push(basket, 250);
+    when std::array::push(basket, 99);
+    then discounted_total(basket, 10) == 314;
+    then std::array::get(basket, 0) == 250;
+    then discounted_total(basket, 100) == 0;
+    then discounted_total(std::array::empty(), 50) == 0;
+}

@@ -1,0 +1,67 @@
+enum Entry {
+    Deposit { amount: Int },
+    Withdrawal { amount: Int },
+    Fee { amount: Int, waived: Bool },
+    Freeze,
+}
+
+fn apply(take balance: Int, in e: Entry) -> Int {
+    match e {
+        Entry::Deposit { amount } => balance + amount,
+        Entry::Withdrawal { amount } => if amount <= balance {
+            balance - amount
+        } else {
+            balance
+        },
+        Entry::Fee { amount, waived } => if waived {
+            balance
+        } else {
+            balance - amount
+        },
+        Entry::Freeze => balance,
+    }
+}
+
+fn is_freeze(in e: Entry) -> Bool {
+    match e {
+        Entry::Freeze => true,
+        _ => false,
+    }
+}
+
+fn balance_after(in entries: Array[Entry]) -> Int {
+    var balance = 0;
+    var i = 0;
+    while i < std::array::len(entries) {
+        let e = std::array::get(entries, i);
+        if is_freeze(e) {
+            return balance;
+        }
+        balance = apply(balance, e);
+        i = i + 1;
+    }
+    balance
+}
+
+spec apply {
+    then apply(10, Entry::Deposit { amount: 5 }) == 15;
+    then apply(10, Entry::Withdrawal { amount: 10 }) == 0;
+    then apply(10, Entry::Withdrawal { amount: 11 }) == 10;
+    then apply(10, Entry::Fee { amount: 3, waived: false }) == 7;
+    then apply(10, Entry::Fee { amount: 3, waived: true }) == 10;
+    then apply(2, Entry::Fee { amount: 3, waived: false }) == 0 - 1;
+    then apply(10, Entry::Freeze) == 10;
+}
+
+spec balance_after {
+    when var ledger = std::array::empty();
+    when std::array::push(ledger, Entry::Deposit { amount: 100 });
+    when std::array::push(ledger, Entry::Withdrawal { amount: 30 });
+    when std::array::push(ledger, Entry::Fee { amount: 5, waived: true });
+    when std::array::push(ledger, Entry::Fee { amount: 2, waived: false });
+    then balance_after(ledger) == 68;
+    when std::array::push(ledger, Entry::Freeze);
+    when std::array::push(ledger, Entry::Deposit { amount: 1000 });
+    then balance_after(ledger) == 68;
+    then balance_after(std::array::empty()) == 0;
+}

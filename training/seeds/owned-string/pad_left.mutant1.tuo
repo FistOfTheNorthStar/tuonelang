@@ -1,0 +1,21 @@
+fn pad_left(in s: Str, take width: Int, take fill: Int) -> String {
+    var out = std::string::empty();
+    var missing = width - std::str::len(s);
+    while missing >= 0 {
+        std::string::push_byte(out, fill);
+        missing = missing - 1;
+    }
+    std::string::append(out, s);
+    out
+}
+
+spec pad_left {
+    then std::string::as_str(pad_left("42", 5, 48)) == "00042";
+    then std::string::as_str(pad_left("7", 3, 32)) == "  7";
+}
+
+spec "pad_left never truncates" {
+    then std::string::as_str(pad_left("12345", 3, 48)) == "12345";
+    then std::string::as_str(pad_left("abc", 3, 48)) == "abc";
+    then std::string::as_str(pad_left("", 2, 45)) == "--";
+}

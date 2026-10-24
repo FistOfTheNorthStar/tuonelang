@@ -1,0 +1,14 @@
+task = """
+A playlist has `track_count` tracks numbered from 0 and wraps around at \
+both ends. Write `track_after(take current: Int, take skip: Int, take \
+track_count: Int) -> Int` returning the track reached by skipping `skip` \
+tracks from `current` (a negative `skip` goes backwards, so skipping -1 \
+from track 0 of 5 lands on 4). An empty playlist (`track_count <= 0`) \
+always gives 0."""
+notes = """
+`%` takes the sign of the dividend, so `(0 - 1) % 5` is -1; \
+`std::math::modulo` always returns a residue in `[0, n)`, which is what an \
+index wants. The specs use `std::test::eq`, the library's assertion helper."""
+stdlib_deps = ["math", "test"]
+tier = "executable"
+difficulty = 2

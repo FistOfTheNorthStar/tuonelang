@@ -1,0 +1,44 @@
+module app;
+
+fn is_prime(take n: Int) -> Bool {
+    if n < 2 {
+        return false;
+    }
+    var d = 2;
+    while d * d <= n {
+        if n % d == 0 {
+            return false;
+        }
+        d = d + 1;
+    }
+    true
+}
+
+fn count_primes(take chunk: Int) -> Int {
+    var count = 0;
+    var n = chunk * 250;
+    while n < chunk * 250 + 250 {
+        if is_prime(n) {
+            count = count + 1;
+        }
+        n = n + 1;
+    }
+    count
+}
+
+fn main() -> Int {
+    var tasks = std::array::empty();
+    var chunk = 0;
+    while chunk < 4 {
+        std::array::push(tasks, chunk);
+        chunk = chunk + 1;
+    }
+    let counts = std::sync::par_map(count_primes, tasks, 2);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(counts) {
+        total = total + std::array::get(counts, i);
+        i = i + 1;
+    }
+    total
+}

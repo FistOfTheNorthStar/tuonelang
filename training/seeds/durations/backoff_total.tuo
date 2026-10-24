@@ -1,0 +1,19 @@
+fn backoff_total(take retries: Int) -> std::time::Duration {
+    var total = std::time::zero();
+    var wait_ms = 100;
+    var i = 0;
+    while i < retries {
+        total = std::time::add(total, std::time::from_millis(wait_ms));
+        wait_ms = wait_ms * 2;
+        i = i + 1;
+    }
+    total
+}
+
+spec backoff_total {
+    then std::time::as_millis(backoff_total(0)) == 0;
+    then std::time::as_millis(backoff_total(1)) == 100;
+    then std::time::as_millis(backoff_total(2)) == 300;
+    then std::time::as_millis(backoff_total(5)) == 3100;
+    then std::time::as_nanos(backoff_total(1)) == 100000000;
+}

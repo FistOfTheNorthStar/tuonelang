@@ -1,0 +1,19 @@
+task = """
+Write a runnable program with a two-stage pipeline over `std::sync` \
+channels. `main` sends the sensor readings 12, 55, 7, 90, 31 and 64 into an \
+`inbox` channel and closes it. \
+`relay(take from: Int, take to: Int, take threshold: Int) -> Int` drains \
+`from` until it is closed and empty, forwards every reading above \
+`threshold` into `to`, closes `to`, and returns how many it forwarded. \
+`main` relays with threshold 50, then drains the second channel, and \
+returns the sum of the forwarded readings when exactly three were \
+forwarded; it returns 1..4 on the failure paths."""
+notes = """
+A channel handle is a plain Int, so passing it to a function needs no \
+ownership choice beyond `take`. `recv` returns -1 once the channel is \
+closed AND drained, which is the loop's stop signal; closing `to` inside \
+`relay` is what lets the next stage's loop end."""
+run_exit = 209
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["sync"]

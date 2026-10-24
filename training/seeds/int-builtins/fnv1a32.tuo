@@ -1,0 +1,24 @@
+const FNV_OFFSET: U32 = 2166136261;
+const FNV_PRIME: U32 = 16777619;
+
+fn fnv1a32(in s: Str) -> U32 {
+    var h = FNV_OFFSET;
+    var i = 0;
+    while i < std::str::len(s) {
+        h = h ^ (std::str::byte_at(s, i) as U32);
+        h = std::int::wrapping_mul(h, FNV_PRIME);
+        i = i + 1;
+    }
+    h
+}
+
+spec fnv1a32 {
+    then fnv1a32("") == 2166136261;
+    then fnv1a32("a") == 3826002220;
+    then fnv1a32("foobar") == 3214735720;
+}
+
+spec "fnv1a32 depends on byte order" {
+    then fnv1a32("hello") == 1335831723;
+    then fnv1a32("ab") != fnv1a32("ba");
+}

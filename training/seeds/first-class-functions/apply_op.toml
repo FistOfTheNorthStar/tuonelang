@@ -1,0 +1,15 @@
+task = """
+A tiny calculator decodes an opcode into an operation. Write \
+`plus`, `minus`, `times`, and `larger`, each \
+`(take a: Int, take b: Int) -> Int`, and \
+`apply_op(take code: Int, take a: Int, take b: Int) -> Int` that looks the \
+operation up in a dispatch table — a fixed array of the four functions in \
+that order, indexed by `code` — and calls it. An opcode outside 0..=3 \
+yields 0."""
+notes = """
+A bare top-level function name is a value of type \
+`fn(take Int, take Int) -> Int`, so four of them fit in a \
+`[fn(take Int, take Int) -> Int; 4]` and the one picked out is called like \
+any function. Check the opcode before indexing: an out-of-range index traps."""
+tier = "executable"
+difficulty = 3

@@ -1,0 +1,13 @@
+task = """
+Declare `SECONDS_PER_MINUTE`, `SECONDS_PER_HOUR`, and `SECONDS_PER_DAY` as \
+`Int` constants and use them to write `to_seconds(take days: Int, take \
+hours: Int, take minutes: Int, take seconds: Int) -> Int`, the total length \
+of a duration in seconds, and `whole_hours(take seconds: Int) -> Int`, the \
+number of complete hours in a non-negative number of seconds."""
+notes = """
+Initialize each constant with a plain literal (3600, not `60 * 60`): v0 \
+lowers only literal `const` initializers, so a computed one type-checks but \
+the functions that use it cannot run. Integer `/` truncates, which is \
+exactly \"complete hours\" for a non-negative count."""
+tier = "executable"
+difficulty = 1
