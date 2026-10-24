@@ -1,0 +1,51 @@
+struct Node {
+    value: Int,
+    next: Option[Box[Node]],
+}
+
+fn cons(take value: Int, take rest: Option[Box[Node]]) -> Option[Box[Node]] {
+    Some { value: std::boxed::new(Node { value, next: rest }) }
+}
+
+fn reverse(take list: Option[Box[Node]]) -> Option[Box[Node]] {
+    var rest = list;
+    var out = None;
+    loop {
+        match rest {
+            Some { value } => {
+                let node = std::boxed::into(value);
+                rest = node.next;
+                out = cons(node.value, out);
+            },
+            None => break,
+        }
+    }
+    out
+}
+
+fn digits_from(take acc: Int, in n: Node) -> Int {
+    let here = acc * 10 + n.value;
+    match n.next {
+        Some { value } => digits_from(here, std::boxed::get(value)),
+        None => here,
+    }
+}
+
+fn digits(in list: Option[Box[Node]]) -> Int {
+    match list {
+        Some { value } => digits_from(0, std::boxed::get(value)),
+        None => 0,
+    }
+}
+
+spec digits {
+    then digits(cons(1, cons(2, cons(3, None)))) == 123;
+    then digits(None) == 0;
+}
+
+spec reverse {
+    then digits(reverse(cons(1, cons(2, cons(3, None))))) == 321;
+    then digits(reverse(cons(4, None))) == 4;
+    then digits(reverse(None)) == 0;
+    then digits(reverse(reverse(cons(5, cons(6, None))))) == 56;
+}

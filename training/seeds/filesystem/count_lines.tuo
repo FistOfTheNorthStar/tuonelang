@@ -1,0 +1,55 @@
+module app;
+
+fn count_lines(in text: Str) -> Int {
+    var lines = 0;
+    var i = 0;
+    while i < std::str::len(text) {
+        if std::str::byte_at(text, i) == 10 {
+            lines = lines + 1;
+        }
+        i = i + 1;
+    }
+    lines
+}
+
+fn longest_line(in text: Str) -> Int {
+    var longest = 0;
+    var current = 0;
+    var i = 0;
+    while i < std::str::len(text) {
+        if std::str::byte_at(text, i) == 10 {
+            current = 0;
+        } else {
+            current = current + 1;
+            if current > longest {
+                longest = current;
+            }
+        }
+        i = i + 1;
+    }
+    longest
+}
+
+fn main() -> Int {
+    let path = "tuo_seed_inventory.txt";
+    match std::fs::write(path, "apples 4\nbananas 12\ncherries 7\n") {
+        Ok { value } => {},
+        Err { error } => {
+            return 1;
+        },
+    }
+    let contents = match std::fs::read(path) {
+        Ok { value } => value,
+        Err { error } => {
+            return 2;
+        },
+    };
+    match std::fs::remove(path) {
+        Ok { value } => {},
+        Err { error } => {
+            return 3;
+        },
+    }
+    let text = std::string::as_str(contents);
+    count_lines(text) * 10 + longest_line(text)
+}

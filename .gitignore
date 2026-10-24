@@ -30,3 +30,9 @@ examples/**/tdg.lock
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# The generated training datasets: deterministic outputs of training/seeds/,
+# the harvested sources, and the compiler, published as release assets by
+# training/publish.py. stats.json and manifest.json (their hashes) are kept.
+# The held-out eval set is private and is never written here.
+training/dataset/*.jsonl

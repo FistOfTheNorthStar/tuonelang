@@ -1,0 +1,35 @@
+module app;
+
+fn drain_queue(take ch: Int) -> Int {
+    var taken = 0;
+    var v = std::sync::recv(ch);
+    while v >= 0 {
+        taken = taken + v;
+        v = std::sync::recv(ch);
+    }
+    taken
+}
+
+fn main() -> Int {
+    let ch = std::sync::channel();
+    var size = 1;
+    while size <= 20 {
+        if std::sync::send(ch, size) != 0 {
+            return 1;
+        }
+        size = size + 1;
+    }
+    let _ = std::sync::close(ch);
+    let handles = std::array::filled(4, ch);
+    let sums = std::sync::par_map(drain_queue, handles, 4);
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(sums) {
+        total = total + std::array::get(sums, i);
+        i = i + 1;
+    }
+    if total != 210 {
+        return 2;
+    }
+    total
+}

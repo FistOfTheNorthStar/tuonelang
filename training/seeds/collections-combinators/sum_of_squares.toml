@@ -1,0 +1,14 @@
+task = """
+Write `sum_of_squares(in xs: Array[Int]) -> Int` returning the sum of the \
+squares of the elements (0 for an empty array) by composing \
+`std::collections::map_into` with a top-level `square` function and \
+`std::collections::fold` with an addition step, rather than writing the \
+loop by hand."""
+notes = """
+A bare top-level `fn` name is a first-class value of type \
+`fn(take Int) -> Int`, so it is passed to the combinator directly; closures \
+do not exist, so the step function captures nothing. The fold's initial \
+accumulator is the identity of the step (0 for addition)."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["collections"]

@@ -1,0 +1,18 @@
+task = """
+Write a runnable program in which a UDP server answers a client. Both \
+sockets are bound to ephemeral ports. The client sends \"ping\" to the \
+server on 127.0.0.1; the server receives it (waiting at most 50 ms), checks \
+it is four bytes, and replies \"pong\" to the sender's port, found with \
+`std::net::udp_peer_port`. `reply_matches(take fd: Int, in expected: Str) -> Bool` \
+receives one datagram on `fd` (at most 50 ms) and compares it byte by byte \
+with `expected`. `main` closes both sockets and returns 44 when the client \
+got \"pong\", or a distinct code 1..5 for the failing step."""
+notes = """
+A UDP server learns where to reply only from the datagram it received: \
+`udp_peer_port` reports the sender of the last `udp_recv`, so the reply \
+needs no connection. The payload is read with `udp_byte_at`, never the \
+stream-side `read_byte`."""
+run_exit = 44
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["net"]

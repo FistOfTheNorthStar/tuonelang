@@ -1,0 +1,54 @@
+fn parse_amount(in text: Str) -> Result[Int, Array[String]] {
+    match std::str::parse_int(text) {
+        Ok { value } => Ok { value },
+        Err { error } => Err { error: std::core::error_new("not a number") },
+    }
+}
+
+fn load_total(in first: Str, in second: Str) -> Result[Int, Array[String]] {
+    let a = match parse_amount(first) {
+        Ok { value } => value,
+        Err { error } => {
+            return Err { error: std::core::error_wrap(error, "line 1") };
+        },
+    };
+    let b = match parse_amount(second) {
+        Ok { value } => value,
+        Err { error } => {
+            return Err { error: std::core::error_wrap(error, "line 2") };
+        },
+    };
+    Ok { value: a + b }
+}
+
+fn report(in first: Str, in second: Str) -> String {
+    match load_total(first, second) {
+        Ok { value } => std::str::to_string(value),
+        Err { error } => std::core::error_message(error),
+    }
+}
+
+spec parse_amount {
+    when let good = parse_amount("17");
+    when let bad = parse_amount("seventeen");
+    then match good {
+        Ok { value } => value,
+        Err { error } => 0,
+    } == 17;
+    then match bad {
+        Ok { value } => false,
+        Err { error } => std::string::as_str(std::core::error_message(error)) == "not a number",
+    };
+}
+
+spec load_total {
+    then std::string::as_str(report("12", "30")) == "42";
+    then std::string::as_str(report("-5", "1")) == "-4";
+    then std::string::as_str(report("12", "x")) == "line 2: not a number";
+    then std::string::as_str(report("", "")) == "line 1: not a number";
+}
+
+spec report {
+    then std::string::as_str(report("100", "0")) == "100";
+    then std::string::as_str(report("7", "")) == "line 2: not a number";
+}

@@ -1,0 +1,10 @@
+task = """
+Write `rms(in xs: Array[Float]) -> Float` returning the root mean square of \
+the samples: the square root of the mean of their squares (divide by the \
+number of samples). An empty array has an RMS of 0.0."""
+notes = """
+`std::float::sqrt` is the correctly rounded hardware square root. The count \
+is an `Int`, so it is converted with `n as Float` before dividing; mixing \
+`Int` and `Float` operands is a type error, never an implicit conversion."""
+tier = "executable"
+difficulty = 2

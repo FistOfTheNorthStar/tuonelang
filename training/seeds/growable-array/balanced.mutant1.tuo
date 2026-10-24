@@ -1,0 +1,41 @@
+fn opener_for(take close: Int) -> Int {
+    if close == 41 {
+        40
+    } else if close == 93 {
+        91
+    } else {
+        123
+    }
+}
+
+fn balanced(in text: Str) -> Bool {
+    var stack = std::array::empty();
+    var i = 0;
+    while i < std::str::len(text) {
+        let b = std::str::byte_at(text, i);
+        if b == 40 || b == 91 || b == 123 {
+            std::array::push(stack, b);
+        } else if b == 41 || b == 93 || b == 125 {
+            match std::array::pop(stack) {
+                Some { value } => {
+                    if value != opener_for(b) {
+                        return false;
+                    }
+                },
+                None => return false,
+            }
+        }
+        i = i + 1;
+    }
+    true
+}
+
+spec balanced {
+    then balanced("f(a[1], {b})");
+    then balanced("");
+    then balanced("no brackets");
+    then !balanced("(]");
+    then !balanced("((");
+    then !balanced("())");
+    then !balanced("([)]");
+}

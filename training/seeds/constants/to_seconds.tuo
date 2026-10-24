@@ -1,0 +1,23 @@
+const SECONDS_PER_MINUTE: Int = 60;
+const SECONDS_PER_HOUR: Int = 3600;
+const SECONDS_PER_DAY: Int = 86400;
+
+fn to_seconds(take days: Int, take hours: Int, take minutes: Int, take seconds: Int) -> Int {
+    days * SECONDS_PER_DAY + hours * SECONDS_PER_HOUR + minutes * SECONDS_PER_MINUTE + seconds
+}
+
+fn whole_hours(take seconds: Int) -> Int {
+    seconds / SECONDS_PER_HOUR
+}
+
+spec to_seconds {
+    then to_seconds(0, 0, 0, 0) == 0;
+    then to_seconds(0, 1, 30, 15) == 5415;
+    then to_seconds(2, 0, 0, 1) == 172801;
+}
+
+spec whole_hours {
+    then whole_hours(5415) == 1;
+    then whole_hours(3599) == 0;
+    then whole_hours(to_seconds(1, 2, 59, 59)) == 26;
+}

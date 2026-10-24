@@ -1,0 +1,14 @@
+task = """
+Write `log_entry(in chain: Array[String], take attempt: Int) -> String` that \
+formats one line of a retry log: `[attempt N] ` followed by the full error \
+message (`std::core::error_message`), then ` (root: R)` where R is the \
+root cause (`std::core::error_root`). A single-layer chain still gets the \
+root suffix, e.g. `[attempt 1] disk full (root: disk full)`."""
+notes = """
+Build text with the `std::str` builder: `builder()` starts an empty \
+`String`, `push` appends a `Str`, `push_int` appends an Int in decimal. The \
+chain functions return owned `String`s, which `std::string::as_str` lends \
+as a `Str` for `push`."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["core", "str"]

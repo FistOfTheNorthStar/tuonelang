@@ -1,0 +1,33 @@
+struct Account {
+    id: Int,
+    balance: Int,
+}
+
+fn withdraw(mut acct: Account, take amount: Int) -> Bool {
+    if amount <= 0 || amount >= acct.balance {
+        return false;
+    }
+    acct.balance = acct.balance - amount;
+    true
+}
+
+spec withdraw {
+    when var acct = Account { id: 7, balance: 100 };
+    when let first = withdraw(acct, 30);
+    then first;
+    then acct.balance == 70;
+    when let second = withdraw(acct, 70);
+    then second;
+    then acct.balance == 0;
+}
+
+spec "withdraw refuses bad amounts" {
+    when var acct = Account { id: 8, balance: 50 };
+    when let too_much = withdraw(acct, 51);
+    when let negative = withdraw(acct, 0 - 5);
+    when let zero = withdraw(acct, 0);
+    then !too_much;
+    then !negative;
+    then !zero;
+    then acct.balance == 50;
+}

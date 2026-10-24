@@ -1,0 +1,31 @@
+fn rms(in xs: Array[Float]) -> Float {
+    let n = std::array::len(xs);
+    if n == 0 {
+        return 0.0;
+    }
+    var sum_sq = 0.0;
+    var i = 0;
+    while i < n {
+        let x = std::array::get(xs, i);
+        sum_sq = sum_sq + x * x;
+        i = i + 1;
+    }
+    std::float::sqrt(sum_sq / ((n - 1) as Float))
+}
+
+spec rms {
+    when var xs = std::array::empty();
+    when std::array::push(xs, 1.0);
+    when std::array::push(xs, 7.0);
+    then rms(xs) == 5.0;
+}
+
+spec "rms of a constant signal and of nothing" {
+    when var flat = std::array::empty();
+    when std::array::push(flat, 0.0 - 3.0);
+    when std::array::push(flat, 3.0);
+    when std::array::push(flat, 3.0);
+    when let none = std::array::empty();
+    then rms(flat) == 3.0;
+    then rms(none) == 0.0;
+}

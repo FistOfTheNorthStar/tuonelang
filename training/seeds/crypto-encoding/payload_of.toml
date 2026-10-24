@@ -1,0 +1,15 @@
+task = """
+A token has three dot-separated parts, `header.payload.signature`, each \
+encoded in standard Base64. Write `payload_of(in token: Str) -> String` \
+returning the decoded text of the middle part, or the empty string when \
+the token does not have exactly three parts. (Only decode; do not check the \
+signature.)"""
+notes = """
+`std::str::split` yields the parts and `std::crypto::base64_decode` turns \
+the middle one into bytes, which `std::crypto::str_of_bytes` makes a \
+`String`. `base64_decode` is lenient — it skips characters outside the \
+alphabet and reports no error — so the structural check on the part count \
+is the caller's job."""
+stdlib_deps = ["str", "crypto"]
+tier = "executable"
+difficulty = 3

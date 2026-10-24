@@ -1,0 +1,22 @@
+fn tag_line(in tags: Array[Str]) -> String {
+    var out = std::str::builder();
+    std::str::push(out, "#");
+    std::str::push(out, std::string::as_str(std::str::join(tags, " #")));
+    std::str::to_lower(std::string::as_str(out))
+}
+
+spec tag_line {
+    when var tags = std::array::empty();
+    when std::array::push(tags, "Rust");
+    when std::array::push(tags, "compilers");
+    when std::array::push(tags, "LLM");
+    then std::string::as_str(tag_line(tags)) == "#rust #compilers #llm";
+}
+
+spec "tag_line of one tag and of none" {
+    when var one = std::array::empty();
+    when std::array::push(one, "News");
+    when let none = std::array::empty();
+    then std::string::as_str(tag_line(one)) == "#news";
+    then std::string::len(tag_line(none)) == 0;
+}

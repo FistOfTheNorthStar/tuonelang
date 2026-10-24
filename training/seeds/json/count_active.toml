@@ -1,0 +1,14 @@
+task = """
+Using `std::json`, write `count_active(in text: Str) -> Int` for a JSON \
+array of user objects: return how many elements have an `active` member \
+whose value is the boolean `true` (a missing member, `false`, `null`, or a \
+string does not count; nested objects are not searched). Return -1 when \
+`text` is not valid JSON."""
+notes = """
+Walk an array's elements with `first_child` and `next_sibling`, both -1 at \
+the end. `member` finding the key only proves it is present: the value's \
+`kind_of` must also be `kind_true()`. A helper can take the parsed document \
+as `in doc: std::json::Json`."""
+stdlib_deps = ["json"]
+tier = "executable"
+difficulty = 3

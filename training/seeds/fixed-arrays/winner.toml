@@ -1,0 +1,11 @@
+task = """
+A tic-tac-toe board is a `[Int; 9]` in row-major order where 0 is an empty \
+cell, 1 is X and 2 is O. Write `winner(in board: [Int; 9]) -> Int` \
+returning 1 or 2 when that player holds a full row, column, or diagonal, and \
+0 when nobody does (assume at most one player has a line)."""
+notes = """
+Indexing takes a `Usize`, so an `Int` index is converted with `as Usize`. \
+Listing the eight lines explicitly, both diagonals included, is clearer \
+than deriving them arithmetically."""
+tier = "executable"
+difficulty = 3

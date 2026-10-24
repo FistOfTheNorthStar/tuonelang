@@ -1,0 +1,28 @@
+fn common_cycle(take a: Int, take b: Int) -> Int {
+    if a <= 0 || b <= 0 {
+        return 0;
+    }
+    std::math::lcm(a, b)
+}
+
+fn ratio_terms(take width: Int, take height: Int) -> Int {
+    let g = std::math::gcd(width, height);
+    if g == 0 {
+        return 0;
+    }
+    std::core::max(width / g, height / g)
+}
+
+spec common_cycle {
+    then common_cycle(12, 18) == 36;
+    then common_cycle(7, 7) == 7;
+    then common_cycle(4, 9) == 36;
+    then common_cycle(0, 5) == 0;
+}
+
+spec ratio_terms {
+    then ratio_terms(1920, 1080) == 16;
+    then ratio_terms(1024, 768) == 4;
+    then ratio_terms(5, 5) == 1;
+    then ratio_terms(0, 0) == 0;
+}

@@ -1,0 +1,13 @@
+task = """
+Write `sum_fields(in line: Str) -> Option[Int]` that splits a line on `,`, \
+trims each field, parses it as a decimal integer, and returns the sum. If \
+any field is empty or not an integer — including the single empty field of \
+an empty line, or the empty field after a trailing comma — return `None`."""
+notes = """
+`std::str::split` returns an `Array[String]` of owned pieces; view each with \
+`std::string::as_str` to hand it to the `Str`-taking `trim` and \
+`parse_int`. Calling the library is the point: a hand-written splitter is \
+where the empty-field edge cases go wrong."""
+stdlib_deps = ["str"]
+tier = "executable"
+difficulty = 3

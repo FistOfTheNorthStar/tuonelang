@@ -1,3 +1,0 @@
-spec "checksum wraps instead of trapping" {
-    then checksum("the quick brown fox jumps over the lazy dog") == 2212148595;
-}

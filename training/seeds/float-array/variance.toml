@@ -1,0 +1,11 @@
+task = """
+Write `variance(in xs: Array[Float]) -> Float`, the POPULATION variance of \
+`xs` (the mean of the squared deviations from the mean, dividing by `n`, \
+not `n - 1`), returning 0.0 for an empty array, and `std_dev(in xs: \
+Array[Float]) -> Float`, its square root."""
+notes = """
+`std::float::sqrt` is the native, correctly rounded square root. Converting \
+the element count with `as Float` is needed because arithmetic never mixes \
+`Int` and `Float` implicitly."""
+tier = "executable"
+difficulty = 3

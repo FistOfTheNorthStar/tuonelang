@@ -1,0 +1,17 @@
+task = """
+A binary search tree of distinct keys is `struct Bst { key: Int, left: \
+Option[Box[Bst]], right: Option[Box[Bst]] }`, with a whole (possibly empty) \
+tree held as an `Option[Box[Bst]]`; smaller keys go left. Write \
+`bst_insert(take tree: Option[Box[Bst]], take key: Int) -> \
+Option[Box[Bst]]` that returns the tree with `key` added (a key already \
+present leaves the tree unchanged), `bst_contains(in tree: \
+Option[Box[Bst]], take key: Int) -> Bool`, and `bst_size(in tree: \
+Option[Box[Bst]]) -> Int` counting the keys."""
+notes = """
+Insertion takes the tree by `take`, unboxes the node with \
+`std::boxed::into`, and moves each field out exactly once before branching, \
+so every path rebuilds the node from the same values (moving `node` on one \
+branch only is O0008). The read-only queries take `in` and lend each child \
+with `std::boxed::get`, so they never copy a subtree."""
+tier = "executable"
+difficulty = 5

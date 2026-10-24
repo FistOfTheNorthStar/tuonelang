@@ -1,0 +1,13 @@
+task = """
+Write `latency_label(take start_ns: Int, take end_ns: Int) -> String` for a \
+request log: the time between two clock readings (in nanoseconds), \
+rendered with the standard library's one duration spelling, \
+`std::time::render` — e.g. \"2s\", \"1500ms\", \"250us\", \"37ns\", and \
+\"0s\" for no time at all."""
+notes = """
+`std::time::render` picks the largest unit that represents the span \
+exactly, so 1.5 s renders as `1500ms`, not `1.5s`; reuse it rather than \
+formatting units by hand."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["time"]

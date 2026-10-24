@@ -1,0 +1,12 @@
+task = """
+Write `pad_left(in s: Str, take width: Int, take fill: Int) -> String` \
+returning an owned copy of `s` with the byte `fill` repeated on the left \
+until it is `width` bytes long, e.g. `pad_left(\"42\", 5, 48)` is `00042`. \
+A string already `width` bytes or longer is returned unchanged, never \
+truncated."""
+notes = """
+Grow one `String` in place: `std::string::push_byte` for the fill bytes, \
+then `std::string::append` for the borrowed `Str`. Both take the string as \
+`mut`, so it is declared with `var`."""
+tier = "executable"
+difficulty = 2

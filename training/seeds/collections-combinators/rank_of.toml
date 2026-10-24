@@ -1,0 +1,15 @@
+task = """
+Leaderboard scores are an unsorted `Array[Int]` that may contain ties. \
+Write `rank_of(in scores: Array[Int], take score: Int) -> Option[Int]` \
+returning the dense rank of `score` — 1 for the highest distinct score, 2 \
+for the next distinct one, and so on, with tied scores sharing a rank — or \
+`None` when nobody has that score. Also write `ties(in scores: Array[Int], \
+take score: Int) -> Int` returning how many entries have exactly `score`."""
+notes = """
+Sort with `sorted_ascending`, collapse ties with `deduped` (which only \
+removes ADJACENT duplicates, so it must come after the sort), then \
+`binary_search` gives the position among distinct scores. \
+`std::collections::counts` builds the frequency map in one call."""
+tier = "executable"
+difficulty = 4
+stdlib_deps = ["collections", "core"]

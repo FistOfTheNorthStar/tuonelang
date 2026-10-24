@@ -28,12 +28,20 @@ spec block.
 
 This module is the loader. It refuses an unknown metadata key and a ``.tuo``
 file that belongs to no seed, so a typo cannot silently drop data.
+
+The held-out eval seeds use the same layout but live **outside** this public
+repository, in a private checkout named by ``TUO_EVAL_DIR`` (its ``seeds/``
+directory): a model trained on scraped GitHub may have seen anything public,
+so a score on public tasks measures memorisation. ``EVAL_SEEDS`` is empty when
+the variable is unset.
 """
+import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
 SEEDS_DIR = Path(__file__).resolve().parent / "seeds"
+EVAL_DIR = Path(os.environ["TUO_EVAL_DIR"]).resolve() if os.environ.get("TUO_EVAL_DIR") else None
 
 
 @dataclass(frozen=True)
@@ -77,14 +85,16 @@ class Seed:
     ownership choices); 0 = unrated."""
 
     heldout_specs: str = ""
-    """Extra ``spec`` blocks kept out of every SFT example. The generator runs
-    them against the solution (they must pass) and puts them in the eval
-    record, so scoring checks behaviour the prompt did not spell out."""
+    """Extra ``spec`` blocks for an eval seed, kept out of the prompt. The
+    generator runs them against the solution (they must pass) and puts them in
+    the eval record, so scoring checks behaviour the prompt did not spell out.
+    A public seed may not carry them: published, they are not held out."""
 
     mutants: tuple[str, ...] = ()
     """Plausible wrong solutions: each must *check* and must *fail* a spec.
     The generator verifies both and emits each as a spec-failure repair
-    transcript, with the real ``tuo spec`` output as the compiler turn."""
+    transcript, with the real ``tuo spec`` output as the compiler turn. Only a
+    training seed has them, since an eval seed emits no transcripts."""
 
     origin: str = "hand"
     """Where the seed came from (``hand``, ``py2tuo``, ``benchmark``, ...)."""
@@ -158,3 +168,4 @@ def load_seeds(root: Path = SEEDS_DIR) -> list[Seed]:
 
 
 SEEDS: list[Seed] = load_seeds()
+EVAL_SEEDS: list[Seed] = load_seeds(EVAL_DIR / "seeds") if EVAL_DIR else []

@@ -1,0 +1,17 @@
+task = """
+Write a complete program that scores a ten-pin bowling game. \
+`bowling_score(in rolls: [Int; 21]) -> Int` takes the pins knocked down by \
+each roll in order (unused trailing slots are 0) and returns the total over \
+ten frames: a strike (10 on the frame's first roll) scores 10 plus the next \
+two rolls, a spare (two rolls totalling 10) scores 10 plus the next roll, \
+and any other frame scores its two rolls. `main` scores the game \
+1,4, 4,5, 6,4, 5,5, 10, 0,1, 7,3, 6,4, 10, 2,8,6 and returns the total. \
+Spec `bowling_score` with a gutter game, an all-ones game, and a perfect \
+game."""
+notes = """
+The frame loop advances the roll index by 1 after a strike and by 2 \
+otherwise, so the bonus rolls are read without being consumed. The program \
+is pure, so its helper carries specs while `main` is checked by running it."""
+run_exit = 133
+tier = "executable"
+difficulty = 4

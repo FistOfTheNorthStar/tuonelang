@@ -1,0 +1,13 @@
+task = """
+Write a generic `choose[T](take use_override: Bool, take override: T, take \
+default: T) -> T` that returns `override` when `use_override` is true and \
+`default` otherwise — the shape of a configuration lookup where a \
+command-line value beats the built-in one. It must work for any `T`, e.g. \
+both `Int` and `Str`."""
+notes = """
+Inside a generic body `T` is owned and never `Copy`, so each `T` value must \
+be moved exactly once on every path: the value a branch does not return is \
+consumed explicitly with `let _ = v;`, or the ownership checker \
+reports O0008 (moved on one path but not the other)."""
+tier = "executable"
+difficulty = 2

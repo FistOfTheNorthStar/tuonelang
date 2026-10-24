@@ -1,0 +1,15 @@
+task = """
+A batch job has four steps with known durations in milliseconds and an \
+overall budget in whole seconds. Write \
+`remaining_ms(in steps_ms: [Int; 4], take budget_secs: Int) -> Int` that \
+returns how many milliseconds of the budget are left after all four steps, \
+or 0 when the steps use the whole budget or more. Accumulate the steps as a \
+`std::time::Duration` (`from_millis`, `add`) and compare with \
+`std::time::lt` against `std::time::from_secs(budget_secs)`."""
+notes = """
+Mixing units is where duration bugs live; converting both sides to \
+`Duration` first makes seconds and milliseconds comparable, and \
+`as_millis` brings the answer back to an Int only at the end."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["time"]

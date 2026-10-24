@@ -12,15 +12,25 @@ Outputs (under ``training/dataset/``):
     corrected program (multi-turn, teaches the TDG feedback loop). The feedback
     is a ``tuo check`` diagnostic (parse, type, or ownership break) or a failing
     ``tuo spec`` report (a logic break or a seed's own mutant).
-  * ``eval_heldout.jsonl`` — about a fifth of each concept's seeds, never
-    emitted into the SFT sets, for scoring Compile@1 / SpecPass@1 / TestPass@1
-    with the real compiler.
   * ``stats.json`` — coverage and validation counts.
+  * ``manifest.json`` — the source commit and a SHA-256 for each output, so a
+    published dataset can be regenerated and checked (``publish.py verify``).
+
+The two JSONL files are not committed; ``publish.py release`` publishes them.
+``stats.json`` and ``manifest.json`` are.
+
+Every public seed is a training seed. The held-out eval tasks are the seeds of
+the private checkout named by ``TUO_EVAL_DIR``; with it set, the generator also
+writes ``$TUO_EVAL_DIR/dataset/eval_heldout.jsonl`` (for scoring Compile@1 /
+SpecPass@1 / TestPass@1 with the real compiler) and records only that file's
+hash in the public manifest. It refuses an eval task that also appears in the
+training material.
 
 Usage:
     python3 training/generate.py            # validate seeds, emit all datasets
     python3 training/generate.py --check    # validate only; emit nothing
     python3 training/generate.py --limit 5  # first N seeds (smoke test)
+    TUO_EVAL_DIR=../tuonelang-eval python3 training/generate.py  # ...and the eval set
 
 The seeds are read from ``training/seeds/`` (see ``seeds.py`` for the layout);
 ``crates/tuo-cli/tests/training_seeds.rs`` admits the same files on every
@@ -51,7 +61,10 @@ OUT = HERE / "dataset"
 sys.path.insert(0, str(HERE))
 from breaks import BREAKS  # noqa: E402
 from harvest import Harvested, harvest_all  # noqa: E402
-from seeds import SEEDS, Seed  # noqa: E402
+from seeds import EVAL_DIR, EVAL_SEEDS, SEEDS, Seed  # noqa: E402
+
+PUBLIC_OUTPUTS = ("sft_oneshot.jsonl", "sft_repair.jsonl", "stats.json")
+"""What ``manifest.json`` hashes and ``publish.py`` uploads. Never the eval set."""
 
 SYSTEM_PROMPT = (
     "You are a professional tuonelang programmer. tuonelang is a statically "
@@ -107,11 +120,16 @@ def check_ok(text: str) -> tuple[bool, str]:
     return p.returncode == 0, (p.stderr + p.stdout).strip()
 
 
+# The summary line `tuo spec` ends with when it skipped a spec it cannot run.
+_SKIPPED = re.compile(r"^\d+ passed, \d+ failed of \d+ specs? in \S+; \d+ skipped$", re.MULTILINE)
+
+
 def spec_ok(text: str) -> tuple[bool, str]:
-    """True if ``tuo spec`` runs every spec green."""
+    """True if ``tuo spec`` runs every spec green. A skipped spec counts as a
+    failure: ``tuo spec`` exits 0 for it, but it verified nothing."""
     p = _run(["spec"], text)
     out = (p.stdout + p.stderr).strip()
-    return p.returncode == 0 and "0 failed" in out, out
+    return p.returncode == 0 and "0 failed" in out and not _SKIPPED.search(out), out
 
 
 def run_exit(text: str) -> tuple[int | None, str]:
@@ -170,11 +188,37 @@ EFFECT_PATHS = (
 )
 
 
+# The executable tier of those modules: pure classifiers and state models that
+# a spec may call.
+PURE_IN_EFFECT_MODULES = (
+    "std::io::error_code",
+    "std::io::is_eof",
+    "std::fs::error_code",
+    "std::fs::is_not_found",
+    "std::fs::is_absolute",
+    "std::fs::is_empty_path",
+    "std::net::is_descriptor",
+    "std::net::is_timeout",
+    "std::net::is_ipv6",
+    "std::process::success",
+    "std::process::failure",
+    "std::process::code",
+    "std::process::is_success",
+    "std::sync::once_new",
+    "std::sync::has_fired",
+    "std::sync::fire",
+    "std::sync::unlocked",
+    "std::sync::is_held",
+)
+
+
 def infer_tier(solution: str) -> str:
     """``effect`` if the program calls an effectful module, else ``executable``.
 
     ``interpreter`` (checks and specs, outside the native subset) cannot be
     seen from the text; a seed declares it."""
+    for pure in PURE_IN_EFFECT_MODULES:
+        solution = re.sub(re.escape(pure) + r"\b", "", solution)
     return "effect" if any(p in solution for p in EFFECT_PATHS) else "executable"
 
 
@@ -196,31 +240,104 @@ def render_diagnostic(diag: dict) -> str:
     return line
 
 
-def split_by_concept(seeds: list[Seed], ratio: int = 5) -> tuple[list[Seed], list[Seed]]:
-    """Hold out about 1/``ratio`` of *each concept's* seeds for eval.
+def _normalized(text: str) -> str:
+    return " ".join(text.split())
 
-    A global hash split left whole concepts out of the eval set and others
-    over-represented, so a score said little about any one area. Within a
-    concept the seeds are ordered by a stable hash of their task, and the
-    first ``round(n / ratio)`` are held out — at least one when the concept has
-    two or more seeds, none when it has one (its only example stays in
-    training). Deterministic: the same seeds always give the same split.
-    """
-    by_concept: dict[str, list[Seed]] = {}
-    for seed in seeds:
-        by_concept.setdefault(seed.concept, []).append(seed)
-    held: set[int] = set()
-    for group in by_concept.values():
-        if len(group) < 2:
-            continue
-        ordered = sorted(
-            group, key=lambda s: hashlib.sha256(s.task.encode()).hexdigest()
-        )
-        for seed in ordered[: max(1, round(len(group) / ratio))]:
-            held.add(id(seed))
-    train = [s for s in seeds if id(s) not in held]
-    eval_ = [s for s in seeds if id(s) in held]
-    return train, eval_
+
+BENCH_SOURCES = REPO / "benchmarks" / "llm" / "codegen" / "sources"
+
+
+def bench_functions() -> dict[str, str]:
+    """The function each public codegen-benchmark task asks for (the first
+    signature its instruction names), mapped to the task."""
+    names = {}
+    for instruction in sorted(BENCH_SOURCES.glob("*/*/instruction.md")):
+        m = re.search(r"`(?:fn )?([a-z_][a-z_0-9]*)\s*[\[(]", instruction.read_text())
+        if m:
+            names.setdefault(m.group(1), instruction.parent.name)
+    return names
+
+
+def contamination(eval_: list[Seed], train: list[Seed], harvested: list[Harvested]) -> list[str]:
+    """Every eval seed whose task or solution also appears, whitespace aside,
+    in the training material, or that is named after the same function as a
+    training seed of its concept or a public codegen-benchmark task: a
+    held-out score on it would measure recall. (The name test is coarse on
+    purpose; two seeds written apart still converge on `parse_port` when the
+    idea is the obvious one.)"""
+    tasks = {_normalized(s.task) for s in train} | {_normalized(h.task) for h in harvested}
+    programs = {_normalized(s.solution) for s in train} | {
+        _normalized(h.solution) for h in harvested
+    }
+    names = {(s.concept, s.name) for s in train if s.name != "program"}
+    bench = bench_functions()
+    found = []
+    for seed in eval_:
+        if seed.name in bench:
+            found.append(
+                f"{seed.concept}/{seed.name}: the public codegen-benchmark task "
+                f"`{bench[seed.name]}` is about the same function"
+            )
+        if (seed.concept, seed.name) in names:
+            found.append(
+                f"{seed.concept}/{seed.name}: a training seed of the same concept is "
+                "about the same function"
+            )
+        if _normalized(seed.task) in tasks:
+            found.append(f"{seed.concept}/{seed.name}: its task is also a training task")
+        if _normalized(seed.solution) in programs:
+            found.append(f"{seed.concept}/{seed.name}: its solution is also a training program")
+    return found
+
+
+def sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def source_state() -> tuple[str, bool]:
+    """The commit the compiler, seeds, and generator come from, and whether
+    the tree differs from it outside the generated ``training/dataset/``."""
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    status = subprocess.run(
+        ["git", "status", "--porcelain", "--", ".", ":(exclude)training/dataset"],
+        cwd=REPO,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return commit, bool(status.strip())
+
+
+def write_manifest(eval_path: Path | None, n_eval: int) -> Path:
+    """``manifest.json``: what produced the outputs and a hash of each.
+
+    The eval set is private, so only its hash and size are recorded: a score
+    can then name the exact set it was measured on without revealing it."""
+    commit, dirty = source_state()
+    compiler = subprocess.run(
+        tuo_cmd() + ["--version"], cwd=REPO, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    manifest = {
+        "schema": 1,
+        "source_commit": commit,
+        "source_dirty": dirty,
+        "compiler": compiler,
+        "files": {
+            name: {
+                "sha256": sha256_file(OUT / name),
+                "bytes": (OUT / name).stat().st_size,
+            }
+            for name in PUBLIC_OUTPUTS
+        },
+        "eval": (
+            {"sha256": sha256_file(eval_path), "tasks": n_eval} if eval_path else None
+        ),
+    }
+    path = OUT / "manifest.json"
+    path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    return path
 
 
 def chat(system: str, user: str, assistant: str) -> dict:
@@ -263,9 +380,20 @@ def assistant_answer(seed: Seed) -> str:
     return body
 
 
-def validate_seed(seed: Seed) -> list[str]:
-    """Return a list of failure messages (empty if the seed is fully valid)."""
+def validate_seed(seed: Seed, held_out: bool = False) -> list[str]:
+    """Return a list of failure messages (empty if the seed is fully valid).
+
+    ``held_out`` marks a seed of the private eval set: it may carry held-out
+    specs and may not carry mutants, the reverse of a public training seed."""
     problems: list[str] = []
+    if seed.heldout_specs and not held_out:
+        problems.append(
+            "a public seed has held-out specs, which are not held out once "
+            "published; move the seed to the private eval set or the specs "
+            "into the solution"
+        )
+    if seed.mutants and held_out:
+        problems.append("an eval seed has mutants, which nothing would use")
     ok, out = check_ok(seed.solution)
     if not ok:
         problems.append(f"check failed:\n{out}")
@@ -310,23 +438,33 @@ def main() -> int:
 
     OUT.mkdir(parents=True, exist_ok=True)
     seeds = SEEDS[: args.limit] if args.limit else SEEDS
+    eval_seeds = EVAL_SEEDS[: args.limit] if args.limit else EVAL_SEEDS
+    if EVAL_DIR is None:
+        print("TUO_EVAL_DIR is unset: generating the training sets only, no eval set.")
 
-    print(f"Validating {len(seeds)} seeds through the real tuo compiler...")
-    valid: list[Seed] = []
+    print(
+        f"Validating {len(seeds)} training and {len(eval_seeds)} eval seeds "
+        "through the real tuo compiler..."
+    )
+    train: list[Seed] = []
+    eval_: list[Seed] = []
     failures = 0
-    for seed in seeds:
-        problems = validate_seed(seed)
-        if problems:
-            failures += 1
-            print(f"  [FAIL] {seed.concept}/{seed.name}: {seed.task[:60]}")
-            for p in problems:
-                print("         " + p.replace("\n", "\n         "))
-        else:
-            valid.append(seed)
-            tag = "run" if seed.runnable else "spec"
-            print(f"  [ ok ] {seed.concept}/{seed.name} [{tag}]")
+    for held_out, group, valid in ((False, seeds, train), (True, eval_seeds, eval_)):
+        for seed in group:
+            label = f"{'eval:' if held_out else ''}{seed.concept}/{seed.name}"
+            problems = validate_seed(seed, held_out)
+            if problems:
+                failures += 1
+                print(f"  [FAIL] {label}: {seed.task[:60]}")
+                for p in problems:
+                    print("         " + p.replace("\n", "\n         "))
+            else:
+                valid.append(seed)
+                tag = "run" if seed.runnable else "spec"
+                print(f"  [ ok ] {label} [{tag}]")
 
-    print(f"\n{len(valid)}/{len(seeds)} seeds valid, {failures} failed.")
+    total = len(seeds) + len(eval_seeds)
+    print(f"\n{len(train) + len(eval_)}/{total} seeds valid, {failures} failed.")
     if failures:
         print("Refusing to emit datasets while any seed fails to compile.")
         return 1
@@ -365,12 +503,17 @@ def main() -> int:
             + ", ".join(f"{k}={v}" for k, v in sorted(harvest_by_origin.items()))
         )
 
-    # ---- emit datasets -------------------------------------------------
-    train, eval_ = split_by_concept(valid)
+    leaks = contamination(eval_, train, harvested)
+    if leaks:
+        print("\nRefusing to emit: eval tasks that also appear in the training material:")
+        for leak in leaks:
+            print(f"  {leak}")
+        return 1
 
+    # ---- emit datasets -------------------------------------------------
     sft_path = OUT / "sft_oneshot.jsonl"
     repair_path = OUT / "sft_repair.jsonl"
-    eval_path = OUT / "eval_heldout.jsonl"
+    eval_path = EVAL_DIR / "dataset" / "eval_heldout.jsonl" if EVAL_DIR else None
 
     n_oneshot = 0
     with sft_path.open("w") as f:
@@ -448,56 +591,53 @@ def main() -> int:
                     emit_repair(seed, mutant, report, "spec", "seed-mutant")
                     repair_by_kind["spec"] = repair_by_kind.get("spec", 0) + 1
 
-    n_eval = 0
-    with eval_path.open("w") as f:
-        for seed in eval_:
-            rec = {
-                "task": seed.task,
-                "concept": seed.concept,
-                "system": SYSTEM_PROMPT,
-                "reference_solution": seed.solution,
-                "runnable": seed.runnable,
-                "run_exit": seed.run_exit if seed.runnable else None,
-                "tier": seed.tier or infer_tier(seed.solution),
-                "difficulty": seed.difficulty,
-                "heldout_specs": seed.heldout_specs,
-            }
-            f.write(json.dumps(rec) + "\n")
-            n_eval += 1
+    n_eval = len(eval_)
+    if eval_path:
+        eval_path.parent.mkdir(parents=True, exist_ok=True)
+        with eval_path.open("w") as f:
+            for seed in eval_:
+                rec = {
+                    "task": seed.task,
+                    "concept": seed.concept,
+                    "system": SYSTEM_PROMPT,
+                    "reference_solution": seed.solution,
+                    "runnable": seed.runnable,
+                    "run_exit": seed.run_exit if seed.runnable else None,
+                    "tier": seed.tier or infer_tier(seed.solution),
+                    "difficulty": seed.difficulty,
+                    "heldout_specs": seed.heldout_specs,
+                }
+                f.write(json.dumps(rec) + "\n")
 
     concepts: dict[str, int] = {}
     tiers: dict[str, int] = {}
-    for s in valid:
+    for s in train:
         concepts[s.concept] = concepts.get(s.concept, 0) + 1
         tier = s.tier or infer_tier(s.solution)
         tiers[tier] = tiers.get(tier, 0) + 1
-    eval_by_concept: dict[str, int] = {}
-    for s in eval_:
-        eval_by_concept[s.concept] = eval_by_concept.get(s.concept, 0) + 1
-
+    # The eval set's size is in the manifest; nothing more about it is public.
     stats = {
-        "seeds_total": len(valid),
         "train_seeds": len(train),
-        "eval_seeds": len(eval_),
         "oneshot_examples": n_oneshot,
         "repair_examples": n_repair,
-        "eval_examples": n_eval,
         "repair_by_break": repair_by_break,
         "repair_by_kind": repair_by_kind,
         "concepts": concepts,
-        "eval_by_concept": eval_by_concept,
         "tiers": tiers,
         "harvested_kept": len(harvested),
         "harvested_dropped": harvest_dropped,
         "harvested_by_origin": harvest_by_origin,
     }
     (OUT / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True) + "\n")
+    manifest = write_manifest(eval_path, n_eval)
 
     print("\nEmitted:")
     print(f"  {sft_path.relative_to(REPO)}   ({n_oneshot} one-shot examples)")
     print(f"  {repair_path.relative_to(REPO)}    ({n_repair} repair transcripts)")
-    print(f"  {eval_path.relative_to(REPO)}  ({n_eval} held-out eval tasks)")
     print(f"  {(OUT / 'stats.json').relative_to(REPO)}")
+    print(f"  {manifest.relative_to(REPO)}")
+    if eval_path:
+        print(f"  {eval_path}  ({n_eval} held-out eval tasks, private)")
     print(f"\nConcept coverage: {len(concepts)} concepts")
     if harvested:
         print(

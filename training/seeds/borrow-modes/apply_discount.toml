@@ -1,0 +1,14 @@
+task = """
+Write `apply_discount(mut prices: Array[Int], take percent: Int) -> ()` that \
+lowers every price in the caller's array, in place, by `percent` percent, \
+rounding the discounted price down (a price p becomes p * (100 - percent) / 100). \
+Also write `discounted_total(in prices: Array[Int], take percent: Int) -> Int` \
+that returns what the basket would cost after the discount WITHOUT changing \
+the caller's array."""
+notes = """
+`mut` lends the caller's array exclusively, so `std::array::set` writes \
+through to it; `in` lends it read-only, so `discounted_total` computes from \
+it without touching it. Multiplying before dividing keeps the rounding to \
+one step: `p / 100 * (100 - percent)` would drop the price's last two digits."""
+tier = "executable"
+difficulty = 3

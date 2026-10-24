@@ -1,0 +1,43 @@
+module app;
+
+fn relay(take from: Int, take to: Int, take threshold: Int) -> Int {
+    var forwarded = 0;
+    var v = std::sync::recv(from);
+    while v >= 0 {
+        if v > threshold {
+            let _ = std::sync::send(to, v);
+            forwarded = forwarded + 1;
+        }
+        v = std::sync::recv(from);
+    }
+    let _ = std::sync::close(to);
+    forwarded
+}
+
+fn main() -> Int {
+    let inbox = std::sync::channel();
+    let alerts = std::sync::channel();
+    if inbox < 0 || alerts < 0 {
+        return 1;
+    }
+    let readings: [Int; 6] = [12, 55, 7, 90, 31, 64];
+    for r in readings {
+        if std::sync::send(inbox, r) != 0 {
+            return 2;
+        }
+    }
+    let _ = std::sync::close(inbox);
+    if relay(inbox, alerts, 50) != 3 {
+        return 3;
+    }
+    var total = 0;
+    var v = std::sync::recv(alerts);
+    while v >= 0 {
+        total = total + v;
+        v = std::sync::recv(alerts);
+    }
+    if total == 0 {
+        return 4;
+    }
+    total
+}

@@ -33,8 +33,20 @@ training/
                    while any seed fails to compile.
   score_eval.py    Honest scorer: compiles a model's held-out completions through
                    the real compiler and reports Compile@1 / SpecPass@1 / Run@1.
-  dataset/         Generated output (see below). Regenerate with generate.py.
+  publish.py       Checks generated files against the manifest and publishes
+                   them as a GitHub release.
+  dataset/         Generated output (see below). Only stats.json and
+                   manifest.json are committed; regenerate with generate.py.
 ```
+
+Three rules decide where each thing lives: **sources live with the
+compiler, generated outputs are published, and held-out tasks stay
+private.** The seeds are here so a language change that breaks one fails in
+the same PR. The datasets are deterministic outputs of the seeds and the
+compiler, so committing them would make every regeneration a large, noisy
+diff. And this repository is public: anything committed may end up in a
+scraped training set, which is what training examples are for and exactly
+what an eval task must avoid.
 
 ## The datasets
 
@@ -47,15 +59,53 @@ TUO_BIN="$(pwd)/target/debug/tuo" python3 training/generate.py
 
 This writes, under `training/dataset/`:
 
-| File | Purpose | Format |
-|------|---------|--------|
-| `sft_oneshot.jsonl` | Supervised fine-tuning for **fluency**: task → correct program. | Chat: `system`, `user`, `assistant`. |
-| `sft_repair.jsonl` | SFT for the **feedback loop**: task → buggy attempt → *real* compiler diagnostic → corrected program. | Chat with a `tool` (name `tuo_compiler`) turn between the two `assistant` turns. |
-| `eval_heldout.jsonl` | **Held-out** tasks never emitted into the SFT sets, for scoring. | `{task, concept, system, reference_solution, runnable, run_exit, stdlib_deps}`. |
-| `stats.json` | Coverage: seed/example counts, per-concept and per-break breakdown, harvest kept/dropped counts. | JSON. |
+| File | Purpose | Format | Committed |
+|------|---------|--------|-----------|
+| `sft_oneshot.jsonl` | Supervised fine-tuning for **fluency**: task → correct program. | Chat: `system`, `user`, `assistant`. | no, published |
+| `sft_repair.jsonl` | SFT for the **feedback loop**: task → buggy attempt → *real* compiler diagnostic → corrected program. | Chat with a `tool` (name `tuo_compiler`) turn between the two `assistant` turns. | no, published |
+| `stats.json` | Coverage: seed/example counts, per-concept and per-break breakdown, harvest kept/dropped counts. | JSON. | yes |
+| `manifest.json` | The source commit, whether the tree was clean, the compiler version, and a SHA-256 per file above; for the eval set, only its hash and size. | JSON. | yes |
 
-The eval split is deterministic (a stable hash of each task string), so the same
-seeds always produce the same train/eval partition — no leakage between runs.
+Every public seed is a training seed. Generation is byte-reproducible, so
+anyone can check a published dataset: check out the manifest's
+`source_commit`, build `tuo` there, regenerate, and run
+`python3 training/publish.py verify` (or `verify --dir <downloads>` against
+the release's files).
+
+### Publishing
+
+```bash
+# after the seeds and code are merged to main, from a clean checkout of it:
+TUO_BIN="$(pwd)/target/debug/tuo" TUO_EVAL_DIR=../tuonelang-eval python3 training/generate.py
+git commit -m "Regenerate the training datasets" training/dataset   # stats + manifest
+python3 training/publish.py release --dry-run
+python3 training/publish.py release   # gh release create dataset-<commit> ...
+```
+
+`release` refuses unless the files match the committed manifest, the
+manifest came from a clean tree, and its commit is on `origin/main`, so every
+published dataset names a commit anyone can check out. It uploads the two
+JSONL files, `stats.json`, and the manifest, and never the eval set.
+
+### The held-out eval set is private
+
+The eval tasks live in a **separate private repository** (`tuonelang-eval`)
+using the same seed layout, plus a `<name>.heldout.tuo` of specs the model
+is never shown. A model trained on scraped GitHub may have seen anything
+public, so a score on public tasks would measure memorisation. The 16 tasks
+that used to be committed here as `eval_heldout.jsonl` are treated as burned
+and were replaced by a fresh private set on 2026-10-23.
+
+Point `TUO_EVAL_DIR` at a checkout of it. `generate.py` then validates its
+seeds too (held-out specs must pass; mutants are refused, since an eval seed
+emits no transcripts), refuses to emit if any eval task or solution also
+appears in the training material, writes
+`$TUO_EVAL_DIR/dataset/eval_heldout.jsonl` (records of `{task, concept,
+system, reference_solution, runnable, run_exit, tier, difficulty,
+heldout_specs}`), and records only that file's hash and task count in the
+public manifest. Without the variable the training sets are generated
+exactly as before and the manifest's `eval` is `null`. In this repository a
+`.heldout.tuo` file is an error: published, its specs are not held out.
 
 ### Harvested examples
 
@@ -81,9 +131,8 @@ the modules it names), so the harvest shows the call instead. `stats.json` recor
 `harvested_kept`, `harvested_dropped`, and the per-origin breakdown, so the drop
 rate is visible rather than silent.
 
-Harvested records join the **one-shot set only** and never the eval split — the
-held-out tasks stay the hand-authored seed slice, so scoring is never
-contaminated by material that also appears verbatim in the repository.
+Harvested records join the **one-shot set only**. The contamination check
+compares every eval task and solution against them as well as the seeds.
 
 Skip the harvest with `--no-harvest` to regenerate from seeds alone.
 
@@ -154,16 +203,18 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
    The `.toml` carries `task` (required), `notes`, `run_exit` (present exactly
    when the program has a `main` to run natively), `stdlib_deps`, a `tier`
    (`executable` / `effect` / `interpreter`; inferred when omitted and checked
-   when declared), a `difficulty` 1–5, and an `origin`. The held-out specs
-   are never shown in training; they must pass and are scored as TestPass@1.
-   Each mutant must check and must fail a spec, and becomes a spec-failure
-   repair transcript. Every `.tuo` file must be canonically formatted
-   (`tuo fmt`), since a model learns its style from them.
+   when declared), a `difficulty` 1–5, and an `origin`. Each mutant must
+   check and must fail a spec, and becomes a spec-failure repair transcript.
+   Every `.tuo` file must be canonically formatted (`tuo fmt`), since a model
+   learns its style from them. A held-out spec belongs to an eval seed in the
+   private set, never here.
 
    `crates/tuo-cli/tests/training_seeds.rs` admits every seed on each
-   `cargo test` — formatting, `check`, `spec`, `run_exit`, held-out specs,
-   mutants, and stray files — so a language change that breaks a seed fails
-   in the same PR, and `generate.py` validates them again before emitting.
+   `cargo test` — formatting, `check`, `spec`, `run_exit`, mutants, and stray
+   files — so a language change that breaks a seed fails in the same PR, and
+   `generate.py` validates them again before emitting. With `TUO_EVAL_DIR`
+   set it admits the private eval seeds too; CI has no copy of them, so run
+   it locally after a language change.
 2. **Add break rules** (`breaks.py`) — more mistake patterns produce more repair
    transcripts from the same seeds. A break that fails to actually break a
    program (or that the compiler still accepts) is skipped, never faked.
@@ -187,8 +238,14 @@ Produce a completions file — one JSON line per held-out task,
 `{"task": "<verbatim task string>", "completion": "<model output>"}` — then:
 
 ```bash
-TUO_BIN="$(pwd)/target/debug/tuo" python3 training/score_eval.py completions.jsonl
+export TUO_BIN="$(pwd)/target/debug/tuo" TUO_EVAL_DIR=../tuonelang-eval
+python3 training/score_eval.py completions.jsonl
 ```
+
+The scorer prints the SHA-256 of the eval set it read; quote it with a
+result, and compare it with the manifest's `eval.sha256`, so a number always
+names the exact set it was measured on. Do not paste eval tasks or model
+completions of them anywhere public: a leaked task is burned.
 
 It extracts the ```` ```tuo ```` block from each completion, compiles it, runs
 its specs, and (for runnable tasks) runs it natively — reporting:
@@ -199,14 +256,14 @@ its specs, and (for runnable tasks) runs it natively — reporting:
   also pass.
 - **Run@1** — fraction of runnable tasks hitting the expected exit byte.
 
-The eval split holds out about a fifth of **each concept's** seeds (none from a
-concept with a single seed), and the scorer reports every metric per concept,
-so a result can be read area by area rather than as one number.
+The private set covers every training concept, and the scorer reports every
+metric per concept, so a result can be read area by area rather than as one
+number.
 
 Sanity-check the harness itself (reference solutions must score 100%):
 
 ```bash
-TUO_BIN="$(pwd)/target/debug/tuo" python3 training/score_eval.py --reference
+python3 training/score_eval.py --reference
 ```
 
 ## The language, in one screen
@@ -233,7 +290,8 @@ correctness rules a model coming from other languages gets wrong:
 
 - Every emitted program compiled clean through `tuo` at generation time.
 - Every repair diagnostic is the compiler's real output, not hand-written.
-- The eval split never overlaps the SFT sets.
+- The eval set never overlaps the SFT sets (checked, not assumed), and it
+  is never published.
 - `stats.json` records exactly what was produced, including which break rules
   fired and how often — silent truncation is visible, not hidden.
 

@@ -1,0 +1,17 @@
+task = """
+Write a complete program that validates a 16-digit card number with the \
+Luhn checksum. `luhn_sum(in digits: [Int; 16]) -> Int` doubles every second \
+digit counting from the RIGHTMOST digit (so indices 0, 2, ..., 14), \
+subtracts 9 from any doubled value above 9, and returns the sum of all \
+sixteen resulting digits; `luhn_valid(in digits: [Int; 16]) -> Bool` is \
+true when that sum is a multiple of 10. `main` checks the number \
+4539 1488 0343 6467 and returns its Luhn sum when it is valid, or 1 when it \
+is not."""
+notes = """
+With an even number of digits, \"every second digit from the right\" is \
+every even index from the left; stating that once in the loop keeps the \
+indexing simple. `main` returns a distinct small code on the failure path \
+so a wrong answer is visible in the exit status."""
+run_exit = 80
+tier = "executable"
+difficulty = 3

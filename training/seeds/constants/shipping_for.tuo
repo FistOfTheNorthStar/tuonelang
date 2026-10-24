@@ -1,0 +1,25 @@
+const FREE_SHIPPING_CENTS: Int = 5000;
+const FLAT_RATE_CENTS: Int = 499;
+
+fn shipping_for(take order_cents: Int) -> Int {
+    if order_cents >= FREE_SHIPPING_CENTS {
+        0
+    } else {
+        FLAT_RATE_CENTS
+    }
+}
+
+fn order_total(take order_cents: Int) -> Int {
+    order_cents + shipping_for(order_cents)
+}
+
+spec shipping_for {
+    then shipping_for(1200) == 499;
+    then shipping_for(5000) == 0;
+    then shipping_for(4999) == 499;
+}
+
+spec order_total {
+    then order_total(1200) == 1699;
+    then order_total(7350) == 7350;
+}

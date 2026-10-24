@@ -1,0 +1,17 @@
+module app;
+
+fn main() -> Int {
+    let listener = std::net::listen(0);
+    if listener < 0 {
+        return 1;
+    }
+    let outcome = std::net::accept_timeout(listener, 30);
+    let _ = std::net::close(listener);
+    if std::net::is_timeout(outcome) {
+        30
+    } else if std::net::is_descriptor(outcome) {
+        2
+    } else {
+        3
+    }
+}

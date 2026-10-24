@@ -1,0 +1,17 @@
+fn prefix_sums(in xs: [Int; 5]) -> [Int; 5] {
+    var out = [0; 5];
+    var running = 0;
+    for i in 0 .. 5 {
+        out[i] = running;
+        running = running + xs[i];
+    }
+    out
+}
+
+spec prefix_sums {
+    then prefix_sums([1, 2, 3, 4, 5])[0] == 1;
+    then prefix_sums([1, 2, 3, 4, 5])[2] == 6;
+    then prefix_sums([1, 2, 3, 4, 5])[4] == 15;
+    then prefix_sums([0, 0, 7, 0, 0])[1] == 0;
+    then prefix_sums([0, 0, 7, 0, 0])[3] == 7;
+}

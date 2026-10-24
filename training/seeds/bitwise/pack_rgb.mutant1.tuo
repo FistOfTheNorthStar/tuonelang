@@ -1,0 +1,24 @@
+fn pack_rgb(take r: Int, take g: Int, take b: Int) -> Int {
+    (r << 16) | (g << 8) | b
+}
+
+fn green_of(take color: Int) -> Int {
+    (color >> 8) & 255
+}
+
+spec pack_rgb {
+    then pack_rgb(255, 0, 0) == 16711680;
+    then pack_rgb(18, 52, 86) == 0x123456;
+    then pack_rgb(0, 0, 0) == 0;
+}
+
+spec "pack_rgb keeps only the low byte of each channel" {
+    then pack_rgb(256, 1, 2) == 258;
+    then pack_rgb(255, 255, 255) == 0xffffff;
+}
+
+spec green_of {
+    then green_of(0x123456) == 0x34;
+    then green_of(pack_rgb(9, 200, 7)) == 200;
+    then green_of(0xff00ff) == 0;
+}

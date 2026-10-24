@@ -1,0 +1,10 @@
+task = """
+Write `word_count(in s: Str) -> Int` counting the words in `s`, where a \
+word is a maximal run of bytes that are not a space, tab, or newline. \
+Leading, trailing, and repeated whitespace must not produce extra words."""
+notes = """
+Count a word when it *starts* (a non-space byte while not inside a word); \
+counting at the separator instead misses a final word with no whitespace \
+after it."""
+tier = "executable"
+difficulty = 2

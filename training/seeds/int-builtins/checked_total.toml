@@ -1,0 +1,11 @@
+task = """
+Write `checked_total(in xs: Array[Int]) -> Option[Int]` returning the sum of \
+`xs`, or `None` if any running sum overflows `Int` (even when a later \
+element would bring the total back into range). The sum of an empty array \
+is `Some` 0."""
+notes = """
+`std::int::checked_add` returns `None` exactly where `+` would trap, so \
+overflow becomes data the caller can handle. Return on the first `None`: \
+skipping the overflowing element silently produces a wrong total."""
+tier = "executable"
+difficulty = 3

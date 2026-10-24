@@ -1,0 +1,15 @@
+task = """
+Write a runnable program that counts the primes below 1000 in parallel. \
+`count_primes(take chunk: Int) -> Int` counts the primes in the range \
+`chunk * 250 .. chunk * 250 + 250` by trial division (using a helper \
+`is_prime(take n: Int) -> Bool`). `main` builds the tasks 0, 1, 2, 3, maps \
+them over two workers with `std::sync::par_map`, and returns the total \
+number of primes (168)."""
+notes = """
+Splitting the range into independent chunks is what makes fork-join fit: \
+each task is a plain Int, each worker returns a plain Int, and the results \
+come back in task order once every worker has joined."""
+run_exit = 168
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["sync"]

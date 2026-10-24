@@ -1,0 +1,13 @@
+task = """
+Using `std::json`, write `key_list(in text: Str) -> String` returning the \
+top-level member keys of a JSON object in document order, joined by `,` \
+(an empty key still takes its slot, so `{\"\": 1, \"x\": 2}` gives `,x`). \
+Return the empty string when the text is not valid JSON or its root is not \
+an object."""
+notes = """
+`key_of` names the member under which a child sits, and is \"\" under an \
+array, so check the root's `kind_of` first: iterating an array's children \
+would silently emit empty keys. The arena preserves member order."""
+stdlib_deps = ["json"]
+tier = "executable"
+difficulty = 3

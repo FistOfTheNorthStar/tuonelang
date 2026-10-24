@@ -1,0 +1,10 @@
+task = """
+Given `struct Pair[A, B] { first: A, second: B }`, write a generic \
+`swap_pair[A, B](take p: Pair[A, B]) -> Pair[B, A]` that exchanges the two \
+fields, so a `Pair[Int, Str]` becomes a `Pair[Str, Int]`."""
+notes = """
+Taking `p` by `take` lets the body move each field out exactly once and \
+rebuild the struct with the types exchanged; type parameters use square \
+brackets on both the struct and the function."""
+tier = "executable"
+difficulty = 2

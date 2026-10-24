@@ -1,0 +1,35 @@
+fn is_valid(take t: Int) -> Bool {
+    t >= 0 && t <= 150
+}
+
+fn is_alarm(take t: Int) -> Bool {
+    t > 100
+}
+
+fn alarm_count(in readings: Array[Int]) -> Int {
+    std::array::len(std::collections::filter_into(readings, is_alarm))
+}
+
+fn batch_status(in readings: Array[Int]) -> Int {
+    if !std::collections::any(readings, is_valid) {
+        0
+    } else if std::collections::any(readings, is_alarm) {
+        2
+    } else {
+        1
+    }
+}
+
+spec alarm_count {
+    then alarm_count(std::collections::of3(101, 100, 150)) == 2;
+    then alarm_count(std::collections::of2(20, 30)) == 0;
+    then alarm_count(std::array::empty()) == 0;
+}
+
+spec batch_status {
+    then batch_status(std::collections::of3(20, 45, 99)) == 1;
+    then batch_status(std::collections::of3(20, 120, 99)) == 2;
+    then batch_status(std::collections::of3(20, 120, 151)) == 0;
+    then batch_status(std::collections::of2(0 - 3, 50)) == 0;
+    then batch_status(std::array::empty()) == 1;
+}

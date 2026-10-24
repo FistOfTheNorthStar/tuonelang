@@ -1,0 +1,22 @@
+fn buffer_size(take width: Int, take height: Int, take bytes_per_pixel: Int) -> Option[Int] {
+    if width < 0 || height < 0 || bytes_per_pixel < 0 {
+        return None;
+    }
+    std::int::checked_mul(width * height, bytes_per_pixel)
+}
+
+spec buffer_size {
+    then std::core::unwrap_or(buffer_size(1920, 1080, 4), 0 - 1) == 8294400;
+    then std::core::unwrap_or(buffer_size(0, 1080, 4), 0 - 1) == 0;
+}
+
+spec "buffer_size rejects negative dimensions" {
+    then std::core::is_none(buffer_size(0 - 2, 3, 4));
+    then std::core::is_none(buffer_size(2, 3, 0 - 4));
+}
+
+spec "buffer_size reports overflow at either multiplication" {
+    then std::core::is_none(buffer_size(4294967296, 4294967296, 1));
+    then std::core::is_none(buffer_size(3037000499, 3037000499, 4));
+    then std::core::is_some(buffer_size(3037000499, 3037000499, 1));
+}

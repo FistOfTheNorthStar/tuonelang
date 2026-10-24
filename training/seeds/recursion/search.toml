@@ -1,0 +1,13 @@
+task = """
+Write a recursive binary search over a sorted batch of eight ids. \
+`search(in ids: [Int; 8], take needle: Int) -> Int` returns the index of \
+`needle` in `ids` (sorted ascending, no duplicates) or -1 when it is \
+absent. It delegates to a recursive helper \
+`search_between(in ids: [Int; 8], take needle: Int, take lo: Int, take hi: Int) -> Int` \
+that searches the half-open range `lo..hi`."""
+notes = """
+A half-open range makes the base case `lo >= hi` (empty) and the two \
+recursive calls `lo..mid` and `mid + 1..hi`, so no element is visited twice \
+or skipped. The array is passed `in` at every level: a borrow, never a copy."""
+tier = "executable"
+difficulty = 3

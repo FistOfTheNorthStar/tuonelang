@@ -1,0 +1,13 @@
+task = """
+With the linked list `struct Node { value: Int, next: Option[Box[Node]] }` \
+(a list is an `Option[Box[Node]]`), write `reverse(take list: \
+Option[Box[Node]]) -> Option[Box[Node]]` that reverses the list \
+iteratively, consuming it. Also write `digits(in list: Option[Box[Node]]) \
+-> Int` that reads the values front to back as decimal digits (`[1, 2, 3]` \
+gives 123, the empty list 0), which makes the order easy to check."""
+notes = """
+`std::boxed::into` moves the node out of its box, so each node's `next` can \
+be taken by value and the loop advances without copying. `std::boxed::get` \
+is for reading; `into` is for taking apart."""
+tier = "executable"
+difficulty = 4

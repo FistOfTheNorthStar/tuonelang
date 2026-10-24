@@ -1,0 +1,47 @@
+module app;
+
+fn luhn_sum(in digits: [Int; 16]) -> Int {
+    var sum = 0;
+    var i = 0;
+    while i < 16 {
+        let d = digits[i as Usize];
+        if i % 2 == 0 {
+            let doubled = d * 2;
+            if doubled > 9 {
+                sum = sum + doubled - 9;
+            } else {
+                sum = sum + doubled;
+            }
+        } else {
+            sum = sum + d;
+        }
+        i = i + 1;
+    }
+    sum
+}
+
+fn luhn_valid(in digits: [Int; 16]) -> Bool {
+    luhn_sum(digits) % 10 == 0
+}
+
+spec luhn_sum {
+    then luhn_sum([0; 16]) == 0;
+    then luhn_sum([9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 9;
+    then luhn_sum([0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 9;
+    then luhn_sum([5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 1;
+}
+
+spec luhn_valid {
+    then luhn_valid([4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 7]);
+    then !luhn_valid([4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 8]);
+    then luhn_valid([0; 16]);
+}
+
+fn main() -> Int {
+    let card: [Int; 16] = [4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 7];
+    if luhn_valid(card) {
+        luhn_sum(card)
+    } else {
+        1
+    }
+}

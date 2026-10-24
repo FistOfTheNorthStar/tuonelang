@@ -1,0 +1,19 @@
+fn next_step(take outcome: Int, take attempt: Int, take max_attempts: Int) -> Int {
+    if std::net::is_descriptor(outcome) {
+        0
+    } else if std::net::is_timeout(outcome) && attempt < max_attempts {
+        1
+    } else {
+        2
+    }
+}
+
+spec next_step {
+    then next_step(5, 1, 3) == 0;
+    then next_step(0, 3, 3) == 0;
+    then next_step(0 - 3, 1, 3) == 1;
+    then next_step(0 - 3, 2, 3) == 1;
+    then next_step(0 - 3, 3, 3) == 2;
+    then next_step(0 - 1, 1, 3) == 2;
+    then next_step(0 - 2, 1, 3) == 2;
+}

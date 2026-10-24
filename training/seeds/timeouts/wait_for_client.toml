@@ -1,0 +1,15 @@
+task = """
+Write a runnable program for a server that must not hang when nobody \
+connects. `main` listens on an ephemeral loopback port, waits at most \
+30 ms for a client with `std::net::accept_timeout`, and returns 30 when \
+that wait times out (`std::net::is_timeout`), 1 if listening fails, 2 if a \
+connection unexpectedly arrived, and 3 for any other error. Close the \
+listener before returning."""
+notes = """
+The blocking `accept` waits forever; `accept_timeout` gives up after the \
+bounded wait and reports the timeout as the -3 sentinel, a value to branch \
+on rather than a trap, so the server can do something else and try again."""
+run_exit = 30
+tier = "effect"
+difficulty = 2
+stdlib_deps = ["net"]

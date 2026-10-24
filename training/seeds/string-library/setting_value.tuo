@@ -1,0 +1,30 @@
+fn setting_value(in line: Str, in key: Str) -> Option[Int] {
+    let eq = match std::str::find(line, "=") {
+        Some { value } => value,
+        None => {
+            return None;
+        },
+    };
+    let name = std::str::trim(std::str::slice(line, 0, eq));
+    if name != key {
+        return None;
+    }
+    let text = std::str::trim(std::str::slice(line, eq + 1, std::str::len(line)));
+    match std::str::parse_int(text) {
+        Ok { value } => Some { value: value },
+        Err { error } => None,
+    }
+}
+
+spec setting_value {
+    then std::core::unwrap_or(setting_value("timeout = 30", "timeout"), 0) == 30;
+    then std::core::unwrap_or(setting_value("retries=3", "retries"), 0) == 3;
+    then std::core::unwrap_or(setting_value("  offset =  -12 ", "offset"), 0) == 0 - 12;
+}
+
+spec "setting_value rejects other keys and bad values" {
+    then std::core::is_none(setting_value("timeout = 30", "retries"));
+    then std::core::is_none(setting_value("timeout 30", "timeout"));
+    then std::core::is_none(setting_value("timeout = soon", "timeout"));
+    then std::core::is_none(setting_value("timeout =", "timeout"));
+}
