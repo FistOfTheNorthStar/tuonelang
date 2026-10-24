@@ -10,3 +10,8 @@ spec capped {
     then capped(2, 9, 100) == 7;
     then capped(2, 9, 5) == 5;
 }
+
+spec "capped is symmetric" {
+    then capped(9, 2, 5) == 5;
+    then distance(0 - 4, 4) == 8;
+}

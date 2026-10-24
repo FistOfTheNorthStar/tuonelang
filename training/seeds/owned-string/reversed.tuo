@@ -11,3 +11,9 @@ fn reversed(in s: Str) -> String {
 spec reversed {
     then std::string::as_str(reversed("abc")) == "cba";
 }
+
+spec "reversed edge cases" {
+    then std::string::len(reversed("")) == 0;
+    then std::string::as_str(reversed("a")) == "a";
+    then std::string::as_str(reversed("racecar")) == "racecar";
+}

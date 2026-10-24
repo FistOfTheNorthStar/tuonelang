@@ -20,3 +20,7 @@ spec mean_of_three {
     then mean_of_three(1, 2, 3) == 2;
     then mean_of_three(10, 10, 11) == 10;
 }
+
+spec "mean_of_three with negatives" {
+    then mean_of_three(0 - 3, 0, 3) == 0;
+}

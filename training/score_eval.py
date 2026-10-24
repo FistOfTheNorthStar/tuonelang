@@ -17,13 +17,19 @@ Every metric is also reported per concept: the eval split holds out a share of
 each concept's seeds, so an overall number can be read area by area.
 
 Input: a JSONL file where each line is ``{"task": ..., "completion": "..."}``
-matching a task in ``eval_heldout.jsonl`` (matched by exact ``task`` string). A
+matching a task in the eval set (matched by exact ``task`` string). A
 completion may be the raw assistant text; the scorer pulls the fenced ```tuo
 block out of it.
 
+The eval set is private (see ``seeds.py``): it is read from
+``$TUO_EVAL_DIR/dataset/eval_heldout.jsonl``, which ``generate.py`` writes, or
+from ``--eval PATH``. The scorer prints the set's SHA-256, which the public
+``training/dataset/manifest.json`` records, so a score names the set it was
+measured on.
+
 Usage:
-    python3 training/score_eval.py completions.jsonl
-    TUO_BIN=target/debug/tuo python3 training/score_eval.py completions.jsonl
+    TUO_EVAL_DIR=../tuonelang-eval python3 training/score_eval.py completions.jsonl
+    TUO_BIN=target/debug/tuo python3 training/score_eval.py --eval set.jsonl completions.jsonl
 
 To sanity-check the harness itself, score the reference solutions (they must hit
 100% on every metric):
@@ -33,6 +39,7 @@ To sanity-check the harness itself, score the reference solutions (they must hit
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -42,8 +49,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 # Reuse the exact compiler-invocation helpers the generator validates seeds with.
 from generate import check_ok, run_exit, spec_ok  # noqa: E402
-
-EVAL = HERE / "dataset" / "eval_heldout.jsonl"
+from seeds import EVAL_DIR  # noqa: E402
 
 _FENCE = re.compile(r"```(?:tuo|tuonelang)?\s*\n(.*?)```", re.DOTALL)
 
@@ -54,10 +60,10 @@ def extract_code(completion: str) -> str:
     return (m.group(1) if m else completion).strip() + "\n"
 
 
-def load_eval() -> dict[str, dict]:
+def load_eval(path: Path) -> dict[str, dict]:
     """Map each held-out task string to its record."""
     tasks = {}
-    for line in EVAL.read_text().splitlines():
+    for line in path.read_text().splitlines():
         line = line.strip()
         if line:
             rec = json.loads(line)
@@ -96,9 +102,20 @@ def main() -> int:
         action="store_true",
         help="score the eval set's own reference solutions (expect 100 pct)",
     )
+    ap.add_argument(
+        "--eval",
+        type=Path,
+        help="the eval set (default: $TUO_EVAL_DIR/dataset/eval_heldout.jsonl)",
+    )
     args = ap.parse_args()
 
-    tasks = load_eval()
+    eval_path = args.eval or (EVAL_DIR / "dataset" / "eval_heldout.jsonl" if EVAL_DIR else None)
+    if eval_path is None:
+        ap.error("the eval set is private: set TUO_EVAL_DIR or pass --eval")
+    if not eval_path.is_file():
+        ap.error(f"no eval set at {eval_path}; run generate.py with TUO_EVAL_DIR set")
+    tasks = load_eval(eval_path)
+    print(f"Eval set {eval_path} (sha256 {hashlib.sha256(eval_path.read_bytes()).hexdigest()})")
 
     pairs: list[tuple[dict, str]] = []
     if args.reference:
