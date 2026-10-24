@@ -1,0 +1,24 @@
+{
+  "compiler": "tuo 0.1.0",
+  "eval": {
+    "sha256": "2c1814a419f43bbe7f6cf130472c89b1efc0d9aba55d144cf3b2ba5e3b69213d",
+    "tasks": 37
+  },
+  "files": {
+    "sft_oneshot.jsonl": {
+      "bytes": 1533370,
+      "sha256": "ff9cbc59c06c7b5999d4023716d1a234effac01fa0efbd4e0e3c08a8a461171b"
+    },
+    "sft_repair.jsonl": {
+      "bytes": 1865592,
+      "sha256": "fcf142ec8dfbb9375c938d18effffeac34212cebe4f5a07d80b976d41a5fdfc6"
+    },
+    "stats.json": {
+      "bytes": 1705,
+      "sha256": "8da07ba0e720d5e533498e900e707449ac577642b2645144838242fffcd23f69"
+    }
+  },
+  "schema": 1,
+  "source_commit": "87ec6640601f7b0abc077f4221b0c54c7d63f8b5",
+  "source_dirty": false
+}
