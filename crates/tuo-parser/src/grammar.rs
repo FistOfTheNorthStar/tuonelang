@@ -122,6 +122,37 @@ fn comma_list<'a>(item: BP<'a>) -> Boxed<'a, 'a, Stream<'a>, Vec<SyntaxElement>,
         .boxed()
 }
 
+/// The arms of a `match`: a [`comma_list`] that also accepts an arm written
+/// with no comma before it. That arm parses as if the comma were there, and
+/// the targeted `match-arm-comma` marker reports the slip
+/// (`parse::match_arm_comma` builds the diagnostic for both engines), so it
+/// is one error rather than a recovery that drops the whole `match`. Valid
+/// input is unaffected: the extra alternative is tried only where the list
+/// would otherwise have ended without a `}`.
+fn match_arm_list<'a>(arm: BP<'a>) -> Boxed<'a, 'a, Stream<'a>, Vec<SyntaxElement>, Extra<'a>> {
+    let unseparated = arm.clone().validate(|node, extra, emitter| {
+        let start = extra.span().start;
+        emitter.emit(Rich::custom(
+            SimpleSpan::from(start..start),
+            format!("{}match-arm-comma", crate::oracle::TARGETED),
+        ));
+        node
+    });
+    let next = choice((
+        tok(K::Comma).then(arm.clone()).map(children),
+        unseparated.map(|node| vec![node]),
+    ));
+    arm.then(
+        next.repeated()
+            .collect::<Vec<_>>()
+            .then(tok(K::Comma).or_not()),
+    )
+    .map(children)
+    .or_not()
+    .map(Option::unwrap_or_default)
+    .boxed()
+}
+
 /// Like [`comma_list`], but the list must have at least one item.
 fn comma_list1<'a>(item: BP<'a>) -> Boxed<'a, 'a, Stream<'a>, Vec<SyntaxElement>, Extra<'a>> {
     item.clone()
@@ -356,7 +387,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         tok(K::KwMatch)
             .then(expr_ns_b.clone())
             .then(tok(K::OpenBrace))
-            .then(comma_list(match_arm.boxed()))
+            .then(match_arm_list(match_arm.boxed()))
             .then(tok(K::CloseBrace)),
     );
     let block_expression = choice((

@@ -239,3 +239,30 @@ pub(crate) fn call_arg_mode(primary: Span, source: &SourceText) -> Diagnostic {
         Confidence::MachineApplicable,
     )
 }
+
+/// The targeted diagnostic for a match arm written without the comma that
+/// separates it from the one before — most often after a block-bodied arm
+/// (`0 => { … }` followed by `_ => …`). `previous` spans the earlier arm's
+/// last token and `next` this arm's first.
+///
+/// Before it, the missing comma sent the whole `match` into generic recovery
+/// ("skipped N tokens"), and the dropped statement then surfaced as unrelated
+/// resolution and type errors. The arm now parses as if the comma were
+/// there, and the fix is always to insert one after `previous`: a
+/// machine-applicable edit. Both engines build the diagnostic here, so they
+/// cannot drift.
+pub(crate) fn match_arm_comma(previous: Span, next: Span) -> Diagnostic {
+    let after = Span::new(previous.source(), TextRange::empty(previous.range().end()));
+    Diagnostic::error(code(1), "expected `,` between match arms", previous)
+        .with_primary_label("add `,` after this arm")
+        .with_secondary_label(next, "the next arm starts here")
+        .with_help("every match arm but the last is followed by `,`, a block-bodied arm included")
+        .with_suggestion(
+            "insert `,`",
+            vec![Edit {
+                span: after,
+                replacement: ",".to_owned(),
+            }],
+            Confidence::MachineApplicable,
+        )
+}

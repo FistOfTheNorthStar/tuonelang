@@ -42,6 +42,9 @@ pub struct Skipped {
     /// The function's name (`{impl}` for impl functions, which have no
     /// resolved symbol until the trait system lands).
     pub name: String,
+    /// The function's symbol, so a call to it can say why it is absent
+    /// (`None` for impl functions).
+    pub symbol: Option<SymbolId>,
     /// The reason lowering declined (one of the documented v0 limits).
     pub reason: String,
     /// The declaration's span.

@@ -82,8 +82,19 @@ pub(crate) const TARGETED: &str = "\u{1}targeted:";
 /// at. Targeted recoveries must match the handwritten engine's diagnostic
 /// exactly — same code, message, label, and help — because `oracle_parity`
 /// compares them.
-fn targeted_recovery(message: &str, primary: Span, source: &SourceText) -> Option<Diagnostic> {
+///
+/// `previous` spans the token before `primary`, which a missing separator
+/// needs: the fix inserts one after it.
+fn targeted_recovery(
+    message: &str,
+    primary: Span,
+    previous: Span,
+    source: &SourceText,
+) -> Option<Diagnostic> {
     let kind = message.strip_prefix(TARGETED)?;
+    if kind == "match-arm-comma" {
+        return Some(crate::parse::match_arm_comma(previous, primary));
+    }
     if kind == "generic-params-empty" {
         return Some(
             Diagnostic::error(code(1), "empty generic parameter list".to_owned(), primary)
@@ -130,6 +141,7 @@ fn to_diagnostic(
 ) -> Diagnostic {
     let span = error.span();
     let primary = byte_span(span.start, toks, lex, source);
+    let previous = byte_span(span.start.saturating_sub(1), toks, lex, source);
 
     match error.reason() {
         // A custom message is a recovery report by default (`P0002`). The one
@@ -139,7 +151,7 @@ fn to_diagnostic(
         // instead of being dressed as generic resynchronization. The
         // handwritten engine produces the identical diagnostic directly;
         // parity over the `invalid/` corpus pins the two together.
-        RichReason::Custom(message) => match targeted_recovery(message, primary, source) {
+        RichReason::Custom(message) => match targeted_recovery(message, primary, previous, source) {
             Some(diagnostic) => diagnostic,
             None => Diagnostic::error(code(2), message.clone(), primary)
                 .with_primary_label("skipped during error recovery")

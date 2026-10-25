@@ -632,6 +632,230 @@ fn guarded_arms_do_not_count_toward_exhaustiveness() {
 }
 
 #[test]
+fn a_struct_pattern_binding_every_field_is_exhaustive() {
+    let (_, result) = check_one(
+        "struct Point { x: Int, y: Int }\n\
+         fn f(in p: Point) -> Int {\n\
+             match p {\n\
+                 Point { x, y } => x + y,\n\
+             }\n\
+         }\n",
+    );
+    assert_clean(&result);
+}
+
+#[test]
+fn a_constructor_counts_as_covered_only_when_its_fields_are() {
+    // `Some { value: 0 }` leaves every other `Some`: the shallow check this
+    // replaced accepted the match, and the run trapped as unreachable.
+    let (_, partial) = check_one(
+        "fn f(take o: Option[Int]) -> Int {\n\
+             match o {\n\
+                 Some { value: 0 } => 1,\n\
+                 None => 2,\n\
+             }\n\
+         }\n",
+    );
+    assert_eq!(codes(&partial), ["T0007"]);
+    let diagnostic = &partial.diagnostics()[0];
+    assert!(
+        diagnostic.message.contains("missing `Some`"),
+        "{}",
+        diagnostic.message
+    );
+    assert!(
+        diagnostic
+            .notes
+            .iter()
+            .any(|note| note.contains("only for some")),
+        "the note says `Some` is partly matched: {:?}",
+        diagnostic.notes
+    );
+    // Nested patterns that together cover every value are exhaustive.
+    let (_, nested) = check_one(
+        "enum Shape { Circle { r: Int }, Rect { w: Int, h: Int } }\n\
+         fn f(take o: Option[Bool], take r: Result[Shape, Int]) -> Int {\n\
+             let a = match o {\n\
+                 Some { value: true } => 1,\n\
+                 Some { value: false } => 2,\n\
+                 None => 3,\n\
+             };\n\
+             let b = match r {\n\
+                 Ok { value: Shape::Circle { r } } => r,\n\
+                 Ok { value: Shape::Rect { w, .. } } => w,\n\
+                 Err { error: 0 } => 0,\n\
+                 Err { error } => error,\n\
+             };\n\
+             a + b\n\
+         }\n",
+    );
+    assert_clean(&nested);
+    let (_, inner) = check_one(
+        "fn f(take o: Option[Bool]) -> Int {\n\
+             match o {\n\
+                 Some { value: true } => 1,\n\
+                 None => 3,\n\
+             }\n\
+         }\n",
+    );
+    assert_eq!(codes(&inner), ["T0007"]);
+}
+
+#[test]
+fn a_bare_variant_pattern_is_a_constructor_not_a_catch_all() {
+    // `None` alone used to count as a binding that matched everything.
+    let (_, lone) = check_one(
+        "fn f(take o: Option[Int]) -> Int {\n\
+             match o {\n\
+                 None => 2,\n\
+             }\n\
+         }\n",
+    );
+    assert_eq!(codes(&lone), ["T0007"]);
+    // It must be a variant of the scrutinee's type...
+    let (_, wrong_type) = check_one(
+        "fn f(take n: Int) -> Int {\n\
+             match n {\n\
+                 None => 2,\n\
+                 _ => 3,\n\
+             }\n\
+         }\n",
+    );
+    assert_eq!(codes(&wrong_type), ["T0001"]);
+    // ...and one with no fields to leave unmatched.
+    let (_, payload) = check_one(
+        "fn f(take o: Option[Int]) -> Int {\n\
+             match o {\n\
+                 Some => 2,\n\
+                 None => 3,\n\
+             }\n\
+         }\n",
+    );
+    assert_eq!(codes(&payload), ["T0005"]);
+}
+
+#[test]
+fn a_let_pattern_must_match_every_value() {
+    let (_, refutable) = check_one(
+        "struct P { x: Int, y: Int }\n\
+         fn f(take o: Option[Int], take p: P) -> Int {\n\
+             let Some { value } = o;\n\
+             let P { x: 0, y } = p;\n\
+             value + y\n\
+         }\n",
+    );
+    assert_eq!(codes(&refutable), ["T0007", "T0007"]);
+    let (_, irrefutable) = check_one(
+        "struct P { x: Int, y: Int }\n\
+         fn f(take p: P) -> Int {\n\
+             let P { x, y } = p;\n\
+             x + y\n\
+         }\n",
+    );
+    assert_clean(&irrefutable);
+}
+
+#[test]
+fn a_const_initializer_must_be_a_constant_expression() {
+    let (_, folded) = check_one(
+        "const BASE: Int = 10;\n\
+         const LIMIT: Int = BASE * BASE + (3 as Int) - -1;\n\
+         const OK: Bool = LIMIT > 100 || BASE == 0;\n",
+    );
+    assert_clean(&folded);
+    let (_, call) = check_one(
+        "fn base() -> Int { 7 }\n\
+         const X: Int = base() * 2;\n",
+    );
+    assert_eq!(codes(&call), ["T0028"]);
+    let (_, local) = check_one(
+        "fn f() -> Int {\n\
+             let x = 2;\n\
+             const Y: Int = x + 1;\n\
+             Y\n\
+         }\n",
+    );
+    assert_eq!(codes(&local), ["T0028"]);
+    let (_, aggregate) = check_one(
+        "struct P { x: Int }\n\
+         const ORIGIN: P = P { x: 0 };\n",
+    );
+    assert_eq!(codes(&aggregate), ["T0028"]);
+}
+
+#[test]
+fn a_const_defined_in_terms_of_itself_is_reported() {
+    let (_, result) = check_one(
+        "const A: Int = B + 1;\n\
+         const B: Int = A + 1;\n\
+         const C: Int = C;\n",
+    );
+    assert_eq!(codes(&result), ["T0028", "T0028", "T0028"]);
+    assert!(
+        result.diagnostics()[0]
+            .message
+            .contains("`const A` is defined in terms of itself")
+    );
+}
+
+#[test]
+fn a_generic_body_may_store_its_type_parameter_in_an_array() {
+    let (_, result) = check_one(
+        "fn reversed[T](in xs: Array[T]) -> Array[T] {\n\
+             var out = std::array::empty();\n\
+             var i = std::array::len(xs);\n\
+             while i > 0 {\n\
+                 i = i - 1;\n\
+                 std::array::push(out, std::array::get(xs, i));\n\
+             }\n\
+             out\n\
+         }\n\
+         fn g() -> Int {\n\
+             std::array::len(reversed(std::array::filled(2, 1.5)))\n\
+         }\n",
+    );
+    assert_clean(&result);
+}
+
+#[test]
+fn a_generic_array_element_is_checked_at_each_instantiation() {
+    // `wrap` stores its `T` in an `Array`, and `outer` passes its `U` there
+    // inside a struct, so both reach `Array[Array[I64]]` from a concrete
+    // call. Accepting `T` in the body without this check let a generic
+    // build an element type the v0 set refuses.
+    let (_, result) = check_one(
+        "struct Pair[T] { first: T, second: T }\n\
+         fn wrap[T](take x: T) -> Array[T] {\n\
+             var xs = std::array::empty();\n\
+             std::array::push(xs, x);\n\
+             xs\n\
+         }\n\
+         fn outer[U](take x: U, take y: U) -> Array[Pair[U]] {\n\
+             wrap(Pair { first: x, second: y })\n\
+         }\n\
+         fn ok() -> Int {\n\
+             std::array::len(outer(3, 4)) + std::array::len(wrap(\"s\"))\n\
+         }\n\
+         fn bad() -> Int {\n\
+             std::array::len(outer(wrap(1), wrap(2)))\n\
+         }\n\
+         fn bad2() -> Int {\n\
+             std::array::len(wrap(wrap(1)))\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), ["T0001", "T0001"]);
+    for diagnostic in result.diagnostics() {
+        assert!(
+            diagnostic
+                .message
+                .contains("`Array[Array[I64]]` is not supported"),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
 fn match_arms_must_yield_one_type() {
     let (_, result) = check_one(
         "fn f(in b: Bool) -> Int {\n\
