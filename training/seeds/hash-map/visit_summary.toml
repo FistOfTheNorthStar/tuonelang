@@ -1,0 +1,13 @@
+task = """
+Write `visit_summary(in visitors: Array[Str]) -> String` that counts how \
+many times each name appears in a visitor log and renders the tally as \
+`name=count` entries joined by commas, in the order each name was FIRST \
+seen — e.g. `[\"ann\", \"bob\", \"ann\"]` gives `\"ann=2,bob=1\"`. An empty log \
+gives the empty string, and there is no trailing comma."""
+notes = """
+A `Map[Str, Int]` remembers insertion order: `std::map::keys` returns the \
+keys first-seen first, on every engine, so no separate order array is \
+needed. Re-inserting an existing key updates its value without moving it."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["str", "core"]

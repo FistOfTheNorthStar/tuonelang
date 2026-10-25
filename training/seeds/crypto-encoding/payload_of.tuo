@@ -1,0 +1,21 @@
+fn payload_of(in token: Str) -> String {
+    let parts = std::str::split(token, ".");
+    if std::array::len(parts) != 3 {
+        return std::string::empty();
+    }
+    let payload = std::array::get(parts, 1);
+    let bytes = std::crypto::base64_decode(std::string::as_str(payload));
+    std::crypto::str_of_bytes(bytes)
+}
+
+spec payload_of {
+    then std::string::as_str(payload_of("eyJhbGciOiJub25lIn0=.eyJzdWIiOjQyfQ==.c2ln")) == "{\"sub\":42}";
+    then std::string::as_str(payload_of("aGVhZA==.aGk=.c2ln")) == "hi";
+}
+
+spec "payload_of needs exactly three parts" {
+    then std::string::len(payload_of("aGk=")) == 0;
+    then std::string::len(payload_of("a.aGk=")) == 0;
+    then std::string::len(payload_of("a.aGk=.b.c")) == 0;
+    then std::string::len(payload_of("a..b")) == 0;
+}

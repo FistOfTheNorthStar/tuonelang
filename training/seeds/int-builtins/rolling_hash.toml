@@ -1,0 +1,10 @@
+task = """
+Write `rolling_hash(in s: Str) -> U32`: starting from 0, for each byte of \
+`s` rotate the 32-bit hash left by 5 bits and XOR the byte into it."""
+notes = """
+`std::int::rotate_left` is a true rotation: bits leaving the top re-enter \
+at the bottom, and it never traps. A plain `h << 5` discards those bits \
+instead, and on a `U32` it agrees with the rotation only until the hash \
+fills its top five bits."""
+tier = "executable"
+difficulty = 2

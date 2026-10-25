@@ -1,0 +1,18 @@
+fn basic_auth(in user: Str, in password: Str) -> String {
+    var credentials = std::string::from_str(user);
+    std::string::append(credentials, password);
+    let encoded = std::crypto::base64_encode(std::crypto::bytes_of_str(std::string::as_str(credentials)));
+    var header = std::string::from_str("Basic ");
+    std::string::append(header, std::string::as_str(encoded));
+    header
+}
+
+spec basic_auth {
+    then std::string::as_str(basic_auth("Aladdin", "open sesame")) == "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==";
+    then std::string::as_str(basic_auth("ab", "c")) == "Basic YWI6Yw==";
+}
+
+spec "basic_auth with empty parts still has the colon" {
+    then std::string::as_str(basic_auth("", "")) == "Basic Og==";
+    then std::string::as_str(basic_auth("user", "")) == "Basic dXNlcjo=";
+}

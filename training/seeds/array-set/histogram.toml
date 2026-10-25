@@ -1,0 +1,11 @@
+task = """
+Write `histogram(in scores: Array[Int]) -> Array[Int]` that buckets exam \
+scores into ten buckets of width ten: bucket 0 counts 0..=9, bucket 1 counts \
+10..=19, and so on, with a perfect 100 counted in bucket 9. Scores outside \
+0..=100 are ignored. The result always has exactly ten elements."""
+notes = """
+`std::array::filled(10, 0)` allocates the whole buffer once, and an indexed \
+write `buckets[b as Usize] = ...` updates it in place; both need the array in \
+a `var`. Clamping 100 into the last bucket avoids an IndexOutOfBounds trap."""
+tier = "executable"
+difficulty = 2

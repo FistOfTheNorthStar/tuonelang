@@ -1,0 +1,20 @@
+fn read_status(take b: Int) -> Str {
+    if b >= 0 {
+        "byte"
+    } else if b == 0 - 1 {
+        "eof"
+    } else if std::net::is_timeout(b) {
+        "timeout"
+    } else {
+        "error"
+    }
+}
+
+spec read_status {
+    then read_status(0) == "byte";
+    then read_status(65) == "byte";
+    then read_status(255) == "byte";
+    then read_status(0 - 1) == "eof";
+    then read_status(0 - 3) == "timeout";
+    then read_status(0 - 2) == "error";
+}

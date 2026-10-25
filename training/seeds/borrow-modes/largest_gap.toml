@@ -1,0 +1,12 @@
+task = """
+Arrival times (in minutes) of buses at a stop are kept in ascending order in \
+a growable array. Write `largest_gap(in times: Array[Int]) -> Int` that \
+returns the longest wait between two consecutive buses, or 0 when fewer than \
+two buses arrive. The caller keeps using its array afterwards, so borrow it \
+with `in` and walk it by index."""
+notes = """
+`for t in times` would MOVE the array into the loop, which an `in` borrow \
+cannot give up; a borrowed `Array` is walked by index with `std::array::len` \
+and `std::array::get`, starting at 1 so `i - 1` is always a valid index."""
+tier = "executable"
+difficulty = 3

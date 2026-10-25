@@ -1,0 +1,42 @@
+module app;
+
+fn reply_matches(take fd: Int, in expected: Str) -> Bool {
+    let n = std::net::udp_recv(fd, 50);
+    if n != std::str::len(expected) {
+        return false;
+    }
+    var i = 0;
+    while i < n {
+        if std::net::udp_byte_at(fd, i) != std::str::byte_at(expected, i) {
+            return false;
+        }
+        i = i + 1;
+    }
+    true
+}
+
+fn main() -> Int {
+    let server = std::net::udp_bind(0);
+    let client = std::net::udp_bind(0);
+    if server < 0 || client < 0 {
+        return 1;
+    }
+    let port = std::net::bound_port(server);
+    if std::net::udp_send(client, "127.0.0.1", port, "ping") < 0 {
+        return 2;
+    }
+    if std::net::udp_recv(server, 50) != 4 {
+        return 3;
+    }
+    let reply_to = std::net::udp_peer_port(server);
+    if std::net::udp_send(server, "127.0.0.1", reply_to, "pong") < 0 {
+        return 4;
+    }
+    let ok = reply_matches(client, "pong");
+    let _ = std::net::close(server);
+    let _ = std::net::close(client);
+    if !ok {
+        return 5;
+    }
+    44
+}

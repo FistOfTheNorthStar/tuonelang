@@ -1,0 +1,12 @@
+task = """
+Write `pack_rgb(take r: Int, take g: Int, take b: Int) -> Int` packing three \
+colour channels into one `0xRRGGBB` value, using only the low 8 bits of each \
+argument, and `green_of(take color: Int) -> Int` extracting the green \
+channel back out of a packed colour."""
+notes = """
+Mask each channel with `& 255` before shifting it into place, or an \
+out-of-range channel bleeds into its neighbour. Extraction is the reverse: \
+shift right, then mask. Hex literals such as `0x123456` make the layout \
+visible in the specs."""
+tier = "executable"
+difficulty = 2

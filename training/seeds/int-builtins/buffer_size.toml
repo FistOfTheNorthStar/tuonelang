@@ -1,0 +1,11 @@
+task = """
+Write `buffer_size(take width: Int, take height: Int, take bytes_per_pixel: \
+Int) -> Option[Int]` returning the byte size of an image buffer, \
+`width * height * bytes_per_pixel`. Return `None` when any argument is \
+negative or when either multiplication would overflow `Int`; never trap."""
+notes = """
+Each multiplication needs its own `std::int::checked_mul`: checking only the \
+last one still lets `width * height` trap on hostile dimensions. Matching on \
+the first result chains the two."""
+tier = "executable"
+difficulty = 3

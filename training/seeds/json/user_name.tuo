@@ -1,0 +1,26 @@
+fn user_name(in text: Str) -> String {
+    match std::json::parse(text) {
+        Ok { value } => {
+            let user = std::json::member(value, std::json::root(), "user");
+            let name = std::json::member(value, user, "name");
+            if name >= 0 && std::json::kind_of(value, name) == std::json::kind_string() {
+                std::json::text_of(value, name)
+            } else {
+                std::string::from_str("anonymous")
+            }
+        },
+        Err { error } => std::string::from_str("anonymous"),
+    }
+}
+
+spec user_name {
+    then std::string::as_str(user_name("{\"user\": {\"id\": 7, \"name\": \"ada\"}}")) == "ada";
+    then std::string::as_str(user_name("{\"user\": {\"name\": \"a \\\"b\\\"\"}}")) == "a \"b\"";
+}
+
+spec "user_name falls back when the path is missing" {
+    then std::string::as_str(user_name("{\"user\": {\"id\": 7}}")) == "anonymous";
+    then std::string::as_str(user_name("{\"name\": \"ada\"}")) == "anonymous";
+    then std::string::as_str(user_name("{\"user\": {\"name\": 42}}")) == "anonymous";
+    then std::string::as_str(user_name("{\"user\": ")) == "anonymous";
+}

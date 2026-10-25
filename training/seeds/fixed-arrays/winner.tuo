@@ -1,0 +1,31 @@
+fn line(in board: [Int; 9], take a: Int, take b: Int, take c: Int) -> Int {
+    let first = board[a as Usize];
+    if first != 0 && board[b as Usize] == first && board[c as Usize] == first {
+        first
+    } else {
+        0
+    }
+}
+
+fn winner(in board: [Int; 9]) -> Int {
+    let lines: [Int; 24] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 0, 3, 6, 1, 4, 7, 2, 5, 8, 0, 4, 8, 2, 4, 6];
+    for k in 0 .. 8 {
+        let found = line(board, lines[k * 3], lines[k * 3 + 1], lines[k * 3 + 2]);
+        if found != 0 {
+            return found;
+        }
+    }
+    0
+}
+
+spec winner {
+    then winner([1, 1, 1, 2, 2, 0, 0, 0, 0]) == 1;
+    then winner([2, 1, 0, 2, 1, 0, 2, 0, 1]) == 2;
+    then winner([1, 2, 0, 2, 1, 0, 0, 0, 1]) == 1;
+    then winner([0, 0, 2, 1, 2, 1, 2, 1, 0]) == 2;
+}
+
+spec "winner on an undecided board" {
+    then winner([0, 0, 0, 0, 0, 0, 0, 0, 0]) == 0;
+    then winner([1, 2, 1, 1, 2, 2, 2, 1, 1]) == 0;
+}

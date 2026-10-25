@@ -1,0 +1,13 @@
+task = """
+Write `setting_value(in line: Str, in key: Str) -> Option[Int]` for a \
+config line of the form `name = value`. Split at the first `=`, trim ASCII \
+whitespace from both sides, and return the value parsed as a decimal \
+integer (a leading `-` allowed) when the name equals `key`. Return `None` \
+when there is no `=`, the name differs, or the value is not an integer."""
+notes = """
+The point is to call the `std::str` library — `find`, `slice`, `trim`, \
+`parse_int` — rather than hand-roll a scanner. `parse_int` does not skip \
+whitespace, so the value must be trimmed first."""
+stdlib_deps = ["str"]
+tier = "executable"
+difficulty = 3

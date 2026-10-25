@@ -1,0 +1,12 @@
+task = """
+Write `rename(mut roster: Array[String], in old: Str, in new_name: Str) -> \
+Bool` that replaces the FIRST name in `roster` equal to `old` with \
+`new_name`, in place, and returns whether a name was replaced. The roster's \
+length never changes; when `old` is absent the roster is left untouched and \
+the result is `false`."""
+notes = """
+An indexed write `xs[i] = v` only works for `Copy` elements; a `String` \
+element is replaced with `std::array::set(xs, i, v)`, which drops the old \
+`String` in place."""
+tier = "executable"
+difficulty = 3

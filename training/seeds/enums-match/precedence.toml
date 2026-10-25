@@ -1,0 +1,13 @@
+task = """
+An expression lexer produces `enum Token { Num { value: Int }, Plus, Minus, \
+Star, Slash, Caret, LParen, RParen }`. Write `precedence(in t: Token) -> \
+Int` returning the binding strength of an operator — 1 for `Plus` and \
+`Minus`, 2 for `Star` and `Slash`, 3 for `Caret` — and 0 for anything that \
+is not an operator (numbers and parentheses)."""
+notes = """
+`|` inside a match pattern is alternation, so variants that share an \
+answer share one arm; `Token::Num { value: _ }` matches a field variant \
+without binding its payload. The match stays exhaustive, so adding a \
+variant later is a T0007 here rather than a silent fallthrough."""
+tier = "executable"
+difficulty = 2

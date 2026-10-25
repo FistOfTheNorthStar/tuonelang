@@ -1,0 +1,14 @@
+task = """
+Write `tag_for(in key: Str, in message: Str) -> Array[Int]` returning the \
+HMAC-SHA-256 of `message` under `key` as raw bytes, and `is_authentic(in \
+key: Str, in message: Str, in tag: Array[Int]) -> Bool` that recomputes the \
+tag and compares it with the received one in constant time. A tag of the \
+wrong length is never authentic."""
+notes = """
+`std::crypto::hmac_sha256` and `std::crypto::verify` do the work: `verify` \
+runs in time that depends only on the lengths, never on where the bytes \
+first differ, which an early-returning comparison would leak to an \
+attacker timing forged tags."""
+stdlib_deps = ["crypto"]
+tier = "executable"
+difficulty = 3

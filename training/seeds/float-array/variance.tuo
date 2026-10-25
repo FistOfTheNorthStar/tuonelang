@@ -1,0 +1,56 @@
+fn mean(in xs: Array[Float]) -> Float {
+    var total = 0.0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total / (std::array::len(xs) as Float)
+}
+
+fn variance(in xs: Array[Float]) -> Float {
+    let n = std::array::len(xs);
+    if n == 0 {
+        return 0.0;
+    }
+    let m = mean(xs);
+    var sum_sq = 0.0;
+    var i = 0;
+    while i < n {
+        let d = std::array::get(xs, i) - m;
+        sum_sq = sum_sq + d * d;
+        i = i + 1;
+    }
+    sum_sq / (n as Float)
+}
+
+fn std_dev(in xs: Array[Float]) -> Float {
+    std::float::sqrt(variance(xs))
+}
+
+fn sample() -> Array[Float] {
+    var xs = std::array::empty();
+    std::array::push(xs, 2.0);
+    std::array::push(xs, 4.0);
+    std::array::push(xs, 4.0);
+    std::array::push(xs, 4.0);
+    std::array::push(xs, 5.0);
+    std::array::push(xs, 5.0);
+    std::array::push(xs, 7.0);
+    std::array::push(xs, 9.0);
+    xs
+}
+
+spec variance {
+    then variance(sample()) == 4.0;
+    then variance(std::array::empty()) == 0.0;
+    when var same = std::array::empty();
+    when std::array::push(same, 3.5);
+    when std::array::push(same, 3.5);
+    then variance(same) == 0.0;
+}
+
+spec std_dev {
+    then std_dev(sample()) == 2.0;
+    then std_dev(std::array::empty()) == 0.0;
+}

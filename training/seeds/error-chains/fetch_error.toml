@@ -1,0 +1,15 @@
+task = """
+Write `fetch_error(take status: Int) -> Array[String]` that turns a failed \
+HTTP status from a user-directory request into an error chain: the root \
+cause is \"not found\" for 404, \"timeout\" for 408 and 504, and \
+\"server error\" for anything else, and the chain is wrapped once with the \
+context \"fetch users\". Build it with `std::core::error_new` and \
+`std::core::error_wrap`."""
+notes = """
+An error chain is the `Array[String]` that `std::core` builds: the root \
+cause first, each `error_wrap` adding an outer layer. `error_message` \
+renders it outermost-first as `\"fetch users: timeout\"`, and returns a \
+`String`, so a spec compares it through `std::string::as_str`."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["core"]

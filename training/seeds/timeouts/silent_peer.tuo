@@ -1,0 +1,32 @@
+module app;
+
+fn poll_byte(take fd: Int) -> Int {
+    std::net::read_byte_timeout(fd, 20)
+}
+
+fn main() -> Int {
+    let listener = std::net::listen(0);
+    if listener < 0 {
+        return 1;
+    }
+    let client = std::net::connect("127.0.0.1", std::net::bound_port(listener));
+    let session = std::net::accept_timeout(listener, 50);
+    if client < 0 || session < 0 {
+        return 2;
+    }
+    let first = poll_byte(session);
+    if std::rt::write(client, "!") != 1 {
+        return 3;
+    }
+    let second = poll_byte(session);
+    let _ = std::net::close(session);
+    let _ = std::net::close(client);
+    let _ = std::net::close(listener);
+    if !std::net::is_timeout(first) {
+        return 4;
+    }
+    if second != 33 {
+        return 5;
+    }
+    second
+}

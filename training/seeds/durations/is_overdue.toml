@@ -1,0 +1,15 @@
+task = """
+A watchdog checks whether a task has run too long. Write \
+`is_overdue(take started_ns: Int, take checked_ns: Int, take limit_ms: Int) -> Bool` \
+where the two timestamps are monotonic-clock readings in nanoseconds. The \
+task is overdue only when the elapsed time is strictly longer than the \
+limit; running exactly `limit_ms` is still on time. Use \
+`std::time::instant_at`, `std::time::elapsed`, and `std::time::lt`."""
+notes = """
+`instant_at` turns a raw clock reading into an `Instant`, so the comparison \
+is pure and can be spec'd with fixed readings; the live program would get \
+them from `std::time::now`, which is an effect. \"Longer than\" is \
+`lt(limit, elapsed)`; `!lt(elapsed, limit)` would also fire at equality."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["time"]

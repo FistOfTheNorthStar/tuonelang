@@ -1,0 +1,13 @@
+task = """
+Using `std::json`, write `user_name(in text: Str) -> String` that returns \
+the string at the path `user.name` of a JSON document, decoded (escapes \
+resolved). Return `anonymous` when the text is not valid JSON, either \
+member is missing, or `name` is not a string."""
+notes = """
+Navigation chains safely: `member` on a missing parent (-1) returns -1 \
+again, so only the final index needs checking. `text_of` returns \"\" for a \
+non-string node rather than failing, so check `kind_of` to tell a missing \
+name from an empty one."""
+stdlib_deps = ["json"]
+tier = "executable"
+difficulty = 2

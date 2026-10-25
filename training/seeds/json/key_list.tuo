@@ -1,0 +1,36 @@
+fn key_list(in text: Str) -> String {
+    var out = std::string::empty();
+    match std::json::parse(text) {
+        Ok { value } => {
+            if std::json::kind_of(value, std::json::root()) != std::json::kind_object() {
+                return out;
+            }
+            var node = std::json::first_child(value, std::json::root());
+            var first = true;
+            while node >= 0 {
+                if !first {
+                    std::string::push_byte(out, 44);
+                }
+                first = false;
+                let key = std::json::key_of(value, node);
+                std::string::append(out, std::string::as_str(key));
+                node = std::json::next_sibling(value, node);
+            }
+        },
+        Err { error } => {},
+    }
+    out
+}
+
+spec key_list {
+    then std::string::as_str(key_list("{\"host\": \"db\", \"port\": 5432, \"tls\": true}")) == "host,port,tls";
+    then std::string::as_str(key_list("{\"only\": null}")) == "only";
+}
+
+spec "key_list lists top-level keys only" {
+    then std::string::as_str(key_list("{\"a\": {\"b\": 1}, \"c\": [2, 3]}")) == "a,c";
+    then std::string::as_str(key_list("{\"\": 1, \"x\": 2}")) == ",x";
+    then std::string::len(key_list("{}")) == 0;
+    then std::string::len(key_list("[1, 2]")) == 0;
+    then std::string::len(key_list("{oops}")) == 0;
+}

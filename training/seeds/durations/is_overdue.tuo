@@ -1,0 +1,12 @@
+fn is_overdue(take started_ns: Int, take checked_ns: Int, take limit_ms: Int) -> Bool {
+    let ran = std::time::elapsed(std::time::instant_at(started_ns), std::time::instant_at(checked_ns));
+    std::time::lt(std::time::from_millis(limit_ms), ran)
+}
+
+spec is_overdue {
+    then is_overdue(0, 2000000000, 1500);
+    then !is_overdue(0, 1000000000, 1500);
+    then !is_overdue(500000000, 2000000000, 1500);
+    then is_overdue(500000000, 2000000001, 1500);
+    then !is_overdue(7, 7, 0);
+}

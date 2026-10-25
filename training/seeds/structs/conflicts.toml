@@ -1,0 +1,15 @@
+task = """
+Meeting slots are half-open minute ranges `struct Slot { start: Int, end: \
+Int }` (a slot ending at 60 does not touch one starting at 60), and a \
+booking is `struct Booking { room: Int, slot: Slot }`. Write \
+`overlap(in a: Slot, in b: Slot) -> Int` returning how many minutes two \
+slots share (0 when they are disjoint), and `conflicts(in a: Booking, in b: \
+Booking) -> Bool` that is true when two bookings are in the same room and \
+their slots overlap by at least one minute."""
+notes = """
+Structs nest by value and are read through an `in` borrow with chained \
+field access (`a.slot.start`). Clamping with `std::core::max(.., 0)` keeps \
+disjoint slots from producing a negative overlap."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["core"]

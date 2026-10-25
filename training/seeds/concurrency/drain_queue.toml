@@ -1,0 +1,18 @@
+task = """
+Write a runnable program whose workers share one work queue. `main` puts \
+the task sizes 1, 2, ..., 20 into a `std::sync` channel and closes it, then \
+runs four workers with `std::sync::par_map`; every worker's task is the \
+channel handle itself. `drain_queue(take ch: Int) -> Int` is the worker: it \
+keeps receiving until the channel is closed and empty and returns the sum \
+of the sizes it took. However the workers race, their sums must add up to \
+210; `main` returns that total, or 1 if the queue could not be filled and 2 \
+if the totals disagree."""
+notes = """
+`par_map` takes a non-capturing function, so the shared queue reaches each \
+worker as its task value: an array holding the same channel handle once per \
+worker. Which worker gets which task is up to the race; the total is not, \
+which is what `main` checks."""
+run_exit = 210
+tier = "effect"
+difficulty = 4
+stdlib_deps = ["sync"]

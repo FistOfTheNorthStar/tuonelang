@@ -1,0 +1,29 @@
+enum Token {
+    Num { value: Int },
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Caret,
+    LParen,
+    RParen,
+}
+
+fn precedence(in t: Token) -> Int {
+    match t {
+        Token::Plus | Token::Minus => 1,
+        Token::Star | Token::Slash | Token::Caret => 2,
+        Token::Num { value: _ } | Token::LParen | Token::RParen => 0,
+    }
+}
+
+spec precedence {
+    then precedence(Token::Plus) == 1;
+    then precedence(Token::Minus) == 1;
+    then precedence(Token::Star) == 2;
+    then precedence(Token::Slash) == 2;
+    then precedence(Token::Caret) == 3;
+    then precedence(Token::Num { value: 42 }) == 0;
+    then precedence(Token::LParen) == 0;
+    then precedence(Token::RParen) == 0;
+}

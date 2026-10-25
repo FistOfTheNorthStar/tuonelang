@@ -1,0 +1,55 @@
+fn plus(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+fn minus(take a: Int, take b: Int) -> Int {
+    a - b
+}
+
+fn times(take a: Int, take b: Int) -> Int {
+    a * b
+}
+
+fn larger(take a: Int, take b: Int) -> Int {
+    if a > b {
+        a
+    } else {
+        b
+    }
+}
+
+fn apply_op(take code: Int, take a: Int, take b: Int) -> Int {
+    let table: [fn(take Int, take Int) -> Int; 4] = [plus, minus, times, larger];
+    if code < 0 || code > 3 {
+        return 0;
+    }
+    let op = table[code as Usize];
+    op(a, b)
+}
+
+spec apply_op {
+    then apply_op(0, 7, 5) == 12;
+    then apply_op(1, 7, 5) == 2;
+    then apply_op(2, 7, 5) == 35;
+    then apply_op(3, 7, 5) == 7;
+    then apply_op(3, 0 - 2, 4) == 4;
+    then apply_op(4, 7, 5) == 0;
+    then apply_op(0 - 1, 7, 5) == 0;
+}
+
+spec plus {
+    then plus(2, 2) == 4;
+}
+
+spec minus {
+    then minus(2, 5) == 0 - 3;
+}
+
+spec times {
+    then times(0 - 3, 4) == 0 - 12;
+}
+
+spec larger {
+    then larger(4, 4) == 4;
+    then larger(1, 9) == 9;
+}

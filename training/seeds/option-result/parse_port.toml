@@ -1,0 +1,15 @@
+task = """
+Write `parse_port(in field: Str) -> Result[Int, Str]` for a config loader. \
+Parse the field with `std::str::parse_int`; if that fails, return its error \
+unchanged. A parsed number outside 1..=65535 is \
+`Err { error: \"port out of range\" }`; otherwise it is `Ok { value }`. \
+Also write `error_of(in r: Result[Int, Str]) -> Str`, returning the error \
+text or \"\" for an `Ok`, so specs can compare the message."""
+notes = """
+There is no `?` operator: an error is propagated by matching and rebuilding \
+it, `Err { error } => Err { error }`. The stdlib's \
+`std::core::ok_or(r, fallback)` already extracts the value of a \
+`Result[Int, Str]`, so only the error side needs a helper."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["str", "core"]

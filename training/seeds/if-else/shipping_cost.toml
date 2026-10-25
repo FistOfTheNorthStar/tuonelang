@@ -1,0 +1,12 @@
+task = """
+Write `shipping_cost(take grams: Int, take express: Bool) -> Int` for a \
+parcel service: a parcel of 0 grams or less costs 0; up to and including \
+500 g costs 5; up to and including 2000 g costs 9; anything heavier costs \
+15. Express delivery doubles the price of any parcel that costs something. \
+Use an else-if chain."""
+notes = """
+`if` is an expression, so the tier price binds with `let` and the express \
+surcharge is a second `if` over it; the boundaries are inclusive, which is \
+what the `<=` comparisons say."""
+tier = "executable"
+difficulty = 2

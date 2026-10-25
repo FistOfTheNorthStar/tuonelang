@@ -1,0 +1,17 @@
+task = """
+Write a runnable program that tells a silent peer from a slow byte. `main` \
+sets up a loopback TCP connection (listen on an ephemeral port, connect to \
+127.0.0.1, accept). `poll_byte(take fd: Int) -> Int` reads one byte with \
+`std::net::read_byte_timeout` waiting at most 20 ms. First the server polls \
+while the client has sent nothing, which must time out; then the client \
+writes \"!\" and the server polls again, which must return byte 33. `main` \
+closes all three descriptors and returns 33 on success, or a distinct code \
+1..5 for the failing step."""
+notes = """
+A timeout is not end of input: the connection is still open and a later \
+read can succeed, which is exactly what the second poll shows. Keeping the \
+wait short is fine on loopback, where the written byte is already queued."""
+run_exit = 33
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["net"]

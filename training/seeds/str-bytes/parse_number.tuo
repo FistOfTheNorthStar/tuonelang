@@ -9,3 +9,8 @@ spec parse_number {
     then parse_number("42") == 42;
     then parse_number("4x2") == 0 - 1;
 }
+
+spec "parse_number on the empty string" {
+    then parse_number("") == 0 - 1;
+    then parse_number("0") == 0;
+}

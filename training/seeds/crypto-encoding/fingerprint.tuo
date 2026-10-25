@@ -1,0 +1,14 @@
+fn fingerprint(in data: Str) -> String {
+    let digest = std::crypto::sha256(data);
+    std::string::slice(digest, 0, 8)
+}
+
+spec fingerprint {
+    then std::string::as_str(fingerprint("abc")) == "ba7816bf";
+    then std::string::as_str(fingerprint("")) == "e3b0c442";
+}
+
+spec "fingerprint changes with one byte" {
+    then std::string::as_str(fingerprint("hello")) == "2cf24dba";
+    then std::string::as_str(fingerprint("hello")) != std::string::as_str(fingerprint("hellp"));
+}

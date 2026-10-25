@@ -1,0 +1,12 @@
+task = """
+Write `minutes_between(take h1: Int, take m1: Int, take h2: Int, take m2: \
+Int) -> Int` returning how many minutes pass on a 24-hour clock going \
+forward from `h1:m1` to `h2:m2`. When the second time is earlier in the day \
+the interval runs past midnight (23:30 to 00:15 is 45 minutes); equal times \
+are 0 minutes apart."""
+notes = """
+`%` keeps the sign of the dividend, so a negative difference stays \
+negative: add one full day (1440) before taking the remainder. A small \
+helper for minutes since midnight keeps the main function readable."""
+tier = "executable"
+difficulty = 2

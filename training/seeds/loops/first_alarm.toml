@@ -1,0 +1,11 @@
+task = """
+A sensor reports six temperature readings. Write \
+`first_alarm(in readings: [Int; 6], take limit: Int) -> Int` that returns \
+the index of the first reading strictly above `limit`, or -1 when no reading \
+exceeds it. Use a `loop` that `break`s as soon as the answer is known."""
+notes = """
+`loop` runs until a `break`; the result is carried out in a `var` set just \
+before breaking. Indexing a fixed array takes a `Usize`, so the Int counter \
+is cast with `as Usize`."""
+tier = "executable"
+difficulty = 2

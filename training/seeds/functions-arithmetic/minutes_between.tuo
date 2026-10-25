@@ -1,0 +1,19 @@
+fn minutes_of_day(take hour: Int, take minute: Int) -> Int {
+    hour * 60 + minute
+}
+
+fn minutes_between(take h1: Int, take m1: Int, take h2: Int, take m2: Int) -> Int {
+    let diff = minutes_of_day(h2, m2) - minutes_of_day(h1, m1);
+    (diff + 1440) % 1440
+}
+
+spec minutes_between {
+    then minutes_between(9, 15, 10, 45) == 90;
+    then minutes_between(12, 0, 12, 0) == 0;
+}
+
+spec "minutes_between wraps past midnight" {
+    then minutes_between(23, 30, 0, 15) == 45;
+    then minutes_between(10, 0, 9, 0) == 1380;
+    then minutes_between(0, 0, 23, 59) == 1439;
+}

@@ -1,0 +1,30 @@
+fn word_count(in s: Str) -> Int {
+    var words = 0;
+    var in_word = false;
+    var i = 0;
+    while i < std::str::len(s) {
+        let b = std::str::byte_at(s, i);
+        if b == 32 || b == 9 || b == 10 {
+            if in_word {
+                words = words + 1;
+            }
+            in_word = false;
+        } else {
+            in_word = true;
+        }
+        i = i + 1;
+    }
+    words
+}
+
+spec word_count {
+    then word_count("the quick brown fox") == 4;
+    then word_count("one") == 1;
+    then word_count("") == 0;
+}
+
+spec "word_count ignores runs of whitespace" {
+    then word_count("  leading and trailing  ") == 3;
+    then word_count("a\tb\nc") == 3;
+    then word_count("   ") == 0;
+}

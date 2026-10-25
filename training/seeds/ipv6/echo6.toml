@@ -1,0 +1,19 @@
+task = """
+Write a runnable program that runs an echo exchange over IPv6 loopback. \
+`main` listens on an ephemeral port with `std::net::listen6`, connects a \
+client to `::1`, and accepts the session. The client writes \"hi6\"; \
+`echo6(take session: Int, take expected: Int) -> Int` reads `expected` \
+bytes from the session (each read bounded by 50 ms), writes each one \
+straight back, and returns how many it echoed. The client then reads the \
+three echoed bytes back and checks they spell \"hi6\". `main` closes every \
+descriptor and returns 63 on success, with a distinct code 1..7 for each \
+failing step."""
+notes = """
+A connected descriptor moves bytes through the same seam files use, \
+`std::rt::write` and a byte-at-a-time read; there is no separate socket \
+send/receive pair. Reading with `std::net::read_byte_timeout` keeps a lost \
+byte from hanging the program forever."""
+run_exit = 63
+tier = "effect"
+difficulty = 4
+stdlib_deps = ["net"]

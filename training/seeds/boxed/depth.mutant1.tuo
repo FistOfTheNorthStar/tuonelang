@@ -1,0 +1,41 @@
+enum Tree {
+    Leaf,
+    Branch { left: Box[Tree], value: Int, right: Box[Tree] },
+}
+
+fn depth(in t: Tree) -> Int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Branch { left, value: _, right } => {
+            1 + std::core::min(depth(std::boxed::get(left)), depth(std::boxed::get(right)))
+        },
+    }
+}
+
+fn total(in t: Tree) -> Int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Branch { left, value, right } => {
+            value + total(std::boxed::get(left)) + total(std::boxed::get(right))
+        },
+    }
+}
+
+fn node(take left: Tree, take value: Int, take right: Tree) -> Tree {
+    Tree::Branch { left: std::boxed::new(left), value, right: std::boxed::new(right) }
+}
+
+fn lopsided() -> Tree {
+    node(Tree::Leaf, 1, node(node(Tree::Leaf, 3, Tree::Leaf), 2, Tree::Leaf))
+}
+
+spec depth {
+    then depth(Tree::Leaf) == 0;
+    then depth(node(Tree::Leaf, 5, Tree::Leaf)) == 1;
+    then depth(lopsided()) == 3;
+}
+
+spec total {
+    then total(Tree::Leaf) == 0;
+    then total(lopsided()) == 6;
+}

@@ -1,0 +1,37 @@
+fn stars(take n: Int) -> String {
+    var out = std::string::empty();
+    var i = 0;
+    while i < n {
+        std::string::push_byte(out, 42);
+        i = i + 1;
+    }
+    out
+}
+
+fn censor(in text: Str, in word: Str) -> String {
+    let mask = stars(std::str::len(word));
+    std::str::replace(text, word, std::string::as_str(mask))
+}
+
+fn mentions(in text: Str, in word: Str) -> Int {
+    if std::str::len(word) == 0 {
+        return 0;
+    }
+    std::str::count(text, word)
+}
+
+spec censor {
+    then std::string::as_str(censor("darn it, darn", "darn")) == "**** it, ****";
+    then std::string::as_str(censor("all clean", "darn")) == "all clean";
+    then std::string::as_str(censor("Darn", "darn")) == "Darn";
+}
+
+spec "censor with an empty word changes nothing" {
+    then std::string::as_str(censor("hello", "")) == "hello";
+}
+
+spec mentions {
+    then mentions("darn it, darn", "darn") == 2;
+    then mentions("aaaa", "aa") == 2;
+    then mentions("hello", "") == 0;
+}

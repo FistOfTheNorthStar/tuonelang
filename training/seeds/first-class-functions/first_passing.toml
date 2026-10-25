@@ -1,0 +1,14 @@
+task = """
+Write a higher-order helper \
+`first_passing(take check: fn(take Int) -> Bool, take limit: Int) -> Int` \
+that tries attempts 1, 2, ..., `limit` in order and returns the first \
+attempt number for which `check` returns true, or -1 if none of them \
+passes (including when `limit` is 0 or less). Write two checks to spec it \
+with: `is_square(take n: Int) -> Bool` (n is a perfect square greater than \
+1) and `over_fifty(take n: Int) -> Bool` (n > 50)."""
+notes = """
+A function parameter is typed like any other: `take check: fn(take Int) -> Bool`, \
+and the argument is a bare top-level function name. Function values capture \
+nothing, so everything a check needs must arrive as its parameter."""
+tier = "executable"
+difficulty = 3

@@ -1,0 +1,12 @@
+task = """
+A job runner retries a failed step only for transient failures. Write \
+`is_retryable(in chain: Array[String]) -> Bool` that is true when any layer \
+of the error chain is exactly \"timeout\" or \"connection refused\", at any \
+wrapping depth, and false otherwise. Use `std::core::error_is`."""
+notes = """
+`std::core::error_is` is the `errors.Is` analog: it matches a sentinel \
+message at every layer, so a \"timeout\" that some caller added as context \
+around an i/o error still counts. Comparing only `error_root` would miss it."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["core"]

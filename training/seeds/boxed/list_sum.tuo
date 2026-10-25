@@ -1,0 +1,33 @@
+struct Node {
+    value: Int,
+    next: Option[Box[Node]],
+}
+
+fn cons(take value: Int, take rest: Option[Box[Node]]) -> Option[Box[Node]] {
+    Some { value: std::boxed::new(Node { value, next: rest }) }
+}
+
+fn node_sum(in n: Node) -> Int {
+    match n.next {
+        Some { value } => n.value + node_sum(std::boxed::get(value)),
+        None => n.value,
+    }
+}
+
+fn list_sum(in list: Option[Box[Node]]) -> Int {
+    match list {
+        Some { value } => node_sum(std::boxed::get(value)),
+        None => 0,
+    }
+}
+
+spec list_sum {
+    then list_sum(cons(4, cons(5, cons(6, None)))) == 15;
+    then list_sum(cons(9, None)) == 9;
+    then list_sum(None) == 0;
+}
+
+spec cons {
+    when let one = cons(7, None);
+    then list_sum(cons(3, one)) == 10;
+}

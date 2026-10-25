@@ -1,0 +1,53 @@
+module app;
+
+fn echo6(take session: Int, take expected: Int) -> Int {
+    var echoed = 0;
+    while echoed < expected {
+        let b = std::net::read_byte_timeout(session, 50);
+        if b < 0 {
+            return echoed;
+        }
+        var one = std::string::empty();
+        std::string::push_byte(one, b);
+        if std::rt::write(session, std::string::as_str(one)) != 1 {
+            return echoed;
+        }
+        echoed = echoed + 1;
+    }
+    echoed
+}
+
+fn main() -> Int {
+    let server = std::net::listen6(0);
+    if server < 0 {
+        return 1;
+    }
+    let port = std::net::bound_port(server);
+    let client = std::net::connect("::1", port);
+    if client < 0 {
+        return 2;
+    }
+    let session = std::net::accept_timeout(server, 50);
+    if session < 0 {
+        return 3;
+    }
+    if std::rt::write(client, "hi6") != 3 {
+        return 4;
+    }
+    if echo6(session, 3) != 3 {
+        return 5;
+    }
+    let a = std::net::read_byte_timeout(client, 50);
+    let b = std::net::read_byte_timeout(client, 50);
+    let c = std::net::read_byte_timeout(client, 50);
+    let _ = std::net::close(session);
+    let _ = std::net::close(client);
+    let _ = std::net::close(server);
+    if a < 0 || b < 0 || c < 0 {
+        return 6;
+    }
+    if a != 104 || b != 105 || c != 54 {
+        return 7;
+    }
+    63
+}

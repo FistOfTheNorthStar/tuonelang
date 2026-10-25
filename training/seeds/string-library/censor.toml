@@ -1,0 +1,14 @@
+task = """
+Write `censor(in text: Str, in word: Str) -> String` replacing every \
+non-overlapping occurrence of `word` (case-sensitive) with one `*` per byte \
+of `word`, and `mentions(in text: Str, in word: Str) -> Int` counting those \
+non-overlapping occurrences. An empty `word` censors nothing and has 0 \
+mentions."""
+notes = """
+`std::str::replace` and `std::str::count` already implement the \
+non-overlapping scan; calling them is the point. `count` follows the \
+conventional rule that the empty needle occurs `len + 1` times, so \
+`mentions` guards the empty word explicitly."""
+stdlib_deps = ["str"]
+tier = "executable"
+difficulty = 2

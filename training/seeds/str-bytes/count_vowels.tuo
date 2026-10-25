@@ -19,3 +19,9 @@ spec count_vowels {
     then count_vowels("apple") == 2;
     then count_vowels("") == 0;
 }
+
+spec "count_vowels ignores consonants and capitals" {
+    then count_vowels("rhythm") == 0;
+    then count_vowels("AEIOU") == 0;
+    then count_vowels("aeiou") == 5;
+}

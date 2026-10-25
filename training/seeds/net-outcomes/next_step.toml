@@ -1,0 +1,15 @@
+task = """
+A client connects with `std::net::connect_timeout` and may retry. Write \
+`next_step(take outcome: Int, take attempt: Int, take max_attempts: Int) -> Int` \
+that decides what to do after attempt number `attempt` (counting from 1) \
+returned `outcome`: 0 = connected (the outcome is a descriptor), \
+1 = retry (the attempt timed out and fewer than `max_attempts` attempts \
+have been made), 2 = give up (any other failure, or a timeout on the last \
+allowed attempt). Use `std::net::is_descriptor` and `std::net::is_timeout`."""
+notes = """
+Only a timeout is worth retrying: a refused connection or other host error \
+will fail the same way again. Classifying the outcome is pure, so it is \
+spec'd here while the socket call itself stays in the effect tier."""
+tier = "executable"
+difficulty = 2
+stdlib_deps = ["net"]

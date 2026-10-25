@@ -1,0 +1,56 @@
+fn flat(take raw: Int) -> Int {
+    raw
+}
+
+fn doubled(take raw: Int) -> Int {
+    raw * 2
+}
+
+fn capped(take raw: Int) -> Int {
+    std::core::min(raw, 100)
+}
+
+fn scorer_for(take mode: Int) -> fn(take Int) -> Int {
+    match mode {
+        1 => doubled,
+        2 => capped,
+        _ => flat,
+    }
+}
+
+fn score_all(in raws: Array[Int], take mode: Int) -> Int {
+    std::collections::sum(std::collections::map_into(raws, scorer_for(mode)))
+}
+
+spec scorer_for {
+    when let d = scorer_for(1);
+    when let c = scorer_for(2);
+    when let f = scorer_for(7);
+    then d(30) == 60;
+    then c(130) == 100;
+    then c(99) == 99;
+    then f(130) == 130;
+}
+
+spec score_all {
+    when var raws = std::array::empty();
+    when std::array::push(raws, 40);
+    when std::array::push(raws, 80);
+    when std::array::push(raws, 120);
+    then score_all(raws, 0) == 240;
+    then score_all(raws, 1) == 480;
+    then score_all(raws, 2) == 220;
+    then score_all(std::array::empty(), 1) == 0;
+}
+
+spec flat {
+    then flat(5) == 5;
+}
+
+spec doubled {
+    then doubled(0) == 0;
+}
+
+spec capped {
+    then capped(100) == 100;
+}

@@ -1,0 +1,37 @@
+struct Slot {
+    start: Int,
+    end: Int,
+}
+
+struct Booking {
+    room: Int,
+    slot: Slot,
+}
+
+fn overlap(in a: Slot, in b: Slot) -> Int {
+    let start = std::core::max(a.start, b.start);
+    let end = std::core::min(a.end, b.end);
+    end - start
+}
+
+fn conflicts(in a: Booking, in b: Booking) -> Bool {
+    a.room == b.room && overlap(a.slot, b.slot) > 0
+}
+
+spec overlap {
+    then overlap(Slot { start: 0, end: 60 }, Slot { start: 30, end: 90 }) == 30;
+    then overlap(Slot { start: 30, end: 90 }, Slot { start: 0, end: 60 }) == 30;
+    then overlap(Slot { start: 0, end: 60 }, Slot { start: 60, end: 120 }) == 0;
+    then overlap(Slot { start: 0, end: 10 }, Slot { start: 50, end: 70 }) == 0;
+    then overlap(Slot { start: 10, end: 20 }, Slot { start: 0, end: 100 }) == 10;
+}
+
+spec conflicts {
+    when let standup = Booking { room: 1, slot: Slot { start: 0, end: 60 } };
+    when let review = Booking { room: 1, slot: Slot { start: 45, end: 75 } };
+    when let elsewhere = Booking { room: 2, slot: Slot { start: 45, end: 75 } };
+    when let after = Booking { room: 1, slot: Slot { start: 60, end: 75 } };
+    then conflicts(standup, review);
+    then !conflicts(standup, elsewhere);
+    then !conflicts(standup, after);
+}

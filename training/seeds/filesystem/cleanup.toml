@@ -1,0 +1,16 @@
+task = """
+Write a runnable program that proves a scratch file is really gone after \
+cleanup. `main` writes \"lock\" to `tuo_seed_cleanup.lock`, checks with \
+`std::fs::exists` that it is there, removes it, checks that it no longer \
+exists, and finally reads it and expects the read to fail with a not-found \
+error (`std::fs::is_not_found`). It returns 7 when every step behaves, and \
+a distinct code 1..5 for the step that did not."""
+notes = """
+`std::fs::exists` returns `Result[Bool, FsError]`: `Ok { value: false }` \
+is a definite answer, while `Err` means the question could not be answered. \
+Reading a missing file is `Err { error: FsError::NotFound }`, which \
+`std::fs::is_not_found` classifies without matching the enum by hand."""
+run_exit = 7
+tier = "effect"
+difficulty = 3
+stdlib_deps = ["fs"]

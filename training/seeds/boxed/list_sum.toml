@@ -1,0 +1,14 @@
+task = """
+A singly linked list is `struct Node { value: Int, next: Option[Box[Node]] \
+}`, with the whole list (possibly empty) held as an `Option[Box[Node]]`. \
+Write `cons(take value: Int, take rest: Option[Box[Node]]) -> \
+Option[Box[Node]]` that puts a new node in front of `rest`, and \
+`list_sum(in list: Option[Box[Node]]) -> Int` that adds up every value \
+(0 for the empty list) without copying or consuming the list."""
+notes = """
+A recursive type needs an indirection: `next: Option[Box[Node]]`, built \
+with `std::boxed::new`. Matching through an `in` parameter lends the boxed \
+child, and `std::boxed::get(child)` passed straight to an `in` parameter \
+lends the pointee instead of copying it, so the walk is O(n)."""
+tier = "executable"
+difficulty = 3

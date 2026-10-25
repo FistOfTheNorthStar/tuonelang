@@ -1,0 +1,15 @@
+task = """
+A ledger is an `Array[Entry]` of `enum Entry { Deposit { amount: Int }, \
+Withdrawal { amount: Int }, Fee { amount: Int, waived: Bool }, Freeze }`. \
+Write `apply(take balance: Int, in e: Entry) -> Int` for one entry: a \
+deposit adds, a withdrawal subtracts only when it does not overdraw the \
+balance (otherwise it is ignored), a fee subtracts unless waived (fees may \
+overdraw), and `Freeze` changes nothing. Then write `balance_after(in \
+entries: Array[Entry]) -> Int` that applies the entries in order starting \
+from 0 and stops at the first `Freeze`."""
+notes = """
+Matching an `in` parameter lends its payload fields, so `apply` reads the \
+entry without taking ownership. Binding `waived` alongside `amount` lets \
+one arm decide with an ordinary `if`."""
+tier = "executable"
+difficulty = 3

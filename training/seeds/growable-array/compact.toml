@@ -1,0 +1,11 @@
+task = """
+A sensor log is an `Array[Int]` where a negative reading marks a failed \
+sample. Write `compact(in readings: Array[Int]) -> Array[Int]` returning a \
+new array holding only the valid readings (zero is valid), in their \
+original order. An empty log gives an empty array."""
+notes = """
+The input is only borrowed (`in`), so read it by index with \
+`std::array::get` and push into a fresh `var` array; `for x in readings` \
+would try to move the borrowed array."""
+tier = "executable"
+difficulty = 2

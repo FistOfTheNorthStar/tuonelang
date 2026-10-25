@@ -1,0 +1,18 @@
+fn track_after(take current: Int, take skip: Int, take track_count: Int) -> Int {
+    if track_count <= 0 {
+        return 0;
+    }
+    (current + skip) % track_count
+}
+
+spec track_after {
+    then std::test::eq(track_after(2, 1, 5), 3);
+    then std::test::eq(track_after(4, 1, 5), 0);
+    then std::test::eq(track_after(0, 12, 5), 2);
+}
+
+spec "track_after wraps backwards too" {
+    then std::test::eq(track_after(0, 0 - 1, 5), 4);
+    then std::test::eq(track_after(1, 0 - 8, 5), 3);
+    then std::test::eq(track_after(3, 7, 0), 0);
+}

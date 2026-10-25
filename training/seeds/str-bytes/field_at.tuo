@@ -1,0 +1,31 @@
+fn field_at(in line: Str, take index: Int) -> Str {
+    var field = 0;
+    var start = 0;
+    var i = 0;
+    let n = std::str::len(line);
+    while i <= n {
+        if i == n || std::str::byte_at(line, i) == 44 {
+            if field == index {
+                return std::str::slice(line, start, i);
+            }
+            field = field + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    ""
+}
+
+spec field_at {
+    then field_at("id,name,score", 0) == "id";
+    then field_at("id,name,score", 1) == "name";
+    then field_at("id,name,score", 2) == "score";
+}
+
+spec "field_at on empty fields and out of range" {
+    then field_at("a,,c", 1) == "";
+    then field_at("a,,c", 2) == "c";
+    then field_at("a,b", 2) == "";
+    then field_at("", 0) == "";
+    then field_at("a,b", 0 - 1) == "";
+}

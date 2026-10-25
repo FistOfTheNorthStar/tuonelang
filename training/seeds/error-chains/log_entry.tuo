@@ -1,0 +1,17 @@
+fn log_entry(in chain: Array[String], take attempt: Int) -> String {
+    var line = std::str::builder();
+    std::str::push(line, "[attempt ");
+    std::str::push_int(line, attempt);
+    std::str::push(line, "] ");
+    std::str::push(line, std::string::as_str(std::core::error_message(chain)));
+    std::str::push(line, " (root: ");
+    std::str::push(line, std::string::as_str(std::core::error_root(chain)));
+    std::str::push(line, ")");
+    line
+}
+
+spec log_entry {
+    then std::string::as_str(log_entry(std::core::error_new("disk full"), 1)) == "[attempt 1] disk full (root: disk full)";
+    then std::string::as_str(log_entry(std::core::error_wrap(std::core::error_new("connection refused"), "dial db"), 3)) == "[attempt 3] dial db: connection refused (root: connection refused)";
+    then std::string::as_str(log_entry(std::core::error_wrap(std::core::error_wrap(std::core::error_new("eof"), "read header"), "load"), 12)) == "[attempt 12] load: read header: eof (root: eof)";
+}

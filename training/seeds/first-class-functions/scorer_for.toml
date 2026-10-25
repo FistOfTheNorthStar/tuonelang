@@ -1,0 +1,18 @@
+task = """
+A quiz app has three scoring modes. Write `flat(take raw: Int) -> Int` \
+(the raw score), `doubled(take raw: Int) -> Int` (twice the raw score) and \
+`capped(take raw: Int) -> Int` (the raw score but at most 100), then \
+`scorer_for(take mode: Int) -> fn(take Int) -> Int` that returns `doubled` \
+for mode 1, `capped` for mode 2, and `flat` for any other mode, chosen with \
+a `match`. Finally write \
+`score_all(in raws: Array[Int], take mode: Int) -> Int` that sums the \
+scores of every raw value under the chosen mode, using \
+`std::collections::map_into` and `std::collections::sum`."""
+notes = """
+A function can return a function value: `scorer_for`'s return type is \
+written `fn(take Int) -> Int`, and each match arm names a top-level \
+function. Passing it to `std::collections::map_into` reuses the library's \
+one higher-order map instead of a hand-written loop."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["collections"]

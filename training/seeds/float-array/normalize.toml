@@ -1,0 +1,12 @@
+task = """
+Write `normalize(in xs: Array[Float]) -> Array[Float]` that rescales \
+readings linearly so the smallest becomes 0.0 and the largest 1.0, \
+preserving order. When every reading is equal (including a single \
+reading) every result is 0.0, and an empty input gives an empty array."""
+notes = """
+Find the range in one pass with `std::math::fmin` / `std::math::fmax`, then \
+build the result in a second; guarding a zero range avoids dividing by \
+zero, which for `Float` silently yields NaN rather than trapping."""
+tier = "executable"
+difficulty = 3
+stdlib_deps = ["math"]

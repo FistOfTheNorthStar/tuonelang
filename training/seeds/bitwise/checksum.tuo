@@ -13,3 +13,7 @@ spec checksum {
     then checksum("a") == 97;
     then checksum("ab") == 3105;
 }
+
+spec "checksum wraps instead of trapping" {
+    then checksum("the quick brown fox jumps over the lazy dog") == 2212148595;
+}

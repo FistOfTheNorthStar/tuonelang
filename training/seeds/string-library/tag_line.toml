@@ -1,0 +1,14 @@
+task = """
+Write `tag_line(in tags: Array[Str]) -> String` rendering tags as hashtags: \
+each tag prefixed with `#`, separated by single spaces, all lowercased \
+(ASCII). `[\"Rust\", \"LLM\"]` becomes `#rust #llm`, and an empty array \
+gives the empty string."""
+notes = """
+`std::str::join` puts the separator only between pieces, so joining with \
+`\" #\"` and pushing one leading `#` yields every prefix — except for an \
+empty array, which must be handled first or the result is a lone `#`. \
+`std::str::to_lower` does the case folding; calling the library is the \
+point."""
+stdlib_deps = ["str"]
+tier = "executable"
+difficulty = 2

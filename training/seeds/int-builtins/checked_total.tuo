@@ -1,0 +1,43 @@
+fn checked_total(in xs: Array[Int]) -> Option[Int] {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        match std::int::checked_add(total, std::array::get(xs, i)) {
+            Some { value } => {
+                total = value;
+            },
+            None => {
+                return None;
+            },
+        }
+        i = i + 1;
+    }
+    Some { value: total }
+}
+
+spec checked_total {
+    when var xs = std::array::empty();
+    when std::array::push(xs, 40);
+    when std::array::push(xs, 2);
+    then std::core::unwrap_or(checked_total(xs), 0 - 1) == 42;
+}
+
+spec "checked_total of nothing is zero" {
+    when let xs = std::array::empty();
+    then std::core::unwrap_or(checked_total(xs), 0 - 1) == 0;
+}
+
+spec "checked_total reports overflow instead of trapping" {
+    when var xs = std::array::empty();
+    when std::array::push(xs, 9223372036854775000);
+    when std::array::push(xs, 1000);
+    when std::array::push(xs, 0 - 5000);
+    then std::core::is_none(checked_total(xs));
+}
+
+spec "checked_total handles negatives" {
+    when var xs = std::array::empty();
+    when std::array::push(xs, 0 - 9223372036854775000);
+    when std::array::push(xs, 0 - 800);
+    then std::core::unwrap_or(checked_total(xs), 0) == 0 - 9223372036854775800;
+}

@@ -1,0 +1,30 @@
+module app;
+
+fn in_order(take ch: Int) -> Int {
+    var digits = 0;
+    var v = std::sync::recv(ch);
+    while v >= 0 {
+        digits = digits * 10 + v;
+        v = std::sync::recv(ch);
+    }
+    digits
+}
+
+fn main() -> Int {
+    let ch = std::sync::channel();
+    let jobs: [Int; 5] = [3, 1, 4, 1, 5];
+    for job in jobs {
+        let _ = std::sync::send(ch, job);
+    }
+    if std::sync::send(ch, 0 - 7) == 0 {
+        return 1;
+    }
+    let _ = std::sync::close(ch);
+    if std::sync::send(ch, 9) == 0 {
+        return 2;
+    }
+    if in_order(ch) != 31415 {
+        return 3;
+    }
+    31
+}

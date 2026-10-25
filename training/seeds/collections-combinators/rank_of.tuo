@@ -1,0 +1,38 @@
+fn rank_of(in scores: Array[Int], take score: Int) -> Option[Int] {
+    let distinct = std::collections::deduped(std::collections::sorted_ascending(scores));
+    match std::collections::binary_search(distinct, score) {
+        Some { value } => Some { value: std::array::len(distinct) - value },
+        None => None,
+    }
+}
+
+fn ties(in scores: Array[Int], take score: Int) -> Int {
+    let freq = std::collections::counts(scores);
+    std::core::unwrap_or(std::map::get(freq, score), 0)
+}
+
+fn board() -> Array[Int] {
+    var xs = std::array::empty();
+    std::array::push(xs, 70);
+    std::array::push(xs, 95);
+    std::array::push(xs, 80);
+    std::array::push(xs, 95);
+    std::array::push(xs, 70);
+    std::array::push(xs, 60);
+    xs
+}
+
+spec rank_of {
+    then std::core::unwrap_or(rank_of(board(), 95), 0) == 1;
+    then std::core::unwrap_or(rank_of(board(), 80), 0) == 2;
+    then std::core::unwrap_or(rank_of(board(), 70), 0) == 3;
+    then std::core::unwrap_or(rank_of(board(), 60), 0) == 4;
+    then std::core::is_none(rank_of(board(), 85));
+    then std::core::is_none(rank_of(std::array::empty(), 1));
+}
+
+spec ties {
+    then ties(board(), 95) == 2;
+    then ties(board(), 80) == 1;
+    then ties(board(), 85) == 0;
+}

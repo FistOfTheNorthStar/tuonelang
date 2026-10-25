@@ -1,0 +1,15 @@
+fn square(take x: Int) -> Int {
+    x * x
+}
+
+fn sum_of_squares(in xs: Array[Int]) -> Int {
+    let squares = std::collections::map_into(xs, square);
+    std::collections::fold(squares, 0, std::collections::add)
+}
+
+spec sum_of_squares {
+    then sum_of_squares(std::collections::of3(1, 2, 3)) == 14;
+    then sum_of_squares(std::collections::of2(0 - 4, 0)) == 16;
+    then sum_of_squares(std::collections::singleton(5)) == 25;
+    then sum_of_squares(std::array::empty()) == 0;
+}

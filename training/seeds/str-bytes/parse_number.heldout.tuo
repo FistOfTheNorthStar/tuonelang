@@ -1,4 +1,0 @@
-spec "parse_number on the empty string" {
-    then parse_number("") == 0 - 1;
-    then parse_number("0") == 0;
-}

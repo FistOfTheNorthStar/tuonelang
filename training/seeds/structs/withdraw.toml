@@ -1,0 +1,12 @@
+task = """
+Define `struct Account { id: Int, balance: Int }` and write \
+`withdraw(mut acct: Account, take amount: Int) -> Bool` that takes `amount` \
+out of the account in place and returns `true`, or returns `false` and \
+leaves the balance unchanged when `amount` is not positive or exceeds the \
+balance. Withdrawing the exact balance is allowed and leaves 0."""
+notes = """
+A `mut` parameter is an exclusive borrow of the caller's place, so \
+assigning `acct.balance` updates the caller's struct; the caller must hold \
+it in a `var`."""
+tier = "executable"
+difficulty = 2
