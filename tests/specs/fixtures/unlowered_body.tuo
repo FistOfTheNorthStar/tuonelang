@@ -1,0 +1,15 @@
+// `BIG` overflows `I8`, so `widen` (which names it) is not lowered: its spec
+// and a native build must say so, naming the function and the trap.
+const BIG: I8 = 100 * 2;
+
+fn widen() -> Int {
+    BIG as Int
+}
+
+spec widen {
+    then widen() == 200;
+}
+
+fn main() -> Int {
+    widen()
+}

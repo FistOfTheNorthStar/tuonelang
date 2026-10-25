@@ -24,7 +24,8 @@ use std::collections::HashSet;
 use tuo_resolve::SymbolId;
 
 use crate::mir::{
-    Arg, BasicBlock, Callee, Const, Function, Operand, Program, Rvalue, Statement, Terminator,
+    Arg, BasicBlock, Callee, Const, Function, Operand, Program, Rvalue, Skipped, Statement,
+    Terminator,
 };
 
 /// Keep only the functions reachable from the first function named `entry` or
@@ -63,6 +64,32 @@ pub fn retain_reachable(
         .functions
         .retain(|function| reachable.contains(&function.symbol));
     before - program.functions.len()
+}
+
+/// The body lowering declined that a native build of `program` would need:
+/// the entry itself, or a function a lowered function calls or names. A
+/// backend can only report such a call as leaving "the lowered program"
+/// (or the entry as missing); this names the declined body and its reason.
+/// Run it after [`retain_reachable`], so a declined body nothing reaches
+/// does not refuse the build.
+#[must_use]
+pub fn needed_skipped<'p>(program: &'p Program, entry: &str) -> Option<&'p Skipped> {
+    if !program.functions.iter().any(|f| f.name == entry) {
+        if let Some(skipped) = program.skipped.iter().find(|s| s.name == entry) {
+            return Some(skipped);
+        }
+    }
+    let lowered: HashSet<SymbolId> = program.functions.iter().map(|f| f.symbol).collect();
+    let mut referenced = Vec::new();
+    for function in &program.functions {
+        for block in &function.blocks {
+            referenced_in(block, &mut referenced);
+        }
+    }
+    referenced
+        .into_iter()
+        .filter(|symbol| !lowered.contains(symbol))
+        .find_map(|symbol| program.skipped.iter().find(|s| s.symbol == Some(symbol)))
 }
 
 /// Push every function symbol `block` calls directly or names as a value.

@@ -28,7 +28,7 @@ use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
 use crate::grammar::ITEM_START;
-use crate::parse::{byte_span, call_arg_mode, code, depth_guard};
+use crate::parse::{byte_span, call_arg_mode, code, depth_guard, match_arm_comma};
 use crate::stream::{Tok, kind_name, parse_stream};
 
 /// Parse one immutable source snapshot with the handwritten engine.
@@ -1428,9 +1428,54 @@ impl Parser<'_> {
         self.expect(K::KwMatch, &mut els)?;
         els.push(self.expr(true)?);
         self.expect(K::OpenBrace, &mut els)?;
-        self.comma_list(&mut els, false, Self::match_arm)?;
+        self.match_arms(&mut els);
         self.expect(K::CloseBrace, &mut els)?;
         Ok(node(SyntaxKind::MatchExpr, els))
+    }
+
+    /// The arms of a `match`, comma-separated like [`Self::comma_list`],
+    /// except that an arm written with no comma before it parses anyway and
+    /// is reported by [`match_arm_comma`] (mirroring the grammar's
+    /// `match_arm_list`).
+    fn match_arms(&mut self, out: &mut Els) {
+        let mark = self.mark();
+        match self.match_arm() {
+            Ok(el) => out.push(el),
+            Err(Fail) => {
+                self.rollback(mark);
+                return;
+            }
+        }
+        loop {
+            let mark = self.mark();
+            if self.at(K::Comma) {
+                let comma = self.bump();
+                match self.match_arm() {
+                    Ok(el) => {
+                        out.push(comma);
+                        out.push(el);
+                        continue;
+                    }
+                    Err(Fail) => self.rollback(mark),
+                }
+            }
+            let start = self.pos;
+            match self.match_arm() {
+                Ok(el) => {
+                    let previous = byte_span(start - 1, self.toks, self.lex, self.source);
+                    let next = byte_span(start, self.toks, self.lex, self.source);
+                    self.diagnostics.push(match_arm_comma(previous, next));
+                    out.push(el);
+                }
+                Err(Fail) => {
+                    self.rollback(mark);
+                    if self.at(K::Comma) {
+                        out.push(self.bump());
+                    }
+                    return;
+                }
+            }
+        }
     }
 
     fn match_arm(&mut self) -> R {

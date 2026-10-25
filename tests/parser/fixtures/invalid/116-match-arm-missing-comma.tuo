@@ -1,0 +1,10 @@
+fn classify(take n: Int) -> Int {
+    match n {
+        0 => {
+            let z = 0;
+            z
+        }
+        1 => 10
+        _ => 1,
+    }
+}

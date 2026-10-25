@@ -124,3 +124,94 @@ fn synthetic_functions_do_not_collide_with_real_symbols() {
     symbols.dedup();
     assert_eq!(symbols.len(), count, "function symbols are unique");
 }
+
+#[test]
+fn a_spec_naming_a_const_lowers_instead_of_skipping() {
+    // The spec context once started with an empty const table, so any
+    // spec naming a const was skipped — even `const K: Int = 3`.
+    let specs = lower_specs(concat!(
+        "const K: Int = 3;\n",
+        "fn triple(take n: Int) -> Int { n * K }\n",
+        "spec triple { then triple(1) == K; }\n",
+    ));
+    assert!(specs.skipped.is_empty(), "skipped: {:?}", specs.skipped);
+    assert_eq!(specs.specs.len(), 1);
+}
+
+#[test]
+fn a_computed_const_initializer_is_evaluated() {
+    // `LIMIT` used to stay out of the const table (literals only), which
+    // dropped `cap` from the program and left the spec calling nothing.
+    let specs = lower_specs(concat!(
+        "const LIMIT: Int = BASE * BASE;\n",
+        "const BASE: Int = 10;\n",
+        "fn cap(take n: Int) -> Int {\n",
+        "    const LOCAL: Int = LIMIT - 7;\n",
+        "    if n < LOCAL { n } else { LOCAL }\n",
+        "}\n",
+        "spec cap { then cap(500) == 93; }\n",
+    ));
+    assert!(
+        specs.program.skipped.is_empty(),
+        "{:?}",
+        specs.program.skipped
+    );
+    assert!(specs.skipped.is_empty());
+}
+
+#[test]
+fn a_const_that_traps_names_the_trap_where_it_is_used() {
+    let specs = lower_specs(concat!(
+        "const BIG: I8 = 100 * 2;\n",
+        "fn f() -> Int { BIG as Int }\n",
+        "spec f { then f() == 0; }\n",
+    ));
+    let skipped = &specs.program.skipped;
+    assert_eq!(skipped.len(), 1);
+    assert_eq!(skipped[0].name, "f");
+    assert!(
+        skipped[0]
+            .reason
+            .contains("`const BIG` cannot be evaluated: it overflows `I8`"),
+        "{}",
+        skipped[0].reason
+    );
+    assert!(
+        skipped[0].symbol.is_some(),
+        "a skipped body records its symbol"
+    );
+}
+
+#[test]
+fn a_generic_struct_field_read_in_a_spec_verifies() {
+    // The verifier typed `_0.0` of a `Pair[I64]` as the declared `T`, so
+    // comparing it with an `I64` failed verification (`M0006`).
+    let specs = lower_specs(concat!(
+        "struct Pair[T] { first: T, second: T }\n",
+        "fn make[T](take a: T, take b: T) -> Pair[T] { Pair { first: a, second: b } }\n",
+        "spec make { then make(1, 2).first == 1; }\n",
+    ));
+    assert_eq!(specs.specs.len(), 1);
+}
+
+#[test]
+fn a_destructuring_let_lowers() {
+    let specs = lower_specs(concat!(
+        "struct Pair[T] { first: T, second: T }\n",
+        "struct Named { name: String, age: Int }\n",
+        "fn swap[T](take p: Pair[T]) -> Pair[T] {\n",
+        "    let Pair { first, second } = p;\n",
+        "    Pair { first: second, second: first }\n",
+        "}\n",
+        "fn name_len(take n: Named) -> Int {\n",
+        "    let Named { name, .. } = n;\n",
+        "    std::string::len(name)\n",
+        "}\n",
+        "spec swap { then swap(Pair { first: 1, second: 2 }).first == 2; }\n",
+    ));
+    assert!(
+        specs.program.skipped.is_empty(),
+        "{:?}",
+        specs.program.skipped
+    );
+}

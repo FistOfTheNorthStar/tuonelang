@@ -99,7 +99,7 @@ fn as_const(operand: &Operand) -> Option<&Const> {
 
 /// Fold a unary op over a constant. Integer negation traps on the minimum
 /// value, so it is not folded there (`None`).
-fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
+pub(crate) fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
     match (op, operand) {
         (UnOp::Not, Const::Bool(value)) => Some(Const::Bool(!value)),
         (UnOp::Neg, Const::Int(value, kind)) => {
@@ -119,7 +119,7 @@ fn fold_unary(op: UnOp, operand: &Const) -> Option<Const> {
 /// Fold a binary op over two constants. Returns `None` when the operation
 /// would trap (so the trap is preserved) or the operands are not a foldable
 /// scalar pair.
-fn fold_binary(op: BinOp, lhs: &Const, rhs: &Const) -> Option<Const> {
+pub(crate) fn fold_binary(op: BinOp, lhs: &Const, rhs: &Const) -> Option<Const> {
     match (lhs, rhs) {
         (Const::Int(a, ka), Const::Int(b, kb)) => {
             // A shift's or rotation's amount is an independent bit count
@@ -320,7 +320,7 @@ fn fold_float_binary(op: BinOp, a: f64, b: f64, kind: FloatKind) -> Option<Const
 }
 
 /// Fold a numeric cast (casts never trap; §MIR `CastKind`).
-fn fold_cast(kind: CastKind, operand: &Const, to: &Ty) -> Option<Const> {
+pub(crate) fn fold_cast(kind: CastKind, operand: &Const, to: &Ty) -> Option<Const> {
     match (kind, operand) {
         (CastKind::IntToInt, Const::Int(value, _)) => {
             let target = int_kind(to)?;

@@ -585,9 +585,24 @@ impl Machine<'_, '_> {
         // outlives every frame, so the reference is safe to hold across the
         // nested `call`.
         let Some(target) = self.interp.function_of(callee_symbol) else {
+            // Lowering records each body it declined; name it and say why,
+            // rather than leaving a test author to guess which call failed.
+            let message = self
+                .interp
+                .program
+                .skipped
+                .iter()
+                .find(|skipped| skipped.symbol == Some(callee_symbol))
+                .map_or_else(
+                    || {
+                        "the interpreter only executes functions present in the lowered MIR"
+                            .to_owned()
+                    },
+                    |skipped| format!("`{}` was not lowered: {}", skipped.name, skipped.reason),
+                );
             return Err(self.abort(
                 TrapKind::Internal("call to a function outside the lowered program".to_owned()),
-                "the interpreter only executes functions present in the lowered MIR".to_owned(),
+                message,
                 function.span,
             ));
         };

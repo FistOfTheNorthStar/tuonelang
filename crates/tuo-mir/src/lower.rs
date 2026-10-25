@@ -42,28 +42,13 @@ use crate::mir::{
     HeapMutOp, HeapOp, LocalDecl, LocalId, Operand, PassMode, Place, Program, Projection, Rvalue,
     Skipped, Statement, StrOp, Terminator, Trap, UnOp,
 };
+use crate::mono::instantiate;
+use crate::opt::const_fold::{fold_binary, fold_cast, fold_unary};
 
 /// Lower every function body of a front-end-clean snapshot.
 #[must_use]
 pub fn lower(hir: &Hir, resolution: &Resolution, types: &TypeckResult) -> Program {
-    let mut cx = Cx {
-        resolution,
-        types,
-        modes: HashMap::new(),
-        consts: HashMap::new(),
-    };
-    for item in &hir.items {
-        match item {
-            Item::Fn(function) => cx.collect_fn(function),
-            Item::Impl(impl_def) => {
-                for function in &impl_def.functions {
-                    cx.collect_fn(function);
-                }
-            }
-            Item::Const(def) => cx.collect_const(def),
-            _ => {}
-        }
-    }
+    let cx = Cx::new(hir, resolution, types);
     let mut program = Program::default();
     for item in &hir.items {
         match item {
@@ -102,11 +87,51 @@ struct Cx<'a> {
     types: &'a TypeckResult,
     /// Parameter passing modes per function symbol.
     modes: HashMap<SymbolId, Vec<PassMode>>,
-    /// Literal-initialized `const` items, pre-converted per declaration.
+    /// Every `const` item whose initializer evaluates at compile time.
     consts: HashMap<SymbolId, Const>,
+    /// Why each remaining `const` item has no value (its initializer traps
+    /// or names itself), reported by any body that references it.
+    const_errors: HashMap<SymbolId, Skip>,
 }
 
-impl Cx<'_> {
+impl<'a> Cx<'a> {
+    /// The program-wide context: every function's pass modes and every
+    /// `const` item's value.
+    fn new(hir: &Hir, resolution: &'a Resolution, types: &'a TypeckResult) -> Self {
+        let mut cx = Cx {
+            resolution,
+            types,
+            modes: HashMap::new(),
+            consts: HashMap::new(),
+            const_errors: HashMap::new(),
+        };
+        let mut defs = HashMap::new();
+        for item in &hir.items {
+            match item {
+                Item::Fn(function) => cx.collect_fn(function),
+                Item::Impl(impl_def) => {
+                    for function in &impl_def.functions {
+                        cx.collect_fn(function);
+                    }
+                }
+                Item::Const(def) => {
+                    if let Res::Symbol(symbol) = def.symbol {
+                        defs.insert(symbol, def);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut symbols: Vec<SymbolId> = defs.keys().copied().collect();
+        symbols.sort_unstable();
+        for symbol in symbols {
+            if let Err(reason) = cx.global_const(symbol, &defs, &mut Vec::new()) {
+                cx.const_errors.entry(symbol).or_insert(reason);
+            }
+        }
+        cx
+    }
+
     fn collect_fn(&mut self, function: &HirFunction) {
         let Res::Symbol(symbol) = function.symbol else {
             return;
@@ -123,21 +148,52 @@ impl Cx<'_> {
         self.modes.insert(symbol, modes);
     }
 
-    /// Register a `const` item usable from MIR: v0 supports literal (and
-    /// negated-literal) initializers; anything else simply stays out of
-    /// the table and skips the functions that reference it.
-    fn collect_const(&mut self, def: &tuo_hir::ConstDef) {
-        let Res::Symbol(symbol) = def.symbol else {
-            return;
-        };
-        let Some(ty) = self.types.type_of(symbol) else {
-            return;
+    /// The value of the `const` item `symbol`, evaluating its initializer
+    /// (and, first, those of the consts it names) on first use. `visiting`
+    /// is the chain of consts being evaluated, so a cycle fails instead of
+    /// recursing forever.
+    fn global_const(
+        &mut self,
+        symbol: SymbolId,
+        defs: &HashMap<SymbolId, &tuo_hir::ConstDef>,
+        visiting: &mut Vec<SymbolId>,
+    ) -> Result<Const, Skip> {
+        if let Some(constant) = self.consts.get(&symbol) {
+            return Ok(constant.clone());
+        }
+        if let Some(reason) = self.const_errors.get(&symbol) {
+            return Err(reason.clone());
+        }
+        let name = self.resolution.symbol(symbol).name.clone();
+        if visiting.contains(&symbol) {
+            return Err(format!("`const {name}` is defined in terms of itself"));
+        }
+        let (Some(def), Some(ty)) = (defs.get(&symbol), self.types.type_of(symbol)) else {
+            return Err(format!("`const {name}` has no checked declaration"));
         };
         let Some(value) = &def.value else {
-            return;
+            return Err(format!("`const {name}` has no initializer"));
         };
-        if let Ok(constant) = literal_const(value, ty) {
-            self.consts.insert(symbol, constant);
+        let (types, resolution) = (self.types, self.resolution);
+        visiting.push(symbol);
+        let result = const_expr(value, ty, types, resolution, &mut |named| {
+            self.global_const(named, defs, visiting)
+        });
+        visiting.pop();
+        match result {
+            Ok(constant) => {
+                self.consts.insert(symbol, constant.clone());
+                Ok(constant)
+            }
+            Err(reason) => {
+                let reason = if reason.starts_with("`const ") {
+                    reason
+                } else {
+                    format!("`const {name}` cannot be evaluated: {reason}")
+                };
+                self.const_errors.insert(symbol, reason.clone());
+                Err(reason)
+            }
         }
     }
 
@@ -160,6 +216,7 @@ impl Cx<'_> {
             // system lands; never drop a body silently.
             program.skipped.push(Skipped {
                 name: "{impl}".to_owned(),
+                symbol: None,
                 reason: "impl functions are not lowered in v0 (pending the trait system)"
                     .to_owned(),
                 span: function.span,
@@ -171,6 +228,7 @@ impl Cx<'_> {
             Ok(lowered) => program.functions.push(lowered),
             Err(reason) => program.skipped.push(Skipped {
                 name,
+                symbol: Some(symbol),
                 reason,
                 span: function.span,
             }),
@@ -199,36 +257,10 @@ pub fn lower_specs(
     };
 
     let mut program = lower(hir, resolution, types);
-    let cx = Cx {
-        resolution,
-        types,
-        modes: {
-            // The synthetic assertion functions call the specs' dependency
-            // functions; their pass modes must be known just as `lower`
-            // registers them.
-            let mut modes = HashMap::new();
-            for item in &hir.items {
-                if let Item::Fn(function) = item {
-                    if let Res::Symbol(symbol) = function.symbol {
-                        modes.insert(
-                            symbol,
-                            function
-                                .params
-                                .iter()
-                                .map(|param| match param.mode {
-                                    ParamMode::In => PassMode::Borrow,
-                                    ParamMode::Mut => PassMode::BorrowMut,
-                                    ParamMode::Take => PassMode::Value,
-                                })
-                                .collect(),
-                        );
-                    }
-                }
-            }
-            modes
-        },
-        consts: HashMap::new(),
-    };
+    // The synthetic assertion functions call the specs' dependency
+    // functions and may name `const` items, so they lower in the same
+    // context as the program itself.
+    let cx = Cx::new(hir, resolution, types);
     // Synthetic functions need fresh symbols that cannot collide with any
     // real one; hand them out above the highest real symbol.
     let mut next_symbol = resolution
@@ -1103,11 +1135,18 @@ impl FnLower<'_> {
             StmtKind::Binding(def) => self.binding_stmt(def, stmt.span),
             StmtKind::Const(def) => {
                 if let (Res::Symbol(symbol), Some(value)) = (&def.symbol, &def.value) {
-                    if let Some(ty) = self.cx.types.type_of(*symbol) {
-                        if let Ok(constant) = literal_const(value, ty) {
-                            self.local_consts.insert(*symbol, constant);
-                        }
-                    }
+                    let Some(ty) = self.cx.types.type_of(*symbol) else {
+                        return Err("`const` has no checked type".to_owned());
+                    };
+                    let constant =
+                        const_expr(value, ty, self.cx.types, self.cx.resolution, &mut |named| {
+                            self.const_value(named)
+                        })
+                        .map_err(|reason| {
+                            let name = &self.cx.resolution.symbol(*symbol).name;
+                            format!("`const {name}` cannot be evaluated: {reason}")
+                        })?;
+                    self.local_consts.insert(*symbol, constant);
                 }
                 Ok(true)
             }
@@ -1137,12 +1176,10 @@ impl FnLower<'_> {
         let symbol = match &def.pat.kind {
             PatKind::Binding(res) => match self.binding_kind(res)? {
                 BindingKind::Local(symbol) => Some(symbol),
-                BindingKind::Variant(_) => {
-                    return Err("destructuring `let` patterns are not lowered in v0".to_owned());
-                }
+                BindingKind::Variant(_) => return self.destructuring_let(def),
             },
             PatKind::Wildcard => None,
-            _ => return Err("destructuring `let` patterns are not lowered in v0".to_owned()),
+            _ => return self.destructuring_let(def),
         };
         let Some(init) = &def.init else {
             // Deferred initialization: the local exists, uninitialized.
@@ -1169,6 +1206,44 @@ impl FnLower<'_> {
                     self.store(&Place::local(local), Rvalue::Use(operand))?;
                 }
             }
+        }
+        Ok(true)
+    }
+
+    /// `let P { a, b } = init;` — a one-arm `match` whose arm is the rest of
+    /// the block, so its bindings land in the enclosing scope. The checker
+    /// proved the pattern irrefutable (`T0007`), so it is never tested, only
+    /// taken apart, under exactly the match's ownership rules: a value rooted
+    /// at an `in` parameter is lent (ADR-0037); otherwise a pattern binding a
+    /// non-`Copy` part consumes the value and drops what it leaves behind.
+    fn destructuring_let(&mut self, def: &BindingDef) -> Result<bool, Skip> {
+        let Some(init) = &def.init else {
+            return Err("a destructuring `let` without an initializer".to_owned());
+        };
+        if matches!(def.pat.kind, PatKind::Or(_)) && self.pattern_binds(&def.pat) {
+            return Err("or-patterns that bind in a `let` are not lowered in v0".to_owned());
+        }
+        let ty = self.expr_ty(init)?;
+        let Some(value) = self.expr(init)? else {
+            return Ok(false);
+        };
+        let lending =
+            matches!(&value, Value::Place(place) if self.in_params.contains(&place.local));
+        let owned = self.pattern_moves(&def.pat, &ty)? && !lending && !self.is_copy(&ty);
+        let subject = if owned {
+            let operand = self.use_value(value, &ty);
+            let local = self.temp(ty.clone(), init.span);
+            let place = Place::local(local);
+            self.store(&place, Rvalue::Use(operand))?;
+            place
+        } else {
+            self.place_of(value, &ty, init.span)?
+        };
+        self.extract(&subject, &def.pat, &ty, owned)?;
+        if owned {
+            self.consume_residue(&subject, &def.pat, &ty)?;
+            self.moved.retain(|(root, _)| *root != subject.local);
+            self.moved.insert((subject.local, Vec::new()));
         }
         Ok(true)
     }
@@ -1305,6 +1380,26 @@ impl FnLower<'_> {
         }
     }
 
+    /// The value of a block-local or item `const`.
+    fn const_value(&self, symbol: SymbolId) -> Result<Const, Skip> {
+        if let Some(constant) = self
+            .local_consts
+            .get(&symbol)
+            .or_else(|| self.cx.consts.get(&symbol))
+        {
+            return Ok(constant.clone());
+        }
+        Err(self
+            .cx
+            .const_errors
+            .get(&symbol)
+            .cloned()
+            .unwrap_or_else(|| {
+                let name = &self.cx.resolution.symbol(symbol).name;
+                format!("`const {name}` has no compile-time value")
+            }))
+    }
+
     fn path_expr(&mut self, expr: &Expr, res: &Res) -> Lowered {
         let Res::Symbol(symbol) = res else {
             return Err("body contains unresolved names".to_owned());
@@ -1318,15 +1413,7 @@ impl FnLower<'_> {
                 Ok(Some(Value::Place(Place::local(local))))
             }
             SymbolKind::Const => {
-                let constant = self
-                    .local_consts
-                    .get(symbol)
-                    .or_else(|| self.cx.consts.get(symbol))
-                    .cloned()
-                    .ok_or_else(|| {
-                        "`const` references are lowered only for literal initializers in v0"
-                            .to_owned()
-                    })?;
+                let constant = self.const_value(*symbol)?;
                 Ok(Some(Value::Operand(Operand::Const(constant))))
             }
             SymbolKind::Variant => {
@@ -1548,25 +1635,7 @@ impl FnLower<'_> {
             return self.short_circuit(expr, op, lhs, rhs);
         }
         let ty = self.expr_ty(expr)?;
-        let mir_op = match op {
-            H::Add => BinOp::Add,
-            H::Sub => BinOp::Sub,
-            H::Mul => BinOp::Mul,
-            H::Div => BinOp::Div,
-            H::Rem => BinOp::Rem,
-            H::Eq => BinOp::Eq,
-            H::Ne => BinOp::Ne,
-            H::Lt => BinOp::Lt,
-            H::Le => BinOp::Le,
-            H::Gt => BinOp::Gt,
-            H::Ge => BinOp::Ge,
-            H::BitAnd => BinOp::BitAnd,
-            H::BitOr => BinOp::BitOr,
-            H::BitXor => BinOp::BitXor,
-            H::Shl => BinOp::Shl,
-            H::Shr => BinOp::Shr,
-            H::And | H::Or => unreachable!("handled above"),
-        };
+        let mir_op = mir_binop(op).expect("`&&` and `||` are handled above");
         let Some(lhs_value) = self.expr(lhs)? else {
             return Ok(None);
         };
@@ -2264,13 +2333,7 @@ impl FnLower<'_> {
             return Ok(Some(lowered));
         }
         let operand = Self::read_value(lowered);
-        let kind = match (&from, &to) {
-            (Ty::Int(_), Ty::Int(_)) => CastKind::IntToInt,
-            (Ty::Int(_), Ty::Float(_)) => CastKind::IntToFloat,
-            (Ty::Float(_), Ty::Int(_)) => CastKind::FloatToInt,
-            (Ty::Float(_), Ty::Float(_)) => CastKind::FloatToFloat,
-            _ => return Err("unsupported cast".to_owned()),
-        };
+        let kind = cast_kind(&from, &to).ok_or_else(|| "unsupported cast".to_owned())?;
         let place = self.assign_temp(
             Rvalue::Cast {
                 kind,
@@ -3617,73 +3680,131 @@ fn contains_error(ty: &Ty) -> bool {
     }
 }
 
-/// Substitute a declaration-context type: each [`Ty::Param`] listed in
-/// `params` is replaced by the corresponding type argument.
-fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
-    match ty {
-        Ty::Param(symbol) => params
-            .iter()
-            .position(|param| param == symbol)
-            .and_then(|index| args.get(index))
-            .cloned()
-            .unwrap_or_else(|| ty.clone()),
-        Ty::Tuple(items) => Ty::Tuple(
-            items
-                .iter()
-                .map(|item| instantiate(item, params, args))
-                .collect(),
-        ),
-        Ty::Array(item) => Ty::Array(Box::new(instantiate(item, params, args))),
-        Ty::FixedArray(item, n) => Ty::FixedArray(Box::new(instantiate(item, params, args)), *n),
-        Ty::Range(item) => Ty::Range(Box::new(instantiate(item, params, args))),
-        Ty::Option(item) => Ty::Option(Box::new(instantiate(item, params, args))),
-        Ty::Result(ok, err) => Ty::Result(
-            Box::new(instantiate(ok, params, args)),
-            Box::new(instantiate(err, params, args)),
-        ),
-        Ty::Wrapper(kind, item) => Ty::Wrapper(*kind, Box::new(instantiate(item, params, args))),
-        Ty::Struct(symbol, inner) => Ty::Struct(
-            *symbol,
-            inner
-                .iter()
-                .map(|item| instantiate(item, params, args))
-                .collect(),
-        ),
-        Ty::Enum(symbol, inner) => Ty::Enum(
-            *symbol,
-            inner
-                .iter()
-                .map(|item| instantiate(item, params, args))
-                .collect(),
-        ),
-        Ty::Fn(fn_ty) => Ty::Fn(Box::new(FnTy {
-            params: fn_ty
-                .params
-                .iter()
-                .map(|param| tuo_types::FnParam {
-                    mode: param.mode,
-                    ty: instantiate(&param.ty, params, args),
-                })
-                .collect(),
-            ret: instantiate(&fn_ty.ret, params, args),
-        })),
-        _ => ty.clone(),
+/// The MIR operator for a non-short-circuit HIR binary operator; `None`
+/// for `&&` and `||`, which lower to control flow.
+fn mir_binop(op: tuo_hir::BinOp) -> Option<BinOp> {
+    use tuo_hir::BinOp as H;
+    Some(match op {
+        H::Add => BinOp::Add,
+        H::Sub => BinOp::Sub,
+        H::Mul => BinOp::Mul,
+        H::Div => BinOp::Div,
+        H::Rem => BinOp::Rem,
+        H::Eq => BinOp::Eq,
+        H::Ne => BinOp::Ne,
+        H::Lt => BinOp::Lt,
+        H::Le => BinOp::Le,
+        H::Gt => BinOp::Gt,
+        H::Ge => BinOp::Ge,
+        H::BitAnd => BinOp::BitAnd,
+        H::BitOr => BinOp::BitOr,
+        H::BitXor => BinOp::BitXor,
+        H::Shl => BinOp::Shl,
+        H::Shr => BinOp::Shr,
+        H::And | H::Or => return None,
+    })
+}
+
+/// The numeric cast from `from` to `to`, or `None` if it is not one.
+fn cast_kind(from: &Ty, to: &Ty) -> Option<CastKind> {
+    match (from, to) {
+        (Ty::Int(_), Ty::Int(_)) => Some(CastKind::IntToInt),
+        (Ty::Int(_), Ty::Float(_)) => Some(CastKind::IntToFloat),
+        (Ty::Float(_), Ty::Int(_)) => Some(CastKind::FloatToInt),
+        (Ty::Float(_), Ty::Float(_)) => Some(CastKind::FloatToFloat),
+        _ => None,
     }
 }
 
-/// Convert a literal (or negated-literal) expression into a constant of
-/// type `ty`.
-fn literal_const(expr: &Expr, ty: &Ty) -> Result<Const, Skip> {
+/// Evaluate a `const` initializer of type `ty` at compile time: literals,
+/// other consts (through `named`), and unary, binary, and cast operators
+/// over them — the constant expressions the checker admits (`T0028`). The
+/// arithmetic is the constant-folding pass's, which mirrors the
+/// interpreter, so a const has exactly the value the same expression
+/// computes at run time. An operation that would trap there (overflow, a
+/// zero divisor, an out-of-range shift) is an error here, never a value.
+fn const_expr(
+    expr: &Expr,
+    ty: &Ty,
+    types: &TypeckResult,
+    resolution: &Resolution,
+    named: &mut dyn FnMut(SymbolId) -> Result<Const, Skip>,
+) -> Result<Const, Skip> {
+    let ty_of = |expr: &Expr| {
+        types
+            .expr_ty(expr.span)
+            .cloned()
+            .ok_or_else(|| "a subexpression has no checked type".to_owned())
+    };
     match &expr.kind {
         ExprKind::Lit(lit) => lit_const(lit, ty, false),
-        ExprKind::Unary {
-            op: tuo_hir::UnOp::Neg,
-            operand,
-        } => match &operand.kind {
-            ExprKind::Lit(lit) => lit_const(lit, ty, true),
-            _ => Err("not a literal".to_owned()),
-        },
-        _ => Err("not a literal".to_owned()),
+        ExprKind::Path {
+            res: Res::Symbol(symbol),
+            ..
+        } if resolution.symbol(*symbol).kind == SymbolKind::Const => named(*symbol),
+        ExprKind::Unary { op, operand } => {
+            let op = match op {
+                tuo_hir::UnOp::Neg => {
+                    // A negated literal is one value, so each type's
+                    // minimum is spellable (as `T0027` checks it).
+                    if let ExprKind::Lit(lit) = &operand.kind {
+                        return lit_const(lit, ty, true);
+                    }
+                    UnOp::Neg
+                }
+                tuo_hir::UnOp::Not => UnOp::Not,
+                tuo_hir::UnOp::BitNot => UnOp::BitNot,
+                tuo_hir::UnOp::Move => return Err("`move` is not a constant expression".to_owned()),
+            };
+            let value = const_expr(operand, &ty_of(operand)?, types, resolution, named)?;
+            fold_unary(op, &value).ok_or_else(|| fold_failure(None, &value, None))
+        }
+        ExprKind::Binary { op, lhs, rhs } => {
+            let left = const_expr(lhs, &ty_of(lhs)?, types, resolution, named)?;
+            let Some(mir_op) = mir_binop(*op) else {
+                // `&&` and `||` short-circuit here as at run time: the right
+                // operand is evaluated only when the left one does not decide.
+                let Const::Bool(decided) = left else {
+                    return Err("a logical operand is not a `Bool`".to_owned());
+                };
+                let is_and = matches!(op, tuo_hir::BinOp::And);
+                if decided != is_and {
+                    return Ok(Const::Bool(decided));
+                }
+                return const_expr(rhs, &Ty::Bool, types, resolution, named);
+            };
+            let right = const_expr(rhs, &ty_of(rhs)?, types, resolution, named)?;
+            fold_binary(mir_op, &left, &right)
+                .ok_or_else(|| fold_failure(Some(mir_op), &left, Some(&right)))
+        }
+        ExprKind::Cast { value, .. } => {
+            let from = ty_of(value)?;
+            let inner = const_expr(value, &from, types, resolution, named)?;
+            if from == *ty {
+                return Ok(inner);
+            }
+            let kind = cast_kind(&from, ty).ok_or_else(|| "unsupported cast".to_owned())?;
+            fold_cast(kind, &inner, ty).ok_or_else(|| fold_failure(None, &inner, None))
+        }
+        _ => Err("it is not a constant expression".to_owned()),
+    }
+}
+
+/// Why folding an operation (`op`, `None` for a unary op or cast) over
+/// these operands gave no value: the trap the same operation raises at run
+/// time, or an operand the folder has no arithmetic for.
+fn fold_failure(op: Option<BinOp>, left: &Const, right: Option<&Const>) -> String {
+    match (left, op) {
+        (Const::Int(..), Some(BinOp::Div | BinOp::Rem))
+            if matches!(right, Some(Const::Int(0, _))) =>
+        {
+            "it divides by zero".to_owned()
+        }
+        (Const::Int(_, kind), Some(op)) if op.has_amount_operand() => {
+            format!("it shifts by an amount outside `{}`'s width", kind.name())
+        }
+        (Const::Int(_, kind), _) => format!("it overflows `{}`", kind.name()),
+        _ => "the folder has no compile-time arithmetic for these operands".to_owned(),
     }
 }
 

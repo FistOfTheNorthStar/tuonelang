@@ -28,6 +28,8 @@ between two spellings, the more explicit one is the real one.
                                    //  dependency or another file)
 
   const LIMIT: Int = 100;          // const REQUIRES a type annotation
+  const AREA: Int = LIMIT * LIMIT; // literals, consts, operators only:
+                                   // no calls or blocks (T0028)
 
   /// Doc comments are `///` and precede the item.
   pub fn add(take a: Int, take b: Int) -> Int {
@@ -80,11 +82,16 @@ between two spellings, the more explicit one is the real one.
       Point { x: 1, y: 2 }         // struct literals name every field
   }
 
+  fn sum(in p: Point) -> Int {
+      let Point { x, y } = p;      // a `let` pattern must match every value
+      x + y
+  }
+
   fn classify(in s: Shape) -> Int {
       match s {                    // `match` is an expression and must be
-          Shape::Dot => 0,         // exhaustive (T0007 otherwise)
-          Shape::Line { length } => length,
-      }
+          Shape::Dot => 0,         // exhaustive (T0007 otherwise), field
+          Shape::Line { length } => length,  // patterns included; every
+      }                            // arm but the last ends with `,`
   }
 
   // Option/Result payloads are NAMED FIELDS, not positional.

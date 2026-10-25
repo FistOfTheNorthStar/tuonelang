@@ -88,6 +88,6 @@ pub use mir::{
 pub use mono::{MonoError, monomorphize};
 pub use opt::{OptReport, PassReport, optimize, pass_descriptions};
 pub use print::render;
-pub use reach::retain_reachable;
+pub use reach::{needed_skipped, retain_reachable};
 pub use spec::{AssertionKind, Comparison, SkippedSpec, SpecAssertion, SpecMir, SpecProgram};
 pub use verify::{debug_assert_verified, is_well_formed, verify};

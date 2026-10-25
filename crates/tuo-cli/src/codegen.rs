@@ -285,6 +285,19 @@ fn compile_and_finish(
     mir::retain_reachable(&mut program, ENTRY, |f| {
         !crate::stdlib_input::is_library(map, f.span.source())
     });
+    // A body lowering declined (a v0 limit) is absent from the program; say
+    // which one the build needs and why, before a backend can only report a
+    // call that leaves the program.
+    // Not `unsupported`: that note promises the interpreter can still run
+    // the program, and it cannot run a body that was never lowered either.
+    if let Some(skipped) = mir::needed_skipped(&program, ENTRY) {
+        return Err(Failure::Step {
+            stage: "lowering",
+            message: format!("`{}` was not lowered: {}", skipped.name, skipped.reason),
+            unsupported: false,
+            advisories: Vec::new(),
+        });
+    }
     // A generic function has no layout until it is instantiated (ADR-0027):
     // clone one copy per concrete type-argument list a call reaches, then
     // re-verify, since the instances are new MIR a backend will consume.
@@ -424,6 +437,14 @@ pub(crate) fn native_run(map: &SourceMap, sources: &[SourceId]) -> NativeRunResu
     mir::retain_reachable(&mut program, ENTRY, |f| {
         !crate::stdlib_input::is_library(map, f.span.source())
     });
+    if let Some(skipped) = mir::needed_skipped(&program, ENTRY) {
+        return NativeRunResult::Failed {
+            reason: format!(
+                "lowering: `{}` was not lowered: {}",
+                skipped.name, skipped.reason
+            ),
+        };
+    }
     if let Err(error) = mir::monomorphize(&mut program, &check.types, &check.resolution) {
         return NativeRunResult::Failed {
             reason: format!("codegen: {}", error.message),

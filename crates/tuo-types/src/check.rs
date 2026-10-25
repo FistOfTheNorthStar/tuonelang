@@ -24,6 +24,8 @@ use tuo_source::Span;
 
 use crate::TypeckResult;
 use crate::infer::{InferCtx, VarClass};
+
+mod exhaustive;
 use crate::ty::{
     FloatKind, FnParam, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
     parse_int_literal,
@@ -85,6 +87,9 @@ use crate::ty::{
 /// - `T0027` — an integer literal outside its inferred type's range (`let x:
 ///   I8 = 128`), checked after inference; a negated literal is one value, so
 ///   `-128` is an `I8`.
+/// - `T0028` — a `const` initializer that is not a constant expression
+///   (literals, other consts, and unary/binary/`as` operators over them), or
+///   a `const` defined in terms of itself.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -182,6 +187,19 @@ pub(crate) struct Checker<'a> {
     enums: HashMap<SymbolId, EnumDef>,
     fns: HashMap<SymbolId, FnSig>,
     consts: HashMap<SymbolId, Ty>,
+    /// Each top-level `const`, its name's span, and the consts its
+    /// initializer names — the graph `check_const_cycles` walks (`T0028`).
+    const_deps: Vec<(SymbolId, Span, Vec<SymbolId>)>,
+    /// Type parameters a generic body stores as growable-`Array` elements
+    /// (`push(xs, x)` with `x: T`): their arguments must be supported
+    /// elements at every instantiation (ADR-0012).
+    array_elem_params: HashSet<SymbolId>,
+    /// This body's calls to generic functions, with the callee's (still
+    /// unsolved) type arguments; applied and moved to `generic_calls` when
+    /// the body finishes.
+    pending_generic_calls: Vec<(SymbolId, Vec<Ty>, Span)>,
+    /// Every call to a generic function, with its solved type arguments.
+    generic_calls: Vec<(SymbolId, Vec<Ty>, Span)>,
     variant_owner: HashMap<SymbolId, SymbolId>,
     diagnostics: Vec<Diagnostic>,
     symbol_types: HashMap<SymbolId, Ty>,
@@ -248,6 +266,10 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         enums: HashMap::new(),
         fns: HashMap::new(),
         consts: HashMap::new(),
+        const_deps: Vec::new(),
+        array_elem_params: HashSet::new(),
+        pending_generic_calls: Vec::new(),
+        generic_calls: Vec::new(),
         variant_owner: HashMap::new(),
         diagnostics: Vec::new(),
         symbol_types: HashMap::new(),
@@ -275,6 +297,8 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     for ast in files {
         checker.check_file(*ast);
     }
+    checker.check_const_cycles();
+    checker.check_generic_array_elements();
     let effectful = checker.compute_effectful();
     checker.check_spec_purity(&effectful);
     let constant_time = checker.collect_constant_time_marks(files);
@@ -1569,6 +1593,9 @@ impl<'a> Checker<'a> {
                     let declared = self.consts.get(&id).cloned().unwrap_or(Ty::Error);
                     if let Some(value) = decl.value() {
                         let span = self.at(value_span(&value));
+                        let deps = self.check_constant_expr(value);
+                        let name = self.at(decl.name_ref().map(|name| name.span));
+                        self.const_deps.push((id, name, deps));
                         let actual = self.expr(value);
                         self.expect_ty(&declared, &actual, span);
                     }
@@ -1608,6 +1635,7 @@ impl<'a> Checker<'a> {
         self.body_exprs = Vec::new();
         self.int_literals = Vec::new();
         self.deferred_map_pairs = Vec::new();
+        self.pending_generic_calls = Vec::new();
         self.locals = HashMap::new();
         self.ret = ret;
         self.frames = Vec::new();
@@ -1639,6 +1667,10 @@ impl<'a> Checker<'a> {
             self.check_map_pair(&key, &value, span);
         }
         self.check_int_literal_ranges();
+        for (callee, args, span) in std::mem::take(&mut self.pending_generic_calls) {
+            let args = args.iter().map(|arg| self.icx.apply(arg)).collect();
+            self.generic_calls.push((callee, args, span));
+        }
         let locals = std::mem::take(&mut self.locals);
         for (symbol, ty) in locals {
             let ty = self.icx.apply(&ty);
@@ -1689,6 +1721,119 @@ impl<'a> Checker<'a> {
                 )
                 .with_actual(StructuredValue::Name(name.to_owned())),
             );
+        }
+    }
+
+    /// `T0028`: a `const` initializer is evaluated at compile time, so it
+    /// may only be a constant expression — literals, other consts, and the
+    /// unary, binary, and `as` operators over them. Reports the first
+    /// subexpression outside that set and returns the consts the
+    /// initializer names (for the cycle check). Before this check a call or
+    /// block initializer was accepted and MIR lowering then dropped every
+    /// function naming the const, so its specs failed without a message and
+    /// `build` reported a call that left the program.
+    fn check_constant_expr(&mut self, value: Expr<'_>) -> Vec<SymbolId> {
+        let mut deps = Vec::new();
+        if let Some((span, label)) = self.non_constant(value, &mut deps) {
+            let span = self.at(span);
+            self.push(
+                Diagnostic::error(
+                    code(28),
+                    "a `const` initializer must be a constant expression",
+                    span,
+                )
+                .with_primary_label(label)
+                .with_help(
+                    "a `const` is computed at compile time from literals, other consts, and \
+                     operators (`+`, `*`, `<<`, `==`, `&&`, `as`, ...); compute this value in a \
+                     function instead",
+                ),
+            );
+        }
+        deps
+    }
+
+    /// The first subexpression of `expr` that is not a constant expression,
+    /// with a label saying why; pushes each const it names onto `deps`.
+    fn non_constant(
+        &self,
+        expr: Expr<'_>,
+        deps: &mut Vec<SymbolId>,
+    ) -> Option<(Option<Span>, String)> {
+        match expr {
+            Expr::Literal(_) => None,
+            Expr::Group(group) => group
+                .inner()
+                .and_then(|inner| self.non_constant(inner, deps)),
+            Expr::Unary(unary) if unary.op() != Some("move") => unary
+                .operand()
+                .and_then(|operand| self.non_constant(operand, deps)),
+            Expr::Binary(binary) => binary
+                .lhs()
+                .and_then(|lhs| self.non_constant(lhs, deps))
+                .or_else(|| binary.rhs().and_then(|rhs| self.non_constant(rhs, deps))),
+            Expr::Cast(cast) => cast
+                .inner()
+                .and_then(|inner| self.non_constant(inner, deps)),
+            Expr::Path(path) => {
+                let symbol = self.symbol_at(path.segment_names().last())?;
+                let entry = self.resolution.symbol(symbol);
+                if entry.kind == SymbolKind::Const {
+                    deps.push(symbol);
+                    None
+                } else {
+                    Some((path.span(), format!("`{}` is not a `const`", entry.name)))
+                }
+            }
+            Expr::Call(call) => Some((call.span(), "a call runs only at run time".to_owned())),
+            Expr::MethodCall(call) => {
+                Some((call.span(), "a call runs only at run time".to_owned()))
+            }
+            Expr::StructLiteral(_) | Expr::ArrayLiteral(_) => Some((
+                expr.span(),
+                "a `const` holds a scalar or `Str` value in v0, not a struct or array".to_owned(),
+            )),
+            other => Some((
+                other.span(),
+                "this expression is not evaluated at compile time".to_owned(),
+            )),
+        }
+    }
+
+    /// `T0028` for a `const` whose initializer reaches itself through the
+    /// consts it names: it has no value to compute.
+    fn check_const_cycles(&mut self) {
+        let deps: HashMap<SymbolId, &Vec<SymbolId>> = self
+            .const_deps
+            .iter()
+            .map(|(symbol, _, deps)| (*symbol, deps))
+            .collect();
+        let mut reported = Vec::new();
+        for (symbol, span, _) in &self.const_deps {
+            // A path from `symbol` back to itself, if one exists.
+            let mut path = vec![*symbol];
+            let mut seen = HashSet::new();
+            if !reaches(*symbol, *symbol, &deps, &mut path, &mut seen) {
+                continue;
+            }
+            let chain = path
+                .iter()
+                .map(|step| format!("`{}`", self.resolution.symbol(*step).name))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            let name = &self.resolution.symbol(*symbol).name;
+            reported.push(
+                Diagnostic::error(
+                    code(28),
+                    format!("`const {name}` is defined in terms of itself"),
+                    *span,
+                )
+                .with_primary_label(format!("{chain} has no value to start from"))
+                .with_help("give one of these consts an initializer that does not name the others"),
+            );
+        }
+        for diagnostic in reported {
+            self.push(diagnostic);
         }
     }
 
@@ -1811,6 +1956,7 @@ impl<'a> Checker<'a> {
                     let declared = decl.ty().map_or(Ty::Error, |ty| self.lower_type(ty));
                     if let Some(value) = decl.value() {
                         let span = self.at(value_span(&value));
+                        self.check_constant_expr(value);
                         let actual = self.expr(value);
                         self.expect_ty(&declared, &actual, span);
                     }
@@ -1858,6 +2004,10 @@ impl<'a> Checker<'a> {
         };
         if let Some(pattern) = binding.pattern() {
             self.pattern(pattern, &ty);
+            if !matches!(pattern, Pattern::Binding(_) | Pattern::Wildcard(_)) {
+                let span = self.at(pattern.span());
+                self.check_irrefutable(&ty, &pattern, span);
+            }
         }
     }
 
@@ -1871,6 +2021,11 @@ impl<'a> Checker<'a> {
             Pattern::Binding(binding) => {
                 if let Some(symbol) = self.declared_at(binding.name_ref()) {
                     self.locals.insert(symbol, expected.clone());
+                } else if let Some(symbol) = self.symbol_at(binding.name_ref()) {
+                    // Resolution made the lone name a variant (`None`, a
+                    // bare `Red`): it must be one of the scrutinee's, and
+                    // one with no fields to leave unmatched.
+                    self.bare_variant_pattern(symbol, binding.span(), expected);
                 }
             }
             Pattern::Literal(literal) => {
@@ -1889,6 +2044,56 @@ impl<'a> Checker<'a> {
                     self.pattern(inner, expected);
                 }
             }
+        }
+    }
+
+    /// Type a variant written as a lone name in pattern position. Before
+    /// this check `None` matched against an `Int`, or a bare `Some`, was
+    /// accepted (and the arm counted as a catch-all).
+    fn bare_variant_pattern(&mut self, symbol: SymbolId, span: Option<Span>, expected: &Ty) {
+        if self.resolution.symbol(symbol).kind != SymbolKind::Variant {
+            return;
+        }
+        let span = self.at(span);
+        let Some(shape) = self.constructor_shape(symbol, None, span) else {
+            return;
+        };
+        if let Err(mismatch) = self.icx.unify(expected, &shape.ty) {
+            self.mismatch(&mismatch.expected, &mismatch.actual, span);
+            // Nothing else constrains the variant's fresh type arguments;
+            // settle them so the mismatch is not followed by a `T0011`.
+            if let Ty::Option(item) = &shape.ty {
+                let _ = self.icx.unify(item, &Ty::Error);
+            } else if let Ty::Result(ok, err) = &shape.ty {
+                let _ = self.icx.unify(ok, &Ty::Error);
+                let _ = self.icx.unify(err, &Ty::Error);
+            } else if let Ty::Enum(_, args) = &shape.ty {
+                for arg in args {
+                    let _ = self.icx.unify(arg, &Ty::Error);
+                }
+            }
+            return;
+        }
+        if !shape.fields.is_empty() {
+            let name = self.resolution.symbol(symbol).name.clone();
+            let fields: Vec<String> = shape.fields.iter().map(|(name, _)| name.clone()).collect();
+            let mut diagnostic = Diagnostic::error(
+                code(5),
+                format!(
+                    "pattern for `{name}` does not mention fields {}",
+                    fields
+                        .iter()
+                        .map(|field| format!("`{field}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                span,
+            )
+            .with_help(format!("write `{name} {{ .. }}` to match any `{name}`"));
+            for field in fields {
+                diagnostic = diagnostic.with_expected(StructuredValue::Name(field));
+            }
+            self.push(diagnostic);
         }
     }
 
@@ -2824,12 +3029,12 @@ impl<'a> Checker<'a> {
             .scrutinee()
             .map_or(Ty::Error, |scrutinee| self.expr(scrutinee));
         let mut result = Ty::Never;
-        let mut coverage = Coverage::default();
+        let mut unguarded = Vec::new();
         for arm in match_expr.arms() {
             if let Some(pattern) = arm.pattern() {
                 self.pattern(pattern, &scrutinee);
                 if arm.guard().is_none() {
-                    self.cover(&pattern, &mut coverage);
+                    unguarded.push(pattern);
                 }
             }
             if let Some(guard) = arm.guard() {
@@ -2843,115 +3048,8 @@ impl<'a> Checker<'a> {
                 result = self.join(result, ty, value_at);
             }
         }
-        self.check_exhaustiveness(&scrutinee, &coverage, scrutinee_span);
+        self.check_exhaustiveness(&scrutinee, &unguarded, scrutinee_span);
         result
-    }
-
-    /// Record what an unguarded arm's pattern covers.
-    fn cover(&self, pattern: &Pattern<'_>, coverage: &mut Coverage) {
-        match pattern {
-            Pattern::Wildcard(_) | Pattern::Binding(_) => coverage.catchall = true,
-            Pattern::Literal(literal) => {
-                let text = literal.text();
-                if text == "true" {
-                    coverage.true_seen = true;
-                } else if text == "false" {
-                    coverage.false_seen = true;
-                }
-            }
-            Pattern::Path(path) => {
-                if let Some(symbol) = self.symbol_at(path.segment_names().last()) {
-                    coverage.variants.push(symbol);
-                }
-            }
-            Pattern::Or(or) => {
-                for alternative in or.alternatives() {
-                    self.cover(&alternative, coverage);
-                }
-            }
-            Pattern::Group(group) => {
-                if let Some(inner) = group.inner() {
-                    self.cover(&inner, coverage);
-                }
-            }
-        }
-    }
-
-    fn check_exhaustiveness(&mut self, scrutinee: &Ty, coverage: &Coverage, span: Span) {
-        if coverage.catchall {
-            return;
-        }
-        let applied = self.icx.apply(scrutinee);
-        let missing: Vec<String> = match &applied {
-            Ty::Enum(symbol, _) => self
-                .resolution
-                .variants_of(*symbol)
-                .iter()
-                .filter(|variant| !coverage.variants.contains(variant))
-                .map(|variant| self.resolution.symbol(*variant).name.clone())
-                .collect(),
-            Ty::Option(_) | Ty::Result(_, _) => {
-                let names: &[&str] = if matches!(applied, Ty::Option(_)) {
-                    &["Some", "None"]
-                } else {
-                    &["Ok", "Err"]
-                };
-                names
-                    .iter()
-                    .copied()
-                    .filter(|name| {
-                        self.prelude(name)
-                            .is_none_or(|symbol| !coverage.variants.contains(&symbol))
-                    })
-                    .map(ToOwned::to_owned)
-                    .collect()
-            }
-            Ty::Bool => {
-                let mut missing = Vec::new();
-                if !coverage.true_seen {
-                    missing.push("true".to_owned());
-                }
-                if !coverage.false_seen {
-                    missing.push("false".to_owned());
-                }
-                missing
-            }
-            Ty::Error | Ty::Var(_) | Ty::Never => return,
-            _ => {
-                let rendered = self.render(&applied);
-                self.push(
-                    Diagnostic::error(
-                        code(7),
-                        format!("non-exhaustive match on `{rendered}`"),
-                        span,
-                    )
-                    .with_primary_label("not all values are covered")
-                    .with_help("add a `_` arm to cover the remaining values"),
-                );
-                return;
-            }
-        };
-        if missing.is_empty() {
-            return;
-        }
-        let rendered = self.render(&applied);
-        let mut diagnostic = Diagnostic::error(
-            code(7),
-            format!(
-                "non-exhaustive match on `{rendered}`: missing {}",
-                missing
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            span,
-        )
-        .with_help("cover every variant, or add a `_` arm");
-        for name in missing {
-            diagnostic = diagnostic.with_expected(StructuredValue::Name(name));
-        }
-        self.push(diagnostic);
     }
 
     // ------------------------------------------------------------------
@@ -3422,8 +3520,15 @@ impl<'a> Checker<'a> {
     /// themselves supported; nested owned containers (`Array[Array[T]]`,
     /// `Array[Map]`) and wrapped values (`Box`/`Shared`/`Weak`) stay refused.
     /// An unsolved/`Error` element is left alone (it is reported elsewhere).
+    ///
+    /// A type parameter is accepted (a generic body cannot know its
+    /// argument) and remembered, so each instantiation is checked instead
+    /// (`check_generic_array_elements`).
     fn reject_unsupported_array_element(&mut self, elem: &Ty, span: Span) {
         let resolved = self.icx.apply(elem);
+        let mut params = Vec::new();
+        self.element_params(&resolved, &mut params);
+        self.array_elem_params.extend(params);
         if !self.is_supported_array_element(&resolved) {
             let rendered = self.render(&resolved);
             self.push(
@@ -3464,9 +3569,101 @@ impl<'a> Checker<'a> {
             Ty::Enum(symbol, targs) => self.aggregate_fields_supported(*symbol, targs, false),
             // Unsolved / poisoned: not this check's responsibility.
             Ty::Var(_) | Ty::Error | Ty::Never => true,
+            // A generic body's type parameter: its arguments are checked at
+            // each instantiation instead (`check_generic_array_elements`).
+            Ty::Param(_) => true,
             // Everything else — nested Array/FixedArray/Option/Result/Tuple/Fn/
             // Wrapper/Range/Char/Unit — is out of the v0 element set.
             _ => false,
+        }
+    }
+
+    /// Push the type parameters that decide whether `ty` is a supported
+    /// array element: `ty` itself, or one reached through a struct's or
+    /// enum's fields (`Pair[T]` is supported exactly when `T` is).
+    fn element_params(&self, ty: &Ty, out: &mut Vec<SymbolId>) {
+        match ty {
+            Ty::Param(symbol) => out.push(*symbol),
+            Ty::Struct(symbol, targs) => {
+                if let Some(def) = self.structs.get(symbol) {
+                    let map = substitution(&def.type_params, targs);
+                    for (_, field) in &def.fields {
+                        self.element_params(&substitute(field, &map), out);
+                    }
+                }
+            }
+            Ty::Enum(symbol, targs) => {
+                if let Some(def) = self.enums.get(symbol) {
+                    let map = substitution(&def.type_params, targs);
+                    for (_, fields) in &def.variants {
+                        for (_, field) in fields {
+                            self.element_params(&substitute(field, &map), out);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// `T0001` for a generic call that instantiates an array-element type
+    /// parameter (`array_elem_params`) at a type outside the v0 element set.
+    /// Element-ness flows through generic calls — `outer[U]` passing its
+    /// `U` to `wrap[T]`'s element `T` makes `U` an element too — so the set
+    /// is closed to a fixpoint over every call before any is reported.
+    fn check_generic_array_elements(&mut self) {
+        let elem_args = |checker: &Self, callee: SymbolId, args: &[Ty]| -> Vec<Ty> {
+            checker.fns.get(&callee).map_or_else(Vec::new, |sig| {
+                sig.type_params
+                    .iter()
+                    .zip(args)
+                    .filter(|(param, _)| checker.array_elem_params.contains(param))
+                    .map(|(_, arg)| arg.clone())
+                    .collect()
+            })
+        };
+        loop {
+            let mut found = Vec::new();
+            for (callee, args, _) in &self.generic_calls {
+                for arg in elem_args(self, *callee, args) {
+                    self.element_params(&arg, &mut found);
+                }
+            }
+            let before = self.array_elem_params.len();
+            self.array_elem_params.extend(found);
+            if self.array_elem_params.len() == before {
+                break;
+            }
+        }
+        let mut reported = Vec::new();
+        for (callee, args, span) in &self.generic_calls {
+            for arg in elem_args(self, *callee, args) {
+                if self.is_supported_array_element(&arg) {
+                    continue;
+                }
+                let rendered = arg.render(self.resolution);
+                let name = &self.resolution.symbol(*callee).name;
+                reported.push(
+                    Diagnostic::error(
+                        code(1),
+                        format!("`Array[{rendered}]` is not supported in v0"),
+                        *span,
+                    )
+                    .with_primary_label(format!(
+                        "`{name}` stores this type argument in a growable `Array`, whose element \
+                         type must be a scalar (`Int`/`Float`/`Bool`/`Str`/`String`) or a \
+                         supported struct/enum, not `{rendered}`"
+                    ))
+                    .with_help(
+                        "nested owned containers and wrapped values are outside the v0 element \
+                         set (ADR-0012); call it with a supported element type",
+                    )
+                    .with_actual(StructuredValue::Type(rendered)),
+                );
+            }
+        }
+        for diagnostic in reported {
+            self.push(diagnostic);
         }
     }
 
@@ -3520,6 +3717,10 @@ impl<'a> Checker<'a> {
             }
             None => sig.type_params.iter().map(|_| self.fresh(span)).collect(),
         };
+        if !sig.type_params.is_empty() {
+            self.pending_generic_calls
+                .push((symbol, args.clone(), span));
+        }
         let map = substitution(&sig.type_params, &args);
         (
             sig.params.iter().map(|ty| substitute(ty, &map)).collect(),
@@ -3800,14 +4001,6 @@ struct Shape {
 }
 
 /// Coverage gathered from a match's unguarded arms.
-#[derive(Default)]
-struct Coverage {
-    catchall: bool,
-    variants: Vec<SymbolId>,
-    true_seen: bool,
-    false_seen: bool,
-}
-
 fn substitution(params: &[SymbolId], args: &[Ty]) -> HashMap<SymbolId, Ty> {
     params.iter().copied().zip(args.iter().cloned()).collect()
 }
@@ -3862,6 +4055,31 @@ fn substitute(ty: &Ty, map: &HashMap<SymbolId, Ty>) -> Ty {
 
 /// The span of an expression view (every well-formed expression covers at
 /// least one token).
+/// Whether `from`'s const dependencies reach `target`, extending `path` with
+/// the steps taken (ending at `target`) when they do.
+fn reaches(
+    from: SymbolId,
+    target: SymbolId,
+    deps: &HashMap<SymbolId, &Vec<SymbolId>>,
+    path: &mut Vec<SymbolId>,
+    seen: &mut HashSet<SymbolId>,
+) -> bool {
+    let Some(next) = deps.get(&from) else {
+        return false;
+    };
+    for &step in next.iter() {
+        path.push(step);
+        if step == target {
+            return true;
+        }
+        if seen.insert(step) && reaches(step, target, deps, path, seen) {
+            return true;
+        }
+        path.pop();
+    }
+    false
+}
+
 fn value_span(expr: &Expr<'_>) -> Option<Span> {
     expr.span()
 }

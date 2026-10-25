@@ -229,8 +229,13 @@ inference context. It verifies:
 - casts (numeric-only, §3.3);
 - `?` propagation — permitted **only** in a function whose return type is a
   compatible `Result` (or `Option`, for `None`-propagation), §20;
-- **exhaustiveness** foundations for `match` over enums, `Option`/`Result`, and
-  `Bool` (§16, §17), reporting the **specific missing cases**;
+- **exhaustiveness** for `match` over enums, `Option`/`Result`, structs, and
+  `Bool` (§16, §17), reporting the **specific missing cases**. Coverage is
+  checked through nested patterns (the usefulness algorithm): a constructor is
+  covered only when its fields are, so `Some { value: 0 }` and `None` leave every
+  other `Some` uncovered, and a struct pattern binding each field covers the
+  struct. A `let` pattern must cover its whole type, since a binding has no
+  other arm to fall to;
 - generic arity and instantiation (§18).
 
 Every mismatch diagnostic carries **structured expected and actual types** (not
@@ -252,7 +257,7 @@ the trait system will own.
 | `T0004` | Unknown field. |
 | `T0005` | Struct-literal / struct-pattern field-set error. |
 | `T0006` | Operation not supported for a type. |
-| `T0007` | Non-exhaustive match. |
+| `T0007` | Non-exhaustive match, or a `let` whose pattern can fail (`let Some { value } = o;`). Checked through nested patterns; a constructor matched for only some field values is named as missing, with a note. A lone variant name in pattern position (`None`) is that constructor, not a catch-all binding, and must belong to the scrutinee's type. Before nested checking, `Some { value: 0 } => …, None => …` was accepted and the run trapped as unreachable. |
 | `T0008` | Invalid cast. |
 | `T0009` | Invalid `?` propagation. |
 | `T0010` | Wrong number of type arguments. |
@@ -273,6 +278,7 @@ the trait system will own.
 | `T0025` | A qualified interface-member call (`Area::area(p)`, ADR-0032 Stage A): interfaces lower to nothing until ADR-0032 Stage B, so no engine executes the member. |
 | `T0026` | **Warning, not an error** — an `interface` or `impl` declaration (ADR-0032 Stage A) type-checks but lowers to nothing, so none of its members runs. A program declaring one runs today, so refusing it would break it for no gain. |
 | `T0027` | An integer literal outside the range of the type inference gave it (`let x: I8 = 128`, `0x100` as a `U8`, a `200` pattern against an `I8` scrutinee). Checked after inference, so a literal typed by later use is checked at that type. A unary minus applied directly to a literal (through parentheses too) makes one value, so `-128` is an `I8` and each type's minimum is spellable. Before this check such a program was accepted and MIR lowering then dropped the whole function, so its specs failed without a message and `build` reported it absent. |
+| `T0028` | A `const` initializer that is not a **constant expression** — literals, other consts, and the unary, binary, and `as` operators over them (a call, a block, a local, a struct or array literal are not) — or a `const` defined in terms of itself (`const A: Int = B; const B: Int = A;`). A constant expression is evaluated at compile time with the interpreter's arithmetic, so a const has the value the same expression computes at run time; one whose evaluation would trap (overflow, a zero divisor, an out-of-range shift) cannot be used, and each function naming it reports that trap where it is called or built. Before this check a computed initializer was accepted and every function naming the const was dropped without a message. |
 
 `T0022` and `T0026` are the table's only warnings: each reports a program the
 static semantics **accepts**. They exist because `tuo check` deliberately
@@ -389,7 +395,13 @@ since ADR-0012 (they were `Array[Int]`-monomorphic in ADR-0009). `T` is
 value/result follow that `T`, unified from the first argument; `empty()` gives
 `Array[T]` for a `T` solved from the use site (an annotation or a later `push`).
 These are not user-written generics — the operations stay language-provided
-builtins whose element type is resolved from the call, not user type parameters:
+builtins whose element type is resolved from the call, not user type parameters.
+Inside a user generic function the element may be one of its type parameters
+(`push(out, x)` with `x: T`); the v0 element-set check then moves to every call
+of that function, where `T`'s argument must be a supported element (`T0001`
+there, naming the callee). The check follows a type parameter passed on to
+another generic's element parameter, so `outer[U]` calling `wrap(x)` is
+checked at each call of `outer`:
 
 | Signature | Meaning |
 |-----------|---------|

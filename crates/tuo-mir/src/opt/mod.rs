@@ -60,7 +60,7 @@
 //! backends start from and to demonstrate the framework, not to compete with
 //! LLVM.
 
-mod const_fold;
+pub(crate) mod const_fold;
 mod copy_prop;
 mod dead_locals;
 mod unreachable_blocks;

@@ -123,9 +123,16 @@ let xs: [Int; 4] = [1, 2, 3, 4];   // optional annotation
 var total = 0;             // mutable
 total = total + 5;         // plain assignment (there is NO += / -= etc.)
 const LIMIT: Int = 100;    // constant; type annotation REQUIRED
+const AREA: Int = LIMIT * LIMIT;   // computed at compile time
+let Point { x, y } = p;    // destructuring: the pattern must match every value
 ```
 
 - `let` bindings cannot be reassigned; `var` bindings can.
+- A `const` initializer is a **constant expression**: literals, other consts,
+  and operators (`+ - * / % << & == && as` …) over them — no calls, blocks,
+  locals, or struct/array literals (`T0028`). It holds a scalar or `Str`.
+- A `let` pattern must match every value of its type (`T0007`): destructure a
+  struct, or use `match` for an `Option`/`Result`/enum.
 - Both may be **shadowed**; the initializer sees the outer name.
 - Local types are inferred by unification where unambiguous (`let x = 1` is
   `Int`). If inference can't decide (e.g. an empty `[]`), you get `T0011`
@@ -905,12 +912,15 @@ violation · `R0006` spec target is not a function.
 
 **Types** — `T0001` mismatched types · `T0002` wrong argument count · `T0003`
 call of non-function · `T0004` unknown field · `T0005` struct field-set error ·
-`T0006` operator unsupported for type · `T0007` non-exhaustive match · `T0008`
+`T0006` operator unsupported for type · `T0007` non-exhaustive match (or a
+refutable `let` pattern) · `T0008`
 invalid cast · `T0009` invalid `?` · `T0010` wrong type-argument count ·
 `T0011` type annotation needed · `T0012` expected value/constructor · `T0013`
 break/continue outside loop · `T0014` invalid fixed-array length · `T0015` a
 builtin or generic function is not first-class (cannot be used as a value) ·
-`T0016` recursive struct/enum without a `Box`/`Shared`/`Weak` indirection.
+`T0016` recursive struct/enum without a `Box`/`Shared`/`Weak` indirection ·
+`T0027` integer literal out of range · `T0028` `const` initializer is not a
+constant expression.
 
 **Ownership** — `O0001` use of moved value · `O0003` move out of borrowed
 param · `O0005` conflicting borrows in a call · `O0006` move of borrowed value

@@ -554,7 +554,7 @@ fn substitute(function: &mut Function, params: &[SymbolId], args: &[Ty]) {
 }
 
 /// `ty` with each [`Ty::Param`] in `params` replaced by its argument.
-fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
+pub(crate) fn instantiate(ty: &Ty, params: &[SymbolId], args: &[Ty]) -> Ty {
     let go = |item: &Ty| instantiate(item, params, args);
     match ty {
         Ty::Param(symbol) => params

@@ -63,6 +63,7 @@ use crate::mir::{
     AggregateKind, Arg, BinOp, BlockId, Callee, EffectOp, Function, HeapMutOp, HeapOp, LocalId,
     Operand, Place, Program, Projection, Rvalue, Statement, StrOp, Terminator,
 };
+use crate::mono::instantiate;
 
 /// MIR diagnostic codes. Once shipped a number is never reused (the code
 /// space is documented in `tuo-diagnostics`).
@@ -317,16 +318,18 @@ impl Verifier<'_> {
         }
     }
 
-    /// The declared type of struct/tuple/range field `index`. Generic
-    /// struct fields are returned in their *declaration* form (`Ty::Param`)
-    /// — the verifier checks projection legality, not full instantiation.
+    /// The type of struct/tuple/range field `index`, a generic struct's
+    /// field instantiated at the struct's type arguments. Returning the
+    /// declaration form (`Ty::Param`) instead made a read of `Pair[I64]`'s
+    /// `T` field compare unequal to an `I64` (`M0006`).
     fn field_ty(&self, ty: &Ty, index: u32) -> Option<Ty> {
         match ty {
             Ty::Tuple(items) => items.get(index as usize).cloned(),
             Ty::Range(item) => (index < 2).then(|| (**item).clone()),
-            Ty::Struct(symbol, _) => {
+            Ty::Struct(symbol, args) => {
                 let shape = self.types.struct_shape(*symbol)?;
-                shape.fields.get(index as usize).map(|(_, ty)| ty.clone())
+                let (_, field) = shape.fields.get(index as usize)?;
+                Some(instantiate(field, &shape.type_params, args))
             }
             _ => None,
         }
@@ -341,10 +344,11 @@ impl Verifier<'_> {
                 (1, 0) => Some((**err).clone()),
                 _ => None,
             },
-            Ty::Enum(symbol, _) => {
+            Ty::Enum(symbol, args) => {
                 let shape = self.types.enum_shape(*symbol)?;
                 let (_, fields) = shape.variants.get(variant as usize)?;
-                fields.get(field as usize).map(|(_, ty)| ty.clone())
+                let (_, ty) = fields.get(field as usize)?;
+                Some(instantiate(ty, &shape.type_params, args))
             }
             _ => None,
         }

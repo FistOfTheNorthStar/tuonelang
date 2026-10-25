@@ -103,3 +103,30 @@ fn a_runaway_recursion_is_a_failed_spec_not_a_crash() {
     // Locations are one-based, like every other diagnostic surface.
     assert!(stderr.contains("runaway-recursion.tuo:15:10"), "{stderr}");
 }
+
+#[test]
+fn a_call_to_a_body_that_was_not_lowered_names_it_and_why() {
+    // Before, the spec trapped "the interpreter only executes functions
+    // present in the lowered MIR" and the build said a call left "the
+    // lowered program", neither naming `widen` or the overflowing const.
+    let spec = run(&["spec", &path("unlowered_body.tuo")]);
+    assert!(!spec.status.success());
+    let stderr = String::from_utf8(spec.stderr).expect("utf-8");
+    assert!(
+        stderr.contains(
+            "`widen` was not lowered: `const BIG` cannot be evaluated: it overflows `I8`"
+        ),
+        "{stderr}"
+    );
+    let build = run(&["run", &path("unlowered_body.tuo")]);
+    assert!(!build.status.success());
+    let stderr = String::from_utf8(build.stderr).expect("utf-8");
+    assert!(
+        stderr
+            .contains("error: lowering: `widen` was not lowered: `const BIG` cannot be evaluated"),
+        "{stderr}"
+    );
+    // The interpreter cannot run an unlowered body either, so the note
+    // pointing there must not appear.
+    assert!(!stderr.contains("can still execute it"), "{stderr}");
+}
