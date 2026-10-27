@@ -39,16 +39,17 @@
     "udp": 2
   },
   "harvested_by_origin": {
-    "corpus": 3,
-    "example": 21,
+    "corpus": 2,
+    "example": 16,
     "stdlib": 273
   },
   "harvested_dropped": 120,
-  "harvested_kept": 297,
-  "oneshot_examples": 436,
+  "harvested_duplicates": 6,
+  "harvested_kept": 291,
+  "oneshot_examples": 430,
   "repair_by_break": {
     "angle-bracket-generics": 12,
-    "bool-for-int-return": 22,
+    "bool-for-int-return": 23,
     "chained-comparison": 53,
     "compound-assign": 46,
     "exclusive-bound-made-inclusive": 28,
@@ -70,9 +71,9 @@
     "ownership": 37,
     "parse": 275,
     "spec": 132,
-    "type": 85
+    "type": 86
   },
-  "repair_examples": 529,
+  "repair_examples": 530,
   "tiers": {
     "effect": 16,
     "executable": 123

@@ -1,0 +1,9 @@
+task = """
+Write `is_even(n)` and `is_odd(n)` for `n >= 0` as two mutually recursive \
+functions — each one answers for `n` by asking the other about `n - 1` — \
+without using `%`. Spec both."""
+notes = """
+Functions in a module can call each other in either order; there are no \
+forward declarations. Each recursion bottoms out at `n == 0`, so every call \
+needs a non-negative argument."""
+difficulty = 2

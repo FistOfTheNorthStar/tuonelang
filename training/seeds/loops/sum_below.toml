@@ -1,0 +1,6 @@
+task = """
+Write `sum_below(n)` that sums every integer from 0 up to but not including \
+`n`, with a while loop and a `var` accumulator (remember: assignment is \
+plain `=`, no `+=`)."""
+notes = """
+Mutable bindings are `var`, not `let mut`; reassignment uses plain `=`."""

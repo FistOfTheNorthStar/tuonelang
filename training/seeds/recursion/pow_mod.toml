@@ -1,0 +1,11 @@
+task = """
+Write a recursive `pow_mod(base, exp, modulus)` computing `base^exp % modulus` \
+by squaring: halve `exp` at each level, square the result, and multiply by \
+`base` once more when `exp` is odd. `base` and `exp` are non-negative and \
+`modulus` is between 1 and 1000000007, so no product overflows `Int`."""
+notes = """
+Reducing modulo `modulus` after every multiplication keeps each product \
+below `modulus * modulus`; computing `base^exp` first and reducing at the \
+end overflows (and traps) long before the answer does. `1 % modulus` makes \
+`pow_mod(x, 0, 1)` come out as 0, not 1."""
+difficulty = 3

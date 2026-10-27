@@ -1,0 +1,15 @@
+fn sum_below(take n: Int) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < n {
+        total = total + i;
+        i = i + 1;
+    }
+    total
+}
+
+spec sum_below {
+    then sum_below(0) == 0;
+    then sum_below(5) == 10;
+    then sum_below(10) == 45;
+}

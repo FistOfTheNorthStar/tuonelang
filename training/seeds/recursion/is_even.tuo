@@ -1,0 +1,27 @@
+fn is_even(take n: Int) -> Bool {
+    if n == 0 {
+        true
+    } else {
+        is_odd(n - 1)
+    }
+}
+
+fn is_odd(take n: Int) -> Bool {
+    if n == 0 {
+        false
+    } else {
+        is_even(n - 1)
+    }
+}
+
+spec is_even {
+    then is_even(0);
+    then is_even(10);
+    then !is_even(7);
+}
+
+spec is_odd {
+    then !is_odd(0);
+    then is_odd(1);
+    then is_odd(9);
+}

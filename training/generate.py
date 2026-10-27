@@ -23,8 +23,10 @@ Every public seed is a training seed. The held-out eval tasks are the seeds of
 the private checkout named by ``TUO_EVAL_DIR``; with it set, the generator also
 writes ``$TUO_EVAL_DIR/dataset/eval_heldout.jsonl`` (for scoring Compile@1 /
 SpecPass@1 / TestPass@1 with the real compiler) and records only that file's
-hash in the public manifest. It refuses an eval task that also appears in the
-training material.
+hash in the public manifest. It refuses an eval task that resembles the
+training material or a benchmark task, a training seed that resembles a
+benchmark task, and two seeds that are the same program; a harvested example
+that copies a seed is dropped (``overlap.py``).
 
 Usage:
     python3 training/generate.py            # validate seeds, emit all datasets
@@ -61,6 +63,12 @@ OUT = HERE / "dataset"
 sys.path.insert(0, str(HERE))
 from breaks import BREAKS  # noqa: E402
 from harvest import Harvested, harvest_all  # noqa: E402
+from overlap import (  # noqa: E402
+    benchmark_overlap,
+    eval_contamination,
+    harvest_duplicates,
+    seed_duplicates,
+)
 from seeds import EVAL_DIR, EVAL_SEEDS, SEEDS, Seed  # noqa: E402
 
 PUBLIC_OUTPUTS = ("sft_oneshot.jsonl", "sft_repair.jsonl", "stats.json")
@@ -238,56 +246,6 @@ def render_diagnostic(diag: dict) -> str:
     if help_text:
         line += f"\n  help: {help_text}"
     return line
-
-
-def _normalized(text: str) -> str:
-    return " ".join(text.split())
-
-
-BENCH_SOURCES = REPO / "benchmarks" / "llm" / "codegen" / "sources"
-
-
-def bench_functions() -> dict[str, str]:
-    """The function each public codegen-benchmark task asks for (the first
-    signature its instruction names), mapped to the task."""
-    names = {}
-    for instruction in sorted(BENCH_SOURCES.glob("*/*/instruction.md")):
-        m = re.search(r"`(?:fn )?([a-z_][a-z_0-9]*)\s*[\[(]", instruction.read_text())
-        if m:
-            names.setdefault(m.group(1), instruction.parent.name)
-    return names
-
-
-def contamination(eval_: list[Seed], train: list[Seed], harvested: list[Harvested]) -> list[str]:
-    """Every eval seed whose task or solution also appears, whitespace aside,
-    in the training material, or that is named after the same function as a
-    training seed of its concept or a public codegen-benchmark task: a
-    held-out score on it would measure recall. (The name test is coarse on
-    purpose; two seeds written apart still converge on `parse_port` when the
-    idea is the obvious one.)"""
-    tasks = {_normalized(s.task) for s in train} | {_normalized(h.task) for h in harvested}
-    programs = {_normalized(s.solution) for s in train} | {
-        _normalized(h.solution) for h in harvested
-    }
-    names = {(s.concept, s.name) for s in train if s.name != "program"}
-    bench = bench_functions()
-    found = []
-    for seed in eval_:
-        if seed.name in bench:
-            found.append(
-                f"{seed.concept}/{seed.name}: the public codegen-benchmark task "
-                f"`{bench[seed.name]}` is about the same function"
-            )
-        if (seed.concept, seed.name) in names:
-            found.append(
-                f"{seed.concept}/{seed.name}: a training seed of the same concept is "
-                "about the same function"
-            )
-        if _normalized(seed.task) in tasks:
-            found.append(f"{seed.concept}/{seed.name}: its task is also a training task")
-        if _normalized(seed.solution) in programs:
-            found.append(f"{seed.concept}/{seed.name}: its solution is also a training program")
-    return found
 
 
 def sha256_file(path: Path) -> str:
@@ -503,11 +461,22 @@ def main() -> int:
             + ", ".join(f"{k}={v}" for k, v in sorted(harvest_by_origin.items()))
         )
 
-    leaks = contamination(eval_, train, harvested)
-    if leaks:
-        print("\nRefusing to emit: eval tasks that also appear in the training material:")
-        for leak in leaks:
-            print(f"  {leak}")
+    # A harvested program that copies a seed or an earlier harvested one adds
+    # no coverage; drop it, and count it, like a harvest that does not compile.
+    duplicates = set(harvest_duplicates(train, harvested))
+    for i in duplicates:
+        harvest_by_origin[harvested[i].origin] -= 1
+    harvested = [h for i, h in enumerate(harvested) if i not in duplicates]
+    if duplicates:
+        print(f"  {len(duplicates)} more dropped as copies of a seed or another harvested example")
+
+    refusals = [f"benchmark overlap: {m}" for m in benchmark_overlap(train, harvested)]
+    refusals += [f"duplicate seeds: {m}" for m in seed_duplicates(train)]
+    refusals += [f"eval contamination: {p}" for p in eval_contamination(eval_, train, harvested)]
+    if refusals:
+        print("\nRefusing to emit: overlapping material (see training/overlap.py):")
+        for refusal in refusals:
+            print(f"  {refusal}")
         return 1
 
     # ---- emit datasets -------------------------------------------------
@@ -626,6 +595,7 @@ def main() -> int:
         "tiers": tiers,
         "harvested_kept": len(harvested),
         "harvested_dropped": harvest_dropped,
+        "harvested_duplicates": len(duplicates),
         "harvested_by_origin": harvest_by_origin,
     }
     (OUT / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True) + "\n")

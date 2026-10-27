@@ -30,7 +30,12 @@ training/
                    the validated corpus). Volume, on top of the seed skeleton.
   generate.py      Compiler-validated generator. Validates every seed and every
                    harvested example, then emits the datasets. Refuses to emit
-                   while any seed fails to compile.
+                   while any seed fails to compile or overlaps (below).
+  similarity.py    Near-duplicate detection: programs compared by shape (names
+                   and literals normalized), tasks by wording.
+  overlap.py       The overlap rules generate.py and CI enforce; run it to
+                   review the closest pairs before adding seeds.
+  test_overlap.py  Their tests (python3 -m unittest discover -s training).
   score_eval.py    Honest scorer: compiles a model's held-out completions through
                    the real compiler and reports Compile@1 / SpecPass@1 / Run@1.
   publish.py       Checks generated files against the manifest and publishes
@@ -98,8 +103,9 @@ and were replaced by a fresh private set on 2026-10-23.
 
 Point `TUO_EVAL_DIR` at a checkout of it. `generate.py` then validates its
 seeds too (held-out specs must pass; mutants are refused, since an eval seed
-emits no transcripts), refuses to emit if any eval task or solution also
-appears in the training material, writes
+emits no transcripts), refuses to emit if any eval task resembles the
+training material, a benchmark task, or another eval task (see
+[Overlap](#overlap)), writes
 `$TUO_EVAL_DIR/dataset/eval_heldout.jsonl` (records of `{task, concept,
 system, reference_solution, runnable, run_exit, tier, difficulty,
 heldout_specs}`), and records only that file's hash and task count in the
@@ -133,6 +139,30 @@ rate is visible rather than silent.
 
 Harvested records join the **one-shot set only**. The contamination check
 compares every eval task and solution against them as well as the seeds.
+A harvested program that copies a seed or an earlier harvested example (the
+`std_*.tuo` modules several examples vendor, say) is dropped and counted as
+`harvested_duplicates`.
+
+### Overlap
+
+An exact-match test misses the duplicates that matter: two seeds written
+apart converge on the same program under different names, and tasks are
+easily reworded. `similarity.py` compares programs by **shape**, with specs,
+comments and `pub` dropped, local names renamed by first occurrence and
+literals replaced by their kind, as the Jaccard index of their 5-token
+shingles. It compares tasks by their word trigrams. `overlap.py` then refuses:
+
+| Pair | Refused at | Why |
+|------|-----------|-----|
+| an eval task and training material, a benchmark task, or another eval task | program ≥ 0.7 or task ≥ 0.5, or the same function name as a benchmark task or a training seed of its concept | a held-out score on it measures recall |
+| a training program and a public codegen-benchmark reference | program ≥ 0.8 or task ≥ 0.5 | a fine-tuned model would score on the benchmark by recall |
+| two training seeds | program ≥ 0.9 | the copy adds nothing and doubles one solution's weight |
+
+Renamed copies score 0.9 to 1.0. The closest pairs of different programs,
+such as two loops over an array, score up to about 0.76. CI runs
+`python3 training/overlap.py` on the public material. Run it with `--top 10`
+to see the closest pairs before adding seeds, and with `TUO_EVAL_DIR` set to
+check the eval seeds (keep that output private).
 
 Skip the harvest with `--no-harvest` to regenerate from seeds alone.
 
@@ -290,8 +320,9 @@ correctness rules a model coming from other languages gets wrong:
 
 - Every emitted program compiled clean through `tuo` at generation time.
 - Every repair diagnostic is the compiler's real output, not hand-written.
-- The eval set never overlaps the SFT sets (checked, not assumed), and it
-  is never published.
+- The eval set never overlaps the SFT sets or the public benchmark, even
+  renamed or reworded (checked, not assumed), and it is never published. No
+  training seed copies a benchmark task.
 - `stats.json` records exactly what was produced, including which break rules
   fired and how often — silent truncation is visible, not hidden.
 

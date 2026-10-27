@@ -1,24 +1,24 @@
 {
   "compiler": "tuo 0.1.0",
   "eval": {
-    "sha256": "2c1814a419f43bbe7f6cf130472c89b1efc0d9aba55d144cf3b2ba5e3b69213d",
+    "sha256": "d0b87c533ce717b33335785b8f59e947d45aeafacdcd6a29eff2dd2a2096ca1b",
     "tasks": 37
   },
   "files": {
     "sft_oneshot.jsonl": {
-      "bytes": 1533370,
-      "sha256": "ff9cbc59c06c7b5999d4023716d1a234effac01fa0efbd4e0e3c08a8a461171b"
+      "bytes": 1317063,
+      "sha256": "c0c8d5a6be8ce6c6c3bf607cb819c03ad536363819a6caf2202f25e86431655d"
     },
     "sft_repair.jsonl": {
-      "bytes": 1865592,
-      "sha256": "fcf142ec8dfbb9375c938d18effffeac34212cebe4f5a07d80b976d41a5fdfc6"
+      "bytes": 1979558,
+      "sha256": "13ca4cfa3b8b58dda17185fb18f5eaec701bfbf60e8eb702ef89f03d586e48f1"
     },
     "stats.json": {
-      "bytes": 1705,
-      "sha256": "8da07ba0e720d5e533498e900e707449ac577642b2645144838242fffcd23f69"
+      "bytes": 1734,
+      "sha256": "9e1587473f8fb2f118792f00ea250473cdb0cd35a946cd90fd5dc2816c6710db"
     }
   },
   "schema": 1,
-  "source_commit": "87ec6640601f7b0abc077f4221b0c54c7d63f8b5",
+  "source_commit": "21b3a2848aea27bbb6fc2615c69d663a76a75cb3",
   "source_dirty": false
 }
