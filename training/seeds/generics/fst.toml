@@ -1,4 +1,7 @@
 task = """
 Define a generic `Pair[A, B] { first, second }` struct and a `fst` that \
 reads the first field of a `Pair[Int, Int]`."""
-notes = 'Generics use square brackets: `Pair[A, B]`, never `<>`.'
+notes = """
+Generics use square brackets: `Pair[A, B]`, never `<>`. A generic struct \
+has no native layout in v0, so this runs on the interpreter (`tuo spec`)."""
+tier = "interpreter"

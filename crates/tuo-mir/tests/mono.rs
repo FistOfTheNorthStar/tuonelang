@@ -109,6 +109,28 @@ fn recursion_at_a_fixed_type_reuses_its_instance() {
     assert_eq!(names(&program), ["depth[I64]", "main"]);
 }
 
+/// A field of a generic struct is typed at the instance's arguments, so moving
+/// `p.first` out of a `Pair[I64, I64]` becomes a copy, as `x` does in
+/// `ident[I64]`. Typed as the declared `A`, it stayed a move of a `Copy` value
+/// (M0009), and the build failed with an internal verification error instead
+/// of the backend's own "generic struct layout" refusal.
+#[test]
+fn a_generic_struct_field_moves_as_a_copy_once_its_type_is_copy() {
+    let (mut program, types, resolution) = lower(
+        "struct Pair[A, B] {\n    first: A,\n    second: B,\n}\n\n\
+         fn swap_pair[A, B](take p: Pair[A, B]) -> Pair[B, A] {\n    let a = p.first;\n    \
+         let b = p.second;\n    Pair { first: b, second: a }\n}\n\n\
+         fn main() -> Int {\n    let p = swap_pair(Pair { first: 3, second: 4 });\n    p.first\n}\n",
+    );
+    tuo_mir::monomorphize(&mut program, &types, &resolution).expect("monomorphizes");
+    assert_eq!(names(&program), ["main", "swap_pair[I64, I64]"]);
+    assert_eq!(
+        tuo_mir::verify(&program, &types),
+        vec![],
+        "instances verify"
+    );
+}
+
 /// An uninstantiated generic is dropped, not refused: no native code can
 /// reach it.
 #[test]

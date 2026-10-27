@@ -1,19 +1,21 @@
+const LOWER_A: Int = 97;
+const LOWER_Z: Int = 122;
+
 fn is_alnum(take b: Int) -> Bool {
-    (b >= 48 && b <= 57) || (b >= 97 && b <= 122)
+    std::str::is_digit(b) || (b >= LOWER_A && b <= LOWER_Z)
 }
 
 fn slugify(in title: Str) -> String {
+    let lowered = std::str::to_lower(title);
+    let text = std::string::as_str(lowered);
     var out = std::string::empty();
     var pending_dash = false;
     var i = 0;
-    while i < std::str::len(title) {
-        var b = std::str::byte_at(title, i);
-        if b >= 65 && b <= 90 {
-            b = b + 32;
-        }
+    while i < std::str::len(text) {
+        let b = std::str::byte_at(text, i);
         if is_alnum(b) {
             if pending_dash && std::string::len(out) > 0 {
-                std::string::push_byte(out, 45);
+                std::string::append(out, "-");
             }
             pending_dash = false;
             std::string::push_byte(out, b);

@@ -4,7 +4,7 @@ fn word_count(in s: Str) -> Int {
     var i = 0;
     while i < std::str::len(s) {
         let b = std::str::byte_at(s, i);
-        if b == 32 || b == 9 || b == 10 {
+        if std::str::is_space(b) {
             in_word = false;
         } else if !in_word {
             in_word = true;
@@ -24,5 +24,6 @@ spec word_count {
 spec "word_count ignores runs of whitespace" {
     then word_count("  leading and trailing  ") == 3;
     then word_count("a\tb\nc") == 3;
+    then word_count("one\r\ntwo") == 2;
     then word_count("   ") == 0;
 }

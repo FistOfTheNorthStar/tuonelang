@@ -1,10 +1,12 @@
+const COMMA: Int = 44;
+
 fn field_at(in line: Str, take index: Int) -> Str {
     var field = 0;
     var start = 0;
     var i = 0;
     let n = std::str::len(line);
     while i <= n {
-        if i == n || std::str::byte_at(line, i) == 44 {
+        if i == n || std::str::byte_at(line, i) == COMMA {
             if field == index {
                 return std::str::slice(line, start, i);
             }

@@ -5,8 +5,11 @@ any other bytes becomes a single `-`. The slug never starts or ends with \
 `-`, so `\"  --Tips & Tricks--  \"` becomes `tips-tricks` and a title with no \
 letters or digits becomes the empty string."""
 notes = """
-Deferring the dash until the next kept byte (a `pending_dash` flag) \
-collapses separator runs and drops a trailing one for free; checking that \
-`out` is non-empty drops a leading one."""
+`std::str::to_lower` folds the case first, so the scan only has to \
+recognise digits (`std::str::is_digit`) and `a`..`z`. Deferring the dash \
+until the next kept byte (a `pending_dash` flag) collapses separator runs \
+and drops a trailing one for free; checking that `out` is non-empty drops a \
+leading one."""
 tier = "executable"
 difficulty = 3
+stdlib_deps = ["str"]

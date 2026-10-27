@@ -15,20 +15,20 @@ fn allows(take perms: Int, take flag: Int) -> Bool {
 }
 
 spec grant {
-    then grant(0, 1) == 1;
-    then grant(1, 2) == 3;
-    then grant(3, 1) == 3;
+    then grant(0, READ) == READ;
+    then grant(READ, WRITE) == READ | WRITE;
+    then grant(READ | WRITE, READ) == READ | WRITE;
 }
 
 spec revoke {
-    then revoke(7, 2) == 5;
-    then revoke(1, 2) == 1;
-    then revoke(0, 4) == 0;
+    then revoke(READ | WRITE | EXECUTE, WRITE) == READ | EXECUTE;
+    then revoke(READ, WRITE) == READ;
+    then revoke(0, EXECUTE) == 0;
 }
 
 spec allows {
-    then allows(5, 4);
-    then !allows(1, 2);
-    then allows(3, 3);
-    then !allows(1, 3);
+    then allows(READ | EXECUTE, EXECUTE);
+    then !allows(READ, WRITE);
+    then allows(READ | WRITE, READ | WRITE);
+    then !allows(READ, READ | WRITE);
 }

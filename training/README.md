@@ -233,7 +233,10 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
    The `.toml` carries `task` (required), `notes`, `run_exit` (present exactly
    when the program has a `main` to run natively), `stdlib_deps`, a `tier`
    (`executable` / `effect` / `interpreter`; inferred when omitted and checked
-   when declared), a `difficulty` 1–5, and an `origin`. Each mutant must
+   when declared, and an `executable` seed with no `main` must still build
+   natively once a stub `main` is added, so a generic struct, which has no
+   native layout in v0, is `interpreter`), a `difficulty` 1–5, and an
+   `origin`. Each mutant must
    check and must fail a spec, and becomes a spec-failure repair transcript.
    Every `.tuo` file must be canonically formatted (`tuo fmt`), since a model
    learns its style from them. A held-out spec belongs to an eval seed in the

@@ -6,7 +6,7 @@ fn key_list(in text: Str) -> String {
             var first = true;
             while node >= 0 {
                 if !first {
-                    std::string::push_byte(out, 44);
+                    std::string::append(out, ",");
                 }
                 first = false;
                 let key = std::json::key_of(value, node);

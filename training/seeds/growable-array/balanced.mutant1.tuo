@@ -1,10 +1,17 @@
+const OPEN_PAREN: Int = 40;
+const CLOSE_PAREN: Int = 41;
+const OPEN_SQUARE: Int = 91;
+const CLOSE_SQUARE: Int = 93;
+const OPEN_CURLY: Int = 123;
+const CLOSE_CURLY: Int = 125;
+
 fn opener_for(take close: Int) -> Int {
-    if close == 41 {
-        40
-    } else if close == 93 {
-        91
+    if close == CLOSE_PAREN {
+        OPEN_PAREN
+    } else if close == CLOSE_SQUARE {
+        OPEN_SQUARE
     } else {
-        123
+        OPEN_CURLY
     }
 }
 
@@ -13,9 +20,9 @@ fn balanced(in text: Str) -> Bool {
     var i = 0;
     while i < std::str::len(text) {
         let b = std::str::byte_at(text, i);
-        if b == 40 || b == 91 || b == 123 {
+        if b == OPEN_PAREN || b == OPEN_SQUARE || b == OPEN_CURLY {
             std::array::push(stack, b);
-        } else if b == 41 || b == 93 || b == 125 {
+        } else if b == CLOSE_PAREN || b == CLOSE_SQUARE || b == CLOSE_CURLY {
             match std::array::pop(stack) {
                 Some { value } => {
                     if value != opener_for(b) {

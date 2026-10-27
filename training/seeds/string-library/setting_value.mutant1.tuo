@@ -11,7 +11,7 @@ fn setting_value(in line: Str, in key: Str) -> Option[Int] {
     }
     let text = std::str::slice(line, eq + 1, std::str::len(line));
     match std::str::parse_int(text) {
-        Ok { value } => Some { value: value },
+        Ok { value } => Some { value },
         Err { error } => None,
     }
 }

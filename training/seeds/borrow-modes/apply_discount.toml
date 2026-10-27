@@ -1,5 +1,5 @@
 task = """
-Write `apply_discount(mut prices: Array[Int], take percent: Int) -> ()` that \
+Write `apply_discount(mut prices: Array[Int], take percent: Int)` that \
 lowers every price in the caller's array, in place, by `percent` percent, \
 rounding the discounted price down (a price p becomes p * (100 - percent) / 100). \
 Also write `discounted_total(in prices: Array[Int], take percent: Int) -> Int` \

@@ -14,9 +14,9 @@ fn order_total(take order_cents: Int) -> Int {
 }
 
 spec shipping_for {
-    then shipping_for(1200) == 499;
-    then shipping_for(5000) == 0;
-    then shipping_for(4999) == 499;
+    then shipping_for(1200) == FLAT_RATE_CENTS;
+    then shipping_for(FREE_SHIPPING_CENTS) == 0;
+    then shipping_for(FREE_SHIPPING_CENTS - 1) == FLAT_RATE_CENTS;
 }
 
 spec order_total {

@@ -1,4 +1,4 @@
-fn apply_discount(mut prices: Array[Int], take percent: Int) -> () {
+fn apply_discount(mut prices: Array[Int], take percent: Int) {
     var i = 0;
     while i < std::array::len(prices) {
         let p = std::array::get(prices, i);

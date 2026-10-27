@@ -1,10 +1,12 @@
 module app;
 
+const NEWLINE: Int = 10;
+
 fn count_lines(in text: Str) -> Int {
     var lines = 0;
     var i = 0;
     while i < std::str::len(text) {
-        if std::str::byte_at(text, i) == 10 {
+        if std::str::byte_at(text, i) == NEWLINE {
             lines = lines + 1;
         }
         i = i + 1;
@@ -17,7 +19,7 @@ fn longest_line(in text: Str) -> Int {
     var current = 0;
     var i = 0;
     while i < std::str::len(text) {
-        if std::str::byte_at(text, i) == 10 {
+        if std::str::byte_at(text, i) == NEWLINE {
             current = 0;
         } else {
             current = current + 1;
