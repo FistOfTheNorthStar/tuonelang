@@ -421,13 +421,13 @@ impl Mono<'_> {
                 Projection::Field(index) => match &ty {
                     Ty::Tuple(items) => items.get(*index as usize)?.clone(),
                     Ty::Range(item) => (**item).clone(),
-                    Ty::Struct(symbol, _) => self
-                        .types
-                        .struct_shape(*symbol)?
-                        .fields
-                        .get(*index as usize)?
-                        .1
-                        .clone(),
+                    // A field of a generic struct is declared over its type
+                    // parameters: `Pair[I64, I64]`'s `first` is `I64`, not `A`.
+                    Ty::Struct(symbol, args) => {
+                        let shape = self.types.struct_shape(*symbol)?;
+                        let (_, field) = shape.fields.get(*index as usize)?;
+                        instantiate(field, &shape.type_params, args)
+                    }
                     _ => return None,
                 },
                 Projection::VariantField { variant, field } => match &ty {
@@ -439,15 +439,11 @@ impl Mono<'_> {
                             (**err).clone()
                         }
                     }
-                    Ty::Enum(symbol, _) => {
+                    Ty::Enum(symbol, args) => {
                         let shape = self.types.enum_shape(*symbol)?;
-                        shape
-                            .variants
-                            .get(*variant as usize)?
-                            .1
-                            .get(*field as usize)?
-                            .1
-                            .clone()
+                        let (_, fields) = shape.variants.get(*variant as usize)?;
+                        let (_, ty) = fields.get(*field as usize)?;
+                        instantiate(ty, &shape.type_params, args)
                     }
                     _ => return None,
                 },

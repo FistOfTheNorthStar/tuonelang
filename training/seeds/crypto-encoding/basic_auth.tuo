@@ -1,6 +1,6 @@
 fn basic_auth(in user: Str, in password: Str) -> String {
     var credentials = std::string::from_str(user);
-    std::string::push_byte(credentials, 58);
+    std::string::append(credentials, ":");
     std::string::append(credentials, password);
     let encoded = std::crypto::base64_encode(std::crypto::bytes_of_str(std::string::as_str(credentials)));
     var header = std::string::from_str("Basic ");

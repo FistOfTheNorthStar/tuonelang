@@ -148,6 +148,19 @@ def run_exit(text: str) -> tuple[int | None, str]:
     return p.returncode, (p.stderr + p.stdout).strip()
 
 
+def builds_natively(text: str) -> tuple[bool, str]:
+    """True if ``tuo build`` compiles ``text`` with a stub ``main`` added.
+
+    A seed without a ``main`` is otherwise only ever run by the interpreter.
+    The native build keeps every function the program declares, so the stub
+    is enough to put each one through the backend; a generic function is
+    compiled only at the types a call reaches, which a stub does not."""
+    stub = text.rstrip() + "\n\nfn main() -> Int {\n    0\n}\n"
+    with tempfile.TemporaryDirectory(dir=str(OUT)) as scratch:
+        p = _run(["build", "-o", str(Path(scratch) / "program")], stub)
+    return p.returncode == 0, (p.stderr + p.stdout).strip()
+
+
 def first_diagnostic(text: str) -> dict | None:
     """Run ``tuo --message-format=json check`` and return the first diagnostic."""
     p = _run(["--message-format=json", "check"], text)
@@ -368,6 +381,13 @@ def validate_seed(seed: Seed, held_out: bool = False) -> list[str]:
     inferred = infer_tier(seed.solution)
     if seed.tier and seed.tier != "interpreter" and seed.tier != inferred:
         problems.append(f"declared tier `{seed.tier}`, but the solution is `{inferred}`")
+    if (seed.tier or inferred) == "executable" and not seed.runnable:
+        ok, out = builds_natively(seed.solution)
+        if not ok:
+            problems.append(
+                f"tier `executable`, but the native backend refuses it "
+                f"(declare tier = \"interpreter\"):\n{out}"
+            )
     if seed.difficulty not in range(0, 6):
         problems.append(f"difficulty {seed.difficulty} is outside 0..=5")
     if seed.heldout_specs:

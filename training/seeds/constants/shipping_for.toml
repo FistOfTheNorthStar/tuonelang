@@ -5,8 +5,9 @@ cents up. Declare both amounts as named constants, then write \
 and `order_total(take order_cents: Int) -> Int` returning the order plus \
 shipping. An order of exactly 5000 cents ships free."""
 notes = """
-A `const` needs its type written (`const FLAT_RATE_CENTS: Int = 499;`). \
-Specs here use the literal amounts: in v0 a spec that names a `const` \
-directly is skipped, while functions that use one run normally."""
+A `const` needs its type written (`const FLAT_RATE_CENTS: Int = 499;`) and \
+can be named anywhere, specs included. Testing at `FREE_SHIPPING_CENTS - 1` \
+and at `FREE_SHIPPING_CENTS` pins the boundary to the constant itself, so \
+changing the threshold cannot leave a stale number in the spec."""
 tier = "executable"
 difficulty = 1

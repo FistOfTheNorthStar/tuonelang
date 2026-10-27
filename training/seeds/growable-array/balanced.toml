@@ -7,6 +7,8 @@ so far."""
 notes = """
 `std::array::pop` returns `Option[T]`, so an unmatched closer shows up as \
 `None` rather than a trap. The stack must also be empty at the end: \
-`\"((\"` never sees a wrong closer but is still unbalanced."""
+`\"((\"` never sees a wrong closer but is still unbalanced. A `Char` does \
+not convert to an integer, so the bracket bytes are named constants rather \
+than bare numbers."""
 tier = "executable"
 difficulty = 3

@@ -2,7 +2,7 @@ fn stars(take n: Int) -> String {
     var out = std::string::empty();
     var i = 0;
     while i < n {
-        std::string::push_byte(out, 42);
+        std::string::append(out, "*");
         i = i + 1;
     }
     out
