@@ -1,5 +1,0 @@
-task = """
-Write `sum_to(n)` that sums 0..n with a while loop and a `var` accumulator \
-(remember: assignment is plain `=`, no `+=`)."""
-notes = """
-Mutable bindings are `var`, not `let mut`; reassignment uses plain `=`."""

@@ -64,6 +64,14 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      # The training material's overlap rules (training/overlap.py): no seed
+      # may copy a public benchmark task or another seed. Pure Python, no
+      # compiler needed; the private eval seeds are checked locally.
+      - name: Training material overlap
+        run: |
+          python3 -m unittest discover -s training -p 'test_*.py'
+          python3 training/overlap.py
+
       # The Computer Language Benchmarks Game speed table: each workload built
       # by `tuo build --release` and by the C, Rust, and Go peers, timed, and
       # reported as a ratio to C. It fails only if a program computes the

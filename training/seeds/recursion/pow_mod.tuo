@@ -1,0 +1,24 @@
+fn pow_mod(take base: Int, take exp: Int, take modulus: Int) -> Int {
+    if exp == 0 {
+        return 1 % modulus;
+    }
+    let half = pow_mod(base, exp / 2, modulus);
+    let squared = half * half % modulus;
+    if exp % 2 == 0 {
+        squared
+    } else {
+        squared * (base % modulus) % modulus
+    }
+}
+
+spec pow_mod {
+    then pow_mod(2, 10, 1000) == 24;
+    then pow_mod(3, 0, 7) == 1;
+    then pow_mod(5, 3, 1) == 0;
+    then pow_mod(7, 222, 1000) == 49;
+}
+
+spec "pow_mod reduces before it can overflow" {
+    then pow_mod(2, 62, 1000000007) == 145586002;
+    then pow_mod(10, 18, 999983) == 4913;
+}
