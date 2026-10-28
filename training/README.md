@@ -36,6 +36,8 @@ training/
   overlap.py       The overlap rules generate.py and CI enforce; run it to
                    review the closest pairs before adding seeds.
   test_overlap.py  Their tests (python3 -m unittest discover -s training).
+  run_eval.py      Asks a model (any OpenAI-compatible endpoint) for a completion
+                   of every held-out task; writes them to the private eval repo.
   score_eval.py    Honest scorer: compiles a model's held-out completions through
                    the real compiler and reports Compile@1 / SpecPass@1 / Run@1.
   publish.py       Checks generated files against the manifest and publishes
@@ -268,12 +270,23 @@ drifting away from what tuonelang actually is.
 ## Evaluating a fine-tuned model
 
 Produce a completions file — one JSON line per held-out task,
-`{"task": "<verbatim task string>", "completion": "<model output>"}` — then:
+`{"task": "<verbatim task string>", "completion": "<model output>"}` — then
+score it. `run_eval.py` produces one from any OpenAI-compatible endpoint
+(local Ollama by default), sending each record's own system prompt and task
+at temperature 0 with `tuo bench run`'s fixed seed; `--prime` adds the
+language brief exactly as `tuo bench run --prime` does:
 
 ```bash
 export TUO_BIN="$(pwd)/target/debug/tuo" TUO_EVAL_DIR=../tuonelang-eval
-python3 training/score_eval.py completions.jsonl
+python3 training/run_eval.py --model qwen3-coder:30b --prime
+python3 training/score_eval.py "$TUO_EVAL_DIR/results/qwen3-coder-30b-primed.jsonl" \
+    --summary "$TUO_EVAL_DIR/results/qwen3-coder-30b-primed.score.json"
 ```
+
+The completions repeat the tasks, so `run_eval.py` writes them into the
+private repo and refuses a path inside this one. `--summary` writes the
+metrics alone (counts and concept names, no task text), which is what may be
+quoted publicly.
 
 The scorer prints the SHA-256 of the eval set it read; quote it with a
 result, and compare it with the manifest's `eval.sha256`, so a number always
@@ -289,15 +302,54 @@ its specs, and (for runnable tasks) runs it natively — reporting:
   also pass.
 - **Run@1** — fraction of runnable tasks hitting the expected exit byte.
 
-The private set covers every training concept, and the scorer reports every
-metric per concept, so a result can be read area by area rather than as one
-number.
+TestPass@1 and Run@1 count a completion that does not compile as a failure:
+their denominators are every task with held-out specs and every runnable
+task, not only those that compiled. (`tuo bench report`'s TestPass@1 is
+measured over the programs that checked, so the two are not comparable.)
+An empty completion fails every metric (`tuo check` accepts an empty file,
+and a reasoning model that spends its token cap thinking returns nothing),
+and a completion with no spec fails SpecPass@1 unless the task's reference
+has none either.
+
+The private set covers every training concept, and the scorer reports
+Compile@1 and SpecPass@1 per concept, so a result can be read area by area
+rather than as one number.
 
 Sanity-check the harness itself (reference solutions must score 100%):
 
 ```bash
 python3 training/score_eval.py --reference
 ```
+
+### Baselines (2026-10-28)
+
+Untuned local models on the private set (sha256 `d0b87c53…96ca1b`, 37
+tasks; 30 with held-out specs, 7 runnable), one completion per task at
+temperature 0 and seed 7, local Ollama 0.35.1 on a 32 GB Mac, 32k context.
+"Brief" is `--prime`: the system prompt plus the language brief, about 13k
+prompt tokens.
+
+| Model | Brief | Compile@1 | SpecPass@1 | TestPass@1 | Run@1 |
+|---|---|---|---|---|---|
+| qwen3-coder:30b | no | 4/37 (10.8%) | 0/37 | 3/30 | 0/7 |
+| qwen3-coder:30b | yes | 13/37 (35.1%) | 8/37 (21.6%) | 5/30 | 2/7 |
+| gemma4:latest | no | 0/37 | 0/37 | 0/30 | 0/7 |
+| gemma4:latest | yes | 11/37 (29.7%) | 7/37 (18.9%) | 6/30 | 1/7 |
+| qwen3:4b | yes | 9/37 (24.3%) | 4/37 (10.8%) | 6/30 | 1/7 |
+
+- gemma4 ran with `--reasoning-effort none`, which it honours. qwen3:4b
+  reasons regardless (see `benchmarks/llm/codegen/results/README.md`) and
+  ran with `--max-tokens 8192`: 19 of its 37 replies hit the cap before any
+  code and score as failures, so its row measures the cap as much as the
+  model. The run took four hours; the others took 4 to 18 minutes.
+- Unprimed, almost nothing parses: 33 of qwen3-coder's 37 replies stop at a
+  parse error. That gap, closed without a 13k-token brief, is what a
+  fine-tune is for.
+- Primed, the most common parse failure is `let mut` (6 of qwen3-coder's 11),
+  which the system prompt rules out by name; then mismatched types (`T0001`)
+  and invented library names (`R0002`).
+
+The completions and per-task scores are in the private repo's `results/`.
 
 ## The language, in one screen
 

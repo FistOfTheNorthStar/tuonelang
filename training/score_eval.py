@@ -51,13 +51,33 @@ sys.path.insert(0, str(HERE))
 from generate import check_ok, run_exit, spec_ok  # noqa: E402
 from seeds import EVAL_DIR  # noqa: E402
 
-_FENCE = re.compile(r"```(?:tuo|tuonelang)?\s*\n(.*?)```", re.DOTALL)
+_THINK = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL)
+
+
+_NO_SPECS = re.compile(r"^0 passed, 0 failed of 0 specs\b", re.MULTILINE)
+"""The summary line of a spec run that found no spec to run."""
+
+_SPEC = re.compile(r"^\s*spec\b", re.MULTILINE)
 
 
 def extract_code(completion: str) -> str:
-    """Pull the first fenced code block out of a completion, or return it whole."""
-    m = _FENCE.search(completion)
-    return (m.group(1) if m else completion).strip() + "\n"
+    """The program in a completion, extracted as ``tuo bench run`` extracts it
+    (``extract_source`` in ``crates/tuo-cli/src/bench.rs``): the first fenced
+    block under any info string, else the whole reply, with any
+    ``<think>…</think>`` reasoning removed first. A reply that wraps its code
+    in prose scores as not compiling."""
+    lines = iter(_THINK.sub("", completion).splitlines())
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            break
+    else:
+        return _THINK.sub("", completion).strip() + "\n"
+    body = []
+    for line in lines:
+        if line.lstrip().startswith("```"):
+            break
+        body.append(line)
+    return "\n".join(body).strip() + "\n"
 
 
 def load_eval(path: Path) -> dict[str, dict]:
@@ -72,15 +92,34 @@ def load_eval(path: Path) -> dict[str, dict]:
 
 
 def score_one(code: str, rec: dict) -> dict:
-    """Compile/spec/test/run one candidate against its held-out task record."""
-    result = {"compile": False, "spec": False, "test": None, "run": None}
+    """Compile/spec/test/run one candidate against its held-out task record.
+
+    ``test`` and ``run`` are None only for a task without held-out specs or a
+    ``main``; a candidate that does not compile fails them, so each metric's
+    denominator is every task it applies to, not just those that compiled.
+
+    An empty candidate fails everything, although ``tuo check`` accepts an
+    empty file: a reasoning model that spends its token cap thinking returns
+    no code at all. When the reference solution has specs, a candidate whose
+    spec run ran none fails ``spec``, as a skipped spec does: it verified
+    nothing. (A runnable task's reference may have none; ``run`` scores it.)"""
+    heldout = rec.get("heldout_specs") or ""
+    result = {
+        "compile": False,
+        "spec": False,
+        "test": False if heldout else None,
+        "run": False if rec.get("runnable") else None,
+    }
+    if not code.strip():
+        return result
     ok, _ = check_ok(code)
     result["compile"] = ok
     if not ok:
         return result
-    ok, _ = spec_ok(code)
+    ok, out = spec_ok(code)
+    if _SPEC.search(rec["reference_solution"]) and _NO_SPECS.search(out):
+        ok = False
     result["spec"] = ok
-    heldout = rec.get("heldout_specs") or ""
     if heldout:
         ok, _ = spec_ok(code.rstrip() + "\n\n" + heldout)
         result["test"] = ok
@@ -107,6 +146,11 @@ def main() -> int:
         type=Path,
         help="the eval set (default: $TUO_EVAL_DIR/dataset/eval_heldout.jsonl)",
     )
+    ap.add_argument(
+        "--summary",
+        type=Path,
+        help="also write the metrics as JSON: counts only, no task text, so publishable",
+    )
     args = ap.parse_args()
 
     eval_path = args.eval or (EVAL_DIR / "dataset" / "eval_heldout.jsonl" if EVAL_DIR else None)
@@ -115,7 +159,8 @@ def main() -> int:
     if not eval_path.is_file():
         ap.error(f"no eval set at {eval_path}; run generate.py with TUO_EVAL_DIR set")
     tasks = load_eval(eval_path)
-    print(f"Eval set {eval_path} (sha256 {hashlib.sha256(eval_path.read_bytes()).hexdigest()})")
+    eval_sha = hashlib.sha256(eval_path.read_bytes()).hexdigest()
+    print(f"Eval set {eval_path} (sha256 {eval_sha})")
 
     pairs: list[tuple[dict, str]] = []
     if args.reference:
@@ -171,6 +216,19 @@ def main() -> int:
     print("\nBy concept (tasks, Compile@1, SpecPass@1):")
     for concept, (total, compiled, specced) in sorted(by_concept.items()):
         print(f"  {concept:24s} {total:3d}  {compiled}/{total}  {specced}/{total}")
+    if args.summary:
+        summary = {
+            "eval_sha256": eval_sha,
+            "completions": "reference" if args.reference else Path(args.completions).name,
+            "scored": n,
+            "of": len(tasks),
+            "compile": n_compile,
+            "spec": n_spec,
+            "test": [n_test_ok, n_tested],
+            "run": [n_run_ok, n_runnable],
+            "by_concept": {c: {"tasks": t, "compile": k, "spec": sp} for c, (t, k, sp) in sorted(by_concept.items())},
+        }
+        args.summary.write_text(json.dumps(summary, indent=2) + "\n")
     return 0
 
 
