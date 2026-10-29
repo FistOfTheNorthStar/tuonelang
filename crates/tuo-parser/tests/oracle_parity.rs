@@ -137,6 +137,9 @@ fn recovery_scenarios_agree() {
         "enum E { A { , B }\n\nfn after() -> Int { 9 }\n",
         "module broken::;\n\nfn f() { }\n",
         "fn f() {\n    match x {\n        1 | => 2,\n        _ => 3,\n    };\n}\n",
+        "fn f() -> Int {\n    let mut x = 1;\n    x = x + 1;\n    x\n}\n",
+        "fn f() {\n    let mut x: Int;\n    let mut = 2;\n}\n",
+        "spec s {\n    let mut t = 1;\n    then t == 1;\n}\n",
     ] {
         assert_parity(text, "recovery scenario");
     }

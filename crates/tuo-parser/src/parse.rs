@@ -240,6 +240,38 @@ pub(crate) fn call_arg_mode(primary: Span, source: &SourceText) -> Diagnostic {
     )
 }
 
+/// The targeted diagnostic for a mutable binding spelled `let mut x`, where
+/// `let_kw` and `mut_kw` span the two keywords; the diagnostic spans both.
+///
+/// Before it, the `mut` sent the statement into generic recovery ("skipped N
+/// tokens"), and the dropped binding then surfaced as an unresolved name at
+/// every use. tuonelang writes a mutable binding with its own keyword, so the
+/// statement now parses as the `var` binding it means, and the fix is always
+/// to write `var` in place of `let mut`: a machine-applicable edit. Both
+/// engines build the diagnostic here, so they cannot drift.
+pub(crate) fn let_mut(let_kw: Span, mut_kw: Span) -> Diagnostic {
+    let primary = TextRange::new(let_kw.range().start(), mut_kw.range().end())
+        .map_or(let_kw, |range| Span::new(let_kw.source(), range));
+    Diagnostic::error(
+        code(1),
+        "mutable bindings use `var`, not `let mut`",
+        primary,
+    )
+    .with_primary_label("write `var` here")
+    .with_help(
+        "`let` binds immutably and `var` mutably; there is no `mut` modifier \
+             on a binding",
+    )
+    .with_suggestion(
+        "replace `let mut` with `var`",
+        vec![Edit {
+            span: primary,
+            replacement: "var".to_owned(),
+        }],
+        Confidence::MachineApplicable,
+    )
+}
+
 /// The targeted diagnostic for a match arm written without the comma that
 /// separates it from the one before — most often after a block-bodied arm
 /// (`0 => { … }` followed by `_ => …`). `previous` spans the earlier arm's

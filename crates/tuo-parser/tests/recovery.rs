@@ -378,3 +378,49 @@ fn a_mode_written_at_a_call_site_is_one_targeted_error_with_a_removal_fix() {
     assert_eq!(removed, "mut ", "the fix deletes the keyword and its space");
     assert_eq!(count(&result, SyntaxKind::CallExpr), 1, "the call survives");
 }
+
+#[test]
+fn a_let_mut_binding_is_one_targeted_error_and_parses_as_var() {
+    // `let mut x` once fell into statement-level recovery ("skipped N
+    // tokens"), and every later use of the dropped binding surfaced as an
+    // unresolved name. It is one targeted `P0001` spanning `let mut`, with an
+    // edit writing `var` in its place, and the statement is the `var` binding
+    // it means — so resolution sees `acc` and the assignment to it.
+    let text = "fn f(take n: Int) -> Int {\n    let mut acc = n;\n    acc = acc + 1;\n    acc\n}\n";
+    let result = parse_str(text);
+    let diagnostics = result.all_diagnostics();
+    let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(
+        codes,
+        vec!["P0001".to_owned()],
+        "exactly one targeted error"
+    );
+    let diagnostic = &diagnostics[0];
+    assert!(
+        diagnostic.message.contains("use `var`, not `let mut`"),
+        "the message names the fix: {}",
+        diagnostic.message
+    );
+    let range = diagnostic.primary_span.range();
+    let spanned = &text[range.start().as_usize()..range.end().as_usize()];
+    assert_eq!(spanned, "let mut", "the diagnostic spans both keywords");
+    let edit = &diagnostic.suggestions[0].edits[0];
+    let replaced = &text[edit.span.range().start().as_usize()..edit.span.range().end().as_usize()];
+    assert_eq!((replaced, edit.replacement.as_str()), ("let mut", "var"));
+    assert_eq!(count(&result, SyntaxKind::VarStatement), 1, "a var binding");
+    assert_eq!(
+        count(&result, SyntaxKind::LetStatement),
+        0,
+        "not a let binding"
+    );
+}
+
+#[test]
+fn a_let_without_mut_is_untouched() {
+    let result = parse_str("fn f() -> Int {\n    let mutable = 1;\n    mutable\n}\n");
+    assert!(
+        result.all_diagnostics().is_empty(),
+        "`mutable` is a name, not `mut`"
+    );
+    assert_eq!(count(&result, SyntaxKind::LetStatement), 1);
+}
