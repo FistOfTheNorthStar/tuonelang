@@ -60,9 +60,15 @@ what an eval task must avoid.
 Regenerate everything (fast path uses a prebuilt binary):
 
 ```bash
-cargo build -p tuo-cli
-TUO_BIN="$(pwd)/target/debug/tuo" python3 training/generate.py
+cargo build --release -p tuo-cli
+TUO_BIN="$(pwd)/target/release/tuo" python3 training/generate.py
 ```
+
+The generator makes about 2,000 compiler calls and runs one per CPU at a
+time (`--jobs N` to change it; the output is the same for any `N`). On a
+10-core Mac a full run takes about 10 s with the release binary and 20 s with
+`target/debug/tuo`; one job at a time with the debug binary, as it ran
+before, took two minutes.
 
 This writes, under `training/dataset/`:
 
@@ -83,7 +89,7 @@ the release's files).
 
 ```bash
 # after the seeds and code are merged to main, from a clean checkout of it:
-TUO_BIN="$(pwd)/target/debug/tuo" TUO_EVAL_DIR=../tuonelang-eval python3 training/generate.py
+TUO_BIN="$(pwd)/target/release/tuo" TUO_EVAL_DIR=../tuonelang-eval python3 training/generate.py
 git commit -m "Regenerate the training datasets" training/dataset   # stats + manifest
 python3 training/publish.py release --dry-run
 python3 training/publish.py release   # gh release create dataset-<commit> ...
@@ -262,7 +268,7 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
    capture the completions it gets wrong, compile them to harvest the real
    diagnostics, and add those (attempt → diagnostic → reference fix) as new
    repair transcripts. `score_eval.py` already does the compile step; the
-   `first_diagnostic` helper in `generate.py` captures the structured error.
+   `check_diagnostic` helper in `generate.py` captures the structured error.
 
 Because validation is the real compiler, the corpus can grow without ever
 drifting away from what tuonelang actually is.

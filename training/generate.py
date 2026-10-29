@@ -40,7 +40,12 @@ The seeds are read from ``training/seeds/`` (see ``seeds.py`` for the layout);
 
 The generator shells out to ``cargo run -p tuo-cli`` by default; set
 ``TUO_BIN=/path/to/tuo`` to use a prebuilt binary (much faster). Build one with
-``cargo build -p tuo-cli`` and point ``TUO_BIN`` at ``target/debug/tuo``.
+``cargo build --release -p tuo-cli`` and point ``TUO_BIN`` at
+``target/release/tuo``; a debug build works too, at a few times the cost.
+
+The compiler calls are independent, so they run ``--jobs`` at a time (one per
+CPU by default). The output does not depend on it: every record is written in
+seed order, as a single job writes it.
 """
 
 from __future__ import annotations
@@ -53,6 +58,8 @@ import subprocess
 import sys
 import re
 import tempfile
+from collections.abc import Callable, Iterable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict
 from pathlib import Path
 
@@ -88,6 +95,22 @@ SYSTEM_PROMPT = (
     "traps; and there are no methods — call free functions like `area(r)`, never "
     "`r.area()`. Prefer the standard library's one obvious API per task."
 )
+
+
+JOBS = os.cpu_count() or 1
+"""How many compiler calls run at once; ``--jobs`` sets it."""
+
+
+def pmap(fn: Callable, items: Iterable) -> list:
+    """``list(map(fn, items))``, with up to ``JOBS`` calls in flight.
+
+    Each call spends its time waiting on a ``tuo`` subprocess, so threads are
+    enough; the results come back in ``items`` order."""
+    items = list(items)
+    if JOBS <= 1 or len(items) <= 1:
+        return [fn(item) for item in items]
+    with ThreadPoolExecutor(JOBS) as pool:
+        return list(pool.map(fn, items))
 
 
 def tuo_cmd() -> list[str]:
@@ -161,10 +184,15 @@ def builds_natively(text: str) -> tuple[bool, str]:
     return p.returncode == 0, (p.stderr + p.stdout).strip()
 
 
-def first_diagnostic(text: str) -> dict | None:
-    """Run ``tuo --message-format=json check`` and return the first diagnostic."""
+def check_diagnostic(text: str) -> tuple[bool, dict | None]:
+    """Run ``tuo --message-format=json check`` once: whether it accepts
+    ``text``, and the first diagnostic it reports."""
     p = _run(["--message-format=json", "check"], text)
-    for line in (p.stdout or "").splitlines():
+    return p.returncode == 0, _first_diagnostic(p.stdout or "")
+
+
+def _first_diagnostic(stdout: str) -> dict | None:
+    for line in stdout.splitlines():
         line = line.strip()
         if not line.startswith("{"):
             continue
@@ -403,7 +431,46 @@ def validate_seed(seed: Seed, held_out: bool = False) -> list[str]:
     return problems
 
 
+_STAGE = {"L": "parse", "P": "parse", "R": "resolve", "T": "type", "O": "ownership"}
+"""The front-end stage a diagnostic code's letter names."""
+
+
+def seed_repairs(seed: Seed) -> list[tuple[str, str, str, str, str]]:
+    """Every repair transcript ``seed`` yields, as ``(broken program, compiler
+    feedback, command, break name, kind)``, in the order they are written."""
+    repairs = []
+    for brk in BREAKS:
+        broken = brk.apply(seed.solution)
+        if broken == seed.solution:
+            continue  # break not applicable to this seed
+        ok, diag = check_diagnostic(broken)
+        if brk.kind == "spec":
+            # The program must still check and must fail a spec: the
+            # repair is to the logic, shown by the real spec report.
+            if not ok:
+                continue
+            report = spec_failure(broken)
+            if report is None:
+                continue  # every spec still passes; nothing to repair
+            repairs.append((broken, report, "spec", brk.name, "spec"))
+            continue
+        if ok:
+            continue  # break did not actually break it; skip silently
+        if diag is None:
+            continue  # no structured diagnostic captured; skip
+        kind = _STAGE.get(diag.get("code", "?")[:1], "other")
+        repairs.append((broken, render_diagnostic(diag), "check", brk.name, kind))
+    # A seed's own mutants are hand-written wrong logic, verified in
+    # `validate_seed` to check and to fail a spec.
+    for mutant in seed.mutants:
+        report = spec_failure(mutant)
+        if report is not None:
+            repairs.append((mutant, report, "spec", "seed-mutant", "spec"))
+    return repairs
+
+
 def main() -> int:
+    global JOBS
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--check", action="store_true", help="validate only")
     ap.add_argument("--limit", type=int, default=0, help="first N seeds only")
@@ -412,7 +479,14 @@ def main() -> int:
         action="store_true",
         help="skip the repository harvest (seeds only)",
     )
+    ap.add_argument(
+        "--jobs",
+        type=int,
+        default=JOBS,
+        help=f"compiler calls in flight (default: one per CPU, {JOBS} here)",
+    )
     args = ap.parse_args()
+    JOBS = max(1, args.jobs)
 
     OUT.mkdir(parents=True, exist_ok=True)
     seeds = SEEDS[: args.limit] if args.limit else SEEDS
@@ -428,9 +502,9 @@ def main() -> int:
     eval_: list[Seed] = []
     failures = 0
     for held_out, group, valid in ((False, seeds, train), (True, eval_seeds, eval_)):
-        for seed in group:
+        verdicts = pmap(lambda seed: validate_seed(seed, held_out), group)
+        for seed, problems in zip(group, verdicts):
             label = f"{'eval:' if held_out else ''}{seed.concept}/{seed.name}"
-            problems = validate_seed(seed, held_out)
             if problems:
                 failures += 1
                 print(f"  [FAIL] {label}: {seed.task[:60]}")
@@ -461,12 +535,11 @@ def main() -> int:
     if not args.no_harvest:
         candidates = harvest_all(REPO)
         print(f"\nHarvesting {len(candidates)} examples from repository source...")
-        for item in candidates:
-            ok, _ = check_ok(item.solution)
-            if not ok:
-                harvest_dropped += 1
-                continue
-            ok, _ = spec_ok(item.solution)
+
+        def compiles(item: Harvested) -> bool:
+            return check_ok(item.solution)[0] and spec_ok(item.solution)[0]
+
+        for item, ok in zip(candidates, pmap(compiles, candidates)):
             if not ok:
                 harvest_dropped += 1
                 continue
@@ -525,60 +598,25 @@ def main() -> int:
     repair_by_break: dict[str, int] = {}
     repair_by_kind: dict[str, int] = {}
     with repair_path.open("w") as f:
-
-        def emit_repair(seed: Seed, broken: str, diag: str, command: str, label: str) -> None:
-            nonlocal n_repair
+        for seed, repairs in zip(train, pmap(seed_repairs, train)):
             user = (
                 seed.task
                 + "\n\n(You may write a first attempt; the tuonelang "
                 "compiler will give you feedback to repair against.)"
             )
-            rec = repair_chat(
-                SYSTEM_PROMPT,
-                user,
-                "```tuo\n" + broken.rstrip() + "\n```",
-                diag,
-                "```tuo\n" + seed.solution.rstrip() + "\n```",
-                command,
-            )
-            f.write(json.dumps(rec) + "\n")
-            n_repair += 1
-            repair_by_break[label] = repair_by_break.get(label, 0) + 1
-
-        for seed in train:
-            for brk in BREAKS:
-                broken = brk.apply(seed.solution)
-                if broken == seed.solution:
-                    continue  # break not applicable to this seed
-                ok, _ = check_ok(broken)
-                if brk.kind == "spec":
-                    # The program must still check and must fail a spec: the
-                    # repair is to the logic, shown by the real spec report.
-                    if not ok:
-                        continue
-                    report = spec_failure(broken)
-                    if report is None:
-                        continue  # every spec still passes; nothing to repair
-                    emit_repair(seed, broken, report, "spec", brk.name)
-                    repair_by_kind["spec"] = repair_by_kind.get("spec", 0) + 1
-                    continue
-                if ok:
-                    continue  # break did not actually break it; skip silently
-                diag = first_diagnostic(broken)
-                if diag is None:
-                    continue  # no structured diagnostic captured; skip
-                code = diag.get("code", "?")
-                stage = {"L": "parse", "P": "parse", "R": "resolve", "T": "type", "O": "ownership"}
-                kind = stage.get(code[:1], "other")
-                emit_repair(seed, broken, render_diagnostic(diag), "check", brk.name)
+            for broken, diag, command, label, kind in repairs:
+                rec = repair_chat(
+                    SYSTEM_PROMPT,
+                    user,
+                    "```tuo\n" + broken.rstrip() + "\n```",
+                    diag,
+                    "```tuo\n" + seed.solution.rstrip() + "\n```",
+                    command,
+                )
+                f.write(json.dumps(rec) + "\n")
+                n_repair += 1
+                repair_by_break[label] = repair_by_break.get(label, 0) + 1
                 repair_by_kind[kind] = repair_by_kind.get(kind, 0) + 1
-            # A seed's own mutants are hand-written wrong logic, verified in
-            # `validate_seed` to check and to fail a spec.
-            for mutant in seed.mutants:
-                report = spec_failure(mutant)
-                if report is not None:
-                    emit_repair(seed, mutant, report, "spec", "seed-mutant")
-                    repair_by_kind["spec"] = repair_by_kind.get("spec", 0) + 1
 
     n_eval = len(eval_)
     if eval_path:
