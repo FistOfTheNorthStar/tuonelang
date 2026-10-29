@@ -28,7 +28,7 @@ use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
 use crate::grammar::ITEM_START;
-use crate::parse::{byte_span, call_arg_mode, code, depth_guard, match_arm_comma};
+use crate::parse::{byte_span, call_arg_mode, code, depth_guard, let_mut, match_arm_comma};
 use crate::stream::{Tok, kind_name, parse_stream};
 
 /// Parse one immutable source snapshot with the handwritten engine.
@@ -865,9 +865,21 @@ impl Parser<'_> {
 
     // ----- statements & blocks (F) ----------------------------------------
 
-    fn binding_stmt(&mut self, kw: K, kind: SyntaxKind) -> R {
+    /// A `let` or `var` binding. A mutable binding spelled `let mut` is
+    /// reported by [`let_mut`], keeps both keywords in an `Error` node, and
+    /// parses as the `var` binding it means.
+    fn binding_stmt(&mut self, kw: K, mut kind: SyntaxKind) -> R {
         let mut els = Els::new();
-        self.expect(kw, &mut els)?;
+        if kw == K::KwLet && self.peek2() == K::KwMut {
+            let let_kw = byte_span(self.pos, self.toks, self.lex, self.source);
+            let mut_kw = byte_span(self.pos + 1, self.toks, self.lex, self.source);
+            self.diagnostics.push(let_mut(let_kw, mut_kw));
+            let keywords = vec![self.bump(), self.bump()];
+            els.push(node(SyntaxKind::Error, keywords));
+            kind = SyntaxKind::VarStatement;
+        } else {
+            self.expect(kw, &mut els)?;
+        }
         els.push(self.pattern()?);
         if self.at(K::Colon) {
             let mark = self.mark();

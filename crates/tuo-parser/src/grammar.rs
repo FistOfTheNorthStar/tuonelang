@@ -681,6 +681,28 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         .boxed()
     };
     let let_stmt = binding_stmt(K::KwLet, SyntaxKind::LetStatement);
+    // A mutable binding spelled `let mut`: both keywords are kept in an
+    // `Error` node and reported with a targeted marker (`parse::let_mut`
+    // builds the diagnostic for both engines), and the statement parses as
+    // the `var` binding it means.
+    let let_mut_stmt = node!(
+        SyntaxKind::VarStatement,
+        tok(K::KwLet)
+            .then(tok(K::KwMut))
+            .map(|keywords| make(SyntaxKind::Error, keywords))
+            .validate(|node, extra, emitter| {
+                emitter.emit(Rich::custom(
+                    extra.span(),
+                    format!("{}let-mut", crate::oracle::TARGETED),
+                ));
+                node
+            })
+            .then(pattern.clone())
+            .then(tok(K::Colon).then(ty.clone()).or_not())
+            .then(tok(K::Eq).then(expr_b.clone()).or_not())
+            .then(tok(K::Semi)),
+    )
+    .boxed();
     let var_stmt = binding_stmt(K::KwVar, SyntaxKind::VarStatement);
     let empty_stmt = node!(SyntaxKind::EmptyStatement, tok(K::Semi)).boxed();
     let expr_stmt = choice((
@@ -692,6 +714,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
     ))
     .boxed();
     let statement = choice((
+        let_mut_stmt.clone(),
         let_stmt.clone(),
         var_stmt.clone(),
         const_item.clone(),
@@ -1061,6 +1084,7 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
         when_clause,
         then_clause,
         assert_clause,
+        let_mut_stmt,
         let_stmt,
         var_stmt,
         expr_stmt,

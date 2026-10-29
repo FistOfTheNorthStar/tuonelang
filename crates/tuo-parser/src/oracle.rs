@@ -84,14 +84,19 @@ pub(crate) const TARGETED: &str = "\u{1}targeted:";
 /// compares them.
 ///
 /// `previous` spans the token before `primary`, which a missing separator
-/// needs: the fix inserts one after it.
+/// needs: the fix inserts one after it. `next` spans the token after it,
+/// which a two-keyword mistake (`let mut`) needs.
 fn targeted_recovery(
     message: &str,
     primary: Span,
     previous: Span,
+    next: Span,
     source: &SourceText,
 ) -> Option<Diagnostic> {
     let kind = message.strip_prefix(TARGETED)?;
+    if kind == "let-mut" {
+        return Some(crate::parse::let_mut(primary, next));
+    }
     if kind == "match-arm-comma" {
         return Some(crate::parse::match_arm_comma(previous, primary));
     }
@@ -142,6 +147,7 @@ fn to_diagnostic(
     let span = error.span();
     let primary = byte_span(span.start, toks, lex, source);
     let previous = byte_span(span.start.saturating_sub(1), toks, lex, source);
+    let next = byte_span(span.start + 1, toks, lex, source);
 
     match error.reason() {
         // A custom message is a recovery report by default (`P0002`). The one
@@ -151,7 +157,9 @@ fn to_diagnostic(
         // instead of being dressed as generic resynchronization. The
         // handwritten engine produces the identical diagnostic directly;
         // parity over the `invalid/` corpus pins the two together.
-        RichReason::Custom(message) => match targeted_recovery(message, primary, previous, source) {
+        RichReason::Custom(message) => match targeted_recovery(
+            message, primary, previous, next, source,
+        ) {
             Some(diagnostic) => diagnostic,
             None => Diagnostic::error(code(2), message.clone(), primary)
                 .with_primary_label("skipped during error recovery")

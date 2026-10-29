@@ -1,0 +1,13 @@
+fn count_up(take n: Int) -> Int {
+    let mut acc = 0;
+    for i in 0 .. n {
+        acc = acc + i;
+    }
+    acc
+}
+
+spec count_up {
+    let mut total: Int = 1;
+    total = total + count_up(3);
+    then total == 4;
+}
