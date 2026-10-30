@@ -1,0 +1,29 @@
+enum Entry {
+    Deposit { amount: Int },
+    Withdrawal { amount: Int },
+    Fee { amount: Int, waived: Bool },
+    Freeze,
+}
+
+fn apply(take balance: Int, in e: Entry) -> Int {
+    match e {
+        Deposit { amount } => balance + amount,
+        Withdrawal { amount } => if balance >= amount then balance - amount else balance,
+        Fee { amount, waived } => if waived then balance else balance - amount,
+        Freeze => balance,
+    }
+}
+
+fn balance_after(in entries: Array[Entry]) -> Int {
+    var balance = 0
+    var i = 0
+    while i < entries.len() {
+        var entry = entries[i]
+        if entry == Freeze {
+            return balance
+        }
+        balance = apply(balance, entry)
+        i = i + 1
+    }
+    balance
+}

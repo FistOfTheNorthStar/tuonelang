@@ -1,0 +1,24 @@
+module fnv;
+
+/// Compute the 32-bit FNV-1a hash of a string.
+pub fn fnv1a32(in s: Str) -> U32 {
+    let offset_basis: U32 = 2166136261;
+    let fnv_prime: U32 = 16777619;
+    
+    var hash: U32 = offset_basis;
+    var i: Int = 0;
+    while i < std::str::len(s) {
+        let byte: U32 = std::str::byte_at(s, i) as U32;
+        hash = hash ^ byte;
+        hash = std::int::wrapping_mul(hash, fnv_prime);
+        i = i + 1;
+    }
+    
+    hash
+}
+
+spec fnv1a32 {
+    then fnv1a32("") == 0x00000000;
+    then fnv1a32("a") == 0x01000000;
+    then fnv1a32("abc") == 0x811c9dc5;
+}

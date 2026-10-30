@@ -1,0 +1,30 @@
+module temperature;
+
+pub fn first_alarm(in readings: [Int; 6], take limit: Int) -> Int {
+    var index = 0;
+    loop {
+        if index >= 6 {
+            break -1;
+        }
+        if readings[index] > limit {
+            break index;
+        }
+        index = index + 1;
+    }
+}
+
+spec first_alarm {
+    given readings: [Int; 6], limit: Int;
+    when let result = first_alarm(readings, limit);
+    then result == -1 || (result >= 0 && result < 6 && readings[result] > limit);
+}
+
+spec "returns -1 when no reading exceeds the limit" {
+    then first_alarm([1, 2, 3, 4, 5, 6], 10) == -1;
+}
+
+spec "returns index of first reading above limit" {
+    then first_alarm([1, 2, 3, 4, 5, 6], 3) == 4;
+    then first_alarm([10, 20, 30, 40, 50, 60], 15) == 1;
+    then first_alarm([5, 5, 5, 5, 5, 5], 4) == 0;
+}

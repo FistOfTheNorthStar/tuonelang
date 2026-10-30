@@ -1,0 +1,9 @@
+import std::array
+
+fn main() -> Int {
+    var arr = array::new[Int]()
+    array::push(take arr, 1)
+    array::push(take arr, 2)
+    array::push(take arr, 3)
+    return array::len(arr)
+}

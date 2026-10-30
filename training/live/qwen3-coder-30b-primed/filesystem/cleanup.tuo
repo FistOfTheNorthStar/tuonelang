@@ -1,0 +1,56 @@
+module cleanup_test;
+
+import std::fs;
+import std::io;
+
+fn main() -> Int {
+    let lock_file: Str = "tuo_seed_cleanup.lock";
+    
+    // Step 1: Write "lock" to the file
+    let write_result = std::fs::write(lock_file, "lock");
+    if std::core::is_err(write_result) {
+        return 1;
+    }
+    
+    // Step 2: Check that the file exists
+    let exists_result = std::fs::exists(lock_file);
+    if std::core::is_err(exists_result) {
+        return 2;
+    }
+    
+    let file_exists = std::core::unwrap_or(exists_result, false);
+    if !file_exists {
+        return 3;
+    }
+    
+    // Step 3: Remove the file
+    let remove_result = std::fs::remove(lock_file);
+    if std::core::is_err(remove_result) {
+        return 4;
+    }
+    
+    // Step 4: Check that the file no longer exists
+    let exists_after_remove_result = std::fs::exists(lock_file);
+    if std::core::is_err(exists_after_remove_result) {
+        return 5;
+    }
+    
+    let file_exists_after_remove = std::core::unwrap_or(exists_after_remove_result, true);
+    if file_exists_after_remove {
+        return 6;
+    }
+    
+    // Step 5: Try to read the file and expect it to fail with not-found error
+    let read_result = std::fs::read(lock_file);
+    if std::core::is_ok(read_result) {
+        return 7;  // This shouldn't happen - file should not be readable
+    }
+    
+    let read_error = read_result;
+    if !std::fs::is_not_found(read_error) {
+        return 8;  // Wrong error type
+    }
+    
+    // All steps passed
+    0
+}

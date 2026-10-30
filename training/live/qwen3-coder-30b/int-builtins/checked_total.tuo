@@ -1,0 +1,25 @@
+import std::math
+
+fn checked_total(in xs: Array[Int]) -> Option[Int] {
+    var total: Int = 0
+    var i: Int = 0
+    
+    while i < xs.length {
+        var new_total: Int = total + xs[i]
+        
+        // Check for overflow by comparing with the original total
+        if (new_total < total) and (xs[i] > 0) {
+            return None
+        }
+        
+        // Check for underflow by comparing with the original total  
+        if (new_total > total) and (xs[i] < 0) {
+            return None
+        }
+        
+        total = new_total
+        i = i + 1
+    }
+    
+    return Some { value: total }
+}

@@ -1,0 +1,14 @@
+const SHIPPING_FLAT_CENTS = 499
+const FREE_SHIPPING_THRESHOLD_CENTS = 5000
+
+fn shipping_for(take order_cents: Int) -> Int {
+    if order_cents >= FREE_SHIPPING_THRESHOLD_CENTS {
+        return 0
+    } else {
+        return SHIPPING_FLAT_CENTS
+    }
+}
+
+fn order_total(take order_cents: Int) -> Int {
+    return order_cents + shipping_for(order_cents)
+}

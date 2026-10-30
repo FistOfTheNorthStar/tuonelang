@@ -1,0 +1,17 @@
+module sum;
+
+/// Sum the range 0..n using a for loop.
+pub fn count_up(take n: Int) -> Int {
+    var total = 0;
+    for i in std::collections::range(n) {
+        total = total + i;
+    }
+    total
+}
+
+spec count_up {
+    then count_up(0) == 0;
+    then count_up(1) == 0;
+    then count_up(2) == 1;
+    then count_up(5) == 10;
+}

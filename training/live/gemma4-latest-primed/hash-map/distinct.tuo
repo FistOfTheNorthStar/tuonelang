@@ -1,0 +1,32 @@
+import std::collections;
+
+/// Returns the number of distinct values in an array of integers.
+pub fn distinct(in xs: Array[Int]) -> Int {
+    // Use std::collections::counts to build a map where keys are the elements
+    // and values are the counts. The number of distinct elements is the size of the map.
+    let counts_map: std::map::Map[Int, Int] = std::collections::counts(in xs);
+    std::map::len(counts_map)
+}
+
+spec distinct {
+    then distinct(std::array::of3(1, 2, 3)) == 3;
+    then distinct(std::array::of3(1, 1, 2)) == 2;
+    then distinct(std::array::of3(5, 5, 5)) == 1;
+    then distinct(std::array::empty()) == 0;
+}
+
+fn main() -> Int {
+    let arr1: Array[Int] = std::array::of3(1, 2, 3);
+    let count1 = distinct(arr1);
+
+    let arr2: Array[Int] = std::array::of3(1, 1, 2);
+    let count2 = distinct(arr2);
+
+    // The main function returns the exit status, here we just return 0.
+    // We can use the results to demonstrate the function works.
+    if count1 == 3 && count2 == 2 {
+        0
+    } else {
+        1
+    }
+}

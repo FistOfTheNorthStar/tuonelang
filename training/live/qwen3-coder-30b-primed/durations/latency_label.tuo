@@ -1,0 +1,18 @@
+module latency;
+
+import std::time;
+
+/// Render the duration between two nanosecond timestamps.
+pub fn latency_label(take start_ns: Int, take end_ns: Int) -> String {
+    let duration_ns = end_ns - start_ns;
+    let duration = std::time::from_nanos(duration_ns);
+    std::time::render(duration)
+}
+
+spec latency_label {
+    then latency_label(0, 1_000_000_000) == "1s";
+    then latency_label(0, 1_500_000) == "1500ms";
+    then latency_label(0, 250_000) == "250us";
+    then latency_label(0, 37) == "37ns";
+    then latency_label(0, 0) == "0s";
+}

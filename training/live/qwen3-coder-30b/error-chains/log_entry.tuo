@@ -1,0 +1,17 @@
+import std.core
+
+log_entry(in chain: Array[String], take attempt: Int) -> String {
+    var message = format("[attempt {attempt}] ")
+    var first = true
+    for item in chain {
+        if first {
+            message = message + item
+            first = false
+        } else {
+            message = message + " -> " + item
+        }
+    }
+    
+    var root = std.core.error_root(chain)
+    return message + " (root: " + root + ")"
+}

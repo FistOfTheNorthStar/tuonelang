@@ -1,0 +1,27 @@
+import std::math
+import std::core
+
+fn common_cycle(take a: Int, take b: Int) -> Int {
+    if a <= 0 || b <= 0 {
+        return 0
+    }
+    
+    var gcd_val: Int = math::gcd(a, b)
+    return (a * b) / gcd_val
+}
+
+fn ratio_terms(take width: Int, take height: Int) -> Int {
+    if width == 0 && height == 0 {
+        return 0
+    }
+    
+    if width == 0 || height == 0 {
+        return core::max(width, height)
+    }
+    
+    var gcd_val: Int = math::gcd(width, height)
+    var reduced_width: Int = width / gcd_val
+    var reduced_height: Int = height / gcd_val
+    
+    return core::max(reduced_width, reduced_height)
+}

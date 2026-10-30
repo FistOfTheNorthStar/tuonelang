@@ -1,0 +1,79 @@
+module checksum_module;
+
+import std::core;
+import std::str;
+import std::array;
+import std::int;
+
+/// Calculates a simple checksum for a string: ((((0 * 31 + b0) * 31 + b1) * 31 + b2) ...) mod 2^32.
+/// Uses std::int::wrapping_mul and std::int::wrapping_add to ensure 32-bit modular arithmetic.
+pub fn checksum(take s: Str) -> Int {
+    var running_checksum: Int = 0;
+    let bytes = std::str::split(s, std::str::empty()); // Split into individual byte strings (Str)
+
+    // We iterate over the bytes of the string. Since we need the byte value (Int),
+    // we must process the array of Str elements.
+    let byte_array: Array[Str] = std::array::filled(std::str::len(s), std::str::empty());
+    for i in 0..std::str::len(s) {
+        // This is a bit complex because we need to treat the string as a sequence of bytes.
+        // We'll use a manual loop over the byte indices and read the byte value.
+        // Since we are constrained to free functions, we'll simulate the iteration
+        // by reading the byte value directly.
+    }
+
+    // Re-implementing the loop using byte indices and std::str::byte_at
+    var i: Int = 0;
+    while i < std::str::len(s) {
+        // Get the byte value at index i
+        let byte_val: Int = std::str::byte_at(s, i);
+
+        // 1. Multiply running_checksum by 31 (modulo 2^32)
+        // std::int::wrapping_mul handles the modulo 2^32 arithmetic for Int (I64)
+        // if the result fits in 32 bits, but since we are using Int (I64),
+        // we must ensure the operation simulates 32-bit wrapping.
+        // The standard library provides std::bits::mul32 for this.
+        let multiplied: Int = std::bits::mul32(running_checksum, 31);
+
+        // 2. Add the byte value (modulo 2^32)
+        // std::int::wrapping_add handles the modulo 2^32 arithmetic.
+        running_checksum = std::int::wrapping_add(multiplied, byte_val);
+
+        i = i + 1;
+    }
+
+    running_checksum
+}
+
+spec checksum {
+    // Test case 1: Empty string
+    then checksum(std::str::empty()) == 0;
+
+    // Test case 2: Single character 'a' (ASCII 97)
+    // Checksum = (0 * 31 + 97) mod 2^32 = 97
+    then checksum(std::str::from_str("a")) == 97;
+
+    // Test case 3: Two characters "ab"
+    // 1. Byte 'a' (97): running = 97
+    // 2. Byte 'b' (98): running = (97 * 31 + 98) mod 2^32
+    //    97 * 31 = 3007
+    //    3007 + 98 = 3105
+    then checksum(std::str::from_str("ab")) == 3105;
+
+    // Test case 4: A longer string "abc"
+    // 1. 'a' (97): running = 97
+    // 2. 'b' (98): running = 3105
+    // 3. 'c' (99): running = (3105 * 31 + 99) mod 2^32
+    //    3105 * 31 = 96255
+    //    96255 + 99 = 96354
+    then checksum(std::str::from_str("abc")) == 96354;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let s1 = std::str::from_str("hello");
+    let checksum_val = checksum(s1);
+    std::io::println(std::str::from_str("Checksum of 'hello': ") + std::str::to_string(checksum_val)).unwrap();
+
+    // The main function must return an Int exit status.
+    0
+}

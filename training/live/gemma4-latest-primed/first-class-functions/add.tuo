@@ -1,0 +1,39 @@
+module app;
+
+import std::collections;
+import std::array;
+
+/// Adds two integers.
+pub fn add(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+/// Sums the elements of an array using the 'add' function as the folding step.
+fn sum_with_add(in xs: Array[Int]) -> Int {
+    // std::collections::fold(in xs: Array[Int], take init: Int, take step: fn(take Int, take Int) -> Int) -> Int
+    // The step function signature must match: fn(take Int, take Int) -> Int
+    std::collections::fold(in xs, 0, add)
+}
+
+spec add {
+    then add(2, 3) == 5;
+    then add(2, 3) == add(3, 2);
+}
+
+spec sum_with_add {
+    then sum_with_add(std::array::filled(3, 1)) == 3;
+    then sum_with_add(std::array::filled(5, 2)) == 10;
+    then sum_with_add(std::array::filled(0, 10)) == 0;
+}
+
+fn main() -> Int {
+    // Create an array [1, 2, 3, 4]
+    let data: Array[Int] = std::array::filled(4, 0);
+    std::array::set(data, 0, 1);
+    std::array::set(data, 1, 2);
+    std::array::set(data, 2, 3);
+    std::array::set(data, 3, 4);
+
+    // Pass the 'add' function as the step function to fold
+    sum_with_add(data)
+}

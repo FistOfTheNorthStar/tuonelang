@@ -1,0 +1,11 @@
+fn square(n: in Int) -> Int {
+    return n * n;
+}
+
+spec square {
+    expect square(0) == 0;
+    expect square(1) == 1;
+    expect square(2) == 4;
+    expect square(3) == 9;
+    expect square(-2) == 4;
+}

@@ -1,0 +1,37 @@
+module app;
+
+/// Replace the first occurrence of old with new_name in roster, in place.
+/// Returns true if a replacement occurred, false if old was not found.
+pub fn rename(mut roster: Array[String], in old: Str, in new_name: Str) -> Bool {
+    var i = 0;
+    let len = std::array::len(roster);
+    var found = false;
+    
+    while i < len {
+        let current = std::array::get(roster, i);
+        if current == old {
+            std::array::set(roster, i, new_name);
+            found = true;
+            break;
+        }
+        i = i + 1;
+    }
+    
+    found
+}
+
+spec rename {
+    given roster: Array[String], old: Str, new_name: Str;
+    when let result = rename(roster, old, new_name);
+    then result == false; // Should return false when old is not found
+}
+
+spec "rename replaces first occurrence" {
+    given roster: Array[String];
+    when let result = rename(roster, "Alice", "Bob");
+    then result == true; // Should return true when replacement occurs
+}
+
+fn main() -> Int {
+    0
+}

@@ -1,0 +1,13 @@
+import std::core
+
+fn is_retryable(in chain: Array[String]) -> Bool {
+    var i: Int = 0
+    while i < chain.length {
+        var error: String = chain[i]
+        if error == "timeout" or error == "connection refused" {
+            return true
+        }
+        i = i + 1
+    }
+    return false
+}

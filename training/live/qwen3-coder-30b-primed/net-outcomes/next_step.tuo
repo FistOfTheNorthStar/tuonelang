@@ -1,0 +1,22 @@
+module client;
+
+pub fn next_step(take outcome: Int, take attempt: Int, take max_attempts: Int) -> Int {
+    if std::net::is_descriptor(outcome) {
+        0  // connected
+    } else if std::net::is_timeout(outcome) {
+        if attempt < max_attempts {
+            1  // retry
+        } else {
+            2  // give up - timeout on last attempt
+        }
+    } else {
+        2  // give up - other failure
+    }
+}
+
+spec next_step {
+    then next_step(42, 1, 3) == 0;  // connected
+    then next_step(-1, 1, 3) == 2;  // give up - other failure
+    then next_step(-2, 1, 3) == 1;  // retry - timeout, not last attempt
+    then next_step(-2, 3, 3) == 2;  // give up - timeout, last attempt
+}

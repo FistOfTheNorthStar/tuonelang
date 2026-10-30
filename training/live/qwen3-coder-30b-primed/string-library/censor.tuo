@@ -1,0 +1,84 @@
+module censor;
+
+/// Replace every non-overlapping occurrence of `word` with one `*` per byte of `word`.
+pub fn censor(in text: Str, in word: Str) -> String {
+    if std::str::len(word) == 0 {
+        return std::string::from_str(text);
+    }
+
+    let mut result = std::string::empty();
+    let mut pos = 0;
+    let text_len = std::str::len(text);
+    let word_len = std::str::len(word);
+    
+    while pos <= text_len - word_len {
+        let found = std::str::find(text, word);
+        if std::core::is_none(found) {
+            std::string::append(result, std::str::slice(text, pos, text_len));
+            break;
+        }
+        
+        let found_pos = std::core::unwrap_or(found, 0);
+        if found_pos > pos {
+            std::string::append(result, std::str::slice(text, pos, found_pos));
+        }
+        
+        // Add asterisks
+        var i = 0;
+        while i < word_len {
+            std::string::push_byte(result, 42); // '*' character
+            i = i + 1;
+        }
+        
+        pos = found_pos + word_len;
+    }
+    
+    if pos < text_len {
+        std::string::append(result, std::str::slice(text, pos, text_len));
+    }
+    
+    result
+}
+
+/// Count non-overlapping occurrences of `word` in `text`.
+pub fn mentions(in text: Str, in word: Str) -> Int {
+    if std::str::len(word) == 0 {
+        return 0;
+    }
+
+    let mut count = 0;
+    let mut pos = 0;
+    let text_len = std::str::len(text);
+    let word_len = std::str::len(word);
+    
+    while pos <= text_len - word_len {
+        let found = std::str::find(text, word);
+        if std::core::is_none(found) {
+            break;
+        }
+        
+        let found_pos = std::core::unwrap_or(found, 0);
+        count = count + 1;
+        pos = found_pos + word_len;
+    }
+    
+    count
+}
+
+spec censor {
+    then censor("hello world", "world") == "hello *";
+    then censor("abababab", "ab") == "****";
+    then censor("hello world", "xyz") == "hello world";
+    then censor("aaa", "aa") == "**a";
+    then censor("", "test") == "";
+    then censor("test", "") == "test";
+}
+
+spec mentions {
+    then mentions("hello world", "world") == 1;
+    then mentions("abababab", "ab") == 4;
+    then mentions("hello world", "xyz") == 0;
+    then mentions("aaa", "aa") == 1;
+    then mentions("", "test") == 0;
+    then mentions("test", "") == 0;
+}

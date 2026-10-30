@@ -1,0 +1,20 @@
+import std::net
+
+fn read_status(take b: Int) -> Str {
+    if b == -1 {
+        return "eof"
+    }
+    
+    if b < 0 {
+        if std::net::is_timeout(b) {
+            return "timeout"
+        }
+        return "error"
+    }
+    
+    if b >= 0 && b <= 255 {
+        return "byte"
+    }
+    
+    return "error"
+}

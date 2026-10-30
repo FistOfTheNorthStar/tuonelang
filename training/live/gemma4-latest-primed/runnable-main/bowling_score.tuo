@@ -1,0 +1,148 @@
+module bowling_game;
+
+/// Calculates the score for a ten-pin bowling game given 21 rolls.
+/// The input array `rolls` must contain at least 21 elements, though unused
+/// trailing slots are assumed to be 0.
+///
+/// Scoring rules:
+/// 1. Strike (X): 10 + next two rolls.
+/// 2. Spare (/): 10 + next one roll.
+/// 3. Open Frame: Sum of the two rolls.
+pub fn bowling_score(in rolls: [Int; 21]) -> Int {
+    var total_score = 0;
+    var roll_index = 0;
+
+    // Iterate through the 10 frames
+    for frame in 1..=10 {
+        var frame_score = 0;
+
+        if frame == 10 {
+            // Last frame: Handle up to three rolls
+            var roll1 = rolls[roll_index];
+            var roll2 = rolls[roll_index + 1];
+            var roll3 = rolls[roll_index + 2];
+
+            if roll1 == 10 { // Strike in 10th frame (impossible by definition, but for completeness)
+                // This case is technically impossible if rolls are correctly provided,
+                // but we handle it based on the general strike logic.
+                frame_score = 10 + roll2 + roll3;
+                roll_index = roll_index + 3;
+            } else if roll1 + roll2 == 10 { // Spare in 10th frame
+                frame_score = 10 + roll3;
+                roll_index = roll_index + 3;
+            } else { // Open frame in 10th frame
+                frame_score = roll1 + roll2;
+                roll_index = roll_index + 2;
+            }
+        } else {
+            // Frames 1 through 9
+            if rolls[roll_index] == 10 {
+                // Strike (X)
+                var strike_score = 10 + rolls[roll_index + 1] + rolls[roll_index + 2];
+                frame_score = strike_score;
+                roll_index = roll_index + 1; // Only consume one roll index
+            } else if rolls[roll_index] + rolls[roll_index + 1] == 10 {
+                // Spare (/)
+                var spare_score = 10 + rolls[roll_index + 2];
+                frame_score = spare_score;
+                roll_index = roll_index + 2; // Consume two rolls
+            } else {
+                // Open Frame
+                frame_score = rolls[roll_index] + rolls[roll_index + 1];
+                roll_index = roll_index + 2; // Consume two rolls
+            }
+        }
+        total_score = total_score + frame_score;
+    }
+    total_score
+}
+
+/// Helper function to calculate the score for a given set of rolls.
+/// This function encapsulates the logic to make the main function cleaner.
+fn calculate_score(in rolls: [Int; 21]) -> Int {
+    var total_score = 0;
+    var roll_index = 0;
+
+    for frame in 1..=10 {
+        var frame_score = 0;
+
+        if frame < 10 {
+            // Frames 1 through 9
+            if rolls[roll_index] == 10 {
+                // Strike (X)
+                var strike_score = 10 + rolls[roll_index + 1] + rolls[roll_index + 2];
+                frame_score = strike_score;
+                roll_index = roll_index + 1;
+            } else if rolls[roll_index] + rolls[roll_index + 1] == 10 {
+                // Spare (/)
+                var spare_score = 10 + rolls[roll_index + 2];
+                frame_score = spare_score;
+                roll_index = roll_index + 2;
+            } else {
+                // Open Frame
+                frame_score = rolls[roll_index] + rolls[roll_index + 1];
+                roll_index = roll_index + 2;
+            }
+        } else {
+            // Frame 10
+            var roll1 = rolls[roll_index];
+            var roll2 = rolls[roll_index + 1];
+            var roll3 = rolls[roll_index + 2];
+
+            if roll1 == 10 { // Strike
+                frame_score = 10 + roll2 + roll3;
+                roll_index = roll_index + 1;
+            } else if roll1 + roll2 == 10 { // Spare
+                frame_score = 10 + roll3;
+                roll_index = roll_index + 2;
+            } else { // Open Frame
+                frame_score = roll1 + roll2;
+                roll_index = roll_index + 2;
+            }
+        }
+        total_score = total_score + frame_score;
+    }
+    total_score
+}
+
+
+spec bowling_score {
+    // 1. Gutter Game (All 0s)
+    given rolls: [Int; 21] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    when let score = bowling_score(rolls);
+    then score == 0;
+
+    // 2. All Ones Game (1, 1, 1, ..., 1)
+    given rolls: [Int; 21] = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+    when let score = bowling_score(rolls);
+    then score == 21; // 10 frames * 2 rolls/frame = 20, plus the 10th frame's 1 roll = 21
+
+    // 3. Perfect Game (All 10s)
+    given rolls: [Int; 21] = [10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+    when let score = bowling_score(rolls);
+    then score == 300;
+}
+
+fn main() -> Int {
+    // Game: 1,4, 4,5, 6,4, 5,5, 10, 0,1, 7,3, 6,4, 10, 2,8,6, 0,0,0
+    // Rolls:
+    // F1: 1, 4 (5)
+    // F2: 4, 5 (9)
+    // F3: 6, 4 (10)
+    // F4: 5, 5 (10)
+    // F5: 10 (X) -> 10 + 0 + 1 = 11
+    // F6: 0, 1 (1)
+    // F7: 7, 3 (10)
+    // F8: 6, 4 (10)
+    // F9: 10 (X) -> 10 + 2 + 8 = 20
+    // F10: 2, 8, 6 (20)
+    // Total: 5 + 9 + 10 + 10 + 11 + 1 + 10 + 10 + 20 + 20 = 106
+    let rolls: [Int; 21] = [1, 4, 4, 5, 6, 4, 5, 5, 10, 0, 1, 7, 3, 6, 4, 10, 2, 8, 6, 0, 0];
+    
+    // Note: The provided example sequence has 19 rolls listed, but the signature requires 21.
+    // I pad the end with 0s to meet the [Int; 21] requirement, assuming the last three rolls are 0.
+    // The actual rolls used for scoring are the first 19, and the last two are 0.
+    let rolls_padded: [Int; 21] = [1, 4, 4, 5, 6, 4, 5, 5, 10, 0, 1, 7, 3, 6, 4, 10, 2, 8, 6, 0, 0];
+
+    calculate_score(rolls_padded)
+}

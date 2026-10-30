@@ -1,0 +1,166 @@
+module bst_operations;
+
+// Definition provided in the prompt
+struct Bst { key: Int, left: Option[Box[Bst]], right: Option[Box[Bst]] }
+
+// Helper function to create an empty Option[Box[Bst]]
+fn empty_bst() -> Option[Box[Bst]] {
+    None
+}
+
+/// Inserts a key into the Binary Search Tree.
+/// Returns the new tree root. If the key already exists, the tree is unchanged.
+fn bst_insert(take tree: Option[Box[Bst]], take key: Int) -> Option[Box[Bst]] {
+    match tree {
+        None => {
+            // Tree is empty, insert the new key
+            Some { Box { key: key, left: None, right: None } }
+        }
+        Some { Box { key: current_key, left: l, right: r } } => {
+            if key == current_key {
+                // Key already exists, return the tree unchanged
+                Some { Box { key: current_key, left: l, right: r } }
+            } else if key < current_key {
+                // Go left
+                let new_left = bst_insert(l, key);
+                // Reconstruct the node with the potentially updated left child
+                Some { Box { key: current_key, left: new_left, right: r } }
+            } else {
+                // Go right (key > current_key)
+                let new_right = bst_insert(r, key);
+                // Reconstruct the node with the potentially updated right child
+                Some { Box { key: current_key, left: l, right: new_right } }
+            }
+        }
+    }
+}
+
+/// Checks if a key exists in the Binary Search Tree.
+fn bst_contains(in tree: Option[Box[Bst]], take key: Int) -> Bool {
+    match tree {
+        None => false,
+        Some { Box { key: current_key, left: l, right: r } } => {
+            if key == current_key {
+                true
+            } else if key < current_key {
+                bst_contains(l, key)
+            } else {
+                bst_contains(r, key)
+            }
+        }
+    }
+}
+
+/// Counts the total number of keys in the Binary Search Tree.
+fn bst_size(in tree: Option[Box[Bst]]) -> Int {
+    match tree {
+        None => 0,
+        Some { Box { key: _, left: l, right: r } } => {
+            1 + bst_size(l) + bst_size(r)
+        }
+    }
+}
+
+// --- Specs ---
+
+spec bst_insert {
+    // Test insertion into an empty tree
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 10);
+    then bst_contains(t1, 10) == true;
+    then bst_size(t1) == 1;
+
+    // Test insertion of a smaller key
+    given empty_bst();
+    when let t2 = bst_insert(empty_bst(), 20);
+    when let t3 = bst_insert(t2, 10);
+    then bst_contains(t3, 10) == true;
+    then bst_contains(t3, 20) == true;
+    then bst_size(t3) == 2;
+
+    // Test insertion of a larger key
+    given empty_bst();
+    when let t2 = bst_insert(empty_bst(), 20);
+    when let t3 = bst_insert(t2, 30);
+    then bst_contains(t3, 20) == true;
+    then bst_contains(t3, 30) == true;
+    then bst_size(t3) == 2;
+
+    // Test key already present (should not change size or structure)
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 10);
+    when let t2 = bst_insert(t1, 20);
+    when let t3 = bst_insert(t2, 10);
+    then bst_size(t3) == 2;
+    then bst_contains(t3, 10) == true;
+    then bst_contains(t3, 20) == true;
+}
+
+spec bst_contains {
+    // Test empty tree
+    given empty_bst();
+    when let contains_none = bst_contains(empty_bst(), 5);
+    then contains_none == false;
+
+    // Test key present in a simple tree
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 10);
+    when let t2 = bst_insert(t1, 20);
+    when let contains_found = bst_contains(t2, 10);
+    then contains_found == true;
+
+    // Test key not present
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 10);
+    when let t2 = bst_insert(t1, 20);
+    when let contains_missing = bst_contains(t2, 15);
+    then contains_missing == false;
+}
+
+spec bst_size {
+    // Test empty tree
+    given empty_bst();
+    when let size_empty = bst_size(empty_bst());
+    then size_empty == 0;
+
+    // Test single element tree
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 5);
+    when let size_one = bst_size(t1);
+    then size_one == 1;
+
+    // Test multi-element tree
+    given empty_bst();
+    when let t1 = bst_insert(empty_bst(), 5);
+    when let t2 = bst_insert(t1, 10);
+    when let t3 = bst_insert(t2, 1);
+    when let size_three = bst_size(t3);
+    then size_three == 3;
+}
+
+fn main() -> Int {
+    // Example usage: Build a tree containing {10, 20, 5}
+    let t_empty = empty_bst();
+    let t1 = bst_insert(t_empty, 10);
+    let t2 = bst_insert(t1, 20);
+    let t3 = bst_insert(t2, 5);
+
+    // Test insertion of existing key (should not change size)
+    let t4 = bst_insert(t3, 10);
+
+    // Test size
+    let size = bst_size(t4);
+
+    // Test containment
+    let contains_10 = bst_contains(t4, 10);
+    let contains_15 = bst_contains(t4, 15);
+
+    // Print results (conceptually, as main returns Int)
+    // In a real scenario, we'd use std::io::println, but for this exercise,
+    // we just ensure the logic runs and returns a non-zero status if successful.
+    if size == 3 && contains_10 == true && contains_15 == false {
+        1
+    } else {
+        0
+    }
+}

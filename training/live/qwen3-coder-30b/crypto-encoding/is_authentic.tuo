@@ -1,0 +1,18 @@
+import crypto.hmac
+import crypto.sha256
+import crypto.constant_time_compare
+
+fn tag_for(in key: Str, in message: Str) -> Array[Int] {
+    var tag: Array[Int] = hmac_sha256(key, message)
+    return tag
+}
+
+fn is_authentic(in key: Str, in message: Str, in tag: Array[Int]) -> Bool {
+    var expected_tag: Array[Int] = hmac_sha256(key, message)
+    
+    if (expected_tag.len != tag.len) {
+        return false
+    }
+    
+    return constant_time_compare(expected_tag, tag)
+}

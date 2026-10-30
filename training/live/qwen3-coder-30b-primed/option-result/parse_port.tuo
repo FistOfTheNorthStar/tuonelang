@@ -1,0 +1,42 @@
+module config;
+
+/// Parse a port number from a string field.
+/// Returns Err with the original error if parsing fails,
+/// or Err with "port out of range" if the number is not in 1..=65535.
+pub fn parse_port(in field: Str) -> Result[Int, Str] {
+    match std::str::parse_int(field) {
+        Ok { value } => {
+            if value < 1 || value > 65535 {
+                Err { error: "port out of range" }
+            } else {
+                Ok { value }
+            }
+        }
+        Err { error } => Err { error },
+    }
+}
+
+/// Extract the error message from a Result, or return "" for Ok.
+pub fn error_of(in r: Result[Int, Str]) -> Str {
+    match r {
+        Ok { value } => "",
+        Err { error } => error,
+    }
+}
+
+spec parse_port {
+    then parse_port("8080") == Ok { value: 8080 };
+    then parse_port("0") == Err { error: "port out of range" };
+    then parse_port("65536") == Err { error: "port out of range" };
+    then parse_port("-1") == Err { error: "port out of range" };
+    then parse_port("abc") == Err { error: "invalid number" };
+}
+
+spec error_of {
+    given r: Result[Int, Str];
+    when let error_text = error_of(r);
+    then match r {
+        Ok { value } => error_text == "",
+        Err { error } => error_text == error,
+    };
+}

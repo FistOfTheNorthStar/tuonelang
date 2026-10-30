@@ -1,0 +1,11 @@
+import std::point
+
+function is_origin(p in Point) -> Bool {
+    if p.x == 0 {
+        if p.y == 0 {
+            return true
+        }
+        return false
+    }
+    return false
+}

@@ -1,0 +1,28 @@
+module tagger;
+
+/// Render tags as hashtags: each tag prefixed with `#`, separated by single spaces, all lowercased (ASCII).
+pub fn tag_line(in tags: Array[Str]) -> String {
+    if std::array::len(tags) == 0 {
+        return std::string::empty();
+    }
+
+    let mut result = std::string::empty();
+    var i = 0;
+    while i < std::array::len(tags) {
+        let tag = std::array::get(tags, i);
+        if i > 0 {
+            std::string::append(mut result, " ");
+        }
+        std::string::append(mut result, "#");
+        std::string::append(mut result, std::str::to_lower(tag));
+        i = i + 1;
+    }
+    result
+}
+
+spec tag_line {
+    then tag_line(std::collections::singleton("Rust")) == "#rust";
+    then tag_line(std::collections::of2("Rust", "LLM")) == "#rust #llm";
+    then tag_line(std::array::empty()) == "";
+    then tag_line(std::collections::of3("Hello", "WORLD", "Test")) == "#hello #world #test";
+}

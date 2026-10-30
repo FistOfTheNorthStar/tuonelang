@@ -1,0 +1,14 @@
+import std.string
+
+fn reversed(in s: Str) -> String {
+    var result: String = ""
+    var i: Int = string.length(s)
+    
+    while i > 0 {
+        i = i - 1
+        var byte: Byte = string.byte_at(s, i)
+        result = string.append_byte(result, byte)
+    }
+    
+    return result
+}

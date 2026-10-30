@@ -1,0 +1,15 @@
+import std::rt
+
+fn square(x: in Int) -> Int {
+    x * x
+}
+
+fn main() -> Int {
+    var tasks = [1, 2, 3, 4]
+    var results = std::rt::par_map(tasks, take square, 2)
+    var sum = 0
+    for result in results {
+        sum = sum + result
+    }
+    sum
+}

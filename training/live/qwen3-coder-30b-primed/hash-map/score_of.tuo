@@ -1,0 +1,21 @@
+module score;
+
+import std::map;
+
+/// Look up a score for a string key, returning 0 when the key is absent.
+pub fn score_of(in scores: Map[Str, Int], in key: Str) -> Int {
+    match std::map::get(scores, key) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec score_of {
+    given scores: Map[Str, Int], key: Str;
+    when let result = score_of(scores, key);
+    then result == std::map::get(scores, key).value_or(0);
+}
+
+fn main() -> Int {
+    0
+}

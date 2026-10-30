@@ -1,0 +1,122 @@
+module tic_tac_toe;
+
+/// Checks if a player (1 or 2) has won on the given board.
+/// Returns 1 if X wins, 2 if O wins, and 0 if no winner.
+pub fn winner(in board: [Int; 9]) -> Int {
+    // Check rows
+    if winner_check(board, 0) == 1 { return 1; }
+    if winner_check(board, 1) == 2 { return 2; }
+    if winner_check(board, 2) == 1 { return 1; }
+    if winner_check(board, 3) == 2 { return 2; }
+    if winner_check(board, 4) == 1 { return 1; }
+    if winner_check(board, 5) == 2 { return 2; }
+    if winner_check(board, 6) == 1 { return 1; }
+    if winner_check(board, 7) == 2 { return 2; }
+    if winner_check(board, 8) == 1 { return 1; }
+
+    // Check columns
+    if winner_check(board, 0, 0) == 1 { return 1; }
+    if winner_check(board, 1, 0) == 2 { return 2; }
+    if winner_check(board, 2, 0) == 1 { return 1; }
+    if winner_check(board, 3, 0) == 2 { return 2; }
+    if winner_check(board, 4, 0) == 1 { return 1; }
+    if winner_check(board, 5, 0) == 2 { return 2; }
+    if winner_check(board, 6, 0) == 1 { return 1; }
+    if winner_check(board, 7, 0) == 2 { return 2; }
+    if winner_check(board, 8, 0) == 1 { return 1; }
+
+    // Check diagonals
+    // Top-left to bottom-right (main diagonal)
+    if winner_check(board, 0, 0, 1) == 1 { return 1; }
+    if winner_check(board, 0, 0, 2) == 2 { return 2; }
+
+    // Top-right to bottom-left (anti-diagonal)
+    if winner_check(board, 2, 0, 1) == 1 { return 1; }
+    if winner_check(board, 2, 0, 2) == 2 { return 2; }
+
+    // If no winner found
+    0
+}
+
+/// Helper function to check a row (index i).
+/// Returns 1 if X wins, 2 if O wins, 0 otherwise.
+fn winner_check(in board: [Int; 9], take i: Int) -> Int {
+    let a = board[i * 3 + 0];
+    let b = board[i * 3 + 1];
+    let c = board[i * 3 + 2];
+
+    if a == 1 && b == 1 && c == 1 { return 1; }
+    if a == 2 && b == 2 && c == 2 { return 2; }
+    0
+}
+
+/// Helper function to check a column (index j).
+/// Returns 1 if X wins, 2 if O wins, 0 otherwise.
+fn winner_check(in board: [Int; 9], take j: Int, take offset: Int) -> Int {
+    let a = board[offset + j * 3 + 0];
+    let b = board[offset + j * 3 + 1];
+    let c = board[offset + j * 3 + 2];
+
+    if a == 1 && b == 1 && c == 1 { return 1; }
+    if a == 2 && b == 2 && c == 2 { return 2; }
+    0
+}
+
+/// Helper function to check the main diagonal (top-left to bottom-right).
+/// The 'offset' parameter is unused but required for signature consistency with the pattern above.
+/// Returns 1 if X wins, 2 if O wins, 0 otherwise.
+fn winner_check(in board: [Int; 9], take i: Int, take j: Int, take offset: Int) -> Int {
+    // This function is specialized for the main diagonal (i=j)
+    let a = board[i * 3 + 0];
+    let b = board[i * 3 + 1];
+    let c = board[i * 3 + 2];
+
+    if a == 1 && b == 1 && c == 1 { return 1; }
+    if a == 2 && b == 2 && c == 2 { return 2; }
+    0
+}
+
+/// Helper function to check the anti-diagonal (top-right to bottom-left).
+/// The 'offset' parameter is unused but required for signature consistency with the pattern above.
+/// Returns 1 if X wins, 2 if O wins, 0 otherwise.
+fn winner_check(in board: [Int; 9], take i: Int, take j: Int, take offset: Int) -> Int {
+    // This function is specialized for the anti-diagonal (i+j=2)
+    let a = board[0 * 3 + 2]; // Top-right
+    let b = board[1 * 3 + 1]; // Center
+    let c = board[2 * 3 + 0]; // Bottom-left
+
+    if a == 1 && b == 1 && c == 1 { return 1; }
+    if a == 2 && b == 2 && c == 2 { return 2; }
+    0
+}
+
+
+spec winner {
+    // X wins on the first row
+    then winner([1, 1, 1, 0, 0, 0, 0, 0, 0]) == 1;
+    // O wins on the second row
+    then winner([0, 2, 2, 2, 0, 0, 0, 0, 0]) == 2;
+    // X wins on the third column
+    then winner([0, 0, 0, 0, 0, 0, 1, 1, 1]) == 1;
+    // O wins on the main diagonal
+    then winner([2, 0, 0, 0, 2, 0, 0, 0, 2]) == 2;
+    // X wins on the anti-diagonal
+    then winner([0, 0, 1, 0, 2, 0, 1, 0, 0]) == 1;
+    // No winner
+    then winner([1, 0, 2, 0, 1, 0, 2, 0, 0]) == 0;
+    // Full board, no winner (shouldn't happen in a valid game state, but tests logic)
+    then winner([1, 2, 1, 2, 1, 2, 2, 1, 2]) == 0;
+}
+
+fn main() -> Int {
+    // Example: X wins on the first row
+    let board_x_win: [Int; 9] = [1, 1, 1, 0, 0, 0, 0, 0, 0];
+    let winner_result = winner(board_x_win);
+
+    // Example: No winner
+    let board_no_win: [Int; 9] = [1, 0, 2, 0, 1, 0, 2, 0, 0];
+    let winner_result_none = winner(board_no_win);
+
+    // Return the result of the first test case for the exit status
+    winner_result
+}

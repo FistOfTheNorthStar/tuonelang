@@ -1,0 +1,39 @@
+import std.io
+import std.array
+
+fn luhn_sum(in digits: [Int; 16]) -> Int {
+    var total = 0
+    var i = 0
+    while i < 16 {
+        var digit = digits[i]
+        if (15 - i) % 2 == 1 {
+            digit = digit * 2
+            if digit > 9 {
+                digit = digit - 9
+            }
+        }
+        total = total + digit
+        i = i + 1
+    }
+    return total
+}
+
+fn luhn_valid(in digits: [Int; 16]) -> Bool {
+    var sum = luhn_sum(digits)
+    return sum % 10 == 0
+}
+
+fn main() -> Int {
+    var card_digits = [Int; 16](
+        4, 5, 3, 9,
+        1, 4, 8, 8,
+        0, 3, 4, 3,
+        6, 4, 6, 7
+    )
+    
+    if luhn_valid(card_digits) {
+        return luhn_sum(card_digits)
+    } else {
+        return 1
+    }
+}

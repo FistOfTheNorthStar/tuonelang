@@ -1,0 +1,53 @@
+module app;
+
+import std::str;
+import std::core;
+
+/// Parses a string to an Int. Returns -1 if the string is empty or contains non-digit characters.
+pub fn parse_number(take s: Str) -> Int {
+    if std::str::len(s) == 0 {
+        return -1;
+    }
+
+    match std::str::parse_int(s) {
+        Ok { value } => value,
+        Err { error } => {
+            // The error object from parse_int is a Str, which we can check for emptiness
+            // or if it indicates a parsing failure. Since the requirement is to return -1
+            // for *any* non-digit byte, we treat any Err as failure.
+            // We check if the error string is empty, which might happen if the input
+            // was non-digit but parse_int returned an error without a descriptive string.
+            // However, the safest bet based on the prompt is to return -1 on any Err.
+            if std::str::len(error) == 0 {
+                // This case is unlikely if the input was non-digit, but handles the structure.
+                -1
+            } else {
+                -1
+            }
+        }
+    }
+}
+
+spec parse_number {
+    then parse_number("123") == 123;
+    then parse_number("0") == 0;
+    then parse_number("999999999999999999") == 9223372036854775807; // Max Int value test (assuming I64)
+    then parse_number("") == -1;
+    then parse_number("abc") == -1;
+    then parse_number("12a3") == -1;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let s1: Str = "456";
+    let result1 = parse_number(s1);
+
+    let s2: Str = "";
+    let result2 = parse_number(s2);
+
+    let s3: Str = "hello";
+    let result3 = parse_number(s3);
+
+    // We return the result of the first successful parse for the main function's exit status.
+    result1
+}

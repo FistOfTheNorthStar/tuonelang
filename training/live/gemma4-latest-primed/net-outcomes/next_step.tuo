@@ -1,0 +1,76 @@
+module client_retry;
+
+import std::net;
+import std::core;
+
+/// Decides the next step after an attempt to connect.
+///
+/// outcome: The result of the connection attempt.
+/// attempt: The current attempt number (1-based).
+/// max_attempts: The maximum number of attempts allowed.
+/// Returns: 0 if connected, 1 if retry is warranted, 2 if giving up.
+pub fn next_step(take outcome: Int, take attempt: Int, take max_attempts: Int) -> Int {
+    // Case 1: Successfully connected (outcome == 0)
+    if outcome == 0 {
+        // Check if the outcome is a valid descriptor
+        if std::net::is_descriptor(take outcome) {
+            return 0; // Connected
+        }
+    }
+
+    // Case 2: Retry is warranted (outcome == 1)
+    if outcome == 1 {
+        // Check if it was a timeout AND if we haven't reached max attempts
+        if std::net::is_timeout(take outcome) && attempt < max_attempts {
+            return 1; // Retry
+        }
+    }
+
+    // Case 3: Give up (any other failure, or timeout on the last attempt)
+    return 2;
+}
+
+spec next_step {
+    // Test Case 1: Successful connection (outcome=0, descriptor=true)
+    then next_step(0, 1, 3) == 0;
+
+    // Test Case 2: Timeout, and retries are allowed (outcome=1, timeout=true, attempt < max)
+    then next_step(1, 1, 3) == 1;
+
+    // Test Case 3: Timeout, but max attempts reached (outcome=1, timeout=true, attempt == max)
+    then next_step(1, 3, 3) == 2;
+
+    // Test Case 4: Failure, not a timeout (outcome=2, timeout=false)
+    then next_step(2, 1, 3) == 2;
+
+    // Test Case 5: Timeout, but attempt 1 (should retry)
+    then next_step(1, 1, 5) == 1;
+
+    // Test Case 6: Timeout, but attempt 5 (should give up if max is 5)
+    then next_step(1, 5, 5) == 2;
+}
+
+fn main() -> Int {
+    // Example usage: Assume we start with an initial failure state (e.g., 2)
+    // and try to connect up to 3 times.
+    let max_attempts: Int = 3;
+    var current_attempt: Int = 1;
+    var outcome: Int = 2; // Start assuming failure
+
+    // Simulate the first attempt failing with a timeout (outcome=1)
+    outcome = 1;
+    let step1 = next_step(outcome, current_attempt, max_attempts);
+    println("Step 1 result: {}", step1); // Should be 1 (Retry)
+
+    // Simulate the second attempt succeeding (outcome=0)
+    outcome = 0;
+    let step2 = next_step(outcome, current_attempt + 1, max_attempts);
+    println("Step 2 result: {}", step2); // Should be 0 (Connected)
+
+    // If we wanted to simulate failure until the end:
+    // outcome = 1;
+    // let step_fail = next_step(outcome, 3, 3);
+    // println("Step Fail result: {}", step_fail); // Should be 2 (Give up)
+
+    0
+}

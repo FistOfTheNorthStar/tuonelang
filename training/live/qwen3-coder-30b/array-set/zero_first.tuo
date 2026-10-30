@@ -1,0 +1,9 @@
+import std.array
+import std.option
+
+fn zero_first(xs: mut Array[Int]) -> Array[Int] {
+    if xs.len() > 0 {
+        xs[0] = 0
+    }
+    return xs
+}

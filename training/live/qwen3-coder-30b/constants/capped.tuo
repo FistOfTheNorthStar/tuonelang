@@ -1,0 +1,9 @@
+const LIMIT: Int = 100
+
+fn capped(n: in Int) -> Int {
+    if n < LIMIT {
+        return n
+    } else {
+        return LIMIT
+    }
+}

@@ -1,0 +1,93 @@
+module json_parser;
+
+import std::json;
+import std::str;
+
+/// Extracts the user name from a JSON string at the path "user.name".
+/// Returns "anonymous" if the JSON is invalid, the "user" member is missing,
+/// or the "name" member is not a string.
+pub fn user_name(take text: Str) -> String {
+    // 1. Attempt to parse the input string into a Json structure.
+    let parse_result = std::json::parse(text);
+
+    // 2. Handle JSON parsing errors.
+    let root_node = match parse_result {
+        Ok { node } => node,
+        Err(e) => {
+            // Invalid JSON format
+            return std::string::from_str("anonymous");
+        }
+    };
+
+    // 3. Attempt to get the "user" member.
+    // We use member(root_node, "user") which returns an Int node index.
+    let user_node_index = std::json::member(root_node, "user");
+
+    // Check if the "user" member exists.
+    if user_node_index == std::json::kind_null() {
+        // "user" member is missing or null
+        return std::string::from_str("anonymous");
+    }
+
+    // 4. Attempt to get the "name" member from the "user" node.
+    let name_node_index = std::json::member(root_node, "user", "name");
+
+    // Check if the "name" member exists.
+    if name_node_index == std::json::kind_null() {
+        return std::string::from_str("anonymous");
+    }
+
+    // 5. Check if the "name" member is a string.
+    if std::json::kind_of(root_node, name_node_index) != std::json::kind_string() {
+        return std::string::from_str("anonymous");
+    }
+
+    // 6. Extract the string value.
+    let name_string = std::json::text_of(root_node, name_node_index);
+
+    // 7. Return the resulting String.
+    name_string
+}
+
+spec user_name {
+    // Test case 1: Valid JSON with user.name
+    then user_name(r#"{"user": {"name": "Alice"}}"#) == "Alice";
+
+    // Test case 2: Valid JSON with different name
+    then user_name(r#"{"user": {"name": "Bob Smith"}}"#) == "Bob Smith";
+
+    // Test case 3: JSON is invalid (missing closing brace)
+    then user_name(r#"{"user": {"name": "Alice""#) == "anonymous";
+
+    // Test case 4: "user" member is missing
+    then user_name(r#"{"data": {"name": "Alice"}}"#) == "anonymous";
+
+    // Test case 5: "name" member is missing within "user"
+    then user_name(r#"{"user": {"age": 30}}"#) == "anonymous";
+
+    // Test case 6: "name" member is not a string (it's a number)
+    then user_name(r#"{"user": {"name": 12345}}"#) == "anonymous";
+
+    // Test case 7: Root object is null
+    then user_name(r#"null"#) == "anonymous";
+
+    // Test case 8: "user" member is null
+    then user_name(r#"{"user": null}"#) == "anonymous";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let json_str_ok = r#"{"user": {"name": "TestUser"}}"#;
+    let result_ok = user_name(json_str_ok);
+    std::io::println(std::string::concat("Success: ", result_ok)).unwrap();
+
+    let json_str_bad = r#"{"user": {"name": 123}}"#;
+    let result_bad = user_name(json_str_bad);
+    std::io::println(std::string::concat("Failure (Type): ", result_bad)).unwrap();
+
+    let json_str_missing = r#"{"user": {"age": 30}}"#;
+    let result_missing = user_name(json_str_missing);
+    std::io::println(std::string::concat("Failure (Missing): ", result_missing)).unwrap();
+
+    0
+}

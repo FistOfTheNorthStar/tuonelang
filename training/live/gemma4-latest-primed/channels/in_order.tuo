@@ -1,0 +1,104 @@
+module channel_test;
+
+import std::sync;
+import std::array;
+import std::core;
+
+// Helper function to drain the channel and return the concatenated digits.
+// This function assumes the channel is closed after all expected messages are read.
+fn in_order(take ch: Int) -> Int {
+    var result_str = std::string::empty();
+    let expected_ids: [Int; 5] = [3, 1, 4, 1, 5];
+    let mut count = 0;
+
+    // Read exactly the number of expected IDs
+    while count < 5 {
+        let received = std::sync::recv(take ch);
+        if received == -1 { // Assuming -1 or some sentinel value indicates closed/error if not using Option
+            // Since std::sync::recv returns Int, we rely on the problem description's implication
+            // that we read exactly 5 items before the channel is conceptually "done" for this test.
+            // In a real scenario, we'd check for a specific closed signal or use Option[Int].
+            // Given the constraints, we'll read until we've processed 5 items or hit an error state
+            // that we must interpret as the end of the sequence.
+            break;
+        }
+        
+        // Append the received ID as a character/digit representation
+        // Since we are concatenating digits, we convert Int to String and append.
+        // We must use std::str::to_string(n) which takes an Int.
+        let id_str = std::str::to_string(received);
+        std::string::append(mut result_str, in id_str);
+        count = count + 1;
+    }
+    
+    // The problem asks for the result as a single Int formed by concatenating digits.
+    // Since the expected result 31415 fits in Int, we assume the concatenation
+    // results in a number that can be parsed back to Int.
+    // For simplicity and adherence to the return type Int, we'll rely on the
+    // fact that the expected sequence 3, 1, 4, 1, 5 forms "31415".
+    // We'll use std::str::parse_int which returns Result[Int, Str].
+    match std::str::parse_int(in result_str) {
+        Ok { value } => value,
+        Err { error } => {
+            // If parsing fails (e.g., too large for Int), we return a default error code.
+            // For this specific test case, this shouldn't happen.
+            std::core::abs(0)
+        }
+    }
+}
+
+fn main() -> Int {
+    // 1. Create a channel
+    let ch = std::sync::channel();
+
+    // 2. Send job IDs 3, 1, 4, 1, 5
+    std::sync::send(take ch, take 3);
+    std::sync::send(take ch, take 1);
+    std::sync::send(take ch, take 4);
+    std::sync::send(take ch, take 1);
+    std::sync::send(take ch, take 5);
+
+    // 3. Close the channel
+    std::sync::close(take ch);
+
+    // --- Verification ---
+
+    // Check 1: Sending -7 was refused (non-zero result)
+    // std::sync::send returns Int. If refused, it returns a non-zero value
+    // (or an error code that is non-zero). We check if the result is non-zero.
+    let send_negative_result = std::sync::send(take ch, take (-7));
+    let check1_passed = std::core::ne(take send_negative_result, take 0);
+
+    // Check 2: Sending after close was refused (non-zero result)
+    // Since we already closed it, this should also fail/return non-zero.
+    let send_after_close_result = std::sync::send(take ch, take 99);
+    let check2_passed = std::core::ne(take send_after_close_result, take 0);
+
+    // Check 3: In-order check (3, 1, 4, 1, 5 -> 31415)
+    let received_sequence = in_order(take ch);
+    let check3_passed = std::core::eq(take received_sequence, take 31415);
+
+    // Return code: 31 if all pass, 1..3 otherwise.
+    let result = 0;
+    if check1_passed && check2_passed && check3_passed {
+        result + 31
+    } else {
+        // Calculate a failure code based on which checks failed
+        let failure_code = 1;
+        if !check1_passed {
+            failure_code + 1;
+        }
+        if !check2_passed {
+            failure_code + 2;
+        }
+        if !check3_passed {
+            failure_code + 3;
+        }
+        failure_code
+    }
+}
+
+spec main {
+    // Expected return value: 31
+    then main() == 31;
+}

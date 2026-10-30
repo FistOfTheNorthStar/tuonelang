@@ -1,0 +1,88 @@
+module inventory_manager;
+
+import std::fs;
+import std::str;
+import std::array;
+
+// Helper function to count lines (number of '\n' bytes)
+fn count_lines(in text: Str) -> Int {
+    var count = 0;
+    var index = 0;
+    while index < std::str::len(in text) {
+        if std::str::byte_at(in text, take index) == 10 { // ASCII for '\n'
+            count = count + 1;
+            index = index + 1;
+        } else {
+            index = index + 1;
+        }
+    }
+    count
+}
+
+// Helper function to find the length of the longest line
+fn longest_line(in text: Str) -> Int {
+    var max_len = 0;
+    var current_start = 0;
+    var current_pos = 0;
+
+    while current_pos < std::str::len(in text) {
+        // Check for newline character
+        if std::str::byte_at(in text, take current_pos) == 10 {
+            // Found a newline, calculate length of the line segment
+            let line_len = current_pos - current_start;
+            if line_len > max_len {
+                max_len = line_len;
+            }
+            // Move past the newline character
+            current_start = current_pos + 1;
+            current_pos = current_pos + 1;
+        } else {
+            current_pos = current_pos + 1;
+        }
+    }
+
+    // Check the last segment (if the file doesn't end with a newline)
+    if current_start < std::str::len(in text) {
+        let line_len = std::str::len(in text) - current_start;
+        if line_len > max_len {
+            max_len = line_len;
+        }
+    }
+
+    max_len
+}
+
+fn main() -> Int {
+    let filename: Str = "tuo_seed_inventory.txt";
+    let content: Str = "apples 4\nbananas 12\ncherries 7\n";
+    let result: Result<Int, std::io::IoError> = std::fs::write(filename, content);
+
+    // 1. Write the file
+    if !std::io::is_success(result) {
+        return 1;
+    }
+
+    // 2. Read the file back
+    let read_result: Result<String, std::io::IoError> = std::fs::read(filename);
+    let read_str: Str = std::string::as_str(read_result.unwrap());
+
+    // 3. Analyze the text
+    let line_count = count_lines(read_str);
+    let longest = longest_line(read_str);
+
+    // 4. Remove the file
+    let remove_result: Result<Int, std::io::IoError> = std::fs::remove(filename);
+    if !std::io::is_success(remove_result) {
+        return 3;
+    }
+
+    // 5. Calculate final return value
+    // main returns count_lines * 10 + longest_line
+    return line_count * 10 + longest;
+}
+
+spec main {
+    given _ : Int; // Dummy input for main spec
+    when let result = main();
+    then result == 30; // 3 lines (3 newlines) * 10 + longest line ("bananas 12") = 30
+}

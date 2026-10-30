@@ -1,0 +1,83 @@
+module leaderboard;
+
+/// Returns the dense rank of a score in the leaderboard.
+/// Rank 1 is the highest distinct score, 2 is the next, etc.
+/// Tied scores share the same rank.
+/// Returns None if the score is not found.
+pub fn rank_of(in scores: Array[Int], take score: Int) -> Option[Int] {
+    let sorted = std::collections::sorted_ascending(scores);
+    let unique = std::collections::deduped(sorted);
+    
+    // Find the rank of the given score
+    var rank = 1;
+    for unique_score in unique {
+        if unique_score == score {
+            return Some { value: rank };
+        }
+        rank = rank + 1;
+    }
+    
+    None
+}
+
+/// Returns the number of entries with exactly the given score.
+pub fn ties(in scores: Array[Int], take score: Int) -> Int {
+    let mut count = 0;
+    for s in scores {
+        if s == score {
+            count = count + 1;
+        }
+    }
+    count
+}
+
+spec rank_of {
+    given scores: Array[Int], score: Int;
+    when let result = rank_of(scores, score);
+    then match result {
+        Some { value } => {
+            // If we get a rank, it should be positive and not exceed the number of unique scores
+            let sorted = std::collections::sorted_ascending(scores);
+            let unique = std::collections::deduped(sorted);
+            then value > 0;
+            then value <= std::array::len(unique);
+        }
+        None => {
+            // If we get None, it means the score is not in the array
+            then !std::collections::contains(scores, score);
+        }
+    };
+}
+
+spec ties {
+    given scores: Array[Int], score: Int;
+    when let result = ties(scores, score);
+    then result >= 0;
+    then result <= std::array::len(scores);
+}
+
+spec "rank_of and ties work together" {
+    given scores: Array[Int];
+    when let sorted = std::collections::sorted_ascending(scores);
+    when let unique = std::collections::deduped(sorted);
+    when let max_score = std::collections::max_of(unique);
+    when let rank = if std::core::is_some(max_score) {
+        rank_of(scores, std::core::unwrap_or(max_score, 0))
+    } else {
+        None
+    };
+    then match rank {
+        Some { value } => {
+            // The highest score should have rank 1
+            then value == 1;
+        }
+        None => {
+            // If there's no max score, the array is empty
+            then std::array::len(scores) == 0;
+        }
+    };
+}
+
+fn main() -> Int {
+    0
+}

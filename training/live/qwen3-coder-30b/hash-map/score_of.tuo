@@ -1,0 +1,22 @@
+import Map
+import Str
+import Int
+
+fn score_of(key in Str, scores in Map[Str, Int]) -> Int {
+    var result: Int = 0
+    var found: Bool = false
+    
+    for entry in scores.entries() {
+        if entry.key == key {
+            result = entry.value
+            found = true
+            break
+        }
+    }
+    
+    if not found {
+        result = 0
+    }
+    
+    return result
+}

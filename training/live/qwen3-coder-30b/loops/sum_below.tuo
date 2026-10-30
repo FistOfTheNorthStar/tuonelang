@@ -1,0 +1,11 @@
+fn sum_below(n: in Int) -> Int {
+    var total: Int = 0
+    var i: Int = 0
+    
+    while i < n {
+        total = total + i
+        i = i + 1
+    }
+    
+    return total
+}

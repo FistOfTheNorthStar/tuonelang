@@ -1,0 +1,64 @@
+import std::fs
+import std::io
+
+fn count_lines(in text: Str) -> Int {
+    var count: Int = 0
+    var i: Int = 0
+    while i < text.len() {
+        if text[i] == '\n' {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn longest_line(in text: Str) -> Int {
+    var max_len: Int = 0
+    var start: Int = 0
+    var i: Int = 0
+    
+    while i <= text.len() {
+        if i == text.len() or text[i] == '\n' {
+            var line_len: Int = i - start
+            if line_len > max_len {
+                max_len = line_len
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+    
+    return max_len
+}
+
+fn main() -> Int {
+    var filename: Str = "tuo_seed_inventory.txt"
+    var content: Str = "apples 4\nbananas 12\ncherries 7\n"
+    
+    // Write file
+    var write_result: Result[Void, Str] = std::fs::write(filename, content)
+    if write_result.is_err() {
+        return 1
+    }
+    
+    // Read file
+    var read_result: Result[Str, Str] = std::fs::read(filename)
+    if read_result.is_err() {
+        return 2
+    }
+    
+    var text: Str = read_result.unwrap().value
+    
+    // Remove file
+    var remove_result: Result[Void, Str] = std::fs::remove(filename)
+    if remove_result.is_err() {
+        return 3
+    }
+    
+    // Analyze text
+    var line_count: Int = count_lines(text)
+    var max_line_length: Int = longest_line(text)
+    
+    return line_count * 10 + max_line_length
+}

@@ -1,0 +1,29 @@
+import std::cmp
+
+fn max2(a in Int, b in Int) -> Int {
+    if a >= b {
+        return a
+    }
+    return b
+}
+
+spec max2 {
+    expect max2(1, 2) == 2
+    expect max2(5, 3) == 5
+    expect max2(-1, -5) == -1
+    expect max2(0, 0) == 0
+}
+
+fn min2(a in Int, b in Int) -> Int {
+    if a <= b {
+        return a
+    }
+    return b
+}
+
+spec min2 {
+    expect min2(1, 2) == 1
+    expect min2(5, 3) == 3
+    expect min2(-1, -5) == -5
+    expect min2(0, 0) == 0
+}

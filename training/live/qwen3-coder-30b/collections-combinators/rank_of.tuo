@@ -1,0 +1,36 @@
+import std.array
+import std.sort
+import std.set
+
+function rank_of(in scores: Array[Int], take score: Int) -> Option[Int] {
+    var unique_scores = Set[Int]{}
+    for (var i = 0; i < scores.length; i = i + 1) {
+        unique_scores.add(scores[i])
+    }
+    
+    var sorted_unique = Array[Int]{}
+    for (var item in unique_scores) {
+        sorted_unique.push(item)
+    }
+    sort.descending(sorted_unique)
+    
+    var rank = 1
+    for (var i = 0; i < sorted_unique.length; i = i + 1) {
+        if (sorted_unique[i] == score) {
+            return Some { value: rank }
+        }
+        rank = rank + 1
+    }
+    
+    return None {}
+}
+
+function ties(in scores: Array[Int], take score: Int) -> Int {
+    var count = 0
+    for (var i = 0; i < scores.length; i = i + 1) {
+        if (scores[i] == score) {
+            count = count + 1
+        }
+    }
+    return count
+}

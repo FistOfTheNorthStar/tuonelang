@@ -1,0 +1,16 @@
+module fingerprint;
+
+import std::crypto;
+
+/// Return a short content fingerprint: the first 8 characters of the lowercase hex SHA-256 digest of data.
+pub fn fingerprint(in data: Str) -> String {
+    let hash = std::crypto::sha256(data);
+    let hex = std::crypto::to_hex(std::string::as_str(hash));
+    std::str::slice(hex, 0, 8)
+}
+
+spec fingerprint {
+    then fingerprint("abc") == "ba7816bf";
+    then fingerprint("") == "e3b0c442";
+    then fingerprint("hello world") == "b94d27b9";
+}

@@ -1,0 +1,27 @@
+import std::json
+
+key_list(in text: Str) -> String {
+    var parsed = json::parse(text)
+    if json::is_err(parsed) {
+        return ""
+    }
+    
+    var value = json::unwrap(parsed)
+    if !json::is_object(value) {
+        return ""
+    }
+    
+    var keys = json::object_keys(value)
+    var result = ""
+    var first = true
+    
+    for key in keys {
+        if !first {
+            result = result + ","
+        }
+        result = result + key
+        first = false
+    }
+    
+    return result
+}

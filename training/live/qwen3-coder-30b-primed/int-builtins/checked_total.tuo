@@ -1,0 +1,28 @@
+module checked_total;
+
+/// Returns the sum of xs, or None if any running sum overflows Int.
+pub fn checked_total(in xs: Array[Int]) -> Option[Int] {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        let x = std::array::get(xs, i);
+        match std::int::checked_add(total, x) {
+            Some { value } => total = value,
+            None => return None,
+        }
+        i = i + 1;
+    }
+    Some { value: total }
+}
+
+spec checked_total {
+    then checked_total(std::collections::singleton(5)) == Some { value: 5 };
+    then checked_total(std::collections::empty()) == Some { value: 0 };
+    then checked_total(std::collections::of2(1, 2)) == Some { value: 3 };
+    then checked_total(std::collections::of3(1, 2, 3)) == Some { value: 6 };
+    
+    // Test overflow behavior
+    given large: Int;
+    when let xs = std::array::filled(2, large);
+    then checked_total(xs) == None;
+}

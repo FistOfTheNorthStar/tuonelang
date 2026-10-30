@@ -1,0 +1,17 @@
+import std::json
+
+function port_of(text in String) -> Int {
+    var result: Int = 0
+    var parsed: Option[Json] = json::parse(text)
+    
+    if (parsed is Some) {
+        var json_value: Json = parsed.value
+        var port_member: Option[Int] = json::get_int(json_value, "port")
+        
+        if (port_member is Some) {
+            result = port_member.value
+        }
+    }
+    
+    return result
+}

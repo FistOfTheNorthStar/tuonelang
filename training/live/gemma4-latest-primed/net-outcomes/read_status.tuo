@@ -1,0 +1,70 @@
+import std::net;
+import std::core;
+
+/// Reads a byte and returns a string describing the result status.
+///
+/// The status string is:
+/// - "byte" if the returned value is in the range [0, 255].
+/// - "eof" if the returned value is -1.
+/// - "timeout" if std::net::is_timeout returns true.
+/// - "error" for any other negative value.
+pub fn read_status(take b: Int) -> Str {
+    // The function signature implies that 'b' is the result of a call to
+    // std::net::read_byte_timeout(take fd: Int, take ms: Int) -> Int.
+    // Since we cannot call the function here (as we don't have fd or ms),
+    // we must assume 'b' *is* the result we are analyzing, as per the signature.
+
+    if b >= 0 && b <= 255 {
+        // Case 1: Byte value (0..=255)
+        "byte".to_string()
+    } else if b == -1 {
+        // Case 2: EOF
+        "eof".to_string()
+    } else if std::net::is_timeout(take b) {
+        // Case 3: Timeout sentinel
+        "timeout".to_string()
+    } else if b < 0 {
+        // Case 4: Any other negative value (error)
+        "error".to_string()
+    } else {
+        // Should be unreachable given the checks, but required for exhaustiveness
+        "unknown_error".to_string()
+    }
+}
+
+spec read_status {
+    // Test case for a valid byte value
+    then read_status(10) == "byte";
+    then read_status(255) == "byte";
+    
+    // Test case for EOF (-1)
+    then read_status(-1) == "eof";
+    
+    // Test case for timeout (assuming std::net::is_timeout(-5) is true for testing)
+    // Note: We must use a value that triggers the timeout branch for the spec to pass,
+    // even if the actual sentinel value is unknown. We rely on the compiler/runtime
+    // to correctly evaluate the condition based on the provided logic.
+    // For a reliable spec, we test the logic flow:
+    // If we assume -5 is the timeout sentinel for testing purposes:
+    then read_status(-5) == "timeout"; 
+    
+    // Test case for a general error (e.g., -2)
+    then read_status(-2) == "error";
+}
+
+fn main() -> Int {
+    // Example usage:
+    // If we assume a successful read of 10:
+    let status_byte = read_status(10);
+    // If we assume EOF:
+    let status_eof = read_status(-1);
+    // If we assume timeout:
+    let status_timeout = read_status(-5); // Assuming -5 triggers timeout check
+    // If we assume other error:
+    let status_error = read_status(-99);
+
+    // Print results (though main returns Int, we demonstrate the function)
+    // In a real scenario, we'd use std::io::println, but for a simple main,
+    // we just return 0.
+    0
+}

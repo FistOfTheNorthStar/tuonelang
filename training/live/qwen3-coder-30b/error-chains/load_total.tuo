@@ -1,0 +1,48 @@
+import std::str::parse_int
+import std::core::error_message
+
+fn parse_amount(in text: Str) -> Result[Int, Array[String]] {
+    match parse_int(text) {
+        Ok { value: amount } => Ok { value: amount },
+        Err { error: _ } => Err { error: ["not a number"] }
+    }
+}
+
+fn load_total(in first: Str, in second: Str) -> Result[Int, Array[String]] {
+    match parse_amount(first) {
+        Ok { value: first_amount } => {
+            match parse_amount(second) {
+                Ok { value: second_amount } => Ok { value: first_amount + second_amount },
+                Err { error: second_error } => Err { error: ["line 2"] + second_error }
+            }
+        },
+        Err { error: first_error } => Err { error: ["line 1"] + first_error }
+    }
+}
+
+fn report(in first: Str, in second: Str) -> String {
+    match load_total(first, second) {
+        Ok { value: total } => {
+            var result: Str = ""
+            var temp: Int = total
+            if temp == 0 {
+                return "0"
+            }
+            var negative: Bool = false
+            if temp < 0 {
+                negative = true
+                temp = -temp
+            }
+            while temp > 0 {
+                var digit: Int = temp % 10
+                result = Str { value: digit } + result
+                temp = temp / 10
+            }
+            if negative {
+                return "-" + result
+            }
+            return result
+        },
+        Err { error: error_chain } => error_message(error_chain)
+    }
+}

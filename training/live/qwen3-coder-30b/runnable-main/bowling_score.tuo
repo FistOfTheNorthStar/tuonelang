@@ -1,0 +1,46 @@
+import std.io
+import std.array
+
+fn bowling_score(in rolls: [Int; 21]) -> Int {
+    var total = 0
+    var frame = 0
+    
+    while frame < 10 {
+        var roll_index = frame * 2
+        
+        if rolls[roll_index] == 10 {
+            // Strike
+            total += 10 + rolls[roll_index + 1] + rolls[roll_index + 2]
+            frame += 1
+        } else if rolls[roll_index] + rolls[roll_index + 1] == 10 {
+            // Spare
+            total += 10 + rolls[roll_index + 2]
+            frame += 1
+        } else {
+            // Open frame
+            total += rolls[roll_index] + rolls[roll_index + 1]
+            frame += 1
+        }
+    }
+    
+    return total
+}
+
+fn main() -> Int {
+    var game = [1, 4, 4, 5, 6, 4, 5, 5, 10, 0, 1, 7, 3, 6, 4, 10, 2, 8, 6, 0, 0]
+    return bowling_score(game)
+}
+
+spec bowling_score {
+    // Gutter game: all zeros
+    var gutter_game = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    assert bowling_score(gutter_game) == 0
+    
+    // All-ones game
+    var ones_game = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+    assert bowling_score(ones_game) == 20
+    
+    // Perfect game: all strikes
+    var perfect_game = [10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 0]
+    assert bowling_score(perfect_game) == 300
+}

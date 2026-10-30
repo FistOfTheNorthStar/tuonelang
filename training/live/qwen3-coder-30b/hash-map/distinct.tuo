@@ -1,0 +1,16 @@
+import std::map
+import std::array
+
+fn distinct(xs: in Array[Int]) -> Int {
+    var seen: Map[Int, Bool] = Map.new()
+    var count: Int = 0
+    
+    for x in xs {
+        if not Map.contains(seen, x) {
+            Map.insert(seen, x, true)
+            count = count + 1
+        }
+    }
+    
+    return count
+}

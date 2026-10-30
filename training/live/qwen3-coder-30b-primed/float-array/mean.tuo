@@ -1,0 +1,25 @@
+module stats;
+
+/// Compute the mean of an array of floats, returning 0.0 for an empty array.
+pub fn mean(in xs: Array[Float]) -> Float {
+    let len = std::array::len(xs);
+    if len == 0 {
+        0.0
+    } else {
+        let sum = std::collections::fold(xs, 0.0, fn(take acc: Float, take x: Float) -> Float {
+            acc + x
+        });
+        sum / len as Float
+    }
+}
+
+spec mean {
+    then mean(std::array::empty()) == 0.0;
+    then mean(std::collections::singleton(5.0)) == 5.0;
+    then mean(std::collections::of2(1.0, 3.0)) == 2.0;
+    then mean(std::collections::of3(1.0, 2.0, 3.0)) == 2.0;
+}
+
+fn main() -> Int {
+    0
+}

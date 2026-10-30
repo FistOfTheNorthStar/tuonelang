@@ -1,0 +1,29 @@
+struct Pair[A, B] { first: A, second: B }
+
+fn swap_pair[A, B](take p: Pair[A, B]) -> Pair[B, A] {
+    Pair { first: p.second, second: p.first }
+}
+
+spec swap_pair {
+    // Test case: Pair[Int, Str] -> Pair[Str, Int]
+    then swap_pair(Pair { first: 10, second: "hello" }) == Pair { first: "hello", second: 10 };
+
+    // Test case: Pair[Float, Bool] -> Pair[Bool, Float]
+    then swap_pair(Pair { first: 3.14, second: true }) == Pair { first: true, second: 3.14 };
+
+    // Test case: Pair[Int, Int] -> Pair[Int, Int]
+    then swap_pair(Pair { first: 5, second: 7 }) == Pair { first: 7, second: 5 };
+}
+
+fn main() -> Int {
+    // Example usage: Pair[Int, Str]
+    let p1: Pair[Int, Str] = Pair { first: 10, second: "hello" };
+    let swapped1 = swap_pair(p1);
+
+    // Example usage: Pair[Float, Bool]
+    let p2: Pair[Float, Bool] = Pair { first: 3.14, second: true };
+    let swapped2 = swap_pair(p2);
+
+    // The return value of main is the exit status.
+    0
+}

@@ -1,0 +1,88 @@
+module json_utils;
+
+import std::json;
+import std::str;
+import std::array;
+
+/// Returns the top-level member keys of a JSON object in document order,
+/// joined by `,`. An empty key still takes its slot, so `{"": 1, "x": 2}`
+/// gives `,x`. Returns the empty string when the text is not valid JSON
+/// or its root is not an object.
+pub fn key_list(in text: Str) -> String {
+    let parse_result = std::json::parse(in text);
+
+    match parse_result {
+        Ok { root } => {
+            // Check if the root is an object
+            if std::json::kind_of(root, take node: 0) != std::json::kind_object() {
+                return std::str::empty();
+            }
+
+            // Get the count of top-level members
+            let count = std::json::node_count(in root);
+            if count == 0 {
+                return std::str::empty();
+            }
+
+            // Collect all keys in order
+            var keys: Array[Str] = std::array::empty();
+            for i in 0..count {
+                let key = std::json::key_of(in root, take node: i);
+                keys = std::array::push(keys, key);
+            }
+
+            // Join the keys with ","
+            std::str::join(keys, std::str::from_str(",")).to_string()
+        }
+        Err { error } => {
+            // Invalid JSON
+            std::str::empty()
+        }
+    }
+}
+
+spec key_list {
+    // Valid object, standard keys
+    then key_list(std::str::from_str("{\"a\": 1, \"b\": 2}")) == "a,b";
+
+    // Valid object, different order (should respect document order)
+    then key_list(std::str::from_str("{\"b\": 2, \"a\": 1}")) == "b,a";
+
+    // Object with empty key
+    then key_list(std::str::from_str("{\"\": 1, \"x\": 2}")) == ",x";
+
+    // Object with only empty key
+    then key_list(std::str::from_str("{\"\" : 1}")) == ",";
+
+    // Root is an array
+    then key_list(std::str::from_str("[1, 2, 3]")) == "";
+
+    // Root is a primitive (number)
+    then key_list(std::str::from_str("123")) == "";
+
+    // Empty JSON object
+    then key_list(std::str::from_str("{}")) == "";
+
+    // Invalid JSON
+    then key_list(std::str::from_str("{a: 1}")) == "";
+
+    // Empty string input
+    then key_list(std::str::from_str("")) == "";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let json_str_1 = std::str::from_str("{\"name\": \"Test\", \"version\": 1}");
+    let keys_1 = key_list(json_str_1);
+    std::io::println(std::str::from_str("Keys for 1: ") + keys_1).unwrap();
+
+    let json_str_2 = std::str::from_str("{\"\": 1, \"x\": 2}");
+    let keys_2 = key_list(json_str_2);
+    std::io::println(std::str::from_str("Keys for 2: ") + keys_2).unwrap();
+
+    let json_str_3 = std::str::from_str("[1, 2, 3]");
+    let keys_3 = key_list(json_str_3);
+    std::io::println(std::str::from_str("Keys for 3: ") + keys_3).unwrap();
+
+    0
+}

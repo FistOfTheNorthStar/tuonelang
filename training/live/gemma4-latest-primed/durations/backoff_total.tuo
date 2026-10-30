@@ -1,0 +1,58 @@
+import std::time;
+
+/// Calculates the total waiting time for exponential backoff over a given number of retries.
+/// The wait times are: 100ms, 200ms, 400ms, 800ms, ...
+/// The function returns the sum of these durations.
+pub fn backoff_total(take retries: Int) -> std::time::Duration {
+    if retries <= 0 {
+        std::time::zero()
+    } else {
+        // The sequence of waits is 100 * 2^(i-1) for i = 1 to retries.
+        // This is a geometric series sum: S = a * (r^n - 1) / (r - 1)
+        // Here, a = 100 (first term), r = 2 (ratio), n = retries (number of terms).
+        // Sum = 100 * (2^retries - 1) / (2 - 1)
+        // Sum = 100 * (2^retries - 1)
+        
+        // We calculate 2^retries - 1 using integer arithmetic for the multiplier,
+        // then multiply by 100, and finally convert to Duration.
+        
+        // Calculate 2^retries
+        let two_to_the_retries = 1 << retries;
+        
+        // Calculate 2^retries - 1
+        let multiplier = two_to_the_retries - 1;
+        
+        // Calculate total milliseconds: 100 * multiplier
+        // Since we are dealing with Int (I64), we must ensure the multiplication
+        // does not overflow, though for typical retry counts this should be fine.
+        let total_millis: Int = 100 * multiplier;
+        
+        std::time::from_millis(total_millis)
+    }
+}
+
+spec backoff_total {
+    then backoff_total(0) == std::time::zero();
+    // 1 retry: 100ms. Total: 100ms
+    then backoff_total(1) == std::time::from_millis(100);
+    // 2 retries: 100ms + 200ms. Total: 300ms
+    then backoff_total(2) == std::time::from_millis(300);
+    // 3 retries: 100ms + 200ms + 400ms. Total: 700ms
+    then backoff_total(3) == std::time::from_millis(700);
+    // 4 retries: 100 + 200 + 400 + 800. Total: 1500ms
+    then backoff_total(4) == std::time::from_millis(1500);
+}
+
+fn main() -> Int {
+    // Example usage: 5 retries = 100 + 200 + 400 + 800 + 1600 = 3100ms
+    let total_time = backoff_total(5);
+    
+    // For demonstration, we can print the result (though main returns Int)
+    // In a real scenario, we might use std::io::println if we needed output.
+    // Here, we just return 0 to satisfy the main signature.
+    
+    // If we wanted to verify the calculation in main:
+    // std::io::println(std::time::render(total_time));
+    
+    0
+}

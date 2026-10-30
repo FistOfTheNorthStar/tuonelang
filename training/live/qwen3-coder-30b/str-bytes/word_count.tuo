@@ -1,0 +1,26 @@
+import std::str
+
+fn word_count(in s: Str) -> Int {
+    var count: Int = 0
+    var i: Int = 0
+    var in_word: Bool = false
+    
+    while i < len(s) {
+        var c: Byte = s[i]
+        if std::str::is_space(c) {
+            if in_word {
+                in_word = false
+                count = count + 1
+            }
+        } else {
+            in_word = true
+        }
+        i = i + 1
+    }
+    
+    if in_word {
+        count = count + 1
+    }
+    
+    return count
+}

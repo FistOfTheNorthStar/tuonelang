@@ -1,0 +1,32 @@
+module jwt;
+
+import std::crypto;
+import std::str;
+import std::string;
+
+fn payload_of(in token: Str) -> String {
+    let parts = std::str::split(token, ".");
+    
+    // Check if we have exactly 3 parts
+    if std::array::len(parts) != 3 {
+        return std::string::empty();
+    }
+    
+    // Get the middle part (payload)
+    let payload_b64: Str = std::array::get(parts, 1);
+    
+    // Decode from base64
+    let decoded_bytes = std::crypto::base64_decode(payload_b64);
+    
+    // Convert bytes to string
+    match std::crypto::str_of_bytes(decoded_bytes) {
+        Ok { value: text } => text,
+        Err { error: _ } => std::string::empty(),
+    }
+}
+
+spec payload_of {
+    then payload_of("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c") == "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ";
+    then payload_of("invalid.token") == "";
+    then payload_of("a.b.c.d") == "";
+}

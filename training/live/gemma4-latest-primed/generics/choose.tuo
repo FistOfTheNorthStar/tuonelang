@@ -1,0 +1,32 @@
+/// Returns 'override' if 'use_override' is true, otherwise returns 'default'.
+pub fn choose[T](take use_override: Bool, take override: T, take default: T) -> T {
+    if use_override {
+        override
+    } else {
+        default
+    }
+}
+
+spec choose {
+    // Test case for Int
+    then choose(true, 10, 5) == 10;
+    then choose(false, 10, 5) == 5;
+
+    // Test case for Str
+    then choose(true, "hello", "world") == "hello";
+    then choose(false, "hello", "world") == "world";
+
+    // Test case for Bool
+    then choose(true, true, false) == true;
+    then choose(false, true, false) == false;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let use_override_int = choose(true, 42, 0);
+    let use_override_str = choose(false, "production", "development");
+
+    // We can't easily test the return values in main without more context,
+    // but the spec covers the logic.
+    0
+}

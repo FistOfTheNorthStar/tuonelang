@@ -1,0 +1,58 @@
+import std.string
+import std.slice
+
+fn censor(in text: Str, in word: Str) -> String {
+    if string.is_empty(word) {
+        return string.to_string(text)
+    }
+    
+    var result = ""
+    var pos = 0
+    var start = 0
+    
+    while pos < string.len(text) {
+        var found_pos = string.find_from(text, word, start)
+        if found_pos == -1 {
+            break
+        }
+        
+        result = string.concat(result, string.slice(text, start, found_pos))
+        
+        var stars = ""
+        var i = 0
+        while i < string.len(word) {
+            stars = string.concat(stars, "*")
+            i = i + 1
+        }
+        
+        result = string.concat(result, stars)
+        start = found_pos + string.len(word)
+        pos = start
+    }
+    
+    result = string.concat(result, string.slice(text, start, string.len(text)))
+    return result
+}
+
+fn mentions(in text: Str, in word: Str) -> Int {
+    if string.is_empty(word) {
+        return 0
+    }
+    
+    var count = 0
+    var pos = 0
+    var start = 0
+    
+    while pos < string.len(text) {
+        var found_pos = string.find_from(text, word, start)
+        if found_pos == -1 {
+            break
+        }
+        
+        count = count + 1
+        start = found_pos + string.len(word)
+        pos = start
+    }
+    
+    return count
+}

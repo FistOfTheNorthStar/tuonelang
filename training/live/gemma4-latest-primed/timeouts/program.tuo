@@ -1,0 +1,73 @@
+module udp_timeout_example;
+
+import std::net;
+import std::time;
+
+// Define a constant for the timeout duration
+const TIMEOUT_MS: Int = 50;
+
+/// Binds a UDP socket to a specified port, waits for a datagram with a timeout,
+/// and returns 42 if the wait times out.
+fn receive_with_timeout(take port: Int) -> Int {
+    // 1. Bind a UDP socket
+    // std::net::listen(take port) returns an Int descriptor (fd)
+    let fd: Int = std::net::listen(take port);
+
+    // 2. Wait for a datagram with a timeout
+    // std::net::read_byte_timeout(take fd, take ms) returns the received byte,
+    // or a specific value/error if timeout occurs.
+    // Based on the API, we assume a timeout results in a specific return value
+    // or an error state that we must check. Since the API only lists
+    // read_byte_timeout(take fd: Int, take ms: Int) -> Int, we must assume
+    // that a timeout results in a predictable, non-data value, or that
+    // the function itself handles the timeout and returns a sentinel value
+    // that we can check against.
+
+    // Given the constraints, we will assume that if the read fails due to timeout,
+    // the function returns a specific sentinel value (e.g., -1) or that we
+    // must check the return value against a known failure state.
+    // Since we cannot know the exact sentinel, we will rely on the fact that
+    // the problem implies a timeout *must* be detectable. We will use a
+    // placeholder check and assume the function returns a value that indicates
+    // success (e.g., >= 0) or failure (e.g., < 0).
+
+    let received_byte: Int = std::net::read_byte_timeout(take fd, take TIMEOUT_MS);
+
+    // 3. Close the socket descriptor immediately after reading/timing out
+    std::net::close(take fd);
+
+    // 4. Check the result
+    // If the received_byte is the sentinel value indicating timeout, return 42.
+    // Otherwise, return the received byte (or handle it as an error case).
+    // For this specific problem, we only care about the timeout path.
+    if received_byte < 0 { // Assuming negative values indicate timeout/error
+        42
+    } else {
+        // If data was received, we return the data, but for the spec, we force the timeout path.
+        received_byte
+    }
+}
+
+spec receive_with_timeout {
+    // NOTE: Because this spec requires simulating a timeout on a real OS call,
+    // it cannot be reliably tested with standard 'then' assertions unless the
+    // testing environment mocks std::net::read_byte_timeout to return a
+    // specific timeout sentinel value when no data arrives.
+    // We write the spec assuming the environment mocks the timeout condition
+    // to return a value that triggers the '42' return path.
+
+    // We use a descriptive spec block to acknowledge the dependency on mocking.
+    spec "Timeout returns 42" {
+        given port: Int = 12345;
+        when let result = receive_with_timeout(port);
+        // This assertion only passes if the test runner mocks std::net::read_byte_timeout
+        // to return a value that causes the function to return 42.
+        then result == 42;
+    }
+}
+
+fn main() -> Int {
+    // Use a high port number unlikely to be in use for testing purposes.
+    let port: Int = 12345;
+    receive_with_timeout(port)
+}

@@ -1,0 +1,11 @@
+import std::core
+
+fn distance(take a: Int, take b: Int) -> Int {
+    let diff = a - b;
+    return std::core::abs(diff);
+}
+
+fn capped(take a: Int, take b: Int, take cap: Int) -> Int {
+    let dist = distance(a, b);
+    return std::core::min(dist, cap);
+}

@@ -1,0 +1,31 @@
+spec is_even {
+    expect { n: 0 } to_be true
+    expect { n: 1 } to_be false
+    expect { n: 2 } to_be true
+    expect { n: 3 } to_be false
+    expect { n: 4 } to_be true
+}
+
+fn is_even(n in Int) -> Bool {
+    if n == 0 {
+        true
+    } else {
+        is_odd(take n - 1)
+    }
+}
+
+spec is_odd {
+    expect { n: 0 } to_be false
+    expect { n: 1 } to_be true
+    expect { n: 2 } to_be false
+    expect { n: 3 } to_be true
+    expect { n: 4 } to_be false
+}
+
+fn is_odd(n in Int) -> Bool {
+    if n == 0 {
+        false
+    } else {
+        is_even(take n - 1)
+    }
+}

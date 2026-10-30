@@ -1,0 +1,21 @@
+enum Token {
+    Num { value: Int },
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    Caret,
+    LParen,
+    RParen
+}
+
+fn precedence(in t: Token) -> Int {
+    match t {
+        Token.Plus => 1,
+        Token.Minus => 1,
+        Token.Star => 2,
+        Token.Slash => 2,
+        Token.Caret => 3,
+        _ => 0
+    }
+}

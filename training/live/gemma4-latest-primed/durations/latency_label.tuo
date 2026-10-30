@@ -1,0 +1,32 @@
+import std::time;
+
+/// Calculates the duration between two nanosecond timestamps and renders it
+/// using the standard library's duration formatting.
+pub fn latency_label(take start_ns: Int, take end_ns: Int) -> String {
+    let start_duration = std::time::from_nanos(take start_ns);
+    let end_duration = std::time::from_nanos(take end_ns);
+    
+    let duration = end_duration - start_duration;
+    
+    std::time::render(in duration)
+}
+
+spec latency_label {
+    then latency_label(0, 1000000000) == "1s"; // 1 second
+    then latency_label(0, 150000000) == "150ms"; // 150 milliseconds
+    then latency_label(0, 250000) == "250us"; // 250 microseconds
+    then latency_label(0, 37000) == "37ns";   // 37 nanoseconds
+    then latency_label(1000000000, 1000000000) == "0s"; // Zero duration
+    then latency_label(500000000, 500000000) == "0s";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let label1 = latency_label(0, 1000000000);
+    std::io::println("Latency 1: " + label1);
+
+    let label2 = latency_label(1000000000, 1000000000);
+    std::io::println("Latency 2: " + label2);
+    
+    0
+}

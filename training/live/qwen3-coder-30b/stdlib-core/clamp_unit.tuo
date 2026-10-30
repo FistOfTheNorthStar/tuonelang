@@ -1,0 +1,5 @@
+import std::core
+
+fn clamp_unit(n: in Int) -> Int {
+    return clamp(n, 0, 100)
+}

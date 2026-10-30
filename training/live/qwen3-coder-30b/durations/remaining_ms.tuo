@@ -1,0 +1,18 @@
+import std::time
+
+fn remaining_ms(in steps_ms: [Int; 4], take budget_secs: Int) -> Int {
+    var total_duration = std::time::from_millis(0)
+    
+    for i in 0..4 {
+        total_duration = std::time::add(total_duration, std::time::from_millis(steps_ms[i]))
+    }
+    
+    var budget_duration = std::time::from_secs(budget_secs)
+    
+    if std::time::lt(total_duration, budget_duration) {
+        var diff = std::time::sub(budget_duration, total_duration)
+        return std::time::to_millis(diff)
+    } else {
+        return 0
+    }
+}

@@ -1,0 +1,41 @@
+module file_ops;
+
+import std::fs;
+import std::io;
+
+/// Write a short file, read it back, and remove it.
+pub fn process_file() -> Int {
+    let path = "/tmp/test_file.txt";
+    let content = "Hello, world!";
+    
+    // Write the file
+    let write_result = std::fs::write(path, content);
+    if std::core::is_err(write_result) {
+        return -1;
+    }
+    
+    // Read the file back
+    let read_result = std::fs::read(path);
+    let read_content: String;
+    match read_result {
+        Ok { value } => read_content = value,
+        Err { error } => return -1,
+    }
+    
+    // Remove the file
+    let remove_result = std::fs::remove(path);
+    if std::core::is_err(remove_result) {
+        return -1;
+    }
+    
+    // Return the byte count
+    std::string::len(read_content)
+}
+
+spec process_file {
+    then process_file() == 13;
+}
+
+fn main() -> Int {
+    process_file()
+}

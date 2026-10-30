@@ -1,0 +1,60 @@
+module file_ops;
+
+import std::fs;
+import std::string;
+import std::array;
+
+/// Writes content to a file, reads it back, and removes it.
+/// Returns the byte count of the read content.
+pub fn process_file(take path: Str, take content: Str) -> Int {
+    // 1. Write the content to the file
+    let write_result = std::fs::write(path, content);
+
+    // Check if writing failed
+    if !write_result.is_ok() {
+        // In a real scenario, we'd handle the FsError, but for this example,
+        // we'll just return 0 on failure.
+        return 0;
+    }
+
+    // 2. Read the content back
+    let read_result = std::fs::read(path);
+
+    // Check if reading failed
+    if !read_result.is_ok() {
+        return 0;
+    }
+
+    let read_content: String = read_result.unwrap();
+    let byte_count: Int = std::string::len(read_content);
+
+    // 3. Remove the file
+    let remove_result = std::fs::remove(path);
+
+    // We don't strictly need to check the removal result, but it's good practice.
+    if !remove_result.is_ok() {
+        // Log or handle removal failure if necessary
+    }
+
+    // 4. Return the byte count
+    byte_count
+}
+
+spec process_file {
+    given path: Str, content: Str;
+    when let result = process_file(path, content);
+    then result == std::string::len(content);
+}
+
+fn main() -> Int {
+    let filename: Str = "temp_test_file.txt";
+    let original_content: Str = "Hello, tuonelang!";
+
+    let byte_count = process_file(filename, original_content);
+
+    // Clean up the file even if the process fails (though the spec handles the core logic)
+    // We call remove here just to ensure the file is gone when main exits.
+    std::fs::remove(filename);
+
+    byte_count
+}

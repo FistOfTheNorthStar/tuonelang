@@ -1,0 +1,35 @@
+module app;
+
+/// Overwrites element 0 of a growable Array[Int] in place with 0,
+/// leaving an empty array alone, and returns the array.
+pub fn zero_first(mut xs: Array[Int]) -> Array[Int] {
+    if std::array::len(xs) > 0 {
+        std::array::set(xs, 0, 0);
+    }
+    xs
+}
+
+spec zero_first {
+    given xs: Array[Int];
+    when let result = zero_first(xs);
+    then std::array::len(result) == std::array::len(xs);
+}
+
+spec "zero_first sets first element to 0" {
+    given xs: Array[Int];
+    when let result = zero_first(xs);
+    when let len = std::array::len(xs);
+    when let first = if len > 0 { std::array::get(xs, 0) } else { 0 };
+    then first == 0;
+}
+
+spec "zero_first handles empty array" {
+    given xs: Array[Int];
+    when let result = zero_first(xs);
+    when let len = std::array::len(xs);
+    then if len == 0 { std::array::len(result) == 0 } else { std::array::len(result) == len };
+}
+
+fn main() -> Int {
+    0
+}

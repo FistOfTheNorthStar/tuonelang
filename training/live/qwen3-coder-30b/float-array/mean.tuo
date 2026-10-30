@@ -1,0 +1,39 @@
+import std.array
+import std.float
+
+fn mean(xs: in Array[Float]) -> Float {
+    if xs.len() == 0 {
+        return 0.0
+    }
+    
+    var sum: Float = 0.0
+    var i: Int = 0
+    while i < xs.len() {
+        sum = sum + xs[i]
+        i = i + 1
+    }
+    
+    return sum / xs.len()
+}
+
+spec mean {
+    test empty_array {
+        let xs: Array[Float] = Array[Float]{}
+        assert mean(xs) == 0.0
+    }
+    
+    test single_element {
+        let xs: Array[Float] = Array[Float]{1.0}
+        assert mean(xs) == 1.0
+    }
+    
+    test multiple_elements {
+        let xs: Array[Float] = Array[Float]{1.0, 2.0, 3.0}
+        assert mean(xs) == 2.0
+    }
+    
+    test_with_decimals {
+        let xs: Array[Float] = Array[Float]{1.5, 2.5}
+        assert mean(xs) == 2.0
+    }
+}

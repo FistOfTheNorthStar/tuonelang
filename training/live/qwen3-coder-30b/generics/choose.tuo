@@ -1,0 +1,7 @@
+fn choose[T](take use_override: Bool, take override: T, take default: T) -> T {
+  if use_override {
+    override
+  } else {
+    default
+  }
+}

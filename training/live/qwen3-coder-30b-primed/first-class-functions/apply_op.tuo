@@ -1,0 +1,65 @@
+module calculator;
+
+pub fn plus(take a: Int, take b: Int) -> Int {
+    a + b
+}
+
+pub fn minus(take a: Int, take b: Int) -> Int {
+    a - b
+}
+
+pub fn times(take a: Int, take b: Int) -> Int {
+    a * b
+}
+
+pub fn larger(take a: Int, take b: Int) -> Int {
+    if a > b { a } else { b }
+}
+
+pub fn apply_op(take code: Int, take a: Int, take b: Int) -> Int {
+    let ops: [fn(take Int, take Int) -> Int; 4] = [
+        plus,
+        minus,
+        times,
+        larger
+    ];
+    
+    if code >= 0 && code <= 3 {
+        ops[code](a, b)
+    } else {
+        0
+    }
+}
+
+spec plus {
+    then plus(2, 3) == 5;
+    then plus(0, 5) == 5;
+    then plus(-1, 1) == 0;
+}
+
+spec minus {
+    then minus(5, 3) == 2;
+    then minus(0, 5) == -5;
+    then minus(3, 3) == 0;
+}
+
+spec times {
+    then times(2, 3) == 6;
+    then times(0, 5) == 0;
+    then times(-2, 3) == -6;
+}
+
+spec larger {
+    then larger(2, 3) == 3;
+    then larger(5, 3) == 5;
+    then larger(4, 4) == 4;
+}
+
+spec apply_op {
+    then apply_op(0, 2, 3) == 5;
+    then apply_op(1, 5, 3) == 2;
+    then apply_op(2, 2, 3) == 6;
+    then apply_op(3, 2, 3) == 3;
+    then apply_op(4, 2, 3) == 0;
+    then apply_op(-1, 2, 3) == 0;
+}

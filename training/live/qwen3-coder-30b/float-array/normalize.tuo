@@ -1,0 +1,38 @@
+import std.array
+import std.math
+
+fn normalize(in xs: Array[Float]) -> Array[Float] {
+    if xs.len() == 0 {
+        return Array[Float]{}
+    }
+    
+    var min_val: Float = xs[0]
+    var max_val: Float = xs[0]
+    
+    for i in 0..xs.len() {
+        if xs[i] < min_val {
+            min_val = xs[i]
+        }
+        if xs[i] > max_val {
+            max_val = xs[i]
+        }
+    }
+    
+    if min_val == max_val {
+        var result: Array[Float] = Array[Float]{}
+        for i in 0..xs.len() {
+            result.push(0.0)
+        }
+        return result
+    }
+    
+    var range: Float = max_val - min_val
+    var result: Array[Float] = Array[Float]{}
+    
+    for i in 0..xs.len() {
+        var normalized: Float = (xs[i] - min_val) / range
+        result.push(normalized)
+    }
+    
+    return result
+}

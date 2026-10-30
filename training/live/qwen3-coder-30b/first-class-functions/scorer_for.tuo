@@ -1,0 +1,31 @@
+import std::collections
+
+fn flat(take raw: Int) -> Int {
+    raw
+}
+
+fn doubled(take raw: Int) -> Int {
+    raw * 2
+}
+
+fn capped(take raw: Int) -> Int {
+    if raw > 100 {
+        100
+    } else {
+        raw
+    }
+}
+
+fn scorer_for(take mode: Int) -> fn(take Int) -> Int {
+    match mode {
+        1 => doubled,
+        2 => capped,
+        _ => flat
+    }
+}
+
+fn score_all(in raws: Array[Int], take mode: Int) -> Int {
+    var scorer = scorer_for(mode)
+    var scored = std::collections::map_into(raws, scorer)
+    std::collections::sum(scored)
+}

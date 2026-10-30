@@ -1,0 +1,142 @@
+module ledger_app;
+
+// Define the Entry enum
+enum Entry {
+    Deposit { amount: Int },
+    Withdrawal { amount: Int },
+    Fee { amount: Int, waived: Bool },
+    Freeze
+}
+
+/// Applies a single entry to the current balance.
+/// Returns the new balance.
+fn apply(take balance: Int, in e: Entry) -> Int {
+    match e {
+        Entry::Deposit { amount } => {
+            balance + amount
+        }
+        Entry::Withdrawal { amount } => {
+            if balance >= amount {
+                balance - amount
+            } else {
+                // Overdraw, ignored
+                balance
+            }
+        }
+        Entry::Fee { amount, waived } => {
+            if waived {
+                balance
+            } else {
+                // Fees may overdraw, so we just subtract
+                balance - amount
+            }
+        }
+        Entry::Freeze => {
+            balance
+        }
+    }
+}
+
+/// Applies a sequence of entries to a starting balance, stopping at the first Freeze.
+fn balance_after(in entries: Array[Entry]) -> Int {
+    var current_balance = 0;
+    var i = 0;
+
+    while i < std::array::len(entries) {
+        let entry = std::array::get(entries, i);
+        
+        // Check for Freeze before applying
+        match entry {
+            Entry::Freeze => {
+                // Stop at the first Freeze
+                break;
+            }
+            _ => {
+                // Apply the entry and update the balance
+                current_balance = apply(current_balance, entry);
+            }
+        }
+        i = i + 1;
+    }
+    current_balance
+}
+
+// --- Specs ---
+
+spec apply {
+    // Test Deposit
+    then apply(100, Entry::Deposit { amount: 50 }) == 150;
+    // Test Withdrawal success
+    then apply(100, Entry::Withdrawal { amount: 30 }) == 70;
+    // Test Withdrawal overdraw (ignored)
+    then apply(50, Entry::Withdrawal { amount: 100 }) == 50;
+    // Test Fee waived
+    then apply(100, Entry::Fee { amount: 20, waived: true }) == 100;
+    // Test Fee not waived
+    then apply(100, Entry::Fee { amount: 20, waived: false }) == 80;
+    // Test Freeze
+    then apply(100, Entry::Freeze) == 100;
+}
+
+spec balance_after {
+    // Simple sequence: Deposit -> Withdrawal -> Fee
+    then balance_after(std::array::of3(
+        Entry::Deposit { amount: 100 },
+        Entry::Withdrawal { amount: 20 },
+        Entry::Fee { amount: 10, waived: false }
+    )) == 70; // 100 + 100 = 200 (Wait, Deposit is 100, Withdrawal is 20, Fee is 10. 100 - 20 - 10 = 70)
+    
+    // Sequence with overdraw withdrawal
+    then balance_after(std::array::of3(
+        Entry::Deposit { amount: 100 },
+        Entry::Withdrawal { amount: 150 }, // Ignored
+        Entry::Fee { amount: 10, waived: false }
+    )) == 90; // 100 -> 100 (ignored) -> 90
+
+    // Sequence stopping at Freeze
+    then balance_after(std::array::of3(
+        Entry::Deposit { amount: 50 },
+        Entry::Withdrawal { amount: 10 },
+        Entry::Freeze
+    )) == 40; // 50 -> 40. Stops before Freeze.
+
+    // Sequence starting with Freeze
+    then balance_after(std::array::of3(
+        Entry::Freeze,
+        Entry::Deposit { amount: 10 }
+    )) == 0; // Starts at 0, hits Freeze immediately.
+
+    // Sequence with only Freeze
+    then balance_after(std::array::of3(
+        Entry::Freeze
+    )) == 0;
+}
+
+fn main() -> Int {
+    // Test case 1: Normal flow
+    let entries1: Array[Entry] = std::array::of3(
+        Entry::Deposit { amount: 100 },
+        Entry::Withdrawal { amount: 20 },
+        Entry::Fee { amount: 10, waived: false }
+    );
+    let result1 = balance_after(entries1);
+
+    // Test case 2: Flow interrupted by Freeze
+    let entries2: Array[Entry] = std::array::of3(
+        Entry::Deposit { amount: 50 },
+        Entry::Withdrawal { amount: 10 },
+        Entry::Freeze
+    );
+    let result2 = balance_after(entries2);
+
+    // Test case 3: Flow that never hits Freeze
+    let entries3: Array[Entry] = std::array::of3(
+        Entry::Deposit { amount: 10 },
+        Entry::Deposit { amount: 5 }
+    );
+    let result3 = balance_after(entries3);
+
+    // The main function returns the result of the last calculation for simplicity,
+    // but we can combine them if needed. Here we just return the result of the first test.
+    result1
+}

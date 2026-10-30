@@ -1,0 +1,17 @@
+import std::map
+import std::string
+
+fn main() {
+    var s = "hello world"
+    var view = std::string::as_str(s)
+    
+    var m = map::new[Str, Int]()
+    map::insert(m, "key1", 42)
+    map::insert(m, "key2", 100)
+    
+    var result = map::get(m, "key1")
+    if result is Some {
+        // Access the value
+        var value = result.value
+    }
+}

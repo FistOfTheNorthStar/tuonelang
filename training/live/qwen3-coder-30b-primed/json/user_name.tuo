@@ -1,0 +1,65 @@
+module app;
+
+import std::json;
+
+fn user_name(in text: Str) -> String {
+    let parse_result = std::json::parse(text);
+    match parse_result {
+        Ok { value: doc } => {
+            let user_node = std::json::member(doc, std::json::root(), "user");
+            match user_node {
+                -1 => String { value: "anonymous" },
+                user_index => {
+                    let name_node = std::json::member(doc, user_index, "name");
+                    match name_node {
+                        -1 => String { value: "anonymous" },
+                        name_index => {
+                            match std::json::kind_of(doc, name_index) {
+                                4 => { // kind_string
+                                    let name_str = std::json::text_of(doc, name_index);
+                                    String { value: name_str }
+                                },
+                                _ => String { value: "anonymous" }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        Err { error: _ } => String { value: "anonymous" }
+    }
+}
+
+spec user_name {
+    given text: Str;
+    when let result = user_name(text);
+    then std::str::len(result) >= 0; // placeholder test
+}
+
+spec "valid user name" {
+    then user_name("{\"user\":{\"name\":\"Alice\"}}") == "Alice";
+}
+
+spec "missing user object" {
+    then user_name("{\"name\":\"Alice\"}") == "anonymous";
+}
+
+spec "missing name field" {
+    then user_name("{\"user\":{}}") == "anonymous";
+}
+
+spec "name is not a string" {
+    then user_name("{\"user\":{\"name\":123}}") == "anonymous";
+}
+
+spec "invalid json" {
+    then user_name("not json") == "anonymous";
+}
+
+spec "empty name" {
+    then user_name("{\"user\":{\"name\":\"\"}}") == "";
+}
+
+fn main() -> Int {
+    0
+}

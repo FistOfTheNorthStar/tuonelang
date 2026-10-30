@@ -1,0 +1,15 @@
+import std.array
+import std.option
+
+fn compact(in readings: Array[Int]) -> Array[Int] {
+    var result: Array[Int] = array.new[Int](0)
+    
+    for i in 0..readings.len() {
+        var reading: Int = readings[i]
+        if reading >= 0 {
+            array.push(result, reading)
+        }
+    }
+    
+    return result
+}

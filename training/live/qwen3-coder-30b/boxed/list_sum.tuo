@@ -1,0 +1,28 @@
+struct Node {
+  value: Int,
+  next: Option[Box[Node]]
+}
+
+function cons(take value: Int, take rest: Option[Box[Node]]) -> Option[Box[Node]] {
+  Some { value: Box { Node { value: value, next: rest } } }
+}
+
+function list_sum(in list: Option[Box[Node]]) -> Int {
+  match list {
+    None -> 0
+    Some { value: node } -> {
+      var sum: Int = node.value
+      var current: Option[Box[Node]] = node.next
+      while current != None {
+        match current {
+          None -> {}
+          Some { value: node } -> {
+            sum = sum + node.value
+            current = node.next
+          }
+        }
+      }
+      sum
+    }
+  }
+}

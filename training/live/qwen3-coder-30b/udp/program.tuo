@@ -1,0 +1,38 @@
+import io
+import net
+import time
+
+fn main() {
+    var socket = net.udp_socket()
+    var addr = net.ip_addr("127.0.0.1:8080")
+    
+    // Bind the socket to the address
+    net.bind(socket, addr)
+    
+    // Send "ping" datagram in a loop
+    var i = 0
+    while i < 10 {
+        var payload = io.byte_array("ping")
+        net.send_to(socket, payload, addr)
+        
+        // Receive the response
+        var buffer = io.byte_array(1024)
+        var (bytes_received, sender_addr) = net.recv_from(socket, buffer)
+        
+        // Calculate byte sum modulo 100
+        var sum = 0
+        var j = 0
+        while j < bytes_received {
+            sum = sum + buffer[j]
+            j = j + 1
+        }
+        
+        var result = sum % 100
+        io.print("Byte sum modulo 100: ", result)
+        
+        i = i + 1
+        time.sleep_millis(100)
+    }
+    
+    net.close(socket)
+}

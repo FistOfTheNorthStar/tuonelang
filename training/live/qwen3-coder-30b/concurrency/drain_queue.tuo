@@ -1,0 +1,44 @@
+import std::sync
+import std::io
+
+fn drain_queue(take ch: Int) -> Int {
+    var total = 0
+    var value = 0
+    while std::sync::try_recv(ch, take value) {
+        total = total + value
+    }
+    return total
+}
+
+fn main() -> Int {
+    var ch = std::sync::channel()
+    
+    // Put tasks 1, 2, ..., 20 into the channel
+    for i in 1..20 {
+        std::sync::send(ch, take i)
+    }
+    
+    // Close the channel
+    std::sync::close(ch)
+    
+    // Run four workers
+    var results = std::sync::par_map(4, take drain_queue, take ch)
+    
+    // Check if we got 4 results
+    if results.len() != 4 {
+        return 2
+    }
+    
+    // Sum all the results
+    var total = 0
+    for result in results {
+        total = total + result
+    }
+    
+    // The sum should be 1+2+...+20 = 210
+    if total == 210 {
+        return total
+    } else {
+        return 2
+    }
+}

@@ -1,0 +1,23 @@
+module string_reverse;
+
+/// Return a new String with the bytes of s in reverse order.
+pub fn reversed(in s: Str) -> String {
+    let len = std::str::len(s);
+    let mut result = std::string::empty();
+    
+    var i = len - 1;
+    while i >= 0 {
+        let byte = std::str::byte_at(s, i);
+        std::string::push_byte(result, byte);
+        i = i - 1;
+    }
+    
+    result
+}
+
+spec reversed {
+    then reversed("abc") == "cba";
+    then reversed("") == "";
+    then reversed("a") == "a";
+    then reversed("hello") == "olleh";
+}

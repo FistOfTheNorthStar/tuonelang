@@ -1,0 +1,23 @@
+import std::str
+
+parse_port(in field: Str) -> Result[Int, Str] {
+    var parsed = std::str::parse_int(field)
+    if parsed.is_err() {
+        return parsed
+    }
+    
+    var port = parsed.unwrap().value
+    if port < 1 or port > 65535 {
+        return Err { error: "port out of range" }
+    }
+    
+    return Ok { value: port }
+}
+
+error_of(in r: Result[Int, Str]) -> Str {
+    if r.is_ok() {
+        return ""
+    }
+    
+    return r.unwrap_err().error
+}

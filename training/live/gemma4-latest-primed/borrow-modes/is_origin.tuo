@@ -1,0 +1,12 @@
+fn is_origin(in p: Point) -> Bool {
+    let x_is_zero = std::core::is_zero(p.x);
+    let y_is_zero = std::core::is_zero(p.y);
+    x_is_zero && y_is_zero
+}
+
+spec is_origin {
+    then is_origin(Point { x: 0, y: 0 }) == true;
+    then is_origin(Point { x: 1, y: 0 }) == false;
+    then is_origin(Point { x: 0, y: 1 }) == false;
+    then is_origin(Point { x: 5, y: 5 }) == false;
+}

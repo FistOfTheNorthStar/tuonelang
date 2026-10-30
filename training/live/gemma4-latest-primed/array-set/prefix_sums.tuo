@@ -1,0 +1,26 @@
+/// Calculates the prefix sums of an array of 5 integers.
+/// The result at index i is the sum of elements from index 0 to i.
+pub fn prefix_sums(take xs: [Int; 5]) -> [Int; 5] {
+    var result: [Int; 5] = [0; 5];
+    var current_sum = 0;
+
+    for i in 0..5 {
+        current_sum = current_sum + xs[i];
+        result[i] = current_sum;
+    }
+    result
+}
+
+spec prefix_sums {
+    then prefix_sums([1, 2, 3, 4, 5]) == [1, 3, 6, 10, 15];
+    then prefix_sums([0, 0, 0, 0, 0]) == [0, 0, 0, 0, 0];
+    then prefix_sums([10, -5, 2, 0, 1]) == [10, 5, 7, 7, 8];
+}
+
+fn main() -> Int {
+    let test_array: [Int; 5] = [1, 2, 3, 4, 5];
+    let sums = prefix_sums(test_array);
+    // For demonstration, we'll just return the sum of the result array
+    // to satisfy the main function's return type requirement.
+    std::collections::sum(std::array::filled(5, 0)) // Placeholder to compile main
+}

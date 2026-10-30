@@ -1,0 +1,40 @@
+import "strings"
+import "unicode"
+
+fn slugify(in title: Str) -> String {
+    var result: String = ""
+    var in_run: Bool = false
+    
+    var i: Int = 0
+    while i < len(title) {
+        var c: Byte = title[i]
+        var is_ascii_letter: Bool = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+        var is_digit: Bool = (c >= '0' && c <= '9')
+        
+        if is_ascii_letter || is_digit {
+            var lower_c: Byte = c
+            if is_ascii_letter && (c >= 'A' && c <= 'Z') {
+                lower_c = c + ('a' - 'A')
+            }
+            result = result + Str { value: [lower_c] }
+            in_run = false
+        } else {
+            if !in_run && len(result) > 0 {
+                result = result + "-"
+                in_run = true
+            }
+        }
+        i = i + 1
+    }
+    
+    // Remove leading and trailing dashes
+    while len(result) > 0 && result[0] == '-' {
+        result = substring(result, 1, len(result))
+    }
+    
+    while len(result) > 0 && result[len(result) - 1] == '-' {
+        result = substring(result, 0, len(result) - 1)
+    }
+    
+    return result
+}

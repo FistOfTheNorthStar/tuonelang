@@ -1,0 +1,41 @@
+module json_keys;
+
+import std::json;
+
+/// Extract top-level member keys from a JSON object, joined by commas.
+pub fn key_list(in text: Str) -> String {
+    let parse_result = std::json::parse(text);
+    match parse_result {
+        Ok { value: doc } => {
+            let root_node = std::json::root();
+            let kind = std::json::kind_of(doc, root_node);
+            if kind == std::json::kind_object() {
+                let mut result = std::string::empty();
+                let first_child = std::json::first_child(doc, root_node);
+                let mut node = first_child;
+                while node != -1 {
+                    let key = std::json::key_of(doc, node);
+                    if std::string::len(result) > 0 {
+                        std::string::append(result, ",");
+                    }
+                    std::string::append(result, key);
+                    node = std::json::next_sibling(doc, node);
+                }
+                result
+            } else {
+                std::string::empty()
+            }
+        }
+        Err { error: _ } => std::string::empty(),
+    }
+}
+
+spec key_list {
+    then key_list("{}") == "";
+    then key_list("{\"a\": 1}") == "a";
+    then key_list("{\"a\": 1, \"b\": 2}") == "a,b";
+    then key_list("{\"\": 1, \"x\": 2}") == ",x";
+    then key_list("null") == "";
+    then key_list("[1, 2, 3]") == "";
+    then key_list("not json") == "";
+}

@@ -1,0 +1,14 @@
+import std.result
+import std.str
+
+fn parse_flag(n in Int) -> Result[Int, Str] {
+    if n == 0 {
+        return Ok { value: 0 }
+    }
+    
+    if n == 1 {
+        return Ok { value: 1 }
+    }
+    
+    return Err { error: "not a flag" }
+}

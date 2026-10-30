@@ -1,0 +1,39 @@
+/// Calculates the arithmetic mean of the elements in an array of floats.
+/// Returns 0.0 if the array is empty.
+pub fn mean(in xs: Array[Float]) -> Float {
+    let len = std::array::len(xs);
+    if len == 0 {
+        0.0
+    } else {
+        let sum_array = std::collections::sum(xs);
+        // std::collections::sum returns Int, but we need Float for mean calculation.
+        // Since the input is Array[Float], we must sum it using a float-aware fold or map/sum combination.
+        // We will use fold with Float arithmetic.
+        let sum: Float = std::collections::fold(in xs, 0.0, |acc: Float, x: Float| acc + x);
+        sum / (float_to_string(std::array::len(xs)) as Float)
+    }
+}
+
+spec mean {
+    then mean(std::array::filled(5, 1.0)) == 1.0;
+    then mean(std::array::filled(1, 10.0)) == 10.0;
+    then mean(std::array::filled(3, 1.0)) == 1.0;
+    then mean(std::array::filled(0, 0.0)) == 0.0;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let data1: Array[Float] = std::array::filled(5, 1.0);
+    let mean1 = mean(data1);
+
+    let data2: Array[Float] = std::array::filled(0, 0.0);
+    let mean2 = mean(data2);
+
+    // We can't easily print the result and check the exit code for multiple values,
+    // so we just return 0 to indicate success.
+    if mean1 == 1.0 {
+        0
+    } else {
+        1
+    }
+}

@@ -1,0 +1,8 @@
+fn double(x in Int) -> Int {
+    return x + x;
+}
+
+spec double {
+    expect double(3) == 6;
+    expect double(0) == 0;
+}

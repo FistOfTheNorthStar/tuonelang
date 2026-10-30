@@ -1,0 +1,20 @@
+import io
+import net
+import time
+
+fn main() -> Int {
+    var socket = net.udp_socket()
+    var addr = net.ip_addr("127.0.0.1", 0)
+    net.bind(socket, addr)
+    
+    var buffer = [Byte; 1024]
+    var timeout = time.millis(50)
+    
+    var result = io.recv_from_timeout(socket, buffer, timeout)
+    
+    if result is Err {
+        return 42
+    }
+    
+    return 0
+}

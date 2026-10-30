@@ -1,0 +1,51 @@
+module safe_division;
+
+/// safe_div calculates the integer division of a by b.
+/// Returns Some { value } if b is not zero, otherwise None.
+pub fn safe_div(take a: Int, take b: Int) -> Option[Int] {
+    if b == 0 {
+        None
+    } else {
+        Some { value: a / b }
+    }
+}
+
+/// or_zero extracts the value from an Option[Int].
+/// If the Option is Some { value: x }, it returns x.
+/// If the Option is None, it returns 0.
+pub fn or_zero(in o: Option[Int]) -> Int {
+    match o {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec safe_div {
+    then safe_div(10, 2) == Some { value: 5 };
+    then safe_div(10, 0) == None;
+    then safe_div(0, 5) == Some { value: 0 };
+    then safe_div(-10, 2) == Some { value: -5 };
+    then safe_div(10, -2) == Some { value: -5 };
+}
+
+spec "or_zero handles None" {
+    then or_zero(None) == 0;
+}
+
+spec "or_zero handles Some" {
+    then or_zero(Some { value: 42 }) == 42;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let result1 = safe_div(10, 2);
+    let safe_val1 = or_zero(result1);
+
+    let result2 = safe_div(10, 0);
+    let safe_val2 = or_zero(result2);
+
+    // We can't assert the return value of main directly in a spec,
+    // but we can demonstrate the logic flow.
+    // For the purpose of a runnable main, we return a constant.
+    safe_val1 + safe_val2
+}

@@ -1,0 +1,12 @@
+import std::bit
+
+fn pack_rgb(take r: Int, take g: Int, take b: Int) -> Int {
+    var red = r & 0xFF
+    var green = g & 0xFF
+    var blue = b & 0xFF
+    return (red << 16) | (green << 8) | blue
+}
+
+fn green_of(take color: Int) -> Int {
+    return (color >> 8) & 0xFF
+}

@@ -46,6 +46,8 @@
   "harvested_dropped": 120,
   "harvested_duplicates": 6,
   "harvested_kept": 291,
+  "live_attempts": 324,
+  "live_attempts_stale": 0,
   "oneshot_examples": 430,
   "repair_by_break": {
     "angle-bracket-generics": 12,
@@ -57,6 +59,9 @@
     "int-index": 5,
     "let-for-var-heap": 35,
     "let-mut-for-var": 70,
+    "live:gemma4-latest-primed": 108,
+    "live:qwen3-coder-30b": 134,
+    "live:qwen3-coder-30b-primed": 82,
     "method-call": 39,
     "missing-param-mode": 86,
     "off-by-one-bound": 7,
@@ -68,12 +73,13 @@
     "wrong-module-len": 7
   },
   "repair_by_kind": {
-    "ownership": 37,
-    "parse": 275,
-    "spec": 132,
-    "type": 85
+    "ownership": 42,
+    "parse": 509,
+    "resolve": 25,
+    "spec": 154,
+    "type": 123
   },
-  "repair_examples": 529,
+  "repair_examples": 853,
   "tiers": {
     "effect": 16,
     "executable": 121,

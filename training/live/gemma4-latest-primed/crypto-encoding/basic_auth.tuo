@@ -1,0 +1,37 @@
+import std::crypto;
+import std::str;
+import std::array;
+
+/// Encodes a string into an HTTP Basic Authorization header value.
+/// The format is "Basic " followed by the Base64 encoding of "user:password".
+pub fn basic_auth(take user: Str, take password: Str) -> String {
+    // 1. Construct the "user:password" string.
+    let credentials = std::str::join(
+        std::array::of2(user, ":", password),
+        ":",
+        ""
+    );
+
+    // 2. Convert the string to bytes (Array[Int]).
+    let bytes = std::crypto::bytes_of_str(credentials);
+
+    // 3. Base64 encode the bytes.
+    let base64_encoded = std::crypto::base64_encode(bytes);
+
+    // 4. Prepend "Basic " prefix.
+    std::str::concat("Basic ", base64_encoded)
+}
+
+spec basic_auth {
+    then basic_auth("user", "pass") == "Basic cHVzczpwYXNz";
+    then basic_auth("user", "") == "Basic dXNlcjpwYXNz"; // Should be Basic user:
+    then basic_auth("", "pass") == "Basic aA==";       // Should be Basic :pass
+    then basic_auth("", "") == "Basic AA==";           // Should be Basic :
+}
+
+fn main() -> Int {
+    // Example usage:
+    let auth_header = basic_auth("myuser", "mypassword123");
+    std::io::println(auth_header).unwrap_or(0);
+    0
+}

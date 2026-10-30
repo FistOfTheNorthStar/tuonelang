@@ -1,0 +1,50 @@
+module temperature;
+
+import std::collections;
+
+fn is_valid(take reading: Int) -> Bool {
+    reading >= 0 && reading <= 150
+}
+
+fn is_alarm(take reading: Int) -> Bool {
+    reading > 100
+}
+
+/// Count the number of alarm readings in a batch.
+pub fn alarm_count(in readings: Array[Int]) -> Int {
+    let alarms = collections::filter_into(readings, is_alarm);
+    collections::len(alarms)
+}
+
+/// Determine the status of a temperature batch.
+pub fn batch_status(in readings: Array[Int]) -> Int {
+    // Check if any reading is invalid
+    if collections::any(readings, is_valid) == false {
+        0
+    } else {
+        // Check if at least one reading is an alarm
+        if collections::any(readings, is_alarm) {
+            2
+        } else {
+            // All readings are valid and none are alarms
+            1
+        }
+    }
+}
+
+spec alarm_count {
+    given readings: Array[Int];
+    when let result = alarm_count(readings);
+    then result == collections::len(collections::filter_into(readings, is_alarm));
+}
+
+spec batch_status {
+    then batch_status([50, 60, 70]) == 1;
+    then batch_status([50, 101, 70]) == 2;
+    then batch_status([50, 151, 70]) == 0;
+    then batch_status([]) == 1;
+}
+
+fn main() -> Int {
+    0
+}

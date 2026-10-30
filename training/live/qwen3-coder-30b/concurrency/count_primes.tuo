@@ -1,0 +1,50 @@
+import std::sync
+
+fn is_prime(take n: Int) -> Bool {
+    if n < 2 {
+        return false
+    }
+    if n == 2 {
+        return true
+    }
+    if n % 2 == 0 {
+        return false
+    }
+    
+    var i = 3
+    while i * i <= n {
+        if n % i == 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+fn count_primes(take chunk: Int) -> Int {
+    var count = 0
+    var start = chunk * 250
+    var end = start + 250
+    
+    var i = start
+    while i < end {
+        if is_prime(i) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn main() -> Int {
+    var chunks = [0, 1, 2, 3]
+    var results = sync::par_map(chunks, count_primes)
+    
+    var total = 0
+    var i = 0
+    while i < results.len() {
+        total = total + results[i]
+        i = i + 1
+    }
+    return total
+}

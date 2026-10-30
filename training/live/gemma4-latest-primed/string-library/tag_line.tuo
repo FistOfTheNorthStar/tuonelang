@@ -1,0 +1,41 @@
+import std::str;
+import std::array;
+
+/// Renders an array of tags into a space-separated string of hashtags.
+/// Each tag is lowercased and prefixed with '#'.
+pub fn tag_line(take tags: Array[Str]) -> String {
+    if std::array::len(tags) == 0 {
+        std::str::empty()
+    } else {
+        let processed_tags: Array[String] = std::array::map_into_strings(
+            tags,
+            fn(in tag: Str) -> String {
+                // 1. Convert to lowercase (ASCII)
+                let lower_tag = std::str::to_lower(in tag);
+                // 2. Prepend '#'
+                std::str::concat("#", lower_tag)
+            }
+        );
+        // 3. Join with single spaces
+        std::str::join(processed_tags, " ")
+    }
+}
+
+spec tag_line {
+    then tag_line(std::array::of2("Rust", "LLM")) == "#rust #llm";
+    then tag_line(std::array::of2("PYTHON", "JAVA")) == "#python #java";
+    then tag_line(std::array::empty()) == "";
+    then tag_line(std::array::of2("Single")) == "#single";
+}
+
+fn main() -> Int {
+    let tags1: Array[Str] = std::array::of2("Rust", "LLM");
+    let result1 = tag_line(tags1);
+    std::io::println(std::str::concat("Tags 1: ", result1)).unwrap();
+
+    let tags2: Array[Str] = std::array::empty();
+    let result2 = tag_line(tags2);
+    std::io::println(std::str::concat("Tags 2: ", result2)).unwrap();
+
+    0
+}

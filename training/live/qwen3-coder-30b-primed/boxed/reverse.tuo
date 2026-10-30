@@ -1,0 +1,63 @@
+module app;
+
+struct Node { value: Int, next: Option[Box[Node]] }
+
+fn reverse(take list: Option[Box[Node]]) -> Option[Box[Node]] {
+    var reversed: Option[Box[Node]] = None;
+    var current = list;
+    
+    while std::core::is_some(current) {
+        let Box { value, next } = std::boxed::into(current);
+        let new_node = std::boxed::new(Node { value, next: reversed });
+        reversed = Some { value: new_node };
+        current = next;
+    }
+    
+    reversed
+}
+
+fn digits(in list: Option[Box[Node]]) -> Int {
+    var result = 0;
+    var current = list;
+    
+    while std::core::is_some(current) {
+        let Box { value, next } = std::boxed::into(current);
+        result = result * 10 + value;
+        current = next;
+    }
+    
+    result
+}
+
+spec reverse {
+    then reverse(None) == None;
+    
+    let node1 = std::boxed::new(Node { value: 1, next: None });
+    let node2 = std::boxed::new(Node { value: 2, next: Some { value: node1 } });
+    let node3 = std::boxed::new(Node { value: 3, next: Some { value: node2 } });
+    let list = Some { value: node3 };
+    
+    let reversed = reverse(list);
+    let reversed_node1 = std::boxed::into(reversed);
+    let reversed_node2 = std::boxed::into(reversed_node1.next);
+    let reversed_node3 = std::boxed::into(reversed_node2.next);
+    
+    then reversed_node1.value == 3;
+    then reversed_node2.value == 2;
+    then reversed_node3.value == 1;
+}
+
+spec digits {
+    then digits(None) == 0;
+    
+    let node1 = std::boxed::new(Node { value: 1, next: None });
+    let node2 = std::boxed::new(Node { value: 2, next: Some { value: node1 } });
+    let node3 = std::boxed::new(Node { value: 3, next: Some { value: node2 } });
+    let list = Some { value: node3 };
+    
+    then digits(list) == 321;
+}
+
+fn main() -> Int {
+    0
+}

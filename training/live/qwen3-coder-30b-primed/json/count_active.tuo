@@ -1,0 +1,51 @@
+module json_active;
+
+import std::json;
+
+/// Count active users in a JSON array.
+/// Returns -1 if text is not valid JSON.
+pub fn count_active(in text: Str) -> Int {
+    let result = std::json::parse(text);
+    match result {
+        Ok { value: d } => {
+            let root = std::json::root();
+            let kind = std::json::kind_of(d, root);
+            if kind == std::json::kind_array() {
+                let mut count = 0;
+                let mut node = std::json::first_child(d, root);
+                while node != -1 {
+                    let child_kind = std::json::kind_of(d, node);
+                    if child_kind == std::json::kind_object() {
+                        let active_node = std::json::member(d, node, "active");
+                        if active_node != -1 {
+                            let active_kind = std::json::kind_of(d, active_node);
+                            if active_kind == std::json::kind_true() {
+                                count = count + 1;
+                            }
+                        }
+                    }
+                    node = std::json::next_sibling(d, node);
+                }
+                count
+            } else {
+                -1
+            }
+        }
+        Err { error: _ } => -1,
+    }
+}
+
+spec count_active {
+    then count_active("[]") == 0;
+    then count_active("[{\"active\": true}]") == 1;
+    then count_active("[{\"active\": false}]") == 0;
+    then count_active("[{\"active\": null}]") == 0;
+    then count_active("[{\"active\": \"true\"}]") == 0;
+    then count_active("[{\"active\": true}, {\"active\": true}]") == 2;
+    then count_active("[{\"active\": true}, {\"active\": false}]") == 1;
+    then count_active("[{\"name\": \"alice\"}]") == 0;
+    then count_active("[{\"name\": \"alice\", \"active\": true}]") == 1;
+    then count_active("not json") == -1;
+    then count_active("[1, 2, 3]") == 0;
+    then count_active("[{\"active\": true}, {\"active\": true}, {\"active\": true}]") == 3;
+}

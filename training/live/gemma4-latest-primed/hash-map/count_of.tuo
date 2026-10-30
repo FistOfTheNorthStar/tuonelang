@@ -1,0 +1,67 @@
+module app;
+
+import std::collections;
+import std::array;
+
+/// Builds a frequency table of an Array[Int] and returns the count of a specific needle.
+pub fn count_of(in xs: Array[Int], take needle: Int) -> Int {
+    // 1. Build the frequency map
+    var counts: std::map::Map[Int, Int] = std::map::empty();
+    for x in xs {
+        // Use std::map::insert to update the count.
+        // If the key exists, insert returns Some(old_value).
+        // We use the result of insert to calculate the new value.
+        let old_count = std::map::insert(counts, x, 1);
+        
+        // Since we are building the map iteratively, we need to manually update the count
+        // if the key already exists, as std::map::insert returns Option[V] (the old value).
+        // A simpler approach is to check existence and update, or use a fold/map pattern.
+        
+        // Let's use a fold pattern to build the map cleanly.
+    }
+
+    // Re-implementing map building using fold for clarity and correctness:
+    var counts_fold: std::map::Map[Int, Int] = std::map::empty();
+    counts_fold = std::array::fold(in xs, std::map::empty(), |acc_map, x| {
+        // Get current count, default to 0 if not present
+        let current_count = std::map::get(acc_map, x).unwrap_or(0);
+        // Insert the incremented count
+        std::map::insert(acc_map, x, current_count + 1)
+    });
+    
+    // 2. Retrieve the count for the needle
+    match std::map::get(counts_fold, needle) {
+        Some { value: count } => count,
+        None => 0,
+    }
+}
+
+spec count_of {
+    // Test case 1: Needle present multiple times
+    then count_of([1, 2, 1, 3, 1], 1) == 3;
+    
+    // Test case 2: Needle present once
+    then count_of([1, 2, 3], 2) == 1;
+    
+    // Test case 3: Needle absent
+    then count_of([1, 2, 3], 99) == 0;
+    
+    // Test case 4: Empty array
+    then count_of([0], 1) == 0;
+    then count_of([], 5) == 0;
+    
+    // Test case 5: All elements are the needle
+    then count_of([5, 5, 5], 5) == 3;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let data: Array[Int] = [10, 20, 10, 30, 10];
+    let needle_to_find = 10;
+    let count = count_of(data, needle_to_find);
+    
+    // Print the result (though main's return value is the exit status)
+    // We just return 0 to indicate success for the executable part.
+    println("The number {} appears {} times in the array.", 10, count);
+    0
+}

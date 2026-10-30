@@ -1,0 +1,44 @@
+module csv;
+
+/// Split a line on ',', trim each field, parse as decimal integer, and sum.
+/// Return None if any field is empty or not an integer.
+pub fn sum_fields(in line: Str) -> Option[Int] {
+    if line == "" {
+        return None;
+    }
+    
+    let fields = std::str::split(line, ",");
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(fields) {
+        let field = std::string::from_str(std::array::get(fields, i));
+        let trimmed = std::str::trim(std::string::as_str(field));
+        
+        // Check if field is empty
+        if std::str::len(trimmed) == 0 {
+            return None;
+        }
+        
+        // Parse the integer
+        let parsed = std::str::parse_int(trimmed);
+        match parsed {
+            Ok { value } => total = total + value,
+            Err { error: _ } => return None,
+        }
+        
+        i = i + 1;
+    }
+    
+    Some { value: total }
+}
+
+spec sum_fields {
+    then sum_fields("1,2,3") == Some { value: 6 };
+    then sum_fields(" 1 , 2 , 3 ") == Some { value: 6 };
+    then sum_fields("") == None;
+    then sum_fields("1,") == None;
+    then sum_fields(",1") == None;
+    then sum_fields("1,a") == None;
+    then sum_fields("1,  ") == None;
+    then sum_fields("  ,1") == None;
+}

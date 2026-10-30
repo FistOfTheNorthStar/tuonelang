@@ -1,0 +1,70 @@
+/// Rescales an array of floats linearly so the minimum value becomes 0.0
+/// and the maximum value becomes 1.0. If all values are equal, all results are 0.0.
+/// Returns an empty array if the input is empty.
+pub fn normalize(in xs: Array[Float]) -> Array[Float] {
+    let len = std::array::len(xs);
+    if len == 0 {
+        return std::array::empty();
+    }
+
+    // Find min and max values
+    let min_val = std::array::fold(in xs, Float::infinity, fn(acc: Float, x: Float) -> Float {
+        std::math::fmin(acc, x)
+    });
+
+    let max_val = std::array::fold(in xs, Float::neg_infinity, fn(acc: Float, x: Float) -> Float {
+        std::math::fmax(acc, x)
+    });
+
+    // Check if all values are equal (max_val - min_val == 0.0)
+    if std::math::fcompare(max_val, min_val) == 0 {
+        // All values are equal, return an array of zeros
+        return std::array::filled(len, 0.0);
+    }
+
+    // Calculate the range (max - min)
+    let range = max_val - min_val;
+
+    // Map each element: (x - min) / range
+    let normalized_array = std::array::map_into(in xs, fn(x: Float) -> Float {
+        (x - min_val) / range
+    });
+
+    normalized_array
+}
+
+spec normalize {
+    // Test case 1: Standard scaling (min=1, max=5)
+    then normalize([1.0, 2.0, 3.0, 4.0, 5.0]) == [0.0, 0.25, 0.5, 0.75, 1.0];
+
+    // Test case 2: Already normalized (min=0, max=1)
+    then normalize([0.0, 0.5, 1.0]) == [0.0, 0.5, 1.0];
+
+    // Test case 3: All values equal (should return all zeros)
+    then normalize([7.7, 7.7, 7.7]) == [0.0, 0.0, 0.0];
+
+    // Test case 4: Single element array
+    then normalize([42.0]) == [0.0];
+
+    // Test case 5: Empty input array
+    then normalize([]) == [];
+
+    // Test case 6: Negative numbers
+    then normalize([-10.0, -5.0, 0.0]) == [0.0, 0.5, 1.0];
+}
+
+fn main() -> Int {
+    // Example usage:
+    let readings: Array[Float] = [1.0, 2.0, 3.0, 4.0, 5.0];
+    let normalized = normalize(readings);
+
+    // Print the result (for demonstration, though main returns Int)
+    // In a real scenario, we might write this to a file or process it further.
+    // Since we can't easily print arrays in main without IO, we just return 0.
+    println("Normalized array: " + std::array::map_into_strings(
+        std::array::filled(1, 0.0), // Placeholder to satisfy type checker if needed
+        fn(x: Float) -> String { std::str::float_to_string(x, 2) }
+    ).join(", "));
+
+    0
+}

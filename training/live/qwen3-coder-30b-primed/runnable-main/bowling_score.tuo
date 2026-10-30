@@ -1,0 +1,48 @@
+module bowling;
+
+/// Calculate the score of a ten-pin bowling game.
+pub fn bowling_score(in rolls: [Int; 21]) -> Int {
+    var total = 0;
+    var frame = 0;
+    var roll_index = 0;
+    
+    while frame < 10 {
+        let first_roll = rolls[roll_index];
+        
+        if first_roll == 10 {
+            // Strike
+            total = total + 10 + rolls[roll_index + 1] + rolls[roll_index + 2];
+            roll_index = roll_index + 1;
+        } else {
+            let second_roll = rolls[roll_index + 1];
+            if first_roll + second_roll == 10 {
+                // Spare
+                total = total + 10 + rolls[roll_index + 2];
+            } else {
+                // Open frame
+                total = total + first_roll + second_roll;
+            }
+            roll_index = roll_index + 2;
+        }
+        
+        frame = frame + 1;
+    }
+    
+    total
+}
+
+spec bowling_score {
+    /// A gutter game (all zeros) should score 0.
+    then bowling_score([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) == 0;
+    
+    /// An all-ones game should score 20.
+    then bowling_score([1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]) == 20;
+    
+    /// A perfect game (all strikes) should score 300.
+    then bowling_score([10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10]) == 300;
+}
+
+fn main() -> Int {
+    let game: [Int; 21] = [1, 4, 4, 5, 6, 4, 5, 5, 10, 0, 1, 7, 3, 6, 4, 10, 2, 8, 6];
+    bowling_score(game)
+}

@@ -1,0 +1,95 @@
+module quiz_scorer;
+
+/// Calculates the raw score.
+pub fn flat(take raw: Int) -> Int {
+    raw
+}
+
+/// Calculates twice the raw score.
+pub fn doubled(take raw: Int) -> Int {
+    raw * 2
+}
+
+/// Calculates the raw score, capped at 100.
+pub fn capped(take raw: Int) -> Int {
+    std::core::min(raw, 100)
+}
+
+/// Returns a scoring function based on the mode.
+pub fn scorer_for(take mode: Int) -> fn(take Int) -> Int {
+    match mode {
+        1 => doubled,
+        2 => capped,
+        _ => flat,
+    }
+}
+
+/// Sums the scores of every raw value under the chosen mode.
+pub fn score_all(in raws: Array[Int], take mode: Int) -> Int {
+    let scorer = scorer_for(mode);
+    let scores: Array[Int] = std::collections::map_into(in raws, take scorer);
+    std::collections::sum(scores)
+}
+
+spec flat {
+    then flat(10) == 10;
+    then flat(0) == 0;
+    then flat(-5) == -5;
+}
+
+spec doubled {
+    then doubled(10) == 20;
+    then doubled(0) == 0;
+    then doubled(-5) == -10;
+}
+
+spec capped {
+    then capped(50) == 50;
+    then capped(100) == 100;
+    then capped(150) == 100;
+    then capped(0) == 0;
+}
+
+spec scorer_for {
+    // Test mode 1 (doubled)
+    then scorer_for(1)(5) == 10;
+    // Test mode 2 (capped)
+    then scorer_for(2)(120) == 100;
+    // Test default mode (flat)
+    then scorer_for(0)(5) == 5;
+    // Test another default mode
+    then scorer_for(99)(10) == 10;
+}
+
+spec score_all {
+    // Mode 0 (flat): Sum of [1, 2, 3] = 6
+    then score_all(std::array::of3(1, 2, 3), 0) == 6;
+
+    // Mode 1 (doubled): Sum of [1, 2, 3] -> [2, 4, 6] = 12
+    then score_all(std::array::of3(1, 2, 3), 1) == 12;
+
+    // Mode 2 (capped): Sum of [1, 2, 3] -> [1, 2, 3] = 6 (all <= 100)
+    then score_all(std::array::of3(1, 2, 3), 2) == 6;
+
+    // Mode 2 (capped) with overflow: Sum of [110, 120, 130] -> [100, 100, 100] = 300
+    then score_all(std::array::of3(110, 120, 130), 2) == 300;
+
+    // Mode 1 (doubled) with overflow: Sum of [110, 120, 130] -> [220, 240, 260] = 720
+    then score_all(std::array::of3(110, 120, 130), 1) == 720;
+}
+
+fn main() -> Int {
+    let raw_scores: Array[Int] = std::array::of3(10, 120, 130);
+
+    // Test Mode 0 (flat)
+    let score_flat = score_all(raw_scores, 0);
+
+    // Test Mode 1 (doubled)
+    let score_doubled = score_all(raw_scores, 1);
+
+    // Test Mode 2 (capped)
+    let score_capped = score_all(raw_scores, 2);
+
+    // The main function returns the sum of the three test scores for a final exit status.
+    score_flat + score_doubled + score_capped
+}

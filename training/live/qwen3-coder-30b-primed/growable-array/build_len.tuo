@@ -1,0 +1,13 @@
+module app;
+
+pub fn test_array() -> Int {
+    let mut xs = std::array::empty();
+    std::array::push(mut xs, take 1);
+    std::array::push(mut xs, take 2);
+    std::array::push(mut xs, take 3);
+    std::array::len(in xs)
+}
+
+spec test_array {
+    then test_array() == 3;
+}

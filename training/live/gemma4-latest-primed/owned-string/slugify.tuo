@@ -1,0 +1,135 @@
+module slugify_module;
+
+import std::str;
+import std::string;
+import std::array;
+
+/// Converts a title string into a URL-friendly slug.
+/// 1. Lowercases ASCII letters.
+/// 2. Keeps ASCII letters and digits.
+/// 3. Replaces any sequence of non-alphanumeric characters with a single '-'.
+/// 4. Trims leading/trailing hyphens.
+pub fn slugify(take title: Str) -> String {
+    // 1. Convert to lowercase and replace non-alphanumeric sequences with a placeholder.
+    // We use a mutable String builder for efficiency.
+    var builder = std::string::builder();
+    
+    // First pass: lowercase and build an intermediate representation.
+    // We will use a temporary array of characters/strings to hold the processed parts
+    // before joining them, as direct character-by-character state management is complex.
+    
+    var parts: Array[Str] = std::array::empty();
+    var current_word: String = std::string::empty();
+    var in_word = false;
+
+    // Iterate over the characters of the input title.
+    // Since we are dealing with Str (UTF-8 encoded), we must iterate by characters.
+    // We'll use a helper loop structure to process characters one by one.
+    
+    var remaining_title = title;
+    while !std::str::empty(remaining_title) {
+        // Get the first character (as a Str)
+        let first_char_str = std::str::slice(remaining_title, 0, 1);
+        
+        // Check if the character is alphanumeric (ASCII letters or digits)
+        // We check if it's a digit or if it's an ASCII letter (a-z, A-Z)
+        let is_alphanumeric = std::str::is_digit(first_char_str.as_byte(0)) || 
+                               (std::str::to_upper(first_char_str) != std::str::to_upper(first_char_str)); // Simple check for ASCII letters
+
+        if is_alphanumeric {
+            // If we were previously accumulating a word, finalize it and add it to parts.
+            if !std::string::empty(current_word) {
+                parts = std::array::concat(parts, std::array::singleton(current_word));
+                current_word = std::string::empty();
+            }
+            
+            // Append the current character, lowercased.
+            let lower_char = std::str::to_lower(first_char_str);
+            std::string::push(mut current_word, lower_char);
+            
+            // Move to the rest of the string
+            remaining_title = std::str::slice(remaining_title, 1, std::str::len(remaining_title));
+            in_word = true;
+        } else {
+            // Non-alphanumeric character.
+            
+            // If we were accumulating a word, finalize it.
+            if !std::string::empty(current_word) {
+                parts = std::array::concat(parts, std::array::singleton(current_word));
+                current_word = std::string::empty();
+            }
+            
+            // Consume the character and move on.
+            remaining_title = std::str::slice(remaining_title, 1, std::str::len(remaining_title));
+            in_word = false;
+        }
+    }
+
+    // Finalize any remaining word
+    if !std::string::empty(current_word) {
+        parts = std::array::concat(parts, std::array::singleton(current_word));
+    }
+
+    // 2. Join the parts with a hyphen.
+    var result_string = std::string::empty();
+    if std::array::len(parts) > 0 {
+        // Join all collected words with a hyphen.
+        // We use a manual loop to ensure we don't start/end with a hyphen if parts is empty,
+        // but since we only add parts if they are non-empty, this is safe.
+        for i in 0..std::array::len(parts) {
+            result_string = std::string::concat(result_string, parts[i]);
+            if i < std::array::len(parts) - 1 {
+                result_string = std::string::concat(result_string, "-");
+            }
+        }
+    }
+    
+    // 3. The logic above inherently handles the "no letters or digits becomes empty string"
+    // case because `parts` will be empty. It also handles leading/trailing hyphens
+    // because we only add hyphens *between* parts.
+
+    result_string
+}
+
+spec slugify {
+    // Test case: Standard title
+    then slugify("The Art of Tuonelang Programming") == "the-art-of-tuonelang-programming";
+    
+    // Test case: Mixed case and numbers
+    then slugify("Version 2.1 Beta Release") == "version-2-1-beta-release";
+    
+    // Test case: Leading/trailing non-alphanumeric characters
+    then slugify("  --Tips & Tricks--  ") == "tips-tricks";
+    
+    // Test case: Only non-alphanumeric characters
+    then slugify("  -- & * ? -- ") == "";
+    
+    // Test case: Empty string
+    then slugify("") == "";
+    
+    // Test case: Only letters
+    then slugify("HelloWorld") == "helloworld";
+    
+    // Test case: Only digits
+    then slugify("12345") == "12345";
+    
+    // Test case: Complex mix
+    then slugify("A Title: With $pecial Characters! 100%") == "a-title-with-pecial-characters-100";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let title1 = "  --Tips & Tricks--  ";
+    let slug1 = slugify(std::str::to_string(title1));
+    std::io::println(std::str::to_string("Input: \"") + std::str::to_string(title1) + "\", Slug: " + std::str::to_string(slug1));
+
+    let title2 = "A Title: With $pecial Characters! 100%";
+    let slug2 = slugify(std::str::to_string(title2));
+    std::io::println(std::str::to_string("Input: \"") + std::str::to_string(title2) + "\", Slug: " + std::str::to_string(slug2));
+    
+    let title3 = "  -- & * ? -- ";
+    let slug3 = slugify(std::str::to_string(title3));
+    std::io::println(std::str::to_string("Input: \"") + std::str::to_string(title3) + "\", Slug: " + std::str::to_string(slug3));
+
+    0
+}

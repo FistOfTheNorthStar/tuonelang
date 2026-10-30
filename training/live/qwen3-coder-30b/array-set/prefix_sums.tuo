@@ -1,0 +1,11 @@
+fn prefix_sums(in xs: [Int; 5]) -> [Int; 5] {
+    var result: [Int; 5]
+    var sum: Int = 0
+    
+    for i in 0..5 {
+        sum = sum + xs[i]
+        result[i] = sum
+    }
+    
+    return result
+}

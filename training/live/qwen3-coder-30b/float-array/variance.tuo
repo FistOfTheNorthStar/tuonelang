@@ -1,0 +1,37 @@
+import math
+
+fn mean(in xs: Array[Float]) -> Float {
+    if xs.length == 0 {
+        return 0.0
+    }
+    
+    var sum: Float = 0.0
+    var i: Int = 0
+    while i < xs.length {
+        sum = sum + xs[i]
+        i = i + 1
+    }
+    
+    return sum / xs.length
+}
+
+fn variance(in xs: Array[Float]) -> Float {
+    if xs.length == 0 {
+        return 0.0
+    }
+    
+    var m: Float = mean(xs)
+    var sum_sq_dev: Float = 0.0
+    var i: Int = 0
+    while i < xs.length {
+        var dev: Float = xs[i] - m
+        sum_sq_dev = sum_sq_dev + (dev * dev)
+        i = i + 1
+    }
+    
+    return sum_sq_dev / xs.length
+}
+
+fn std_dev(in xs: Array[Float]) -> Float {
+    return math.sqrt(variance(xs))
+}

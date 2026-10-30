@@ -1,0 +1,60 @@
+module app;
+
+import std::core;
+import std::math;
+import std::array;
+
+/// Checks if a number is a perfect square greater than 1.
+fn is_square(take n: Int) -> Bool {
+    if n <= 1 {
+        return false;
+    }
+    let root_float = std::math::sqrt(n as Float);
+    let root_int = std::math::round(root_float) as Int;
+    return root_int * root_int == n;
+}
+
+/// Checks if a number is greater than 50.
+fn over_fifty(take n: Int) -> Bool {
+    n > 50
+}
+
+/// Tries attempts 1, 2, ..., limit in order and returns the first attempt number
+/// for which check returns true, or -1 if none of them passes.
+fn first_passing(take check: fn(take Int) -> Bool, take limit: Int) -> Int {
+    var i = 1;
+    while i <= limit {
+        if check(i) {
+            return i;
+        }
+        i = i + 1;
+    }
+    -1
+}
+
+spec first_passing {
+    // Test case for is_square: 4 is the first square > 1.
+    then first_passing(is_square, 10) == 4;
+
+    // Test case for over_fifty: 51 is the first number > 50.
+    then first_passing(over_fifty, 100) == 51;
+
+    // Test case where nothing passes (limit too small).
+    then first_passing(over_fifty, 50) == -1;
+
+    // Test case where limit is 0 or negative.
+    then first_passing(over_fifty, 0) == -1;
+    then first_passing(over_fifty, -5) == -1;
+}
+
+fn main() -> Int {
+    // Example usage: find the first square up to 10.
+    let result = first_passing(is_square, 10);
+    std::io::println(std::str::to_string(result));
+
+    // Example usage: find the first number > 50 up to 60.
+    let result2 = first_passing(over_fifty, 60);
+    std::io::println(std::str::to_string(result2));
+
+    0
+}

@@ -1,0 +1,30 @@
+import std::net
+import std::time
+
+fn main() -> Int {
+    var listener = std::net::tcp_listener()
+    if std::net::bind(listener, "127.0.0.1:0") != 0 {
+        std::net::close(listener)
+        return 1
+    }
+    
+    var addr = std::net::local_addr(listener)
+    var timeout = std::time::duration_millis(30)
+    
+    var result = std::net::accept_timeout(listener, timeout)
+    
+    if std::net::is_timeout(result) {
+        std::net::close(listener)
+        return 30
+    }
+    
+    if result == 0 {
+        // Connection arrived unexpectedly
+        std::net::close(listener)
+        return 2
+    }
+    
+    // Some other error occurred
+    std::net::close(listener)
+    return 3
+}

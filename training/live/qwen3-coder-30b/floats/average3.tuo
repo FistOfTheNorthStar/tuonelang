@@ -1,0 +1,19 @@
+import std::f64
+
+fn average3(a in F64, b in F64, c in F64) -> F64 {
+    (a + b + c) / 3.0
+}
+
+fn is_two(x in F64) -> Bool {
+    x == 2.0
+}
+
+spec average3 {
+    let result = average3(1.0, 2.0, 3.0)
+    assert result == 2.0
+}
+
+spec is_two {
+    let result = is_two(2.0)
+    assert result == true
+}

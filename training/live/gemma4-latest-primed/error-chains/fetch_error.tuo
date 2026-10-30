@@ -1,0 +1,41 @@
+import std::core;
+
+/// Converts an HTTP status code into a structured error chain.
+/// The root cause is determined by the status code:
+/// - 404: "not found"
+/// - 408 or 504: "timeout"
+/// - Other: "server error"
+/// The final chain is wrapped with the context "fetch users".
+pub fn fetch_error(take status: Int) -> Array[String] {
+    let root_cause: String = if status == 404 {
+        "not found".to_string()
+    } else if status == 408 || status == 504 {
+        "timeout".to_string()
+    } else {
+        "server error".to_string()
+    };
+
+    // 1. Create the root cause array (Array[String])
+    let root_array: Array[String] = std::core::error_new(root_cause);
+
+    // 2. Wrap the root cause with the context "fetch users"
+    std::core::error_wrap(root_array, "fetch users")
+}
+
+spec fetch_error {
+    then fetch_error(404) == std::core::error_wrap(std::core::error_new("not found"), "fetch users");
+    then fetch_error(408) == std::core::error_wrap(std::core::error_new("timeout"), "fetch users");
+    then fetch_error(504) == std::core::error_wrap(std::core::error_new("timeout"), "fetch users");
+    then fetch_error(500) == std::core::error_wrap(std::core::error_new("server error"), "fetch users");
+    then fetch_error(200) == std::core::error_wrap(std::core::error_new("server error"), "fetch users");
+}
+
+fn main() -> Int {
+    // Example usage:
+    let err_404 = fetch_error(404);
+    let err_500 = fetch_error(500);
+
+    // We just return 0 to satisfy main's return type requirement.
+    // The specs verify the logic.
+    0
+}

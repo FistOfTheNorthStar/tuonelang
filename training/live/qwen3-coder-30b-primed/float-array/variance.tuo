@@ -1,0 +1,56 @@
+module stats;
+
+/// Compute the population variance of an array of floats.
+/// Returns 0.0 for an empty array.
+pub fn variance(in xs: Array[Float]) -> Float {
+    let n = std::array::len(xs);
+    if n == 0 {
+        return 0.0;
+    }
+    
+    // Compute the mean
+    var sum = 0.0;
+    var i = 0;
+    while i < n {
+        sum = sum + std::array::get(xs, i);
+        i = i + 1;
+    }
+    let mean = sum / std::core::abs(n as Float);
+    
+    // Compute the sum of squared deviations
+    var sum_sq_dev = 0.0;
+    i = 0;
+    while i < n {
+        let diff = std::array::get(xs, i) - mean;
+        sum_sq_dev = sum_sq_dev + (diff * diff);
+        i = i + 1;
+    }
+    
+    // Return the population variance (divide by n)
+    sum_sq_dev / std::core::abs(n as Float)
+}
+
+/// Compute the standard deviation of an array of floats.
+/// Returns 0.0 for an empty array.
+pub fn std_dev(in xs: Array[Float]) -> Float {
+    let var = variance(xs);
+    std::float::sqrt(var)
+}
+
+spec variance {
+    then variance(std::collections::singleton(5.0)) == 0.0;
+    then variance(std::collections::of2(1.0, 3.0)) == 1.0;
+    then variance(std::collections::of3(1.0, 2.0, 3.0)) == 0.6666666666666666;
+    then variance(std::array::empty()) == 0.0;
+}
+
+spec std_dev {
+    then std_dev(std::collections::singleton(5.0)) == 0.0;
+    then std_dev(std::collections::of2(1.0, 3.0)) == 1.0;
+    then std_dev(std::collections::of3(1.0, 2.0, 3.0)) == 0.816496580927726;
+    then std_dev(std::array::empty()) == 0.0;
+}
+
+fn main() -> Int {
+    0
+}

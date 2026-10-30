@@ -1,0 +1,16 @@
+import std::str
+
+fn count_vowels(in s: Str) -> Int {
+    var count: Int = 0
+    var i: Int = 0
+    
+    while i < str.len(s) {
+        var c: Byte = str.byte_at(s, i)
+        if c == 'a' || c == 'e' || c == 'i' || c == 'o' || c == 'u' {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    
+    return count
+}

@@ -1,0 +1,21 @@
+module app;
+
+const LIMIT: Int = 100;
+
+/// Returns the smaller of n and LIMIT.
+fn capped(take n: Int) -> Int {
+    std::core::min(take n, take LIMIT)
+}
+
+spec capped {
+    then capped(50) == 50;
+    then capped(150) == 100;
+    then capped(100) == 100;
+    then capped(0) == 0;
+}
+
+fn main() -> Int {
+    let result1 = capped(75);
+    let result2 = capped(200);
+    result1 + result2
+}

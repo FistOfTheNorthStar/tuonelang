@@ -1,0 +1,100 @@
+module app;
+
+import std::time;
+import std::array;
+
+/// Calculates the remaining milliseconds in a budget after executing four steps.
+/// Returns 0 if the total time exceeds or meets the budget.
+pub fn remaining_ms(in steps_ms: [Int; 4], take budget_secs: Int) -> Int {
+    // 1. Accumulate steps into a Duration
+    var total_duration: std::time::Duration = std::time::zero();
+    var current_steps: [Int; 4] = steps_ms;
+
+    // Accumulate the first step
+    total_duration = std::time::add(total_duration, std::time::from_millis(current_steps[0]));
+
+    // Accumulate the second step
+    total_duration = std::time::add(total_duration, std::time::from_millis(current_steps[1]));
+
+    // Accumulate the third step
+    total_duration = std::time::add(total_duration, std::time::from_millis(current_steps[2]));
+
+    // Accumulate the fourth step
+    total_duration = std::time::add(total_duration, std::time::from_millis(current_steps[3]));
+
+    // 2. Calculate the budget duration
+    let budget_duration: std::time::Duration = std::time::from_secs(budget_secs);
+
+    // 3. Compare total duration with budget duration
+    // std::time::lt(a, b) returns true if a < b
+    if std::time::lt(total_duration, budget_duration) {
+        // If total < budget, calculate remaining time in milliseconds
+        let remaining_duration: std::time::Duration = std::time::add(budget_duration, std::time::from_millis(-1)); // Dummy to force calculation path if needed, but subtraction is cleaner if available.
+        
+        // Since we only need the difference, we can calculate the difference in milliseconds.
+        // We must rely on the fact that if total < budget, the difference is positive.
+        // The standard library doesn't expose duration subtraction, so we calculate the difference
+        // by finding the difference in nanoseconds and converting to millis.
+        
+        // A safe way to calculate difference when we know total < budget:
+        // remaining = budget - total
+        // Since we cannot subtract Duration, we calculate the difference in nanoseconds
+        // and then convert to milliseconds.
+        
+        let total_nanos = total_duration.as_nanos();
+        let budget_nanos = budget_duration.as_nanos();
+        
+        // Since we checked total < budget, budget_nanos - total_nanos >= 0
+        let remaining_nanos = budget_nanos - total_nanos;
+        
+        // Convert nanoseconds to milliseconds (integer division truncates)
+        (remaining_nanos / 1_000_000)
+    } else {
+        // If total >= budget, return 0
+        0
+    }
+}
+
+spec remaining_ms {
+    // Case 1: Well within budget (100ms total vs 1000ms budget)
+    then remaining_ms([100, 200, 300, 100], 1) == 600;
+
+    // Case 2: Exactly uses the whole budget (1000ms total vs 1000ms budget)
+    then remaining_ms([250, 250, 250, 250], 1) == 0;
+
+    // Case 3: Exceeds the budget (1100ms total vs 1000ms budget)
+    then remaining_ms([300, 300, 300, 200], 1) == 0;
+
+    // Case 4: Zero budget (0ms total vs 0ms budget)
+    then remaining_ms([0, 0, 0, 0], 0) == 0;
+    
+    // Case 5: Zero steps, positive budget
+    then remaining_ms([0, 0, 0, 0], 5) == 5000;
+}
+
+fn main() -> Int {
+    // Example 1: Total 700ms, Budget 1000ms (1s) -> Remaining 300ms
+    let steps1: [Int; 4] = [100, 200, 300, 100];
+    let budget1 = 1;
+    let remaining1 = remaining_ms(steps1, budget1);
+    
+    // Example 2: Total 1000ms, Budget 1000ms (1s) -> Remaining 0
+    let steps2: [Int; 4] = [250, 250, 250, 250];
+    let budget2 = 1;
+    let remaining2 = remaining_ms(steps2, budget2);
+
+    // Example 3: Total 1100ms, Budget 1000ms (1s) -> Remaining 0
+    let steps3: [Int; 4] = [300, 300, 300, 200];
+    let budget3 = 1;
+    let remaining3 = remaining_ms(steps3, budget3);
+
+    // Print results for verification (though main's return value is the exit status)
+    std::io::println(std::str::join(&[
+        std::str::format("Example 1 Remaining: {}", remaining1),
+        std::str::format("Example 2 Remaining: {}", remaining2),
+        std::str::format("Example 3 Remaining: {}", remaining3)
+    ], "\n")).unwrap();
+
+    // Return a non-zero status to indicate successful execution of the logic
+    15
+}

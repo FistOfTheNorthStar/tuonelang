@@ -1,0 +1,9 @@
+import std::time
+
+fn is_overdue(take started_ns: Int, take checked_ns: Int, take limit_ms: Int) -> Bool {
+    var instant_started = std::time::instant_at(started_ns)
+    var instant_checked = std::time::instant_at(checked_ns)
+    var elapsed_ns = std::time::elapsed(instant_started, instant_checked)
+    var elapsed_ms = elapsed_ns / 1_000_000
+    return std::time::lt(limit_ms, elapsed_ms)
+}

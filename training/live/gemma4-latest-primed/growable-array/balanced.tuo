@@ -1,0 +1,128 @@
+module app;
+
+import std::array;
+import std::string;
+import std::str;
+
+/// Checks if the brackets '()', '[]', and '{}' in the given text are balanced and properly nested.
+///
+/// It uses a stack (represented by an Array[Int]) to track open brackets.
+/// The function returns true if the stack is empty at the end, and false otherwise.
+pub fn balanced(in text: Str) -> Bool {
+    // The stack will store an integer representing the opening bracket type:
+    // 0 for '(', 1 for '[', 2 for '{'
+    var stack: Array[Int] = std::array::empty();
+
+    for i in 0..std::str::len(in text) {
+        let byte = std::str::byte_at(in text, i);
+
+        match byte {
+            // Opening brackets: push the type onto the stack
+            // '(' -> 0
+            // '[' -> 1
+            // '{' -> 2
+            0x28 => { // '('
+                std::array::push(mut stack, 0);
+            }
+            0x5B => { // '['
+                std::array::push(mut stack, 1);
+            }
+            0x7B => { // '{'
+                std::array::push(mut stack, 2);
+            }
+            
+            // Closing brackets: check against the top of the stack
+            0x29 => { // ')'
+                if std::array::len(stack) > 0 {
+                    let top = std::array::get(stack, std::array::len(stack) - 1);
+                    if top == 0 {
+                        // Match found: pop the stack
+                        std::array::pop(mut stack);
+                    } else {
+                        // Mismatch: closing bracket found, but stack top is wrong
+                        return false;
+                    }
+                } else {
+                    // Closing bracket found, but stack is empty
+                    return false;
+                }
+            }
+            0x5D => { // ']'
+                if std::array::len(stack) > 0 {
+                    let top = std::array::get(stack, std::array::len(stack) - 1);
+                    if top == 1 {
+                        std::array::pop(mut stack);
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            0x7D => { // '}'
+                if std::array::len(stack) > 0 {
+                    let top = std::array::get(stack, std::array::len(stack) - 1);
+                    if top == 2 {
+                        std::array::pop(mut stack);
+                    } else {
+                        return false;
+                    }
+                } else {
+                    return false;
+                }
+            }
+            _ => {
+                // Ignore all other bytes
+            }
+        }
+    }
+
+    // After processing the entire string, the brackets are balanced if and only if the stack is empty.
+    std::array::len(stack) == 0
+}
+
+spec balanced {
+    // Test case 1: Empty string (balanced)
+    then balanced(std::str::join(std::array::empty(), ""));
+
+    // Test case 2: No brackets (balanced)
+    then balanced("abcde");
+
+    // Test case 3: Simple balanced pair
+    then balanced("()[]{}");
+
+    // Test case 4: Nested balanced structure
+    then balanced("({[]})");
+
+    // Test case 5: Complex balanced structure
+    then balanced("a{b[c(d)e]f}g");
+
+    // Test case 6: Unbalanced - missing closing bracket
+    then balanced("(((");
+
+    // Test case 7: Unbalanced - extra closing bracket
+    then balanced("())");
+
+    // Test case 8: Unbalanced - wrong nesting order (closing ')' when '[' expected)
+    then balanced("([)]");
+
+    // Test case 9: Unbalanced - starting with closing bracket
+    then balanced("}abc");
+
+    // Test case 10: Empty string (explicitly tested)
+    then balanced("");
+}
+
+fn main() -> Int {
+    // Example usage:
+    let test1 = "This is a test with () and [] and {}";
+    let test2 = "Mismatched: ([)]";
+    let test3 = "Unclosed: {abc";
+
+    println(format!("'{}' balanced: {}", test1, balanced(test1)).unwrap());
+    println!("'{}' balanced: {}", test2, balanced(test2));
+    println!("'{}' balanced: {}", test3, balanced(test3));
+
+    // Exit status 0 for success
+    0
+}

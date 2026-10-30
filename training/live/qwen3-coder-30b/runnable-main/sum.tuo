@@ -1,0 +1,18 @@
+import std::array
+import std::byte
+
+fn sum_array(arr: in [Int; 4]) -> Int {
+    var total: Int = 0
+    var i: Int = 0
+    while i < 4 {
+        total = total + arr[i]
+        i = i + 1
+    }
+    total
+}
+
+fn main() -> byte {
+    var fixed_array: [Int; 4] = [1, 2, 3, 4]
+    var total: Int = sum_array(fixed_array)
+    byte { value: total }
+}

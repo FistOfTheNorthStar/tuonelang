@@ -1,0 +1,6 @@
+import std::time
+
+fn latency_label(take start_ns: Int, take end_ns: Int) -> String {
+    var duration_ns: Int = end_ns - start_ns;
+    return std::time::render(duration_ns);
+}

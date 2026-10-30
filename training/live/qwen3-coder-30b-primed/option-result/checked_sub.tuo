@@ -1,0 +1,16 @@
+module math;
+
+/// Subtract two integers with overflow checking.
+/// Returns Ok { value: a - b } if a >= b, otherwise Err { error: "underflow" }.
+pub fn checked_sub(take a: Int, take b: Int) -> Result[Int, Str] {
+    match std::int::checked_sub(a, b) {
+        Some { value } => Ok { value },
+        None => Err { error: "underflow" },
+    }
+}
+
+spec checked_sub {
+    then checked_sub(5, 3) == Ok { value: 2 };
+    then checked_sub(3, 5) == Err { error: "underflow" };
+    then checked_sub(0, 0) == Ok { value: 0 };
+}

@@ -1,0 +1,13 @@
+import math
+
+enum Shape { 
+  Circle { r }
+  Rect { w, h }
+}
+
+fn area_approx(s) -> take Shape -> Float {
+  match s {
+    Circle { r } => 3.0 * r * r
+    Rect { w, h } => w * h
+  }
+}

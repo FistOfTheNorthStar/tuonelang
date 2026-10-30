@@ -1,0 +1,20 @@
+module net_classifier;
+
+import std::net;
+
+/// Classify a std::net return value into success (0), timeout (1), or host error (2).
+pub fn classify(take outcome: Int) -> Int {
+    if std::net::is_descriptor(outcome) {
+        0
+    } else if std::net::is_timeout(outcome) {
+        1
+    } else {
+        2
+    }
+}
+
+spec classify {
+    then classify(std::net::connect("example.com", 80)) == 0;
+    then classify(std::net::connect_timeout("example.com", 80, 1000)) == 1;
+    then classify(std::net::connect_timeout("nonexistent.invalid", 80, 1000)) == 2;
+}

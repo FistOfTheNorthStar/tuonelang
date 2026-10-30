@@ -1,0 +1,22 @@
+enum Dir {
+    North,
+    South,
+    East,
+    West
+}
+
+fn turn_right(d: in Dir) -> Int {
+    match d {
+        Dir.North => 1,
+        Dir.South => 3,
+        Dir.East => 0,
+        Dir.West => 2
+    }
+}
+
+spec turn_right {
+    assert turn_right(Dir.North) == 1;
+    assert turn_right(Dir.South) == 3;
+    assert turn_right(Dir.East) == 0;
+    assert turn_right(Dir.West) == 2;
+}

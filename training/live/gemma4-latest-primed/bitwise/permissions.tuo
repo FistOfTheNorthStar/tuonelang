@@ -1,0 +1,99 @@
+module file_perms;
+
+const READ: Int = 1;
+const WRITE: Int = 2;
+const EXECUTE: Int = 4;
+
+/// Grants a specific flag bit to the given permissions set.
+///
+/// # Arguments
+/// * `perms`: The current set of permissions (e.g., READ | WRITE).
+/// * `flag`: The specific flag to grant (e.g., READ).
+///
+/// # Returns
+/// The new permissions set with the flag bit set.
+pub fn grant(take perms: Int, take flag: Int) -> Int {
+    perms | flag
+}
+
+/// Revokes a specific flag bit from the given permissions set.
+///
+/// This operation clears the bit corresponding to `flag` in `perms`,
+/// leaving all other bits unchanged.
+///
+/// # Arguments
+/// * `perms`: The current set of permissions.
+/// * `flag`: The specific flag to revoke (e.g., WRITE).
+///
+/// # Returns
+/// The new permissions set with the flag bit cleared.
+pub fn revoke(take perms: Int, take flag: Int) -> Int {
+    perms & (!flag)
+}
+
+/// Checks if all bits set in `flag` are also set in `perms`.
+///
+/// This returns true only if `perms` contains every bit that `flag` has set.
+///
+/// # Arguments
+/// * `perms`: The permissions set to check against.
+/// * `flag`: The required flags (e.g., READ | WRITE).
+///
+/// # Returns
+/// True if all bits of `flag` are set in `perms`, false otherwise.
+pub fn allows(take perms: Int, take flag: Int) -> Bool {
+    (perms & flag) == flag
+}
+
+spec grant {
+    then grant(0, READ) == READ;
+    then grant(READ, WRITE) == READ | WRITE;
+    then grant(READ | WRITE, READ) == READ | WRITE;
+}
+
+spec revoke {
+    then revoke(READ | WRITE, READ) == WRITE;
+    then revoke(READ | WRITE, WRITE) == READ;
+    then revoke(READ | WRITE, EXECUTE) == READ | WRITE; // Revoking unset bit
+    then revoke(READ, READ) == 0;
+}
+
+spec allows {
+    then allows(READ | WRITE, READ) == true;
+    then allows(READ | WRITE, WRITE) == true;
+    then allows(READ | WRITE, READ | WRITE) == true;
+    then allows(READ, READ | WRITE) == false;
+    then allows(0, READ) == false;
+}
+
+fn main() -> Int {
+    // Example usage: Start with no permissions
+    var current_perms = 0;
+
+    // Grant READ permission
+    current_perms = grant(current_perms, READ);
+    // current_perms is now READ (1)
+
+    // Grant WRITE permission
+    current_perms = grant(current_perms, WRITE);
+    // current_perms is now READ | WRITE (3)
+
+    // Check if both READ and WRITE are present
+    let can_read_write = allows(current_perms, READ | WRITE);
+    // can_read_write is true
+
+    // Revoke READ permission
+    current_perms = revoke(current_perms, READ);
+    // current_perms is now WRITE (2)
+
+    // Check if READ is missing
+    let can_read_write_after_revoke = allows(current_perms, READ | WRITE);
+    // can_read_write_after_revoke is false
+
+    // Final check: only WRITE should remain
+    let final_check = allows(current_perms, WRITE);
+    // final_check is true
+
+    // Return a non-zero exit code to indicate successful execution of the example logic
+    1
+}

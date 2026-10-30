@@ -1,0 +1,96 @@
+import std::collections;
+import std::array;
+import std::string;
+
+/// Counts the frequency of each string in the visitor log and returns a comma-separated
+/// string of "name=count" pairs, ordered by first appearance.
+///
+/// # Arguments
+/// * `visitors`: An array of strings representing the visitor log.
+///
+/// # Returns
+/// A String formatted as "name1=count1,name2=count2,...".
+fn visit_summary(in visitors: Array[Str]) -> String {
+    // We need to maintain two pieces of information:
+    // 1. The count of each name (Map[Str, Int])
+    // 2. The order of first appearance (Array[Str])
+
+    // Use a mutable map to store counts: Str -> Int
+    var counts: std::map::Map[Str, Int] = std::map::empty();
+
+    // Use a mutable array to track the order of first appearance
+    var order: Array[Str] = std::array::empty();
+
+    // Iterate through the input array to build the map and order array
+    for visitor in visitors {
+        // Check if the name is already in the map
+        if !std::map::contains_key(in counts, visitor) {
+            // First time seeing this name:
+            // 1. Add it to the order list
+            // We must use std::array::push because Array is the only growable container available.
+            order = std::array::push(order, visitor);
+            // 2. Initialize its count in the map
+            counts = std::map::insert(counts, visitor, 1);
+        } else {
+            // Already seen: just increment the count
+            // We must use std::map::insert to update the value.
+            counts = std::map::insert(counts, visitor, 1);
+        }
+    }
+
+    // Now, construct the final string from the 'order' array.
+    // We will build an array of strings first, then join them.
+
+    var result_parts: Array[Str] = std::array::empty();
+
+    for name in order {
+        // Get the final count for this name
+        let count = std::map::get(in counts, name).unwrap();
+
+        // Format the "name=count" string
+        let part = std::str::join(
+            &[name, std::str::to_string(count)],
+            "="
+        );
+        
+        // Add the formatted part to our results array
+        result_parts = std::array::push(result_parts, part);
+    }
+
+    // Join all parts with a comma
+    std::str::join(result_parts, ",")
+}
+
+spec visit_summary {
+    // Test case 1: Basic sequence
+    then visit_summary([std::str::from("ann"), std::str::from("bob"), std::str::from("ann")]) == "ann=2,bob=1";
+
+    // Test case 2: All unique
+    then visit_summary([std::str::from("a"), std::str::from("b"), std::str::from("c")]) == "a=1,b=1,c=1";
+
+    // Test case 3: All same
+    then visit_summary([std::str::from("test"), std::str::from("test"), std::str::from("test")]) == "test=3";
+
+    // Test case 4: Empty log
+    then visit_summary([std::str::empty()]) == "";
+
+    // Test case 5: Longer sequence
+    then visit_summary([std::str::from("x"), std::str::from("y"), std::str::from("z"), std::str::from("x"), std::str::from("y"), std::str::from("x")]) == "x=3,y=2,z=1";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let log1 = [std::str::from("ann"), std::str::from("bob"), std::str::from("ann")];
+    let summary1 = visit_summary(log1);
+    std::io::println(std::str::from("Log 1 Summary: ") + summary1).unwrap();
+
+    let log2 = [std::str::from("a"), std::str::from("b"), std::str::from("c")];
+    let summary2 = visit_summary(log2);
+    std::io::println(std::str::from("Log 2 Summary: ") + summary2).unwrap();
+
+    let log3: Array[Str] = std::array::empty();
+    let summary3 = visit_summary(log3);
+    std::io::println(std::str::from("Log 3 Summary: ") + summary3).unwrap();
+
+    0
+}

@@ -1,0 +1,31 @@
+import std.array
+import std.comparison
+
+fn largest(xs: in [Int; 4]) -> Int {
+    var max: Int = xs[0]
+    
+    if xs[1] > max {
+        max = xs[1]
+    }
+    
+    if xs[2] > max {
+        max = xs[2]
+    }
+    
+    if xs[3] > max {
+        max = xs[3]
+    }
+    
+    max
+}
+
+spec largest {
+    let xs: [Int; 4] = [1, 2, 3, 4]
+    assert largest(xs) == 4
+    
+    let ys: [Int; 4] = [4, 3, 2, 1]
+    assert largest(ys) == 4
+    
+    let zs: [Int; 4] = [2, 2, 2, 2]
+    assert largest(zs) == 2
+}

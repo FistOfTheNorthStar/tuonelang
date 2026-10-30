@@ -1,0 +1,50 @@
+module app;
+
+import std::core;
+
+/// Returns Some(a) if a is even, otherwise Some(b) if b is even,
+/// or None if neither is even.
+pub fn first_even(take a: Int, take b: Int) -> Option[Int] {
+    if std::math::is_even(a) {
+        Some { value: a }
+    } else if std::math::is_even(b) {
+        Some { value: b }
+    } else {
+        None
+    }
+}
+
+/// Extracts the first even argument, defaulting to 0 if none are even.
+pub fn or_zero(take a: Int, take b: Int) -> Int {
+    match first_even(a, b) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec first_even {
+    then first_even(2, 3) == Some { value: 2 };
+    then first_even(3, 4) == Some { value: 4 };
+    then first_even(1, 3) == None;
+    then first_even(0, 0) == Some { value: 0 };
+}
+
+spec or_zero {
+    then or_zero(2, 3) == 2;
+    then or_zero(3, 4) == 4;
+    then or_zero(1, 3) == 0;
+    then or_zero(0, 0) == 0;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let result1 = first_even(2, 3);
+    let result2 = first_even(1, 3);
+
+    // Example usage of the extractor
+    let zero_fallback_1 = or_zero(2, 3);
+    let zero_fallback_2 = or_zero(1, 3);
+
+    // We only need to return an Int for main
+    zero_fallback_1 + zero_fallback_2
+}

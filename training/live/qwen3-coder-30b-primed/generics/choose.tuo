@@ -1,0 +1,18 @@
+module config;
+
+/// Choose between an override value and a default value based on a boolean flag.
+/// Returns `override` when `use_override` is true and `default` otherwise.
+pub fn choose[T](take use_override: Bool, take override: T, take default: T) -> T {
+    if use_override {
+        override
+    } else {
+        default
+    }
+}
+
+spec choose {
+    then choose(true, 42, 100) == 42;
+    then choose(false, 42, 100) == 100;
+    then choose(true, "hello", "world") == "hello";
+    then choose(false, "hello", "world") == "world";
+}

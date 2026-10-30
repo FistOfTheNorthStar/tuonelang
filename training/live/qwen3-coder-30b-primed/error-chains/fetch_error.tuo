@@ -1,0 +1,22 @@
+module http_error;
+
+pub fn fetch_error(take status: Int) -> Array[String] {
+    let root = if status == 404 {
+        "not found"
+    } else if status == 408 || status == 504 {
+        "timeout"
+    } else {
+        "server error"
+    };
+    
+    let chain = std::core::error_new(root);
+    std::core::error_wrap(chain, "fetch users")
+}
+
+spec fetch_error {
+    then std::core::error_is(fetch_error(404), "not found");
+    then std::core::error_is(fetch_error(408), "timeout");
+    then std::core::error_is(fetch_error(504), "timeout");
+    then std::core::error_is(fetch_error(500), "server error");
+    then std::core::error_message(fetch_error(404)) == "fetch users: not found";
+}

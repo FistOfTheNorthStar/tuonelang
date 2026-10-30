@@ -1,0 +1,30 @@
+import std::json
+
+count_active(in text: Str) -> Int {
+    var json = json::parse(text)
+    if json is Err {
+        return -1
+    }
+    
+    var array = json::as_array(json)
+    if array is None {
+        return -1
+    }
+    
+    var count = 0
+    for element in array {
+        if element is json::Value::Object {
+            var obj = element as json::Value::Object
+            if obj contains "active" {
+                var active_value = obj["active"]
+                if active_value is json::Value::Bool {
+                    if active_value as json::Value::Bool is true {
+                        count = count + 1
+                    }
+                }
+            }
+        }
+    }
+    
+    return count
+}

@@ -1,0 +1,8 @@
+struct Pair[A, B] {
+    first: A,
+    second: B
+}
+
+fn fst(pair: in Pair[Int, Int]) -> Int {
+    pair.first
+}

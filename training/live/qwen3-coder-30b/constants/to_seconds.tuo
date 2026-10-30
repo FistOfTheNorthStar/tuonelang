@@ -1,0 +1,11 @@
+const SECONDS_PER_MINUTE: Int = 60
+const SECONDS_PER_HOUR: Int = 60 * SECONDS_PER_MINUTE
+const SECONDS_PER_DAY: Int = 24 * SECONDS_PER_HOUR
+
+fn to_seconds(take days: Int, take hours: Int, take minutes: Int, take seconds: Int) -> Int {
+    return days * SECONDS_PER_DAY + hours * SECONDS_PER_HOUR + minutes * SECONDS_PER_MINUTE + seconds
+}
+
+fn whole_hours(take seconds: Int) -> Int {
+    return seconds / SECONDS_PER_HOUR
+}

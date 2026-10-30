@@ -1,0 +1,21 @@
+import std.math
+
+buffer_size(take width: Int, take height: Int, take bytes_per_pixel: Int) -> Option[Int] {
+    if width < 0 || height < 0 || bytes_per_pixel < 0 {
+        return None
+    }
+    
+    var size: Int = 0
+    
+    if std.math.mul_overflow(width, height) {
+        return None
+    }
+    size = width * height
+    
+    if std.math.mul_overflow(size, bytes_per_pixel) {
+        return None
+    }
+    size = size * bytes_per_pixel
+    
+    return Some { value: size }
+}

@@ -1,0 +1,88 @@
+import std::str;
+
+/// Returns the index-th (0-based) comma-separated field of line as a slice of it.
+/// Fields may be empty (e.g., "a,,c" has three fields).
+/// Returns the empty string when index is negative or past the last field.
+pub fn field_at(in line: Str, take index: Int) -> Str {
+    if index < 0 {
+        return std::str::empty();
+    }
+
+    // Count the number of fields to determine the expected index range.
+    // The number of fields is 1 + the number of commas.
+    let num_commas = std::str::count(in line, ",");
+    let num_fields = num_commas + 1;
+
+    if index >= num_fields {
+        return std::str::empty();
+    }
+
+    // Calculate the start position.
+    // The start position is index * (1 + 1) - 1, because each field boundary
+    // (except the last one) is preceded by a comma.
+    // For index 0: start = 0.
+    // For index 1: start = 1 (after the first comma).
+    // For index N: start = N * 1 (if we count commas as separators).
+    // The start index is simply the count of commas before it.
+    let start_index = index * 1;
+
+    // Calculate the end position.
+    // The end position is the start of the next field, or the end of the string.
+    let end_index: Int;
+    if index == num_fields - 1 {
+        // Last field, goes to the end of the string.
+        end_index = std::str::len(in line);
+    } else {
+        // Not the last field, ends right before the next comma.
+        // The next comma is at (index + 1) * 1.
+        end_index = (index + 1) * 1;
+    }
+
+    // Use std::str::slice to get the substring without copying.
+    std::str::slice(in line, take start_index, take end_index)
+}
+
+spec field_at {
+    // Test case 1: Normal field extraction
+    then field_at("apple,banana,cherry".to_string(), 0) == "apple".to_string();
+    then field_at("apple,banana,cherry".to_string(), 1) == "banana".to_string();
+    then field_at("apple,banana,cherry".to_string(), 2) == "cherry".to_string();
+
+    // Test case 2: Empty fields (leading, trailing, middle)
+    then field_at(",banana,cherry".to_string(), 0) == "".to_string(); // Leading empty
+    then field_at("apple,,cherry".to_string(), 1) == "".to_string(); // Middle empty
+    then field_at("apple,banana,".to_string(), 2) == "".to_string(); // Trailing empty
+
+    // Test case 3: All empty fields
+    then field_at(",,,".to_string(), 0) == "".to_string();
+    then field_at(",,,".to_string(), 1) == "".to_string();
+    then field_at(",,,".to_string(), 2) == "".to_string();
+
+    // Test case 4: Single field (no commas)
+    then field_at("single".to_string(), 0) == "single".to_string();
+
+    // Test case 5: Edge cases (index out of bounds)
+    then field_at("a,b".to_string(), 2) == "".to_string(); // Too high
+    then field_at("a,b".to_string(), -1) == "".to_string(); // Negative
+
+    // Test case 6: Empty input string
+    then field_at("".to_string(), 0) == "".to_string();
+    then field_at("".to_string(), 1) == "".to_string();
+}
+
+fn main() -> Int {
+    // Example usage:
+    let line1 = "one,two,three".to_string();
+    let field0 = field_at(line1, 0);
+    let field2 = field_at(line1, 2);
+    let field3 = field_at(line1, 3);
+
+    // Print results (though main return value is the exit status)
+    // In a real scenario, we'd use std::io::println, but for a simple main,
+    // we just return 0 to indicate success.
+    println("Field 0: " + field0);
+    println("Field 2: " + field2);
+    println("Field 3 (OOB): " + field3);
+
+    0
+}

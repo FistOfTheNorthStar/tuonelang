@@ -1,0 +1,23 @@
+module sensor;
+
+/// Remove failed sensor readings (negative values) from the log.
+pub fn compact(in readings: Array[Int]) -> Array[Int] {
+    let result = std::array::empty();
+    for reading in readings {
+        if reading >= 0 {
+            std::array::push(result, reading);
+        }
+    }
+    result
+}
+
+spec compact {
+    then compact(std::collections::singleton(-1)) == std::array::empty();
+    then compact(std::collections::singleton(42)) == std::collections::singleton(42);
+    then compact([1, -2, 3, -4, 5]) == [1, 3, 5];
+    then compact([]) == [];
+}
+
+fn main() -> Int {
+    0
+}

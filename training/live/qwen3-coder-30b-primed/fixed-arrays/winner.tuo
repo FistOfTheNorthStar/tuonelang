@@ -1,0 +1,50 @@
+module tictactoe;
+
+/// Returns 1 if X has won, 2 if O has won, and 0 if no player has won.
+pub fn winner(in board: [Int; 9]) -> Int {
+    // Check rows
+    if board[0] != 0 && board[0] == board[1] && board[1] == board[2] {
+        return board[0];
+    }
+    if board[3] != 0 && board[3] == board[4] && board[4] == board[5] {
+        return board[3];
+    }
+    if board[6] != 0 && board[6] == board[7] && board[7] == board[8] {
+        return board[6];
+    }
+
+    // Check columns
+    if board[0] != 0 && board[0] == board[3] && board[3] == board[6] {
+        return board[0];
+    }
+    if board[1] != 0 && board[1] == board[4] && board[4] == board[7] {
+        return board[1];
+    }
+    if board[2] != 0 && board[2] == board[5] && board[5] == board[8] {
+        return board[2];
+    }
+
+    // Check diagonals
+    if board[0] != 0 && board[0] == board[4] && board[4] == board[8] {
+        return board[0];
+    }
+    if board[2] != 0 && board[2] == board[4] && board[4] == board[6] {
+        return board[2];
+    }
+
+    // No winner
+    0
+}
+
+spec winner {
+    then winner([1, 1, 1, 0, 0, 0, 0, 0, 0]) == 1;
+    then winner([0, 0, 0, 2, 2, 2, 0, 0, 0]) == 2;
+    then winner([0, 0, 0, 0, 0, 0, 1, 1, 1]) == 1;
+    then winner([2, 0, 0, 2, 0, 0, 2, 0, 0]) == 2;
+    then winner([0, 2, 0, 0, 2, 0, 0, 2, 0]) == 2;
+    then winner([0, 0, 1, 0, 0, 1, 0, 0, 1]) == 1;
+    then winner([1, 0, 0, 0, 1, 0, 0, 0, 1]) == 1;
+    then winner([0, 0, 2, 0, 2, 0, 2, 0, 0]) == 2;
+    then winner([0, 0, 0, 0, 0, 0, 0, 0, 0]) == 0;
+    then winner([1, 2, 1, 2, 1, 2, 2, 1, 1]) == 0;
+}

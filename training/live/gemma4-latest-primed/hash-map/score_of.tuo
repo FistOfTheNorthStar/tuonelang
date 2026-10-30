@@ -1,0 +1,37 @@
+module app;
+
+import std::map;
+import std::core;
+
+/// Looks up a score for a given key in the map.
+/// Returns 0 if the key is not present.
+pub fn score_of(in scores: std::map::Map[Str, Int], take key: Str) -> Int {
+    // Use std::map::get to safely retrieve the value.
+    // Then use std::core::unwrap_or to provide a default value (0) if the key is missing.
+    match std::map::get(in scores, take key) {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec score_of {
+    given scores: std::map::Map[Str, Int];
+    when scores = std::map::insert(std::map::empty(), "apple", 10);
+    when scores = std::map::insert(scores, "banana", 20);
+
+    then score_of(scores, "apple") == 10;
+    then score_of(scores, "banana") == 20;
+    then score_of(scores, "grape") == 0; // Test absent key
+}
+
+fn main() -> Int {
+    let mut scores: std::map::Map[Str, Int] = std::map::empty();
+    scores = std::map::insert(scores, "apple", 10);
+    scores = std::map::insert(scores, "banana", 20);
+
+    let apple_score = score_of(scores, "apple");
+    let grape_score = score_of(scores, "grape");
+
+    // The main function returns the sum of the scores found.
+    apple_score + grape_score
+}

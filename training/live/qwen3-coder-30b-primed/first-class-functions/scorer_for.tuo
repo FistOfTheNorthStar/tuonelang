@@ -1,0 +1,61 @@
+module quiz;
+
+pub fn flat(take raw: Int) -> Int {
+    raw
+}
+
+pub fn doubled(take raw: Int) -> Int {
+    raw * 2
+}
+
+pub fn capped(take raw: Int) -> Int {
+    std::core::min(raw, 100)
+}
+
+pub fn scorer_for(take mode: Int) -> fn(take Int) -> Int {
+    match mode {
+        1 => doubled,
+        2 => capped,
+        _ => flat,
+    }
+}
+
+pub fn score_all(in raws: Array[Int], take mode: Int) -> Int {
+    let scores = std::collections::map_into(raws, scorer_for(mode));
+    std::collections::sum(scores)
+}
+
+spec flat {
+    then flat(50) == 50;
+    then flat(0) == 0;
+    then flat(100) == 100;
+}
+
+spec doubled {
+    then doubled(50) == 100;
+    then doubled(0) == 0;
+    then doubled(100) == 200;
+}
+
+spec capped {
+    then capped(50) == 50;
+    then capped(100) == 100;
+    then capped(150) == 100;
+}
+
+spec scorer_for {
+    given mode: Int;
+    when let scorer = scorer_for(mode);
+    when let result = scorer(50);
+    then result == match mode {
+        1 => 100,
+        2 => 50,
+        _ => 50,
+    };
+}
+
+spec score_all {
+    then score_all([10, 20, 30], 0) == 60;
+    then score_all([10, 20, 30], 1) == 120;
+    then score_all([10, 20, 30], 2) == 60;
+}

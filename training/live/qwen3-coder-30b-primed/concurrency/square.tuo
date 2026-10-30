@@ -1,0 +1,23 @@
+module square;
+
+import std::sync;
+
+/// Square a number
+fn square(take x: Int) -> Int {
+    x * x
+}
+
+/// Process four tasks in parallel with two workers
+fn process_tasks() -> Int {
+    let tasks: Array[Int] = [2, 3, 4, 5];
+    let results: Array[Int] = std::sync::par_map(square, tasks, 2);
+    let sum = 0;
+    for x in results {
+        sum = sum + x;
+    }
+    sum
+}
+
+fn main() -> Int {
+    process_tasks()
+}

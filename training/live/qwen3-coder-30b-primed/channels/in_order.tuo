@@ -1,0 +1,77 @@
+module channel_test;
+
+import std::sync;
+
+/// Drain a channel and return the received values as decimal digits
+fn in_order(take ch: Int) -> Int {
+    var result = 0;
+    var multiplier = 1;
+    
+    while true {
+        let value = std::sync::recv(ch);
+        if value < 0 {
+            break;
+        }
+        
+        result = result + value * multiplier;
+        multiplier = multiplier * 10;
+    }
+    
+    result
+}
+
+fn main() -> Int {
+    let ch = std::sync::channel();
+    
+    // Send the job ids 3, 1, 4, 1, 5
+    std::sync::send(ch, 3);
+    std::sync::send(ch, 1);
+    std::sync::send(ch, 4);
+    std::sync::send(ch, 1);
+    std::sync::send(ch, 5);
+    
+    // Close the channel
+    std::sync::close(ch);
+    
+    // Verify that sending -7 was refused (non-zero result)
+    let send_refused = std::sync::send(ch, -7);
+    
+    // Verify that sending after close was refused
+    let send_after_close = std::sync::send(ch, 9);
+    
+    // Drain the channel and get the values in order
+    let ch2 = std::sync::channel();
+    std::sync::send(ch2, 3);
+    std::sync::send(ch2, 1);
+    std::sync::send(ch2, 4);
+    std::sync::send(ch2, 1);
+    std::sync::send(ch2, 5);
+    std::sync::close(ch2);
+    let result = in_order(ch2);
+    
+    // Check if all conditions are met
+    let condition1 = send_refused != 0;  // Sending -7 should be refused
+    let condition2 = send_after_close != 0;  // Sending after close should be refused
+    let condition3 = result == 31415;  // Channel should be FIFO
+    
+    let mut final_result = 0;
+    
+    if condition1 {
+        final_result = final_result + 1;
+    }
+    
+    if condition2 {
+        final_result = final_result + 2;
+    }
+    
+    if condition3 {
+        final_result = final_result + 4;
+    }
+    
+    // If all conditions are met, return 31
+    if final_result == 7 {
+        31
+    } else {
+        final_result
+    }
+}

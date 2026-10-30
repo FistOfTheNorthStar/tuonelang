@@ -1,0 +1,51 @@
+module discount;
+
+/// Apply a discount to all prices in place, rounding down.
+pub fn apply_discount(mut prices: Array[Int], take percent: Int) -> () {
+    var i = 0;
+    while i < std::array::len(prices) {
+        let current = std::array::get(prices, i);
+        let discounted = (current * (100 - percent)) / 100;
+        std::array::set(prices, i, discounted);
+        i = i + 1;
+    }
+}
+
+/// Calculate the total cost of prices after applying a discount,
+/// without modifying the original array.
+pub fn discounted_total(in prices: Array[Int], take percent: Int) -> Int {
+    let mut total = 0;
+    var i = 0;
+    while i < std::array::len(prices) {
+        let current = std::array::get(prices, i);
+        let discounted = (current * (100 - percent)) / 100;
+        total = total + discounted;
+        i = i + 1;
+    }
+    total
+}
+
+spec apply_discount {
+    given prices: Array[Int];
+    when let mut copy = std::array::empty();
+    when let len = std::array::len(prices);
+    when var i = 0;
+    when while i < len {
+        std::array::push(copy, std::array::get(prices, i));
+        i = i + 1;
+    };
+    when apply_discount(copy, 20);
+    then std::array::get(copy, 0) == 80;
+    then std::array::get(copy, 1) == 160;
+    then std::array::get(copy, 2) == 240;
+}
+
+spec discounted_total {
+    given prices: Array[Int];
+    when let total = discounted_total(prices, 25);
+    then total == 150;
+}
+
+fn main() -> Int {
+    0
+}

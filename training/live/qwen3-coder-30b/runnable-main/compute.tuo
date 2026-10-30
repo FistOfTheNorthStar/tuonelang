@@ -1,0 +1,13 @@
+import std.io
+
+fn helper() -> Int {
+    return 42
+}
+
+spec helper {
+    expect(helper()) == 42
+}
+
+fn main() -> Int {
+    return helper()
+}

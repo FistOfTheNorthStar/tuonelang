@@ -1,0 +1,16 @@
+import std.array
+import std.mem
+
+fn histogram(in scores: Array[Int]) -> Array[Int] {
+    var result = Array[Int] { length: 10, value: 0 }
+    
+    for (var i = 0; i < scores.length; i = i + 1) {
+        var score = scores[i]
+        if (score >= 0 and score <= 100) {
+            var bucket = score / 10
+            result[bucket] = result[bucket] + 1
+        }
+    }
+    
+    return result
+}

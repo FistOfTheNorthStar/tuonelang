@@ -1,0 +1,39 @@
+fn reversed(take s: Str) -> String {
+    let len = std::str::len(s);
+    if len == 0 {
+        std::string::empty()
+    } else {
+        let mut result_builder = std::str::builder();
+        var i = 0;
+        while i < len {
+            let slice = std::str::slice(s, i, i + 1);
+            std::str::push(mut result_builder, slice);
+            i = i + 1;
+        }
+        // The above loop reconstructs the string in order.
+        // To reverse the bytes, we must iterate backwards and append.
+        
+        let mut result_builder_rev = std::str::builder();
+        var j = len - 1;
+        while j >= 0 {
+            let slice = std::str::slice(s, j, j + 1);
+            std::str::push(mut result_builder_rev, slice);
+            j = j - 1;
+        }
+        std::str::to_string(result_builder_rev)
+    }
+}
+
+spec reversed {
+    then reversed(Str::from("abc")) == String::from("cba");
+    then reversed(Str::from("12345")) == String::from("54321");
+    then reversed(Str::from("")) == String::from("");
+    then reversed(Str::from("a")) == String::from("a");
+}
+
+fn main() -> Int {
+    let s = Str::from("tuonelang");
+    let reversed_s = reversed(s);
+    std::io::println(Str::from("Original: tuonelang, Reversed: ") + Str::from(reversed_s)).unwrap_or(0);
+    0
+}

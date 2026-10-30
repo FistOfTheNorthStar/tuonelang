@@ -1,0 +1,22 @@
+import std.str
+import std.int
+
+fn setting_value(in line: Str, in key: Str) -> Option[Int] {
+    var parts = str.split_at_first(line, "=")
+    if str.is_empty(parts.left) || str.is_empty(parts.right) {
+        return None
+    }
+    
+    var name = str.trim_ascii_whitespace(parts.left)
+    if not str.equal(name, key) {
+        return None
+    }
+    
+    var value_str = str.trim_ascii_whitespace(parts.right)
+    var parsed = int.parse_decimal(value_str)
+    if parsed.is_err() {
+        return None
+    }
+    
+    return Some { value: parsed.value }
+}

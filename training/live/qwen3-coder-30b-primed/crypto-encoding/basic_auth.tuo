@@ -1,0 +1,21 @@
+module auth;
+
+import std::crypto;
+
+/// basic_auth returns an HTTP Basic Authorization header value.
+/// It takes a user and password and returns "Basic " followed by
+/// the base64 encoding of "user:password".
+pub fn basic_auth(in user: Str, in password: Str) -> String {
+    let credentials: Str = std::string::concat(user, ":");
+    let credentials: Str = std::string::concat(credentials, password);
+    let bytes: Array[Int] = std::crypto::bytes_of_str(credentials);
+    let encoded: String = std::crypto::base64_encode(bytes);
+    std::string::concat("Basic ", encoded)
+}
+
+spec basic_auth {
+    then basic_auth("user", "pass") == "Basic dXNlcjpwYXNz";
+    then basic_auth("", "") == "Basic Og==";
+    then basic_auth("test", "") == "Basic dGVzdDo=";
+    then basic_auth("", "secret") == "Basic OnNlY3JldA==";
+}

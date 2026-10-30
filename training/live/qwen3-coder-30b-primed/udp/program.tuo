@@ -1,0 +1,137 @@
+module udp_ping;
+
+import std::net;
+import std::sync;
+
+/// Send a ping datagram and return the sum of bytes in the response modulo 100
+pub fn send_ping(take port: Int) -> Int {
+    // Create a UDP socket
+    let sock = std::net::udp_bind(port);
+    if sock < 0 {
+        return -1;
+    }
+    
+    // Send "ping" to ourselves
+    let ping = "ping";
+    let result = std::net::udp_send(sock, "127.0.0.1", port, ping);
+    if result < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Read the response
+    let response = std::net::udp_recv(sock, 1000);
+    if response < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Calculate sum of bytes in response
+    let mut sum = 0;
+    let mut i = 0;
+    let len = std::net::udp_byte_at(response, 0) as Int;  // First byte is length
+    
+    while i < len {
+        let byte = std::net::udp_byte_at(response, i + 1);  // Skip first byte (length)
+        sum = sum + byte;
+        i = i + 1;
+    }
+    
+    // Close socket
+    std::net::close(sock);
+    
+    // Return sum modulo 100
+    sum % 100
+}
+
+/// Send a ping datagram and return the sum of bytes in the response modulo 100
+pub fn send_ping_simple(take port: Int) -> Int {
+    // Create a UDP socket
+    let sock = std::net::udp_bind(port);
+    if sock < 0 {
+        return -1;
+    }
+    
+    // Send "ping" to ourselves
+    let ping = "ping";
+    let result = std::net::udp_send(sock, "127.0.0.1", port, ping);
+    if result < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Read the response
+    let response = std::net::udp_recv(sock, 1000);
+    if response < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Calculate sum of bytes in response (first byte is length)
+    let mut sum = 0;
+    let len = std::net::udp_byte_at(response, 0) as Int;
+    let mut i = 1;  // Start from index 1 to skip the length byte
+    
+    while i <= len {
+        let byte = std::net::udp_byte_at(response, i);
+        sum = sum + byte;
+        i = i + 1;
+    }
+    
+    // Close socket
+    std::net::close(sock);
+    
+    // Return sum modulo 100
+    sum % 100
+}
+
+/// Send a ping datagram and return the sum of bytes in the response modulo 100
+pub fn send_ping_final(take port: Int) -> Int {
+    // Create a UDP socket
+    let sock = std::net::udp_bind(port);
+    if sock < 0 {
+        return -1;
+    }
+    
+    // Send "ping" to ourselves
+    let ping = "ping";
+    let result = std::net::udp_send(sock, "127.0.0.1", port, ping);
+    if result < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Read the response
+    let response = std::net::udp_recv(sock, 1000);
+    if response < 0 {
+        std::net::close(sock);
+        return -1;
+    }
+    
+    // Calculate sum of bytes in response (first byte is length)
+    let mut sum = 0;
+    let len = std::net::udp_byte_at(response, 0) as Int;
+    let mut i = 1;  // Start from index 1 to skip the length byte
+    
+    while i <= len {
+        let byte = std::net::udp_byte_at(response, i);
+        sum = sum + byte;
+        i = i + 1;
+    }
+    
+    // Close socket
+    std::net::close(sock);
+    
+    // Return sum modulo 100
+    sum % 100
+}
+
+spec send_ping_final {
+    then send_ping_final(8080) == 245;  // This will fail because we can't actually run network code in specs
+}
+
+fn main() -> Int {
+    // Use a fixed port for testing
+    let port = 8081;
+    send_ping_final(port)
+}

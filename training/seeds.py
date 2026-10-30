@@ -29,6 +29,14 @@ spec block.
 This module is the loader. It refuses an unknown metadata key and a ``.tuo``
 file that belongs to no seed, so a typo cannot silently drop data.
 
+A live model's recorded attempts at a training seed's task (``live_attempts.py``)
+live beside the seeds, one directory per run, and are attached to their seed::
+
+    live/<run>/run.json                      the model configuration and counts
+    live/<run>/hash-map/most_common.tuo      that model's attempt at the task
+
+An attempt for a seed that does not exist is refused like a stray file.
+
 The held-out eval seeds use the same layout but live **outside** this public
 repository, in a private checkout named by ``TUO_EVAL_DIR`` (its ``seeds/``
 directory): a model trained on scraped GitHub may have seen anything public,
@@ -37,10 +45,11 @@ the variable is unset.
 """
 import os
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 SEEDS_DIR = Path(__file__).resolve().parent / "seeds"
+LIVE_DIR = Path(__file__).resolve().parent / "live"
 EVAL_DIR = Path(os.environ["TUO_EVAL_DIR"]).resolve() if os.environ.get("TUO_EVAL_DIR") else None
 
 
@@ -98,6 +107,12 @@ class Seed:
 
     origin: str = "hand"
     """Where the seed came from (``hand``, ``py2tuo``, ``benchmark``, ...)."""
+
+    attempts: tuple[tuple[str, str], ...] = ()
+    """A live model's recorded attempts at the task, as ``(run, program)``
+    pairs in run order (``live/<run>/<concept>/<name>.tuo``). The generator
+    emits each one the compiler still has feedback on as a repair transcript
+    ending in the solution. Only a training seed has them."""
 
     name: str = ""
     """The seed's file stem under ``seeds/<concept>/``."""
@@ -167,5 +182,29 @@ def load_seeds(root: Path = SEEDS_DIR) -> list[Seed]:
     return seeds
 
 
-SEEDS: list[Seed] = load_seeds()
+def attach_attempts(seeds: list[Seed], root: Path = LIVE_DIR) -> list[Seed]:
+    """``seeds``, each with the live attempts recorded under ``root``."""
+    if not root.is_dir():
+        return seeds
+    by_key: dict[str, list[tuple[str, str]]] = {}
+    for run in sorted(p for p in root.iterdir() if p.is_dir()):
+        if not (run / "run.json").is_file():
+            raise SeedError(f"{run}: a live run without run.json")
+        for path in sorted(run.glob("*/*.tuo")):
+            by_key.setdefault(f"{path.parent.name}/{path.stem}", []).append((run.name, path.read_text()))
+        stray = sorted(
+            str(p.relative_to(run))
+            for p in run.rglob("*")
+            if p.is_file() and p.name != "run.json" and not (p.suffix == ".tuo" and p.parent.parent == run)
+        )
+        if stray:
+            raise SeedError(f"{run}: file(s) that are not attempts: {', '.join(stray)}")
+    known = {f"{seed.concept}/{seed.name}" for seed in seeds}
+    orphans = sorted(set(by_key) - known)
+    if orphans:
+        raise SeedError(f"{root}: attempt(s) at no seed's task: {', '.join(orphans)}")
+    return [replace(seed, attempts=tuple(by_key.get(f"{seed.concept}/{seed.name}", ()))) for seed in seeds]
+
+
+SEEDS: list[Seed] = attach_attempts(load_seeds())
 EVAL_SEEDS: list[Seed] = load_seeds(EVAL_DIR / "seeds") if EVAL_DIR else []

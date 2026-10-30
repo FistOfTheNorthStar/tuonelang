@@ -1,0 +1,12 @@
+import std.array
+import std.math
+
+fn dot(a in [Int; 3], b in [Int; 3]) -> Int {
+    var result: Int = 0
+    var i: Int = 0
+    while i < 3 {
+        result = result + (a[i] * b[i])
+        i = i + 1
+    }
+    result
+}

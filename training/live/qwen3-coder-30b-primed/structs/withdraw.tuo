@@ -1,0 +1,44 @@
+module bank;
+
+struct Account { id: Int, balance: Int }
+
+fn withdraw(mut acct: Account, take amount: Int) -> Bool {
+    if amount <= 0 {
+        false
+    } else if amount > acct.balance {
+        false
+    } else {
+        acct.balance = acct.balance - amount;
+        true
+    }
+}
+
+spec withdraw {
+    given acct: Account;
+    when let result = withdraw(acct, 5);
+    then result == true;
+}
+
+spec "withdraw fails when amount is zero" {
+    given acct: Account;
+    when let result = withdraw(acct, 0);
+    then result == false;
+}
+
+spec "withdraw fails when amount is negative" {
+    given acct: Account;
+    when let result = withdraw(acct, -1);
+    then result == false;
+}
+
+spec "withdraw fails when amount exceeds balance" {
+    given acct: Account;
+    when let result = withdraw(acct, 100);
+    then result == false;
+}
+
+spec "withdraw succeeds when amount equals balance" {
+    given acct: Account;
+    when let result = withdraw(acct, acct.balance);
+    then result == true;
+}

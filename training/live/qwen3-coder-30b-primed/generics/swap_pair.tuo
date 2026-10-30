@@ -1,0 +1,21 @@
+module pair;
+
+struct Pair[A, B] { first: A, second: B }
+
+fn swap_pair[A, B](take p: Pair[A, B]) -> Pair[B, A] {
+    Pair { first: p.second, second: p.first }
+}
+
+spec swap_pair {
+    given p: Pair[Int, Str];
+    when let swapped = swap_pair(p);
+    then swapped.first == p.second;
+    then swapped.second == p.first;
+}
+
+spec swap_pair_types {
+    given p: Pair[Int, Str];
+    when let swapped = swap_pair(p);
+    then std::core::is_some(swapped.first as Option[Str]) == true;
+    then std::core::is_some(swapped.second as Option[Int]) == true;
+}

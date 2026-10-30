@@ -1,0 +1,31 @@
+import std.array
+import std.sort
+import std.math
+
+fn median(in xs: Array[Int]) -> Option[Int] {
+  if (xs.len() == 0) {
+    None {}
+  } else {
+    var sorted = xs.clone()
+    sort.inplace(sorted)
+    
+    var n = xs.len()
+    if (n % 2 == 1) {
+      // Odd count: return the middle element
+      var mid = n / 2
+      Some { value: sorted[mid] }
+    } else {
+      // Even count: return the integer mean of the two middle elements
+      var mid1 = (n / 2) - 1
+      var mid2 = n / 2
+      var sum = sorted[mid1] + sorted[mid2]
+      var avg = if (sum >= 0) {
+        sum / 2
+      } else {
+        // Round toward zero for negative numbers
+        (sum - 1) / 2
+      }
+      Some { value: avg }
+    }
+  }
+}

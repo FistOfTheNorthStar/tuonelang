@@ -1,0 +1,37 @@
+import std::collections
+
+fn is_valid(in value: Int) -> Bool {
+    value >= 0 && value <= 150
+}
+
+fn is_alarm(in value: Int) -> Bool {
+    value > 100
+}
+
+fn alarm_count(in readings: Array[Int]) -> Int {
+    var count: Int = 0
+    var i: Int = 0
+    while i < readings.len() {
+        if is_alarm(readings[i]) {
+            count = count + 1
+        }
+        i = i + 1
+    }
+    return count
+}
+
+fn batch_status(in readings: Array[Int]) -> Int {
+    if readings.len() == 0 {
+        return 1
+    }
+    
+    if std::collections::any(readings, is_valid) == false {
+        return 0
+    }
+    
+    if std::collections::any(readings, is_alarm) {
+        return 2
+    }
+    
+    return 1
+}

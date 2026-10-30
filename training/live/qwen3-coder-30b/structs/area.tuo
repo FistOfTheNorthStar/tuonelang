@@ -1,0 +1,12 @@
+type Rect {
+  w: Int,
+  h: Int,
+}
+
+fn area(r: in Rect) -> Int {
+  r.w * r.h
+}
+
+fn square_rect(side: Int) -> Rect {
+  Rect { w: side, h: side }
+}

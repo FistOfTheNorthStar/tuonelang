@@ -1,0 +1,19 @@
+fn search(in ids: [Int; 8], take needle: Int) -> Int {
+    return search_between(ids, needle, 0, 8)
+}
+
+fn search_between(in ids: [Int; 8], take needle: Int, take lo: Int, take hi: Int) -> Int {
+    if lo >= hi {
+        return -1
+    }
+    
+    var mid: Int = (lo + hi) / 2
+    
+    if ids[mid] == needle {
+        return mid
+    } else if ids[mid] > needle {
+        return search_between(ids, needle, lo, mid)
+    } else {
+        return search_between(ids, needle, mid + 1, hi)
+    }
+}

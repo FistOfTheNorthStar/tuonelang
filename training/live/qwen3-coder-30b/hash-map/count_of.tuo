@@ -1,0 +1,31 @@
+import std.map
+import std.array
+
+fn count_of(xs: in Array[Int], needle: in Int) -> Int {
+    var freq_table: Map[Int, Int] = Map.new()
+    
+    for x in xs {
+        var count: Int = Map.get(freq_table, x, 0)
+        count = count + 1
+        Map.put(freq_table, x, count)
+    }
+    
+    return Map.get(freq_table, needle, 0)
+}
+
+spec count_of {
+    let xs: Array[Int] = [1, 2, 3, 2, 4, 2, 5]
+    let needle: Int = 2
+    let result: Int = count_of(xs, needle)
+    assert result == 3
+    
+    let xs2: Array[Int] = [1, 2, 3, 4, 5]
+    let needle2: Int = 6
+    let result2: Int = count_of(xs2, needle2)
+    assert result2 == 0
+    
+    let xs3: Array[Int] = []
+    let needle3: Int = 1
+    let result3: Int = count_of(xs3, needle3)
+    assert result3 == 0
+}
