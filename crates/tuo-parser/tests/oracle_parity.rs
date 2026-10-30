@@ -140,6 +140,9 @@ fn recovery_scenarios_agree() {
         "fn f() -> Int {\n    let mut x = 1;\n    x = x + 1;\n    x\n}\n",
         "fn f() {\n    let mut x: Int;\n    let mut = 2;\n}\n",
         "spec s {\n    let mut t = 1;\n    then t == 1;\n}\n",
+        "import std.array\nimport std::io\n\nfn f() { }\n",
+        "import std.net.tcp as tcp;\nimport std::{core, str}\n#[test]\nfn f() { }\n",
+        "import std::io foo;\nimport std.\nimport std::array\n",
     ] {
         assert_parity(text, "recovery scenario");
     }

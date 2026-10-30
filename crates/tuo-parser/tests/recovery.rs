@@ -424,3 +424,96 @@ fn a_let_without_mut_is_untouched() {
     );
     assert_eq!(count(&result, SyntaxKind::LetStatement), 1);
 }
+
+/// The source text a diagnostic's primary span covers.
+fn spanned<'a>(text: &'a str, span: &tuo_source::Span) -> &'a str {
+    &text[span.range().start().as_usize()..span.range().end().as_usize()]
+}
+
+#[test]
+fn a_dotted_import_without_a_semicolon_is_two_targeted_errors_and_still_imports() {
+    // `import std.array` once sent the import, and everything up to the next
+    // item keyword, into item-level recovery ("skipped 4 tokens"), and every
+    // use of the module surfaced as an unresolved name. Each slip is now its
+    // own `P0001` with a machine-applicable fix, and the import is kept.
+    let text = "import std.net.tcp\n\nfn f() -> Int {\n    1\n}\n";
+    let result = parse_str(text);
+    let diagnostics = result.all_diagnostics();
+    let codes: Vec<String> = diagnostics.iter().map(|d| d.code.to_string()).collect();
+    assert_eq!(codes, vec!["P0001".to_owned(), "P0001".to_owned()]);
+
+    let dotted = &diagnostics[0];
+    assert!(
+        dotted.message.contains("with `::`, not `.`"),
+        "{}",
+        dotted.message
+    );
+    assert_eq!(spanned(text, &dotted.primary_span), "std.net.tcp");
+    let edits: Vec<(&str, &str)> = dotted.suggestions[0]
+        .edits
+        .iter()
+        .map(|edit| (spanned(text, &edit.span), edit.replacement.as_str()))
+        .collect();
+    assert_eq!(edits, vec![(".", "::"), (".", "::")], "one edit per `.`");
+
+    let semi = &diagnostics[1];
+    assert!(
+        semi.message.contains("expected `;` after the import"),
+        "{}",
+        semi.message
+    );
+    assert_eq!(spanned(text, &semi.primary_span), "tcp");
+    let edit = &semi.suggestions[0].edits[0];
+    assert_eq!(
+        edit.span.range().start().as_usize(),
+        text.find('\n').expect("a newline")
+    );
+    assert_eq!(edit.replacement, ";");
+
+    assert_eq!(
+        count(&result, SyntaxKind::ImportItem),
+        1,
+        "the import is kept"
+    );
+    assert_eq!(count(&result, SyntaxKind::FunctionItem), 1);
+    assert_eq!(count(&result, SyntaxKind::Error), 0, "nothing is skipped");
+}
+
+#[test]
+fn an_import_missing_only_its_semicolon_at_the_end_of_the_file_is_targeted() {
+    let result = parse_str("import std::{core, str} as\n");
+    assert_eq!(result.diagnostics.len(), 1);
+    assert_eq!(
+        result.diagnostics[0].code.to_string(),
+        "P0002",
+        "`as` needs a name"
+    );
+
+    let result = parse_str("import std::{core, str}");
+    assert_eq!(result.diagnostics.len(), 1);
+    assert!(result.diagnostics[0].message.contains("expected `;`"));
+    assert_eq!(count(&result, SyntaxKind::ImportGroup), 1);
+}
+
+#[test]
+fn an_import_followed_by_anything_but_an_item_is_still_recovered_generically() {
+    // Only a missing `;` before the next item is targeted: a stray name is
+    // more than a missing `;`, and the item is skipped as before.
+    let result = parse_str("import std::io foo;\n\nfn f() { }\n");
+    let codes: Vec<String> = result
+        .diagnostics
+        .iter()
+        .map(|d| d.code.to_string())
+        .collect();
+    assert_eq!(codes, vec!["P0002".to_owned()]);
+    assert_eq!(count(&result, SyntaxKind::ImportItem), 0);
+    assert_eq!(count(&result, SyntaxKind::FunctionItem), 1);
+}
+
+#[test]
+fn well_formed_imports_are_untouched() {
+    let result =
+        parse_str("import std::array;\nimport std::net::tcp as tcp;\nimport std::{core, str};\n");
+    assert!(result.all_diagnostics().is_empty());
+    assert_eq!(count(&result, SyntaxKind::ImportItem), 3);
+}

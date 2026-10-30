@@ -162,8 +162,11 @@ the release compiler):
 
 None duplicates a break or another run, so the 324 attempts add 324 repair
 transcripts. Without the brief the model writes another language: 98 of
-qwen3-coder's 134 attempts stop at an `import` with no `;` (often a dotted
-`import std.array`), which the parser reports only as a malformed item.
+qwen3-coder's 134 attempts stop at an `import` with no `;`, often a dotted
+`import std.array`. The parser reported those only as a malformed item; it
+now names each slip with its own error and fix ("expected `;` after the
+import", "import paths separate segments with `::`, not `.`"), which is the
+first diagnostic of 84 transcripts.
 
 ### Harvested examples
 
