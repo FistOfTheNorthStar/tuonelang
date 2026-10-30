@@ -1,0 +1,8 @@
+import std::string
+
+fn main() -> Int {
+    var s1 = "Hello";
+    var s2 = "World";
+    var result = string::concat(s1, s2);
+    return string::len(result);
+}

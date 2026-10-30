@@ -1,0 +1,18 @@
+import std::net
+
+fn next_step(take outcome: Int, take attempt: Int, take max_attempts: Int) -> Int {
+    if outcome == 0 {
+        return 0; // connected - success
+    }
+    
+    if outcome == 1 {
+        if attempt < max_attempts {
+            return 1; // retry - timeout but more attempts allowed
+        } else {
+            return 2; // give up - timeout on last attempt
+        }
+    }
+    
+    // any other failure (not connected, not timeout)
+    return 2;
+}

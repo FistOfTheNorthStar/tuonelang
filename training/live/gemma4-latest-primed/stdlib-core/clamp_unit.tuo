@@ -1,0 +1,22 @@
+module app;
+
+import std::core;
+
+/// Clamps an integer n into the range [0, 100] using std::core::clamp.
+pub fn clamp_unit(take n: Int) -> Int {
+    std::core::clamp(take value: n, take low: 0, take high: 100)
+}
+
+spec clamp_unit {
+    then clamp_unit(50) == 50;
+    then clamp_unit(10) == 10;
+    then clamp_unit(0) == 0;
+    then clamp_unit(100) == 100;
+    then clamp_unit(-5) == 0;
+    then clamp_unit(101) == 100;
+}
+
+fn main() -> Int {
+    let result = clamp_unit(50);
+    result
+}

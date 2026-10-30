@@ -1,0 +1,45 @@
+module credit_card;
+
+/// Double every second digit counting from the RIGHTMOST digit (indices 0, 2, ..., 14)
+/// and subtract 9 from any doubled value above 9.
+pub fn luhn_sum(in digits: [Int; 16]) -> Int {
+    var sum = 0;
+    var i = 0;
+    while i < 16 {
+        let digit = digits[i];
+        if (15 - i) % 2 == 0 {  // Every second digit from the right
+            let doubled = digit * 2;
+            let adjusted = if doubled > 9 { doubled - 9 } else { doubled };
+            sum = sum + adjusted;
+        } else {
+            sum = sum + digit;
+        }
+        i = i + 1;
+    }
+    sum
+}
+
+/// Check if the Luhn sum is a multiple of 10.
+pub fn luhn_valid(in digits: [Int; 16]) -> Bool {
+    let sum = luhn_sum(digits);
+    sum % 10 == 0
+}
+
+spec luhn_sum {
+    then luhn_sum([4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 7]) == 60;
+    then luhn_sum([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]) == 37;
+}
+
+spec luhn_valid {
+    then luhn_valid([4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 7]) == true;
+    then luhn_valid([1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 1, 2, 3, 4, 5, 6]) == false;
+}
+
+fn main() -> Int {
+    let card_number: [Int; 16] = [4, 5, 3, 9, 1, 4, 8, 8, 0, 3, 4, 3, 6, 4, 6, 7];
+    if luhn_valid(card_number) {
+        luhn_sum(card_number)
+    } else {
+        1
+    }
+}

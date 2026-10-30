@@ -1,0 +1,25 @@
+module batch;
+
+pub fn remaining_ms(in steps_ms: [Int; 4], take budget_secs: Int) -> Int {
+    let total_duration = std::time::from_millis(steps_ms[0])
+        + std::time::from_millis(steps_ms[1])
+        + std::time::from_millis(steps_ms[2])
+        + std::time::from_millis(steps_ms[3]);
+    
+    let budget_duration = std::time::from_secs(budget_secs);
+    
+    if std::time::lt(total_duration, budget_duration) {
+        let diff = std::time::add(budget_duration, std::time::from_millis(-total_duration as Int));
+        std::time::as_millis(diff) as Int
+    } else {
+        0
+    }
+}
+
+spec remaining_ms {
+    then remaining_ms([1000, 1000, 1000, 1000], 5) == 0;
+    then remaining_ms([1000, 1000, 1000, 1000], 6) == 1000;
+    then remaining_ms([500, 500, 500, 500], 3) == 0;
+    then remaining_ms([500, 500, 500, 500], 4) == 500;
+    then remaining_ms([0, 0, 0, 0], 1) == 1000;
+}

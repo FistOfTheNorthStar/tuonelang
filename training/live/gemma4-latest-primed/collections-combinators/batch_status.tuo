@@ -1,0 +1,95 @@
+module temp_analyzer;
+
+/// Predicate to check if a reading is valid (0 <= reading <= 150).
+fn is_valid_reading(take reading: Int) -> Bool {
+    reading >= 0 && reading <= 150
+}
+
+/// Predicate to check if a reading is an alarm (reading > 100).
+fn is_alarm_reading(take reading: Int) -> Bool {
+    reading > 100
+}
+
+/// Counts the number of alarm readings in the batch.
+fn alarm_count(in readings: Array[Int]) -> Int {
+    // Filter into only the alarm readings, then count the resulting array length.
+    let alarms: Array[Int] = std::collections::filter_into(in readings, take is_alarm_reading);
+    std::array::len(alarms)
+}
+
+/// Determines the status of the batch based on validity and alarms.
+/// Returns:
+/// 0: If ANY reading is invalid.
+/// 1: If the batch is empty.
+/// 2: If all readings are valid, and at least one is an alarm.
+/// 3: If all readings are valid, and no alarms are present (and not empty).
+fn batch_status(in readings: Array[Int]) -> Int {
+    // 1. Check for invalid readings (returns 0 if any are invalid)
+    let all_valid = std::collections::all(in readings, take is_valid_reading);
+    if !all_valid {
+        return 0;
+    }
+
+    // 2. Handle empty batch case
+    let is_empty = std::array::len(in readings) == 0;
+    if is_empty {
+        return 1;
+    }
+
+    // 3. Check for alarms (returns true if any are alarms)
+    let has_alarm = std::collections::any(in readings, take is_alarm_reading);
+
+    if has_alarm {
+        return 2;
+    } else {
+        // All valid, not empty, no alarms
+        return 3;
+    }
+}
+
+spec alarm_count {
+    then alarm_count([50, 100, 150, 101, 200]) == 1; // 200 is invalid, but alarm_count only checks > 100
+    then alarm_count([101, 102, 103]) == 3;
+    then alarm_count([50, 60, 70]) == 0;
+    then alarm_count([]) == 0;
+}
+
+spec batch_status {
+    // Case 1: Invalid reading present (should return 0)
+    then batch_status([50, 160, 100]) == 0;
+    then batch_status([-1, 50, 100]) == 0;
+
+    // Case 2: Empty batch (should return 1)
+    then batch_status([]) == 1;
+
+    // Case 3: Valid, has alarm (should return 2)
+    then batch_status([50, 101, 150]) == 2;
+
+    // Case 4: Valid, no alarms (should return 3)
+    then batch_status([50, 100, 150]) == 3;
+}
+
+fn main() -> Int {
+    // Test case 1: Mixed valid, alarm, and invalid
+    let readings1: Array[Int] = [50, 101, 150, 200];
+    let alarms1 = alarm_count(readings1);
+    let status1 = batch_status(readings1);
+
+    // Test case 2: All valid, no alarms
+    let readings2: Array[Int] = [10, 50, 100];
+    let alarms2 = alarm_count(readings2);
+    let status2 = batch_status(readings2);
+
+    // Test case 3: Empty batch
+    let readings3: Array[Int] = [];
+    let alarms3 = alarm_count(readings3);
+    let status3 = batch_status(readings3);
+
+    // Test case 4: All invalid
+    let readings4: Array[Int] = [200, -1];
+    let alarms4 = alarm_count(readings4);
+    let status4 = batch_status(readings4);
+
+    // Return a combination of results to ensure all paths are hit in the main execution flow
+    status1 + status2 + status3 + status4
+}

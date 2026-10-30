@@ -1,0 +1,48 @@
+module histogram;
+
+/// Buckets exam scores into ten buckets of width ten.
+/// Bucket 0 counts 0..=9, bucket 1 counts 10..=19, and so on,
+/// with a perfect 100 counted in bucket 9.
+/// Scores outside 0..=100 are ignored.
+/// The result always has exactly ten elements.
+pub fn histogram(in scores: Array[Int]) -> Array[Int> {
+    let buckets = std::array::filled(10, 0);
+    var i = 0;
+    while i < std::array::len(scores) {
+        let score = std::array::get(scores, i);
+        if score >= 0 && score <= 100 {
+            let bucket_index = score / 10;
+            let current = std::array::get(buckets, bucket_index);
+            std::array::set(buckets, bucket_index, current + 1);
+        }
+        i = i + 1;
+    }
+    buckets
+}
+
+spec histogram {
+    given scores: Array[Int];
+    when let result = histogram(scores);
+    then std::array::len(result) == 10;
+}
+
+spec "empty input produces all zeros" {
+    then histogram(std::array::empty()) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+spec "scores in range are bucketed correctly" {
+    then histogram([0, 1, 9, 10, 19, 20, 29, 30, 39, 40, 49, 50, 59, 60, 69, 70, 79, 80, 89, 90, 99, 100]) 
+        == [10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+}
+
+spec "scores outside range are ignored" {
+    then histogram([-5, 101, 102, -1]) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+spec "bucket 0 contains 0-9" {
+    then histogram([0, 1, 5, 9]) == [4, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+}
+
+spec "bucket 9 contains 90-100" {
+    then histogram([90, 95, 100]) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 3];
+}

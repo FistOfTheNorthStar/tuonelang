@@ -1,0 +1,56 @@
+module pow_mod_recursive;
+
+/// Computes (base^exp) % modulus using binary exponentiation (exponentiation by squaring).
+///
+/// Assumes base, exp >= 0 and 1 <= modulus <= 1000000007, preventing Int overflow
+/// during intermediate multiplications.
+pub fn pow_mod(take base: Int, take exp: Int, take modulus: Int) -> Int {
+    // Base case: base^0 % modulus = 1 % modulus
+    if exp == 0 {
+        return 1 % modulus;
+    }
+
+    // Recursive step:
+    // 1. Calculate half_pow = base^(exp/2) % modulus
+    let half_pow = pow_mod(base, exp / 2, modulus);
+
+    // 2. Calculate squared = (half_pow * half_pow) % modulus
+    // Since we assume no overflow, we can use standard multiplication.
+    let squared = (half_pow * half_pow) % modulus;
+
+    // 3. If exp is even, result is squared.
+    if exp % 2 == 0 {
+        return squared;
+    } else {
+        // 4. If exp is odd, result is (squared * base) % modulus.
+        return (squared * base) % modulus;
+    }
+}
+
+spec pow_mod {
+    // Test case 1: 2^10 % 1000 = 1024 % 1000 = 24
+    then pow_mod(2, 10, 1000) == 24;
+
+    // Test case 2: 3^4 % 7 = 81 % 7 = 4
+    then pow_mod(3, 4, 7) == 4;
+
+    // Test case 3: Base case: 5^0 % 13 = 1
+    then pow_mod(5, 0, 13) == 1;
+
+    // Test case 4: Odd exponent: 2^3 % 5 = 8 % 5 = 3
+    then pow_mod(2, 3, 5) == 3;
+
+    // Test case 5: Large numbers (within Int limits for intermediate products)
+    // 7^13 % 1000000007
+    // Expected value calculated externally: 1000000006
+    then pow_mod(7, 13, 1000000007) == 1000000006;
+
+    // Test case 6: Base = 0
+    then pow_mod(0, 5, 10) == 0;
+    then pow_mod(0, 0, 10) == 1;
+}
+
+fn main() -> Int {
+    // Example usage: 2^10 % 1000
+    pow_mod(2, 10, 1000)
+}

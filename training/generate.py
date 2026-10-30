@@ -435,9 +435,23 @@ _STAGE = {"L": "parse", "P": "parse", "R": "resolve", "T": "type", "O": "ownersh
 """The front-end stage a diagnostic code's letter names."""
 
 
-def seed_repairs(seed: Seed) -> list[tuple[str, str, str, str, str]]:
+def feedback(program: str) -> tuple[str, str, str] | None:
+    """What the compiler says about a wrong ``program``, as ``(feedback,
+    command, kind)``: its first front-end diagnostic, else a failing spec's
+    report, else None."""
+    ok, diag = check_diagnostic(program)
+    if not ok:
+        if diag is None:
+            return None
+        return render_diagnostic(diag), "check", _STAGE.get(diag.get("code", "?")[:1], "other")
+    report = spec_failure(program)
+    return None if report is None else (report, "spec", "spec")
+
+
+def seed_repairs(seed: Seed) -> tuple[list[tuple[str, str, str, str, str]], int]:
     """Every repair transcript ``seed`` yields, as ``(broken program, compiler
-    feedback, command, break name, kind)``, in the order they are written."""
+    feedback, command, break name, kind)``, in the order they are written,
+    and how many of its live attempts the compiler no longer has feedback on."""
     repairs = []
     for brk in BREAKS:
         broken = brk.apply(seed.solution)
@@ -466,7 +480,24 @@ def seed_repairs(seed: Seed) -> list[tuple[str, str, str, str, str]]:
         report = spec_failure(mutant)
         if report is not None:
             repairs.append((mutant, report, "spec", "seed-mutant", "spec"))
-    return repairs
+    # A live model's own attempts at the task (`live_attempts.py`), each
+    # repaired against what the compiler says about it now; a program already
+    # emitted for this seed is not emitted twice. An attempt the
+    # compiler has stopped objecting to (a fix elsewhere made it valid) is
+    # dropped and counted, never emitted with stale feedback.
+    stale = 0
+    seen = {broken for broken, *_ in repairs}
+    for run, attempt in seed.attempts:
+        if attempt in seen:
+            continue  # another run, or a break, already teaches this program
+        seen.add(attempt)
+        found = feedback(attempt)
+        if found is None:
+            stale += 1
+            continue
+        report, command, kind = found
+        repairs.append((attempt, report, command, f"live:{run}", kind))
+    return repairs, stale
 
 
 def main() -> int:
@@ -597,8 +628,10 @@ def main() -> int:
     n_repair = 0
     repair_by_break: dict[str, int] = {}
     repair_by_kind: dict[str, int] = {}
+    live_stale = 0
     with repair_path.open("w") as f:
-        for seed, repairs in zip(train, pmap(seed_repairs, train)):
+        for seed, (repairs, stale) in zip(train, pmap(seed_repairs, train)):
+            live_stale += stale
             user = (
                 seed.task
                 + "\n\n(You may write a first attempt; the tuonelang "
@@ -655,6 +688,8 @@ def main() -> int:
         "harvested_dropped": harvest_dropped,
         "harvested_duplicates": len(duplicates),
         "harvested_by_origin": harvest_by_origin,
+        "live_attempts": sum(len(s.attempts) for s in train),
+        "live_attempts_stale": live_stale,
     }
     (OUT / "stats.json").write_text(json.dumps(stats, indent=2, sort_keys=True) + "\n")
     manifest = write_manifest(eval_path, n_eval)

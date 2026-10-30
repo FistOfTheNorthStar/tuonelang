@@ -1,0 +1,19 @@
+module distinct;
+
+/// Return the number of distinct values in an array.
+pub fn distinct(in xs: Array[Int]) -> Int {
+    let seen = std::map::empty[Int, Bool];
+    for x in xs {
+        std::map::insert(mut seen, take x, take true);
+    }
+    std::map::len(seen)
+}
+
+spec distinct {
+    then distinct(std::collections::singleton(1)) == 1;
+    then distinct(std::collections::of2(1, 2)) == 2;
+    then distinct(std::collections::of2(1, 1)) == 1;
+    then distinct(std::collections::of3(1, 2, 3)) == 3;
+    then distinct(std::collections::of3(1, 2, 1)) == 2;
+    then distinct(std::array::empty[Int]()) == 0;
+}

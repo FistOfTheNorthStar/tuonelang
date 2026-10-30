@@ -1,0 +1,31 @@
+struct Node {
+    value: Int,
+    next: Option[Box[Node]]
+}
+
+fn reverse(take list: Option[Box[Node]]) -> Option[Box[Node]] {
+    var prev: Option[Box[Node]] = None
+    var current = list
+    
+    while (current != None) {
+        var node = current!
+        current = node.next
+        node.next = prev
+        prev = Some { value: node }
+    }
+    
+    prev
+}
+
+fn digits(in list: Option[Box[Node]]) -> Int {
+    var result: Int = 0
+    var current = list
+    
+    while (current != None) {
+        var node = current!
+        result = result * 10 + node.value
+        current = node.next
+    }
+    
+    result
+}

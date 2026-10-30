@@ -1,0 +1,77 @@
+module slug;
+
+/// Convert a title into a URL slug.
+/// ASCII letters are lowercased, letters and digits are kept,
+/// and every run of any other bytes becomes a single '-'.
+/// The slug never starts or ends with '-', so "  --Tips & Tricks--  "
+/// becomes "tips-tricks" and a title with no letters or digits becomes
+/// the empty string.
+pub fn slugify(in title: Str) -> String {
+    let mut result = std::string::empty();
+    var i = 0;
+    var in_run = false;
+    
+    while i < std::str::len(title) {
+        let byte = std::str::byte_at(title, i);
+        let is_alphanumeric = (byte >= 97 && byte <= 122) ||  // a-z
+                              (byte >= 65 && byte <= 90) ||   // A-Z
+                              (byte >= 48 && byte <= 57);     // 0-9
+        
+        if is_alphanumeric {
+            let c = if byte >= 65 && byte <= 90 {
+                // Uppercase letter - convert to lowercase
+                byte + 32
+            } else {
+                byte
+            };
+            std::string::push_byte(result, c);
+            in_run = false;
+        } else {
+            // Non-alphanumeric character
+            if !in_run && std::string::len(result) > 0 {
+                // Only add a dash if we're not at the start and not already in a run
+                std::string::push_byte(result, 45);  // '-'
+                in_run = true;
+            }
+        }
+        i = i + 1;
+    }
+    
+    // Remove leading and trailing dashes
+    let mut final_result = std::string::empty();
+    var start = 0;
+    var end = std::string::len(result);
+    
+    // Find first non-dash character
+    while start < end && std::string::byte_at(result, start) == 45 {
+        start = start + 1;
+    }
+    
+    // Find last non-dash character
+    while end > start && std::string::byte_at(result, end - 1) == 45 {
+        end = end - 1;
+    }
+    
+    // Copy the middle part
+    if start < end {
+        var i = start;
+        while i < end {
+            std::string::push_byte(final_result, std::string::byte_at(result, i));
+            i = i + 1;
+        }
+    }
+    
+    final_result
+}
+
+spec slugify {
+    then slugify("Hello World") == "hello-world";
+    then slugify("  --Tips & Tricks--  ") == "tips-tricks";
+    then slugify("123abc") == "123abc";
+    then slugify("   ") == "";
+    then slugify("") == "";
+    then slugify("Special chars: !@#$%^&*()") == "special-chars";
+    then slugify("MixedCase") == "mixedcase";
+    then slugify("A-B-C") == "a-b-c";
+    then slugify("---start-end---") == "start-end";
+}

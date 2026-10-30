@@ -1,0 +1,12 @@
+fn abs(n in Int) -> Int {
+  if n >= 0 {
+    n
+  } else {
+    -n
+  }
+}
+
+spec abs {
+  expect abs(5) == 5
+  expect abs(-3) == 3
+}

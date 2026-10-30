@@ -1,0 +1,29 @@
+module fib_module;
+
+/// Calculates the n-th Fibonacci number recursively.
+/// fib(0) = 0, fib(1) = 1, fib(n) = fib(n-1) + fib(n-2)
+pub fn fib(take n: Int) -> Int {
+    if n == 0 {
+        0
+    } else if n == 1 {
+        1
+    } else {
+        fib(take n - 1) + fib(take n - 2)
+    }
+}
+
+spec fib {
+    then fib(0) == 0;
+    then fib(1) == 1;
+    then fib(2) == 1;
+    then fib(3) == 2;
+    then fib(4) == 3;
+    then fib(5) == 5;
+    then fib(6) == 8;
+}
+
+fn main() -> Int {
+    // Test with a small number to avoid excessive computation time in a simple example.
+    let n: Int = 10;
+    fib(n)
+}

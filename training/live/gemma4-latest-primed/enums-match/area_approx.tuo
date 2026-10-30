@@ -1,0 +1,38 @@
+module app;
+
+import std::core;
+import std::math;
+
+enum Shape {
+    Circle { r: Float },
+    Rect { w: Float, h: Float }
+}
+
+/// Approximates the area of a given shape using pi ≈ 3.0.
+fn area_approx(in s: Shape) -> Float {
+    match s {
+        Shape::Circle { r } => 3.0 * r * r, // Area = pi * r^2
+        Shape::Rect { w, h } => w * h,    // Area = w * h
+    }
+}
+
+spec area_approx {
+    then area_approx(Shape::Circle { r: 1.0 }) == 3.0 * 1.0 * 1.0;
+    then area_approx(Shape::Circle { r: 2.0 }) == 3.0 * 2.0 * 2.0;
+    then area_approx(Shape::Rect { w: 2.0, h: 3.0 }) == 6.0;
+    then area_approx(Shape::Rect { w: 5.0, h: 0.5 }) == 2.5;
+}
+
+fn main() -> Int {
+    let circle_shape = Shape::Circle { r: 4.0 };
+    let rect_shape = Shape::Rect { w: 10.0, h: 2.0 };
+
+    let circle_area = area_approx(circle_shape);
+    let rect_area = area_approx(rect_shape);
+
+    // Print results to standard output (conceptually, as main returns Int)
+    // In a real scenario, we might use std::io::println, but for a simple main,
+    // we just return a value based on the calculation.
+    // We'll return the sum of the two areas as the exit status.
+    (circle_area + rect_area)
+}

@@ -1,0 +1,7 @@
+fn count_up(n: take Int) -> Int {
+    var total: Int = 0
+    for i in 0..n {
+        total = total + i
+    }
+    return total
+}

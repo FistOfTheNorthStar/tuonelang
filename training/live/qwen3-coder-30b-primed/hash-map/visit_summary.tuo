@@ -1,0 +1,46 @@
+module visitor;
+
+pub fn visit_summary(in visitors: Array[Str]) -> String {
+    let counts = std::map::empty[Str, Int]();
+    let order = std::array::empty[Str]();
+    
+    for visitor in visitors {
+        let existing = std::map::get(counts, visitor);
+        match existing {
+            Some { value } => {
+                let new_count = value + 1;
+                std::map::insert(counts, visitor, new_count);
+            },
+            None => {
+                std::map::insert(counts, visitor, 1);
+                std::array::push(order, visitor);
+            }
+        }
+    }
+    
+    let mut result = std::string::empty();
+    var first = true;
+    
+    for name in order {
+        if not first {
+            std::string::append(result, ",");
+        }
+        first = false;
+        
+        let count = std::map::get(counts, name);
+        std::string::append(result, name);
+        std::string::append(result, "=");
+        std::string::push_int(result, std::core::unwrap_or(count, 0));
+    }
+    
+    result
+}
+
+spec visit_summary {
+    then visit_summary(std::array::empty[Str]()) == "";
+    then visit_summary(std::array::filled(1, "ann")) == "ann=1";
+    then visit_summary(std::array::of2("ann", "bob")) == "ann=1,bob=1";
+    then visit_summary(std::array::of3("ann", "bob", "ann")) == "ann=2,bob=1";
+    then visit_summary(std::array::of3("charlie", "bob", "ann")) == "charlie=1,bob=1,ann=1";
+    then visit_summary(std::array::of3("ann", "bob", "ann")) == "ann=2,bob=1";
+}

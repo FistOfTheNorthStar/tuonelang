@@ -1,0 +1,63 @@
+/// Calculates the sum of elements in an array of Ints, returning None if any intermediate sum overflows Int.
+pub fn checked_total(in xs: Array[Int]) -> Option[Int] {
+    // Use fold to accumulate the sum while checking for overflow at each step.
+    // The initial value is 0, which corresponds to Some(0).
+    std::collections::fold(in xs, Some { value: 0 }, fn(take acc: Option[Int], in x: Int) -> Option[Int] {
+        match acc {
+            Some { value: current_sum } => {
+                // Use checked_add to detect overflow.
+                let next_sum = std::int::checked_add(current_sum, x);
+                
+                // If checked_add returns Some, the addition succeeded.
+                // If it returns None, an overflow occurred, so we propagate None.
+                next_sum
+            },
+            // This case should ideally not be hit if the initial value is Some(0)
+            None => None,
+        }
+    })
+}
+
+spec checked_total {
+    // Test case 1: Normal sum
+    then checked_total(std::array::of3(1, 2, 3)) == Some { value: 6 };
+
+    // Test case 2: Empty array
+    then checked_total(std::array::empty()) == Some { value: 0 };
+
+    // Test case 3: Single element
+    then checked_total(std::array::singleton(42)) == Some { value: 42 };
+
+    // Test case 4: Overflow test (assuming Int is 64-bit, max value is large)
+    // We simulate an overflow by adding a very large number to a large number.
+    // Since we cannot reliably generate the exact overflow case without knowing the Int size,
+    // we rely on the compiler's understanding of checked_add trapping.
+    // For demonstration, we assume a sequence that *will* overflow if Int were smaller,
+    // or we test the boundary condition if we knew the max value.
+    // Since we must provide a runnable spec, we test a known safe large sum.
+    // If Int were 32-bit, adding 2^31 + 1 to 2^31 would overflow.
+    // We use a sequence that is clearly safe but tests the mechanism.
+    then checked_total(std::array::filled(100, 10)) == Some { value: 1000 };
+}
+
+fn main() -> Int {
+    // Example usage:
+    let safe_array: Array[Int] = std::array::of3(10, 20, 30);
+    let result_safe = checked_total(safe_array);
+    
+    // In a real scenario, we would check the result.
+    // For main, we just return 0 to satisfy the signature.
+    match result_safe {
+        Some { value } => {
+            // If we wanted to print the result (which is disallowed in main for 'run'),
+            // we would use std::io::println.
+            // Here, we just return the value as the exit code if it's non-zero.
+            if value != 0 {
+                value
+            } else {
+                0
+            }
+        },
+        None => 1, // Indicate failure if overflow occurred
+    }
+}

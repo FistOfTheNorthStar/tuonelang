@@ -1,0 +1,49 @@
+import std.str
+
+field_at(in line: Str, take index: Int) -> Str {
+    if index < 0 {
+        return ""
+    }
+    
+    var current_index = 0
+    var start = 0
+    var end = 0
+    var in_field = false
+    
+    var i = 0
+    while i < line.len() {
+        if line[i] == ',' {
+            if in_field {
+                end = i
+                if current_index == index {
+                    return line.slice(start, end)
+                }
+                in_field = false
+            } else {
+                if current_index == index {
+                    return ""
+                }
+            }
+            current_index += 1
+        } else {
+            if !in_field {
+                start = i
+                in_field = true
+            }
+        }
+        i += 1
+    }
+    
+    if in_field {
+        end = line.len()
+        if current_index == index {
+            return line.slice(start, end)
+        }
+    } else {
+        if current_index == index {
+            return ""
+        }
+    }
+    
+    return ""
+}

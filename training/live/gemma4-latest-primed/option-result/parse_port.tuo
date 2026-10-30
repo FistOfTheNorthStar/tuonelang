@@ -1,0 +1,85 @@
+module config_loader;
+
+import std::str;
+import std::core;
+
+/// Parses a string field into a port number (1-65535).
+/// Returns an error if parsing fails or if the number is out of range.
+pub fn parse_port(take field: Str) -> Result[Int, Str] {
+    // 1. Attempt to parse the string into an Int using std::str::parse_int
+    let parsed_result = std::str::parse_int(field);
+
+    match parsed_result {
+        Ok { value } => {
+            // 2. Check if the parsed value is within the valid port range [1, 65535]
+            if value >= 1 && value <= 65535 {
+                Ok { value }
+            } else {
+                // 3. Return a specific error if out of range
+                Err { error: "port out of range".to_string() }
+            }
+        }
+        Err { error } => {
+            // 4. Return the original parsing error if it failed
+            Err { error: error }
+        }
+    }
+}
+
+/// Extracts the error message from a Result[Int, Str].
+/// Returns the error message if the result is Err, or an empty string if Ok.
+pub fn error_of(in r: Result[Int, Str]) -> Str {
+    match r {
+        Ok { value } => {
+            // If Ok, return empty string as per requirement
+            std::str::empty()
+        }
+        Err { error } => {
+            // If Err, return the contained error string
+            error
+        }
+    }
+}
+
+spec parse_port {
+    // Test case 1: Valid port number
+    then parse_port("80").is_ok() == Some { value: 80 };
+    // Test case 2: Minimum valid port
+    then parse_port("1").is_ok() == Some { value: 1 };
+    // Test case 3: Maximum valid port
+    then parse_port("65535").is_ok() == Some { value: 65535 };
+    // Test case 4: Port too low (0)
+    then parse_port("0").is_err() == Some { error: "port out of range".to_string() };
+    // Test case 5: Port too high (65536)
+    then parse_port("65536").is_err() == Some { error: "port out of range".to_string() };
+    // Test case 6: Invalid string format
+    then parse_port("abc").is_err() == Some { error: "invalid digit found in string".to_string() };
+}
+
+spec error_of {
+    // Test case 1: Ok result
+    then error_of(Ok { value: 123 }) == "";
+    // Test case 2: Err result (parsing failure)
+    then error_of(Err { error: "invalid digit found in string".to_string() }) == "invalid digit found in string";
+    // Test case 3: Err result (range failure)
+    then error_of(Err { error: "port out of range".to_string() }) == "port out of range";
+}
+
+fn main() -> Int {
+    // Example usage in main (not tested by specs)
+    let port_str_ok = "443".to_string();
+    let result_ok = parse_port(port_str_ok);
+    
+    let port_str_bad = "99999".to_string();
+    let result_bad = parse_port(port_str_bad);
+
+    // Check the error message for the bad port
+    let error_msg = error_of(result_bad);
+    
+    // We expect the error message to be "port out of range"
+    if error_msg == "port out of range".to_string() {
+        0
+    } else {
+        1
+    }
+}

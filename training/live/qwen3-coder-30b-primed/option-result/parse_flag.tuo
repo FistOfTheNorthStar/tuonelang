@@ -1,0 +1,21 @@
+module app;
+
+/// Parse a flag value returning Ok of n when n is 0 or 1, else Err with "not a flag"
+fn parse_flag(take n: Int) -> Result[Int, Str] {
+    if n == 0 || n == 1 {
+        Ok { value: n }
+    } else {
+        Err { error: "not a flag" }
+    }
+}
+
+spec parse_flag {
+    then parse_flag(0) == Ok { value: 0 };
+    then parse_flag(1) == Ok { value: 1 };
+    then parse_flag(2) == Err { error: "not a flag" };
+    then parse_flag(-1) == Err { error: "not a flag" };
+}
+
+fn main() -> Int {
+    0
+}

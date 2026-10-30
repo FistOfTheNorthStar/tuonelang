@@ -1,0 +1,80 @@
+module word_counter;
+
+import std::str;
+import std::array;
+
+/// Counts the number of words in a string. A word is defined as a maximal
+/// run of non-whitespace characters.
+pub fn word_count(take s: Str) -> Int {
+    var count = 0;
+    var in_word = false;
+
+    // Iterate over the bytes of the string.
+    // We use a manual loop structure to track state (in_word)
+    // based on the character type, which is more robust than simple splitting.
+    var i = 0;
+    let len = std::str::len(s);
+
+    while i < len {
+        let byte = std::str::byte_at(s, i);
+        let is_space = std::str::is_space(byte);
+
+        if !is_space {
+            // Current byte is not whitespace
+            if !in_word {
+                // Transition from whitespace/start to non-whitespace: start of a new word
+                count = count + 1;
+                in_word = true;
+            }
+            // If in_word is true, we just continue the current word.
+        } else {
+            // Current byte is whitespace
+            if in_word {
+                // Transition from non-whitespace to whitespace: end of a word
+                in_word = false;
+            }
+            // If in_word is false, we just continue skipping whitespace.
+        }
+        i = i + 1;
+    }
+
+    // If the string ends while we are inside a word, the count is already correct.
+    count
+}
+
+spec word_count {
+    // Test case 1: Simple sentence
+    then word_count("Hello world").== 2;
+
+    // Test case 2: Leading whitespace
+    then word_count("  Start with space").== 2;
+
+    // Test case 3: Trailing whitespace
+    then word_count("End with space  ").== 1;
+
+    // Test case 4: Only whitespace
+    then word_count(" \t\n\r ").== 0;
+
+    // Test case 5: Empty string
+    then word_count("").== 0;
+
+    // Test case 6: Multiple internal spaces
+    then word_count("One   two\tthree").== 3;
+
+    // Test case 7: Mixed whitespace types
+    then word_count("A\nB\rC").== 3;
+
+    // Test case 8: Single word
+    then word_count("SingleWord").== 1;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let test_str: Str = "This is a test string with multiple spaces and tabs.\n";
+    let count = word_count(test_str);
+    
+    // Print the result (though main's return value is the exit status)
+    std::io::println(std::str::join(std::array::filled(1, std::str::to_string(count))));
+    
+    count
+}

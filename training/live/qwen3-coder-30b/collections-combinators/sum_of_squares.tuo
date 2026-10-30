@@ -1,0 +1,8 @@
+fn square(in x: Int) -> Int {
+    return x * x;
+}
+
+fn sum_of_squares(in xs: Array[Int]) -> Int {
+    var mapped = std::collections::map_into(xs, take square);
+    return std::collections::fold(mapped, 0, take std::math::add);
+}

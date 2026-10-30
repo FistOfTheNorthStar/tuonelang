@@ -1,0 +1,44 @@
+module app;
+
+import std::collections;
+import std::array;
+
+/// Calculates the sum of the squares of all elements in the array.
+/// Returns 0 if the array is empty.
+pub fn sum_of_squares(in xs: Array[Int]) -> Int {
+    // 1. Map each element to its square using a helper function.
+    let squared_array: Array[Int] = std::collections::map_into(in xs, fn(take x: Int) -> Int {
+        // Since we are restricted to standard library functions, we must implement
+        // squaring using available arithmetic operations.
+        x * x
+    });
+
+    // 2. Fold the resulting array by summing all elements.
+    // The initial value for the fold is 0.
+    std::collections::fold(in squared_array, 0, fn(take acc: Int, in x: Int) -> Int {
+        acc + x
+    })
+}
+
+spec sum_of_squares {
+    then sum_of_squares(std::array::filled(3, 1)) == 3; // 1*1 + 1*1 + 1*1 = 3
+    then sum_of_squares(std::array::filled(1, 2)) == 4; // 2*2 = 4
+    then sum_of_squares(std::array::filled(5, 0)) == 0; // 0*0 + ... = 0
+    then sum_of_squares(std::array::empty()) == 0;
+}
+
+fn main() -> Int {
+    let arr1: Array[Int] = std::array::filled(3, 1);
+    let result1 = sum_of_squares(arr1);
+
+    let arr2: Array[Int] = std::array::filled(1, 2);
+    let result2 = sum_of_squares(arr2);
+
+    let arr3: Array[Int] = std::array::empty();
+    let result3 = sum_of_squares(arr3);
+
+    // Print results for verification (though main's return value is the exit status)
+    // In a real scenario, we might use std::io::println, but for this self-contained example,
+    // we just return a value based on the last calculation.
+    result1 + result2 + result3
+}

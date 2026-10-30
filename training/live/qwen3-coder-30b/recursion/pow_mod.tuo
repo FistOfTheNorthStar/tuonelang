@@ -1,0 +1,32 @@
+fn pow_mod(base: take Int, exp: take Int, modulus: take Int) -> Int {
+    if exp == 0 {
+        return 1;
+    }
+    
+    var half_exp: Int = exp / 2;
+    var half_result: Int = pow_mod(base, half_exp, modulus);
+    var square: Int = (half_result * half_result) % modulus;
+    
+    if exp % 2 == 0 {
+        return square;
+    } else {
+        return (square * base) % modulus;
+    }
+}
+
+spec {
+    // Test case 1: base^0 mod modulus = 1
+    assert pow_mod(5, 0, 7) == 1;
+    
+    // Test case 2: 2^3 mod 5 = 8 mod 5 = 3
+    assert pow_mod(2, 3, 5) == 3;
+    
+    // Test case 3: 3^4 mod 7 = 81 mod 7 = 4
+    assert pow_mod(3, 4, 7) == 4;
+    
+    // Test case 4: 10^2 mod 6 = 100 mod 6 = 4
+    assert pow_mod(10, 2, 6) == 4;
+    
+    // Test case 5: 2^10 mod 1000 = 1024 mod 1000 = 24
+    assert pow_mod(2, 10, 1000) == 24;
+}

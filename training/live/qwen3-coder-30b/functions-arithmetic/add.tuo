@@ -1,0 +1,17 @@
+fn add(a in Int, b in Int) -> Int {
+    return a + b;
+}
+
+spec add {
+    // Positive case
+    var a = 5;
+    var b = 3;
+    var result = add(a, b);
+    assert result == 8;
+
+    // Zero case
+    var c = 0;
+    var d = 5;
+    var result2 = add(c, d);
+    assert result2 == 5;
+}

@@ -1,0 +1,134 @@
+module app;
+
+import std::array;
+import std::int;
+
+/// Applies a discount percentage to every price in the array, modifying the array in place.
+/// The discount is calculated as floor(price * (100 - percent) / 100).
+pub fn apply_discount(mut prices: Array[Int], take percent: Int) -> () {
+    let multiplier_numerator = 100 - percent;
+    let multiplier_denominator = 100;
+
+    // Iterate over the array indices and update the value at that index.
+    // Since Int is Copy, we can use set directly.
+    for i in 0..std::array::len(prices) {
+        let original_price = std::array::get(prices, i);
+        
+        // Calculate discounted price: floor(p * (100 - percent) / 100)
+        // We use integer arithmetic throughout.
+        // p * (100 - percent) must be calculated first to maintain precision before division.
+        let numerator = original_price * multiplier_numerator;
+        
+        // Integer division automatically floors the result for positive numbers.
+        let discounted_price = numerator / multiplier_denominator;
+        
+        // Update the array in place
+        std::array::set(prices, i, discounted_price);
+    }
+}
+
+/// Calculates the total cost of the prices after applying a discount percentage,
+/// without modifying the input array.
+pub fn discounted_total(in prices: Array[Int], take percent: Int) -> Int {
+    let multiplier_numerator = 100 - percent;
+    let multiplier_denominator = 100;
+
+    // Use std::collections::fold to sum the discounted values.
+    // The step function calculates the discounted value for each price.
+    std::collections::fold(
+        in prices, 
+        take init: 0, 
+        take step: fn(take Int, in price: Int) -> Int {
+            let numerator = price * multiplier_numerator;
+            let discounted_price = numerator / multiplier_denominator;
+            return step + discounted_price;
+        }
+    )
+}
+
+spec apply_discount {
+    given initial_prices: Array[Int];
+    when let prices = std::array::filled(3, 100);
+    when let initial_prices = prices; // Copy for comparison later
+    
+    // Test case 1: 100% discount (should result in 0)
+    when let prices_100 = std::array::filled(3, 100);
+    when let initial_prices_100 = prices_100;
+    
+    // Test case 2: 25% discount (100 -> 75, 50 -> 37, 10 -> 7)
+    when let prices_25 = std::array::filled(3, 100);
+    when let initial_prices_25 = prices_25;
+    
+    // Test case 3: 0% discount (should remain unchanged)
+    when let prices_0 = std::array::filled(3, 100);
+    when let initial_prices_0 = prices_0;
+
+    // Test 1: 100% discount
+    when apply_discount(prices_100, 100);
+    then prices_100[0] == 0;
+    then prices_100[1] == 0;
+    then prices_100[2] == 0;
+
+    // Test 2: 25% discount
+    when apply_discount(prices_25, 25);
+    then prices_25[0] == 75; // 100 * 75 / 100 = 75
+    then prices_25[1] == 37; // 50 * 75 / 100 = 37.5 -> 37
+    then prices_25[2] == 7;  // 10 * 75 / 100 = 7.5 -> 7
+
+    // Test 3: 0% discount
+    when apply_discount(prices_0, 0);
+    then prices_0[0] == 100;
+    then prices_0[1] == 100;
+    then prices_0[2] == 100;
+}
+
+spec discounted_total {
+    given prices: Array[Int];
+    when let prices = std::array::filled(3, 100);
+    
+    // Test case 1: 100% discount (Total should be 0)
+    when let total_100 = discounted_total(prices, 100);
+    then total_100 == 0;
+
+    // Test case 2: 25% discount (Total should be 75 + 37 + 7 = 129)
+    when let total_25 = discounted_total(prices, 25);
+    then total_25 == 129;
+
+    // Test case 3: 0% discount (Total should be 300)
+    when let total_0 = discounted_total(prices, 0);
+    then total_0 == 300;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let basket: Array[Int] = std::array::filled(3, 100);
+    let discount_percent = 25;
+
+    // 1. Calculate total without modifying the basket
+    let total_before_discount = discounted_total(basket, discount_percent);
+    std::io::println(std::str::join(
+        [
+            "Original Total: ", 
+            std::str::to_string(std::array::sum(basket)), 
+            ", Discounted Total: ", 
+            std::str::to_string(total_before_discount)
+        ], 
+        " "
+    )).unwrap();
+
+    // 2. Apply discount in place
+    apply_discount(basket, discount_percent);
+
+    // 3. Verify the change
+    let final_total = discounted_total(basket, 0); // Calculate total of the modified array
+    std::io::println(std::str::join(
+        [
+            "Basket after discount: ", 
+            std::str::to_string(final_total)
+        ], 
+        " "
+    )).unwrap();
+
+    // Return 0 for success
+    0
+}

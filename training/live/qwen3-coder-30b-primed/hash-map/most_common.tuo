@@ -1,0 +1,33 @@
+module app;
+
+/// Returns the value that occurs most often in xs, counting with a Map[Int, Int].
+pub fn most_common(in xs: [Int; 6]) -> Int {
+    let mut counts = std::map::empty[Int, Int]();
+    for x in xs {
+        let current = std::map::get(counts, x);
+        let new_count = match current {
+            Some { value } => value + 1,
+            None => 1,
+        };
+        std::map::insert(counts, x, new_count);
+    }
+    
+    var max_count = 0;
+    var result = 0;
+    for x in xs {
+        let count = std::map::get(counts, x);
+        let count_value = std::core::unwrap_or(count, 0);
+        if count_value > max_count {
+            max_count = count_value;
+            result = x;
+        }
+    }
+    
+    result
+}
+
+spec most_common {
+    then most_common([1, 2, 3, 4, 5, 6]) == 1;
+    then most_common([1, 1, 2, 2, 3, 3]) == 1;
+    then most_common([5, 5, 5, 1, 2, 3]) == 5;
+}

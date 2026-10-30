@@ -1,0 +1,65 @@
+module histogram_module;
+
+/// Buckets exam scores into ten buckets of width ten (0-9, 10-19, ..., 90-99, 100).
+/// Scores outside the range 0..=100 are ignored.
+pub fn histogram(in scores: Array[Int]) -> Array[Int] {
+    // Initialize the result array with ten zeros.
+    let initial_counts: Array[Int] = std::array::filled(10, 0);
+    
+    // Use a mutable variable for the accumulator array.
+    var counts = initial_counts;
+
+    // Iterate over the input scores.
+    for score in scores {
+        // Check if the score is within the valid range [0, 100].
+        if score >= 0 && score <= 100 {
+            // Calculate the bucket index.
+            // For scores 0-99, index = score / 10.
+            // For score 100, it should go into bucket 9.
+            let index: Int = if score == 100 {
+                9
+            } else {
+                score / 10
+            };
+
+            // Ensure the calculated index is valid (0 to 9).
+            if index >= 0 && index <= 9 {
+                // Increment the count for the corresponding bucket.
+                // Since Array[Int] elements are Copy, we can use set.
+                counts = std::array::set(counts, index, counts[index] + 1);
+            }
+        }
+    }
+    counts
+}
+
+spec histogram {
+    // Test case 1: Standard distribution across buckets.
+    then histogram([1, 5, 9, 10, 15, 19, 20, 25, 90, 99]) == [3, 2, 1, 1, 0, 0, 0, 0, 1, 1];
+
+    // Test case 2: All scores in the first bucket (0-9).
+    then histogram([0, 1, 5, 9]) == [4, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    // Test case 3: All scores in the last bucket (100).
+    then histogram([100, 100]) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 2];
+
+    // Test case 4: Empty input array.
+    then histogram([]) == [0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    // Test case 5: Scores outside the valid range (ignored).
+    then histogram([-5, 101, 200, 10, 50]) == [0, 1, 0, 0, 0, 0, 0, 0, 0, 0];
+
+    // Test case 6: Mixed valid and invalid scores.
+    then histogram([1, 10, 100, -1, 101]) == [1, 1, 0, 0, 0, 0, 0, 0, 0, 1];
+}
+
+fn main() -> Int {
+    // Example usage: Scores 0-9, 10-19, 20-29, 100
+    let scores: Array[Int] = std::array::of3(1, 15, 100);
+    let hist = histogram(scores);
+    
+    // Print the resulting array (for demonstration, though main returns Int)
+    // In a real scenario, we might use std::io::println if this were the main entry point.
+    // For this exercise, we just return 0.
+    0
+}

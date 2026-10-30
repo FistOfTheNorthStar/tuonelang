@@ -1,0 +1,63 @@
+module bracket;
+
+/// Check if brackets () [] {} are balanced and properly nested in text.
+pub fn balanced(in text: Str) -> Bool {
+    let stack: Array[Int] = std::array::empty();
+    var i = 0;
+    while i < std::str::len(text) {
+        let byte = std::str::byte_at(text, i);
+        match byte {
+            40 | 91 | 123 => {  // '(', '[', '{'
+                std::array::push(stack, byte);
+            },
+            41 => {  // ')'
+                if std::array::len(stack) == 0 {
+                    return false;
+                }
+                let last = std::array::pop(stack);
+                if last != 40 {  // '('
+                    return false;
+                }
+            },
+            93 => {  // ']'
+                if std::array::len(stack) == 0 {
+                    return false;
+                }
+                let last = std::array::pop(stack);
+                if last != 91 {  // '['
+                    return false;
+                }
+            },
+            125 => {  // '}'
+                if std::array::len(stack) == 0 {
+                    return false;
+                }
+                let last = std::array::pop(stack);
+                if last != 123 {  // '{'
+                    return false;
+                }
+            },
+            _ => { }  // ignore all other bytes
+        }
+        i = i + 1;
+    }
+    std::array::len(stack) == 0
+}
+
+spec balanced {
+    then balanced("") == true;
+    then balanced("()") == true;
+    then balanced("[]") == true;
+    then balanced("{}") == true;
+    then balanced("([{}])") == true;
+    then balanced("([{}])") == true;
+    then balanced("((()))") == true;
+    then balanced("({[]})") == true;
+    then balanced("([)]") == false;
+    then balanced("((]") == false;
+    then balanced("({)}") == false;
+    then balanced(")") == false;
+    then balanced("(") == false;
+    then balanced("a(b[c{d}e]f)g") == true;
+    then balanced("a(b[c{d}e)f)g") == false;
+}

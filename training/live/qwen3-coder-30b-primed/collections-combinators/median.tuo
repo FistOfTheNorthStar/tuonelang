@@ -1,0 +1,67 @@
+module median;
+
+/// Returns the median of the values in xs.
+/// For an odd count, returns the middle element.
+/// For an even count, returns the integer mean of the two middle elements (rounded toward zero).
+/// Returns None for an empty array.
+pub fn median(in xs: Array[Int]) -> Option[Int] {
+    let len = std::array::len(xs);
+    if len == 0 {
+        None
+    } else {
+        let sorted = std::collections::sorted_ascending(xs);
+        let mid = len / 2;
+        if std::int::checked_mul(2, mid) == Some(len) {
+            // Even count: average of two middle elements
+            let a = std::array::get(sorted, mid - 1);
+            let b = std::array::get(sorted, mid);
+            let sum = a + b;
+            // Integer division rounds toward zero as required
+            Some { value: sum / 2 }
+        } else {
+            // Odd count: middle element
+            let value = std::array::get(sorted, mid);
+            Some { value: value }
+        }
+    }
+}
+
+spec "median of empty array is None" {
+    then median(std::array::empty()) == None;
+}
+
+spec "median of single element" {
+    given xs: Array[Int];
+    when let result = median(xs);
+    then std::core::is_some(result) == true;
+    then match result {
+        Some { value } => value == std::array::get(xs, 0),
+        None => false,
+    };
+}
+
+spec "median of two elements" {
+    given a: Int, b: Int;
+    when let xs = std::collections::of2(a, b);
+    when let result = median(xs);
+    then match result {
+        Some { value } => value == (a + b) / 2,
+        None => false,
+    };
+}
+
+spec "median of odd count" {
+    given xs: Array[Int];
+    when let sorted = std::collections::sorted_ascending(xs);
+    when let len = std::array::len(sorted);
+    when let mid = len / 2;
+    when let result = median(xs);
+    then match result {
+        Some { value } => value == std::array::get(sorted, mid),
+        None => false,
+    };
+}
+
+fn main() -> Int {
+    0
+}

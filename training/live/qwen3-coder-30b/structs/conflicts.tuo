@@ -1,0 +1,36 @@
+struct Slot {
+    start: Int,
+    end: Int,
+}
+
+struct Booking {
+    room: Int,
+    slot: Slot,
+}
+
+fn overlap(in a: Slot, in b: Slot) -> Int {
+    var start_max = a.start
+    if b.start > start_max {
+        start_max = b.start
+    }
+    
+    var end_min = a.end
+    if b.end < end_min {
+        end_min = b.end
+    }
+    
+    if end_min > start_max {
+        return end_min - start_max
+    } else {
+        return 0
+    }
+}
+
+fn conflicts(in a: Booking, in b: Booking) -> Bool {
+    if a.room != b.room {
+        return false
+    }
+    
+    var overlap_minutes = overlap(a.slot, b.slot)
+    return overlap_minutes > 0
+}

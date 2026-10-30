@@ -1,0 +1,69 @@
+import std::sync
+import std::io
+
+fn in_order(take ch: Int) -> Int {
+    var result = 0
+    var multiplier = 1
+    
+    while true {
+        var received = std::sync::recv(ch)
+        if received == 0 {
+            break
+        }
+        
+        result = result + (received * multiplier)
+        multiplier = multiplier * 10
+    }
+    
+    return result
+}
+
+fn main() -> Int {
+    var ch = std::sync::channel()
+    
+    // Send job ids 3, 1, 4, 1, 5
+    std::sync::send(ch, 3)
+    std::sync::send(ch, 1)
+    std::sync::send(ch, 4)
+    std::sync::send(ch, 1)
+    std::sync::send(ch, 5)
+    
+    // Close the channel
+    std::sync::close(ch)
+    
+    // Test 1: sending negative value -7 should be refused (non-zero result)
+    var send_result1 = std::sync::send(ch, -7)
+    
+    // Test 2: sending after close should be refused (non-zero result)
+    var send_result2 = std::sync::send(ch, 10)
+    
+    // Test 3: drain channel and verify order is FIFO
+    var ch2 = std::sync::channel()
+    std::sync::send(ch2, 3)
+    std::sync::send(ch2, 1)
+    std::sync::send(ch2, 4)
+    std::sync::send(ch2, 1)
+    std::sync::send(ch2, 5)
+    std::sync::close(ch2)
+    
+    var fifo_result = in_order(ch2)
+    
+    // Verify all tests
+    var test1_passed = send_result1 != 0
+    var test2_passed = send_result2 != 0
+    var test3_passed = fifo_result == 31415
+    
+    if not test1_passed {
+        return 1
+    }
+    
+    if not test2_passed {
+        return 2
+    }
+    
+    if not test3_passed {
+        return 3
+    }
+    
+    return 31
+}

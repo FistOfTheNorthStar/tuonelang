@@ -1,0 +1,97 @@
+import std::str;
+import std::string;
+import std::result;
+
+/// Splits a comma-separated string into fields, trims them, parses each as an integer,
+/// and returns the sum. Returns None if any field is empty or fails to parse as an integer.
+pub fn sum_fields(in line: Str) -> Option[Int] {
+    // 1. Split the line by comma.
+    let parts: Array[Str] = std::str::split(in line, ",");
+
+    // 2. Check for the case of an empty input line, which results in an array containing one empty string.
+    // If the original line was empty, parts will be [""].
+    if line.len() == 0 {
+        // An empty line should result in None, as per the requirement for an empty field.
+        return None;
+    }
+
+    var total: Int = 0;
+
+    for part in parts {
+        // 3. Trim the field.
+        let trimmed_part: Str = std::str::trim(part);
+
+        // 4. Check if the trimmed field is empty.
+        if trimmed_part.len() == 0 {
+            // This handles empty fields (e.g., "a,,b" or "a,")
+            return None;
+        }
+
+        // 5. Parse the field as an integer.
+        let parse_result: Result[Int, Str] = std::str::parse_int(trimmed_part);
+
+        match parse_result {
+            Ok { value } => {
+                // Success: add to total.
+                total = total + value;
+            }
+            Err { error } => {
+                // Failure: return None.
+                return None;
+            }
+        }
+    }
+
+    // 6. If all fields were processed successfully, return Some(total).
+    Some { value: total }
+}
+
+spec sum_fields {
+    // Test case 1: Standard valid input
+    then sum_fields("1,2,3") == Some { value: 6 };
+
+    // Test case 2: Input with spaces (should be trimmed)
+    then sum_fields(" 1 , 2 , 3 ") == Some { value: 6 };
+
+    // Test case 3: Single field
+    then sum_fields("100") == Some { value: 100 };
+
+    // Test case 4: Empty input line
+    then sum_fields("") == None;
+
+    // Test case 5: Empty field in the middle (e.g., "1,,2")
+    then sum_fields("1,,2") == None;
+
+    // Test case 6: Trailing comma (e.g., "1,2,")
+    then sum_fields("1,2,") == None;
+
+    // Test case 7: Leading comma (e.g., ",1,2")
+    then sum_fields(",1,2") == None;
+
+    // Test case 8: Non-integer field
+    then sum_fields("1,two,3") == None;
+
+    // Test case 9: Mixed valid/invalid
+    then sum_fields("1,2,") == None;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let line1 = "10,20,30";
+    let result1 = sum_fields(line1);
+    std::io::println("Sum of \"{}\": {:?}", line1, result1);
+
+    let line2 = "10,20,";
+    let result2 = sum_fields(line2);
+    std::io::println("Sum of \"{}\": {:?}", line2, result2);
+
+    let line3 = "10,abc,30";
+    let result3 = sum_fields(line3);
+    std::io::println("Sum of \"{}\": {:?}", line3, result3);
+
+    let line4 = "";
+    let result4 = sum_fields(line4);
+    std::io::println("Sum of \"{}\": {:?}", line4, result4);
+
+    0
+}

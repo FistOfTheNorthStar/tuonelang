@@ -1,0 +1,34 @@
+module main_module;
+
+import std::sync;
+import std::array;
+
+/// Squares an integer.
+fn square(take x: Int) -> Int {
+    x * x
+}
+
+/// Main function that squares four tasks in parallel and sums the results.
+fn main() -> Int {
+    // The tasks to process: 1, 2, 3, 4
+    let tasks: [Int; 4] = [1, 2, 3, 4];
+    
+    // Use std::sync::par_map to apply 'square' to each element in 'tasks'
+    // with 2 workers. This returns an Array[Int] containing the results.
+    let results: Array[Int] = std::sync::par_map(
+        take square, 
+        in tasks, 
+        take 2
+    );
+
+    // Sum the results in the resulting array.
+    std::collections::sum(results)
+}
+
+spec main {
+    then main() == 1 + 4 + 9 + 16; // 1 + 4 + 9 + 16 = 30
+}
+
+fn main() -> Int {
+    main()
+}

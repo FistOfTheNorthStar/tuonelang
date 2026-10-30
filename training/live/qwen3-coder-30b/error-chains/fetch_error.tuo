@@ -1,0 +1,19 @@
+import std::core
+
+fn fetch_error(take status: Int) -> Array[String] {
+    var root_error: String = ""
+    
+    if status == 404 {
+        root_error = "not found"
+    } else if status == 408 || status == 504 {
+        root_error = "timeout"
+    } else {
+        root_error = "server error"
+    }
+    
+    var error_chain: Array[String] = []
+    error_chain = std::core::error_new(root_error)
+    error_chain = std::core::error_wrap(error_chain, "fetch users")
+    
+    return error_chain
+}

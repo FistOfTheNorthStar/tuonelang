@@ -1,0 +1,33 @@
+module crypto;
+
+import std::crypto;
+
+/// Compute the HMAC-SHA-256 of a message under a key as raw bytes.
+pub fn tag_for(in key: Str, in message: Str) -> Array[Int] {
+    let message_bytes = std::crypto::bytes_of_str(message);
+    let key_bytes = std::crypto::bytes_of_str(key);
+    std::crypto::hmac_sha256(key_bytes, message_bytes)
+}
+
+/// Check if a message is authentic under a key by recomputing the tag and
+/// comparing it with the received one in constant time.
+pub fn is_authentic(in key: Str, in message: Str, in tag: Array[Int]) -> Bool {
+    let computed_tag = tag_for(key, message);
+    std::crypto::verify(computed_tag, tag)
+}
+
+spec tag_for {
+    then std::array::len(tag_for("key", "message")) == 32;
+    then std::array::len(tag_for("", "")) == 32;
+}
+
+spec is_authentic {
+    given key: Str, message: Str;
+    when let tag = tag_for(key, message);
+    then is_authentic(key, message, tag) == true;
+    
+    given key: Str, message: Str, bad_tag: Array[Int];
+    when let tag = tag_for(key, message);
+    when let different = std::array::filled(32, 0);
+    then is_authentic(key, message, different) == false;
+}

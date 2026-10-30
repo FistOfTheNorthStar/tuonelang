@@ -1,0 +1,30 @@
+import std::fs
+import std::io
+
+fn main() -> Int {
+    var filename = "test_file.txt"
+    var content = "Hello, world!"
+    
+    // Write file
+    var write_result = std::fs::write_file(filename, content)
+    if (write_result is Err) {
+        return -1
+    }
+    
+    // Read file
+    var read_result = std::fs::read_file(filename)
+    if (read_result is Err) {
+        return -1
+    }
+    
+    var read_content = read_result.value
+    
+    // Remove file
+    var remove_result = std::fs::remove_file(filename)
+    if (remove_result is Err) {
+        return -1
+    }
+    
+    // Return byte count
+    return std::io::string_byte_count(read_content)
+}

@@ -1,0 +1,6 @@
+import std::array
+
+fn first_or_zero[T](arr: mut array[T], value: take T) -> T {
+    array::push(arr, value)
+    return array::get(arr, 0)
+}

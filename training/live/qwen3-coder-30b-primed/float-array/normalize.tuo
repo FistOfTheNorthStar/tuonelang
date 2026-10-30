@@ -1,0 +1,44 @@
+module normalize;
+
+/// Normalize an array of floats so the smallest becomes 0.0 and the largest becomes 1.0,
+/// preserving order. When every reading is equal (including a single reading) every result is 0.0.
+/// An empty input gives an empty array.
+pub fn normalize(in xs: Array[Float]) -> Array[Float] {
+    let len = std::array::len(xs);
+    if len == 0 {
+        return std::array::empty();
+    }
+    
+    let min_val = std::collections::min_of(xs);
+    let max_val = std::collections::max_of(xs);
+    
+    // If all values are the same, return an array of zeros
+    if min_val == max_val {
+        return std::array::filled(len, 0.0);
+    }
+    
+    let range = max_val - min_val;
+    let mut result = std::array::empty();
+    
+    for i in std::collections::range_len(0, len) {
+        let value = std::array::get(xs, i);
+        let normalized = (value - min_val) / range;
+        std::array::push(result, normalized);
+    }
+    
+    result
+}
+
+spec normalize {
+    then normalize(std::array::empty()) == std::array::empty();
+    
+    given xs: Array[Float];
+    when let result = normalize(xs);
+    then std::array::len(result) == std::array::len(xs);
+    
+    then normalize([1.0, 2.0, 3.0]) == [0.0, 0.5, 1.0];
+    then normalize([5.0]) == [0.0];
+    then normalize([3.0, 3.0, 3.0]) == [0.0, 0.0, 0.0];
+    then normalize([10.0, 20.0]) == [0.0, 1.0];
+    then normalize([0.0, 1.0, 2.0, 3.0]) == [0.0, 0.25, 0.5, 0.75];
+}

@@ -1,0 +1,65 @@
+module config;
+
+/// Parse a configuration line of the form `name = value` and return the value as an integer.
+/// Returns None if the line doesn't contain an equals sign, the name doesn't match key,
+/// or the value is not a valid decimal integer.
+pub fn setting_value(in line: Str, in key: Str) -> Option[Int] {
+    // Find the first '=' character
+    let equal_pos = std::str::index_of_byte(line, 61); // 61 is ASCII for '='
+    
+    match equal_pos {
+        Some { value: pos } => {
+            // Split the line at the equals sign
+            let name_part = std::str::slice(line, 0, pos);
+            let value_part = std::str::slice(line, pos + 1, std::str::len(line));
+            
+            // Trim whitespace from both sides
+            let trimmed_name = std::str::trim(name_part);
+            let trimmed_value = std::str::trim(value_part);
+            
+            // Check if the name matches
+            if trimmed_name == key {
+                // Try to parse the value as an integer
+                match std::str::parse_int(trimmed_value) {
+                    Ok { value: parsed } => Some { value: parsed },
+                    Err { error: _ } => None,
+                }
+            } else {
+                None
+            }
+        },
+        None => None,
+    }
+}
+
+spec setting_value {
+    given line: Str, key: Str;
+    when let result = setting_value(line, key);
+    then std::core::is_none(result) == (std::str::index_of_byte(line, 61) == None || 
+                                       std::str::trim(std::str::slice(line, 0, std::str::index_of_byte(line, 61).unwrap_or(0))) != key ||
+                                       std::str::parse_int(std::str::trim(std::str::slice(line, std::str::index_of_byte(line, 61).unwrap_or(0) + 1, std::str::len(line)))) == Err { error: "" });
+}
+
+spec "parses simple setting" {
+    then setting_value("foo = 42", "foo") == Some { value: 42 };
+}
+
+spec "returns None for mismatched key" {
+    then setting_value("foo = 42", "bar") == None;
+}
+
+spec "returns None for missing equals" {
+    then setting_value("foo 42", "foo") == None;
+}
+
+spec "handles whitespace" {
+    then setting_value("  foo  =  42  ", "foo") == Some { value: 42 };
+}
+
+spec "handles negative numbers" {
+    then setting_value("foo = -42", "foo") == Some { value: -42 };
+}
+
+spec "returns None for invalid number" {
+    then setting_value("foo = not_a_number", "foo") == None;
+}

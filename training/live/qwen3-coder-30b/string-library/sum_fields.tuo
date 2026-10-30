@@ -1,0 +1,23 @@
+import std.str
+import std.int
+
+fn sum_fields(in line: Str) -> Option[Int] {
+    var fields = str.split(line, ',')
+    var sum = 0
+    
+    for field in fields {
+        var trimmed = str.trim(field)
+        if str.is_empty(trimmed) {
+            return None
+        }
+        
+        var parsed = int.parse_decimal(trimmed)
+        if parsed.is_err() {
+            return None
+        }
+        
+        sum = sum + parsed.value
+    }
+    
+    return Some { value: sum }
+}

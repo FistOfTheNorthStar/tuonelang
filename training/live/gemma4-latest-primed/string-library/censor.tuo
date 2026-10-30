@@ -1,0 +1,107 @@
+module censor_utils;
+
+import std::str;
+import std::array;
+
+/// Replaces every non-overlapping occurrence of 'word' in 'text' with '*' characters.
+pub fn censor(take text: Str, take word: Str) -> String {
+    if std::str::len(word) == 0 {
+        return std::string::from_str(text);
+    }
+
+    let word_len = std::str::len(word);
+    let replacement = std::str::to_string(word_len); // Creates a string of '*' of length word_len
+
+    let mut result_parts: Array[String] = std::array::empty();
+    let mut current_index: Int = 0;
+    let text_len = std::str::len(text);
+
+    while current_index < text_len {
+        // Find the next occurrence of 'word' starting from current_index
+        let next_occurrence_index = std::str::index_of_byte(text, word, current_index);
+
+        if next_occurrence_index == None {
+            // No more occurrences found, append the rest of the text and break
+            let remaining_text = std::str::slice(text, current_index, text_len);
+            result_parts = std::array::concat(result_parts, std::array::singleton(remaining_text));
+            break;
+        } else {
+            let start = next_occurrence_index.unwrap();
+            let end = start + word_len;
+
+            // 1. Append the text segment before the match
+            if start > current_index {
+                let prefix = std::str::slice(text, current_index, start);
+                result_parts = std::array::concat(result_parts, std::array::singleton(prefix));
+            }
+
+            // 2. Append the replacement '*'
+            result_parts = std::array::concat(result_parts, std::array::singleton(replacement));
+
+            // 3. Update current_index to start after the match
+            current_index = end;
+        }
+    }
+
+    // Join all collected parts into the final String
+    std::string::join(result_parts, std::string::empty())
+}
+
+/// Counts the number of non-overlapping occurrences of 'word' in 'text'.
+pub fn mentions(take text: Str, take word: Str) -> Int {
+    if std::str::len(word) == 0 {
+        return 0;
+    }
+
+    let word_len = std::str::len(word);
+    let text_len = std::str::len(text);
+    let mut count: Int = 0;
+    let mut current_index: Int = 0;
+
+    while current_index < text_len {
+        // Find the next occurrence of 'word' starting from current_index
+        let next_occurrence_index = std::str::index_of_byte(text, word, current_index);
+
+        if next_occurrence_index == None {
+            break;
+        } else {
+            // Found an occurrence
+            count = count + 1;
+            
+            // Move past the found word to ensure non-overlapping count
+            current_index = next_occurrence_index.unwrap() + word_len;
+        }
+    }
+    count
+}
+
+spec censor {
+    then censor(std::str::to_string("the quick brown fox jumps over the lazy fox"), std::str::to_string("fox")) == std::string::from_str("the quick brown *** jumps over the lazy ***");
+    then censor(std::str::to_string("banana bread"), std::str::to_string("ana")) == std::string::from_str("b***n*** bread");
+    then censor(std::str::to_string("ababab"), std::str::to_string("ab")) == std::string::from_str("******");
+    then censor(std::str::to_string("test"), std::str::to_string("z")) == std::string::from_str("test");
+    then censor(std::str::to_string(""), std::str::to_string("word")) == std::string::from_str("");
+    then censor(std::str::to_string("text"), std::str::to_string("")) == std::string::from_str("text");
+}
+
+spec mentions {
+    then mentions(std::str::to_string("the quick brown fox jumps over the lazy fox"), std::str::to_string("fox")) == 2;
+    then mentions(std::str::to_string("banana bread"), std::str::to_string("ana")) == 2;
+    then mentions(std::str::to_string("ababab"), std::str::to_string("ab")) == 3;
+    then mentions(std::str::to_string("test"), std::str::to_string("z")) == 0;
+    then mentions(std::str::to_string(""), std::str::to_string("word")) == 0;
+    then mentions(std::str::to_string("text"), std::str::to_string("")) == 0;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let text = std::str::to_string("The quick brown fox jumps over the lazy fox.");
+    let word = std::str::to_string("fox");
+
+    let censored_text = censor(std::str::to_string(text), std::str::to_string(word));
+    let count = mentions(std::str::to_string(text), std::str::to_string(word));
+
+    // In a real scenario, we might print these results, but for main, we return a status code.
+    // We'll just return 0 to indicate success in running the example.
+    0
+}

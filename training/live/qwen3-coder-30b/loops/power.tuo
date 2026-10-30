@@ -1,0 +1,27 @@
+import std::math
+
+fn power(base: take Int, exp: take Int) -> Int {
+    if exp < 0 {
+        panic("exponent must be non-negative")
+    }
+    
+    var result: Int = 1
+    var i: Int = 0
+    
+    while i < exp {
+        result = result * base
+        i = i + 1
+    }
+    
+    result
+}
+
+spec power {
+    test {
+        assert(power(2, 0) == 1)
+        assert(power(2, 1) == 2)
+        assert(power(2, 3) == 8)
+        assert(power(5, 2) == 25)
+        assert(power(3, 4) == 81)
+    }
+}

@@ -1,0 +1,13 @@
+fn add(a in Int, b in Int) -> Int {
+    return a + b;
+}
+
+fn main() -> Int {
+    var arr = std::collections::array::new[Int](3);
+    std::collections::array::push(arr, 1);
+    std::collections::array::push(arr, 2);
+    std::collections::array::push(arr, 3);
+    
+    var result = std::collections::fold(arr, 0, add);
+    return result;
+}

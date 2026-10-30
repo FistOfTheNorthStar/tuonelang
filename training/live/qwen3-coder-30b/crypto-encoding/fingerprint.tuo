@@ -1,0 +1,9 @@
+import crypto/sha256
+import hex
+
+fn fingerprint(in data: Str) -> String {
+    var hash = sha256.digest(data)
+    var hex_string = hex.encode(hash)
+    var lower_case = str.to_lower(hex_string)
+    return str.slice(lower_case, 0, 8)
+}

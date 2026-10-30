@@ -1,0 +1,24 @@
+import std::json
+
+user_name(in text: Str) -> String {
+    var json = json::parse(text)
+    if json is Err {
+        return "anonymous"
+    }
+    
+    var user = json::get(json.value, "user")
+    if user is Err {
+        return "anonymous"
+    }
+    
+    var name = json::get(user.value, "name")
+    if name is Err {
+        return "anonymous"
+    }
+    
+    if name.value is not String {
+        return "anonymous"
+    }
+    
+    return name.value
+}

@@ -1,0 +1,85 @@
+module app;
+
+import std::fs;
+import std::io;
+
+fn count_lines(in text: Str) -> Int {
+    var count = 0;
+    var i = 0;
+    while i < std::str::len(text) {
+        let byte = std::str::byte_at(text, i);
+        if byte == 10 {  // newline
+            count = count + 1;
+        }
+        i = i + 1;
+    }
+    count
+}
+
+fn longest_line(in text: Str) -> Int {
+    var max_len = 0;
+    var start = 0;
+    var i = 0;
+    
+    while i <= std::str::len(text) {
+        let byte = if i < std::str::len(text) { 
+            std::str::byte_at(text, i) 
+        } else { 
+            10  // treat end as newline
+        };
+        
+        if byte == 10 {
+            let line_len = i - start;
+            if line_len > max_len {
+                max_len = line_len;
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    
+    max_len
+}
+
+spec count_lines {
+    then count_lines("a\nb\nc\n") == 3;
+    then count_lines("") == 0;
+    then count_lines("\n") == 1;
+}
+
+spec longest_line {
+    then longest_line("a\nbb\nccc\n") == 3;
+    then longest_line("a") == 1;
+    then longest_line("") == 0;
+}
+
+fn main() -> Int {
+    let filename: Str = "tuo_seed_inventory.txt";
+    let content: Str = "apples 4\nbananas 12\ncherries 7\n";
+    
+    // Write the file
+    let write_result = std::fs::write(filename, content);
+    if std::core::is_err(write_result) {
+        return 1;
+    }
+    
+    // Read the file back
+    let read_result = std::fs::read(filename);
+    if std::core::is_err(read_result) {
+        return 2;
+    }
+    
+    let text: Str = std::core::ok_or(read_result, "");
+    
+    // Remove the file
+    let remove_result = std::fs::remove(filename);
+    if std::core::is_err(remove_result) {
+        return 3;
+    }
+    
+    // Analyze the text
+    let line_count = count_lines(text);
+    let max_line_length = longest_line(text);
+    
+    line_count * 10 + max_line_length
+}

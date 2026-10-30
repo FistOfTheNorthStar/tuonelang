@@ -1,0 +1,75 @@
+import std::crypto;
+import std::str;
+import std::array;
+
+/// Computes the HMAC-SHA-256 tag for a given message using a secret key.
+/// Returns the raw 32-byte tag as an Array[Int].
+pub fn tag_for(take key: Str, take message: Str) -> Array[Int] {
+    // std::crypto::hmac_sha256 takes key: Array[Int] and message: Array[Int]
+    // We must convert Str to Array[Int] using std::crypto::bytes_of_str
+    let key_bytes = std::crypto::bytes_of_str(key);
+    let message_bytes = std::crypto::bytes_of_str(message);
+
+    std::crypto::hmac_sha256(key_bytes, message_bytes)
+}
+
+/// Verifies if the provided tag matches the HMAC-SHA-256 tag computed
+/// for the message using the key. Comparison is done in constant time.
+/// Returns true if the tag is authentic and matches, false otherwise.
+pub fn is_authentic(take key: Str, take message: Str, take tag: Array[Int]) -> Bool {
+    // 1. Recompute the expected tag
+    let expected_tag = tag_for(key, message);
+
+    // 2. Check length first (quick exit for wrong length)
+    if std::array::len(tag) != std::array::len(expected_tag) {
+        return false;
+    }
+
+    // 3. Constant time comparison (std::crypto::verify)
+    // std::crypto::verify(in a: Array[Int], in b: Array[Int]) -> Bool
+    std::crypto::verify(tag, expected_tag)
+}
+
+spec tag_for {
+    given key: Str, message: Str;
+    when let tag = tag_for(key, message);
+    then std::array::len(tag) == 32; // SHA-256 produces 32 bytes (32 * 1 byte)
+}
+
+spec is_authentic {
+    given key: Str, message: Str, tag: Array[Int];
+    when let authentic = is_authentic(key, message, tag);
+    then authentic == true;
+}
+
+spec is_authentic_failure {
+    given key: Str, message: Str, tag: Array[Int];
+    when let authentic = is_authentic(key, message, tag);
+    then authentic == false;
+}
+
+fn main() -> Int {
+    // Example usage (not part of the required functions, just for compilation)
+    let key_str = "secret_key".to_string();
+    let message_str = "data_to_authenticate".to_string();
+
+    // 1. Compute the correct tag
+    let correct_tag = tag_for(key_str, message_str);
+    
+    // 2. Test authenticity with the correct tag
+    let result_ok = is_authentic(key_str, message_str, correct_tag);
+    
+    // 3. Test authenticity with a tampered tag (change one byte)
+    var tampered_tag = std::array::filled(32, 0);
+    // Set the first byte to 1 (assuming 0 was the original)
+    std::array::set(tampered_tag, 0, 1); 
+    
+    let result_fail = is_authentic(key_str, message_str, tampered_tag);
+
+    // The main function returns 0 on success, 1 otherwise.
+    if result_ok && !result_fail {
+        0
+    } else {
+        1
+    }
+}

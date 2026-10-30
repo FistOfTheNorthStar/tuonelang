@@ -1,0 +1,98 @@
+import std::net
+import std::time
+
+const TIMEOUT_MS = 20
+
+fn poll_byte(take fd: Int) -> Int {
+    var result = std::net::read_byte_timeout(fd, TIMEOUT_MS)
+    if result is Err { 
+        return -1 
+    }
+    return result.value
+}
+
+fn main() -> Int {
+    var server_fd = std::net::socket(std::net::AF_INET, std::net::SOCK_STREAM, 0)
+    if server_fd < 0 { return 1 }
+    
+    var addr = std::net::sockaddr_in { 
+        sin_family: std::net::AF_INET,
+        sin_port: 0,
+        sin_addr: std::net::in_addr { s_addr: std::net::htonl(0x0100007f) },
+        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0]
+    }
+    
+    var bind_result = std::net::bind(server_fd, addr)
+    if bind_result < 0 { 
+        std::net::close(server_fd)
+        return 2 
+    }
+    
+    var listen_result = std::net::listen(server_fd, 1)
+    if listen_result < 0 { 
+        std::net::close(server_fd)
+        return 3 
+    }
+    
+    var addr_len = std::net::socklen_t { len: 16 }
+    var client_addr = std::net::sockaddr_in { 
+        sin_family: std::net::AF_INET,
+        sin_port: 0,
+        sin_addr: std::net::in_addr { s_addr: std::net::htonl(0x0100007f) },
+        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0]
+    }
+    
+    var client_fd = std::net::socket(std::net::AF_INET, std::net::SOCK_STREAM, 0)
+    if client_fd < 0 { 
+        std::net::close(server_fd)
+        return 4 
+    }
+    
+    var connect_result = std::net::connect(client_fd, client_addr)
+    if connect_result < 0 { 
+        std::net::close(client_fd)
+        std::net::close(server_fd)
+        return 5 
+    }
+    
+    var accepted_fd = std::net::accept(server_fd, client_addr, addr_len)
+    if accepted_fd < 0 { 
+        std::net::close(client_fd)
+        std::net::close(server_fd)
+        return 5 
+    }
+    
+    // First poll - should timeout
+    var first_result = poll_byte(accepted_fd)
+    if first_result != -1 { 
+        std::net::close(accepted_fd)
+        std::net::close(client_fd)
+        std::net::close(server_fd)
+        return 2 
+    }
+    
+    // Send "!" from client
+    var send_result = std::net::write(client_fd, [33])
+    if send_result < 0 { 
+        std::net::close(accepted_fd)
+        std::net::close(client_fd)
+        std::net::close(server_fd)
+        return 3 
+    }
+    
+    // Second poll - should get byte 33
+    var second_result = poll_byte(accepted_fd)
+    if second_result != 33 { 
+        std::net::close(accepted_fd)
+        std::net::close(client_fd)
+        std::net::close(server_fd)
+        return 4 
+    }
+    
+    // Clean up
+    std::net::close(accepted_fd)
+    std::net::close(client_fd)
+    std::net::close(server_fd)
+    
+    return 33
+}

@@ -1,0 +1,30 @@
+import std.tree
+
+enum Tree {
+    Leaf,
+    Branch { left: Box[Tree], value: Int, right: Box[Tree] }
+}
+
+fn depth(in t: Tree) -> Int {
+    match t {
+        Leaf => 0,
+        Branch { left: l, value: _, right: r } => {
+            var left_depth = depth(l)
+            var right_depth = depth(r)
+            if left_depth > right_depth {
+                1 + left_depth
+            } else {
+                1 + right_depth
+            }
+        }
+    }
+}
+
+fn total(in t: Tree) -> Int {
+    match t {
+        Leaf => 0,
+        Branch { left: l, value: v, right: r } => {
+            v + total(l) + total(r)
+        }
+    }
+}

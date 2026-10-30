@@ -1,0 +1,117 @@
+module bst;
+
+struct Bst {
+    key: Int,
+    left: Option[Box[Bst]],
+    right: Option[Box[Bst]],
+}
+
+fn bst_insert(take tree: Option[Box[Bst]], take key: Int) -> Option[Box[Bst]] {
+    match tree {
+        None => {
+            Some { value: std::boxed::new(Bst { key, left: None, right: None }) }
+        },
+        Some { value: node } => {
+            if key < node.key {
+                let new_left = bst_insert(node.left, key);
+                let new_node = Bst { key: node.key, left: new_left, right: node.right };
+                Some { value: std::boxed::new(new_node) }
+            } else if key > node.key {
+                let new_right = bst_insert(node.right, key);
+                let new_node = Bst { key: node.key, left: node.left, right: new_right };
+                Some { value: std::boxed::new(new_node) }
+            } else {
+                // Key already exists, return the original tree unchanged
+                Some { value: node }
+            }
+        }
+    }
+}
+
+fn bst_contains(in tree: Option[Box[Bst]], take key: Int) -> Bool {
+    match tree {
+        None => false,
+        Some { value: node } => {
+            if key < node.key {
+                bst_contains(node.left, key)
+            } else if key > node.key {
+                bst_contains(node.right, key)
+            } else {
+                true
+            }
+        }
+    }
+}
+
+fn bst_size(in tree: Option[Box[Bst]]) -> Int {
+    match tree {
+        None => 0,
+        Some { value: node } => {
+            1 + bst_size(node.left) + bst_size(node.right)
+        }
+    }
+}
+
+spec bst_insert {
+    then {
+        let tree = None;
+        let result = bst_insert(tree, 5);
+        then bst_contains(result, 5) == true;
+        then bst_contains(result, 3) == false;
+    }
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: None, right: None }) };
+        let result = bst_insert(tree, 3);
+        then bst_contains(result, 3) == true;
+        then bst_contains(result, 5) == true;
+        then bst_contains(result, 7) == false;
+    }
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: None, right: None }) };
+        let result = bst_insert(tree, 5);
+        then bst_contains(result, 5) == true;
+    }
+}
+
+spec bst_contains {
+    then bst_contains(None, 5) == false;
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: None, right: None }) };
+        then bst_contains(tree, 5) == true;
+        then bst_contains(tree, 3) == false;
+        then bst_contains(tree, 7) == false;
+    }
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: Some { value: std::boxed::new(Bst { key: 3, left: None, right: None }) }, right: None }) };
+        then bst_contains(tree, 3) == true;
+        then bst_contains(tree, 5) == true;
+        then bst_contains(tree, 7) == false;
+    }
+}
+
+spec bst_size {
+    then bst_size(None) == 0;
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: None, right: None }) };
+        then bst_size(tree) == 1;
+    }
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: Some { value: std::boxed::new(Bst { key: 3, left: None, right: None }) }, right: None }) };
+        then bst_size(tree) == 2;
+    }
+    
+    then {
+        let tree = Some { value: std::boxed::new(Bst { key: 5, left: Some { value: std::boxed::new(Bst { key: 3, left: None, right: None }) }, right: Some { value: std::boxed::new(Bst { key: 7, left: None, right: None }) } }) };
+        then bst_size(tree) == 3;
+    }
+}
+
+fn main() -> Int {
+    0
+}

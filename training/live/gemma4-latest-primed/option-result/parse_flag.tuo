@@ -1,0 +1,25 @@
+/// Parses an integer n, returning Ok(n) if n is 0 or 1, otherwise Err("not a flag").
+pub fn parse_flag(take n: Int) -> Result[Int, Str] {
+    if n == 0 || n == 1 {
+        Ok { value: n }
+    } else {
+        Err { error: "not a flag" }
+    }
+}
+
+spec parse_flag {
+    then parse_flag(0).is_ok() == true;
+    then parse_flag(1).is_ok() == true;
+    then parse_flag(2).is_err() == true;
+    then parse_flag(-1).is_err() == true;
+}
+
+fn main() -> Int {
+    // Example usage, not required for the function definition itself
+    let result_ok = parse_flag(1);
+    let result_err = parse_flag(5);
+
+    // We can't easily assert the return values in main without more boilerplate,
+    // but the spec covers the logic.
+    0
+}

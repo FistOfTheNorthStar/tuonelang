@@ -1,0 +1,92 @@
+module map_view_example;
+
+import std::string;
+import std::map;
+import std::str;
+
+/// Creates a Map[Str, Int] where the keys are derived from a String
+/// and the values are simple counters.
+fn build_map_from_string(in s: Str) -> std::map::Map[Str, Int] {
+    var m = std::map::empty<Str, Int>();
+    var parts: Array[Str] = std::str::split(in s, " ");
+
+    for i in 0..std::array::len(parts) {
+        let key = parts[i];
+        // Use the key itself as the key in the map, and its index as the value.
+        // Since we are building the map, we must take ownership of the key string
+        // to use it as the key in the map structure.
+        // We use std::string::from_str to create an owned String for the map key.
+        let owned_key = std::string::from_str(key);
+        let value = i;
+        
+        // std::map::insert takes ownership of the key and value.
+        // We must convert the owned_key (String) back to Str for the map key type,
+        // which is tricky because std::map::insert expects K: Str.
+        // Since we are using Str literals/results, we must ensure the key type matches.
+        // Let's adjust the map type to use String for keys if we want to own the key,
+        // but the prompt specifies Map[Str, Int]. We will stick to Str keys and
+        // rely on the fact that std::string::from_str(key) creates an owned String,
+        // and we must convert it back to Str if the map key type is Str.
+        // For simplicity and adherence to the prompt's key type (Str), we will
+        // use the Str representation of the key for insertion, accepting that
+        // the map will hold copies of the key's content.
+        
+        // Re-evaluating: std::map::insert(mut m: Map[K, V], take key: K, take value: V)
+        // If K is Str, we must pass a Str.
+        let key_str: Str = key; // This is a copy of the Str content.
+        m = std::map::insert(m, key_str, value);
+    }
+    m
+}
+
+/// Looks up a key in the map, demonstrating the use of the map structure.
+fn lookup_key(in m: std::map::Map[Str, Int], take key: Str) -> Option[Int] {
+    std::map::get(in m, take key)
+}
+
+/// Main function to demonstrate the process.
+fn main() -> Int {
+    // 1. Start with an owned String.
+    let owned_s: String = std::string::from_str("apple banana cherry");
+    
+    // 2. View the String as Str (borrowed view).
+    let borrowed_s: Str = std::string::as_str(owned_s);
+    
+    // 3. Build the map using the borrowed view.
+    let my_map = build_map_from_string(borrowed_s);
+    
+    // 4. Look up an entry using a Str key.
+    let lookup_key_str: Str = "banana";
+    let result = lookup_key(my_map, lookup_key_str);
+    
+    // 5. Print the result (for demonstration, though main returns Int).
+    // We use a simple check here since we cannot use std::io::println in main's return value.
+    // We'll just return 0 if found, 1 otherwise.
+    if std::core::is_some(result) {
+        // In a real scenario, we would print the result.
+        // For this example, we just confirm the structure works.
+        0
+    } else {
+        1
+    }
+}
+
+spec main {
+    given a: Str;
+    when let map = build_map_from_string(a);
+    when let result = lookup_key(map, "banana");
+    then std::core::is_some(result);
+}
+
+spec build_map_from_string {
+    given a: Str;
+    when let m = build_map_from_string(a);
+    then std::map::len(m) == 3;
+}
+
+spec lookup_key {
+    given m: std::map::Map[Str, Int];
+    given key: Str;
+    when let result = lookup_key(m, key);
+    then std::core::is_some(result);
+}

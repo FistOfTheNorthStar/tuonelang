@@ -1,0 +1,67 @@
+import std::core;
+import std::str;
+import std::bits;
+
+/// Calculates a rolling hash for a string using a specific algorithm.
+/// The hash starts at 0. For each byte in the string, the current hash is
+/// rotated left by 5 bits, and the byte is XORed into the result.
+pub fn rolling_hash(take s: Str) -> Int {
+    var hash: Int = 0;
+    let bytes = std::str::slice(s, 0, std::str::len(s));
+
+    for i in 0..std::str::len(s) {
+        let byte_val = std::bits::byte_at(s, i);
+        
+        // 1. Rotate the current hash left by 5 bits
+        let rotated_hash = std::bits::rotl32(hash, 5);
+        
+        // 2. XOR the byte into the rotated hash
+        hash = rotated_hash ^ byte_val;
+    }
+    
+    // The return type is Int, which is an alias for I64, but since we only
+    // used 32-bit operations (rotl32, byte_at), the result fits within 32 bits.
+    hash
+}
+
+spec rolling_hash {
+    // Test case 1: Empty string
+    then rolling_hash(std::str::join(std::array::empty(), ""));
+
+    // Test case 2: Single character 'a' (ASCII 97)
+    // Start: hash = 0
+    // Byte 1 ('a', 97): hash = (0 << 5) ^ 97 = 97
+    then rolling_hash(std::str::join(std::array::empty(), "a")) == 97;
+
+    // Test case 3: Two characters "ab"
+    // Start: hash = 0
+    // Byte 1 ('a', 97): hash = 97
+    // Byte 2 ('b', 98): hash = (97 << 5) ^ 98
+    // 97 << 5 = 1552
+    // 1552 ^ 98 = 1642
+    then rolling_hash(std::str::join(std::array::empty(), "ab")) == 1642;
+
+    // Test case 4: "abc"
+    // Start: hash = 0
+    // 'a': hash = 97
+    // 'b': hash = 1642
+    // 'c' (99): hash = (1642 << 5) ^ 99
+    // 1642 << 5 = 52544
+    // 52544 ^ 99 = 52643
+    then rolling_hash(std::str::join(std::array::empty(), "abc")) == 52643;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let s1 = std::str::join(std::array::empty(), "test");
+    let hash1 = rolling_hash(s1);
+    
+    let s2 = std::str::join(std::array::empty(), "abcd");
+    let hash2 = rolling_hash(s2);
+
+    // Print results (using standard library functions for output simulation)
+    std::io::println(std::str::join(std::array::empty(), "Hash of 'test': ") + std::str::to_string(hash1));
+    std::io::println(std::str::join(std::array::empty(), "Hash of 'abcd': ") + std::str::to_string(hash2));
+
+    0
+}

@@ -1,0 +1,24 @@
+import std.array
+import std.string
+
+fn tag_line(in tags: Array[Str]) -> String {
+    if array.is_empty(tags) {
+        return ""
+    }
+    
+    var result: String = ""
+    var first: Bool = true
+    
+    for tag in tags {
+        if not first {
+            result = string.concat(result, " ")
+        }
+        first = false
+        
+        var lower_tag: String = string.to_lower(tag)
+        result = string.concat(result, "#")
+        result = string.concat(result, lower_tag)
+    }
+    
+    return result
+}

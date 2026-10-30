@@ -1,0 +1,12 @@
+fn first_alarm(in readings: [Int; 6], take limit: Int) -> Int {
+    var index: Int = 0
+    loop {
+        if index >= 6 {
+            break -1
+        }
+        if readings[index] > limit {
+            break index
+        }
+        index = index + 1
+    }
+}

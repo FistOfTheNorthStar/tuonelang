@@ -1,0 +1,73 @@
+module ledger_parser;
+
+import std::str;
+import std::core;
+
+/// Parses a single line string into an Int.
+/// On failure, returns an error chain rooted at "not a number".
+pub fn parse_amount(in text: Str) -> Result[Int, Array[String]] {
+    match std::str::parse_int(in text) {
+        Ok(n) => Ok { value: n },
+        Err(e) => Err { error: std::core::error_new(std::str::to_string(e)) },
+    }
+}
+
+/// Loads and sums two amounts from two separate strings.
+/// Wraps the failure with context indicating which line failed.
+pub fn load_total(in first: Str, in second: Str) -> Result[Int, Array[String]] {
+    let res1 = parse_amount(in first);
+    let res2 = parse_amount(in second);
+
+    match res1 {
+        Ok { value: n1 } => {
+            match res2 {
+                Ok { value: n2 } => Ok { value: n1 + n2 },
+                Err { error: chain } => Err { error: std::core::error_wrap(chain, "line 2") },
+            }
+        },
+        Err { error: chain } => Err { error: std::core::error_wrap(chain, "line 1") },
+    }
+}
+
+/// Parses two amounts and returns the total as a formatted string,
+/// or the full error message chain if parsing fails.
+pub fn report(in first: Str, in second: Str) -> String {
+    match load_total(in first, in second) {
+        Ok { value: total } => std::str::float_to_string(total as Float, 0),
+        Err { error: chain } => std::core::error_message(chain),
+    }
+}
+
+spec parse_amount {
+    then parse_amount("123").is_ok(true);
+    then parse_amount("0").is_ok(true);
+    then parse_amount("abc").is_ok(false);
+}
+
+spec load_total {
+    then load_total("10", "20").is_ok(Some { value: 30 });
+    then load_total("10", "xyz").is_err(Some { error: std::core::error_wrap(std::core::error_new("invalid digit"), "line 2") });
+    then load_total("abc", "20").is_err(Some { error: std::core::error_wrap(std::core::error_new("invalid digit"), "line 1") });
+}
+
+spec report {
+    then report("10", "20") == "30";
+    then report("10", "xyz") == "line 2: invalid digit";
+    then report("abc", "20") == "line 1: invalid digit";
+}
+
+fn main() -> Int {
+    // Test case 1: Success
+    let result1 = report("100", "50");
+    std::io::println(std::str::to_string(result1)).unwrap();
+
+    // Test case 2: Failure on second line
+    let result2 = report("100", "not_a_number");
+    std::io::println(std::str::to_string(result2)).unwrap();
+
+    // Test case 3: Failure on first line
+    let result3 = report("bad_input", "50");
+    std::io::println(std::str::to_string(result3)).unwrap();
+
+    0
+}

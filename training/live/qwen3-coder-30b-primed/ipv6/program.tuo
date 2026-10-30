@@ -1,0 +1,41 @@
+module ipv6_test;
+
+import std::net;
+import std::sync;
+
+fn test_ipv6_family() -> Int {
+    // Listen on an ephemeral port
+    let fd = std::net::listen6(0);
+    
+    // Get the bound port
+    let port = std::net::bound_port(fd);
+    
+    // Connect to the server using IPv6 loopback
+    let client_fd = std::net::connect("::1", port);
+    
+    // Accept the connection
+    let accepted_fd = std::net::accept(fd);
+    
+    // Check if the peer family is IPv6
+    let family = std::net::peer_family(accepted_fd);
+    
+    // Close connections
+    std::net::close(client_fd);
+    std::net::close(accepted_fd);
+    std::net::close(fd);
+    
+    // Return 6 if it's IPv6, otherwise return 0
+    if std::net::is_ipv6(family) {
+        6
+    } else {
+        0
+    }
+}
+
+spec test_ipv6_family {
+    then test_ipv6_family() == 6;
+}
+
+fn main() -> Int {
+    test_ipv6_family()
+}

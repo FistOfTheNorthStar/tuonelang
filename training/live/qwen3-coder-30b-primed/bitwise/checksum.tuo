@@ -1,0 +1,17 @@
+module checksum;
+
+/// Compute a checksum of a string by multiplying the running value by 31 and adding each byte.
+pub fn checksum(in s: Str) -> Int {
+    var acc = 0;
+    for b in s {
+        acc = std::int::wrapping_mul(acc, 31);
+        acc = std::int::wrapping_add(acc, b);
+    }
+    acc
+}
+
+spec checksum {
+    then checksum("") == 0;
+    then checksum("a") == 97;
+    then checksum("ab") == std::int::wrapping_add(std::int::wrapping_mul(97, 31), 98);
+}

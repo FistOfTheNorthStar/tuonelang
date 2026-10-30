@@ -1,0 +1,30 @@
+module stats;
+
+struct Tally { total: Int, count: Int }
+
+fn record(mut t: Tally, take value: Int) -> () {
+    t.total = t.total + value;
+    t.count = t.count + 1;
+}
+
+fn mean_of_three(take a: Int, take b: Int, take c: Int) -> Int {
+    let mut tally: Tally = Tally { total: 0, count: 0 };
+    record(mut tally, a);
+    record(mut tally, b);
+    record(mut tally, c);
+    tally.total / tally.count
+}
+
+spec record {
+    given t: Tally, value: Int;
+    when let mut t2 = t;
+    when record(mut t2, value);
+    then t2.total == t.total + value;
+    then t2.count == t.count + 1;
+}
+
+spec mean_of_three {
+    then mean_of_three(1, 2, 3) == 2;
+    then mean_of_three(0, 0, 0) == 0;
+    then mean_of_three(10, 20, 30) == 20;
+}

@@ -1,0 +1,55 @@
+fn is_square(take n: Int) -> Bool {
+    if n <= 0 {
+        return false;
+    }
+    
+    var i: Int = 1;
+    while i * i <= n {
+        if i * i == n {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn over_fifty(take n: Int) -> Bool {
+    return n > 50;
+}
+
+fn first_passing(take check: fn(take Int) -> Bool, take limit: Int) -> Int {
+    if limit <= 0 {
+        return -1;
+    }
+    
+    var i: Int = 1;
+    while i <= limit {
+        if check(i) {
+            return i;
+        }
+        i = i + 1;
+    }
+    return -1;
+}
+
+spec first_passing {
+    // Test with is_square check
+    var result1: Int = first_passing(is_square, 10);
+    assert result1 == 4;  // 4 is the first perfect square > 1
+    
+    // Test with over_fifty check
+    var result2: Int = first_passing(over_fifty, 60);
+    assert result2 == 51;  // 51 is the first number > 50
+    
+    // Test with limit = 0
+    var result3: Int = first_passing(is_square, 0);
+    assert result3 == -1;
+    
+    // Test with limit = -1
+    var result4: Int = first_passing(is_square, -1);
+    assert result4 == -1;
+    
+    // Test with no passing number
+    var result5: Int = first_passing(over_fifty, 50);
+    assert result5 == -1;  // No number > 50 in range [1, 50]
+}

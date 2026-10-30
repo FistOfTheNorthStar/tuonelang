@@ -1,0 +1,39 @@
+module bus;
+
+/// Find the least common multiple of two positive intervals.
+pub fn common_cycle(take a: Int, take b: Int) -> Int {
+    if a <= 0 || b <= 0 {
+        0
+    } else {
+        let gcd = std::math::gcd(a, b);
+        std::math::div_small(std::math::mul(a, b), gcd)
+    }
+}
+
+/// Reduce an aspect ratio and return the larger term.
+pub fn ratio_terms(take width: Int, take height: Int) -> Int {
+    if width == 0 && height == 0 {
+        0
+    } else {
+        let gcd = std::math::gcd(std::core::abs(width), std::core::abs(height));
+        let reduced_width = std::math::div_small(width, gcd);
+        let reduced_height = std::math::div_small(height, gcd);
+        std::core::max(std::core::abs(reduced_width), std::core::abs(reduced_height))
+    }
+}
+
+spec common_cycle {
+    then common_cycle(12, 18) == 36;
+    then common_cycle(5, 7) == 35;
+    then common_cycle(0, 5) == 0;
+    then common_cycle(4, 0) == 0;
+    then common_cycle(1, 1) == 1;
+}
+
+spec ratio_terms {
+    then ratio_terms(1920, 1080) == 16;
+    then ratio_terms(1080, 1920) == 16;
+    then ratio_terms(4, 3) == 4;
+    then ratio_terms(0, 0) == 0;
+    then ratio_terms(5, 5) == 1;
+}

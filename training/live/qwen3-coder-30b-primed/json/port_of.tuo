@@ -1,0 +1,33 @@
+module port;
+
+import std::json;
+
+/// Parse a JSON object and return the value of its "port" member, or 0 if
+/// the input is not valid JSON or has no such member.
+pub fn port_of(in text: Str) -> Int {
+    match std::json::parse(text) {
+        Ok { value: json } => {
+            let node = std::json::member(json, std::json::root(), "port");
+            match node {
+                -1 => 0,
+                index => {
+                    match std::json::kind_of(json, index) {
+                        kind if kind == std::json::kind_number() => {
+                            std::json::num_of(json, index) as Int
+                        }
+                        _ => 0
+                    }
+                }
+            }
+        }
+        Err { error: _ } => 0
+    }
+}
+
+spec port_of {
+    then port_of("{}") == 0;
+    then port_of("{\"port\": 8080}") == 8080;
+    then port_of("{\"port\": \"not_a_number\"}") == 0;
+    then port_of("invalid json") == 0;
+    then port_of("{\"port\": 42}") == 42;
+}

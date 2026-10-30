@@ -1,0 +1,19 @@
+fn shipping_cost(take grams: Int, take express: Bool) -> Int {
+    var cost: Int = 0;
+    
+    if grams <= 0 {
+        cost = 0;
+    } else if grams <= 500 {
+        cost = 5;
+    } else if grams <= 2000 {
+        cost = 9;
+    } else {
+        cost = 15;
+    };
+    
+    if cost > 0 and express {
+        cost = cost * 2;
+    };
+    
+    return cost;
+}

@@ -1,0 +1,44 @@
+import std.array
+import std.string
+
+fn balanced(in text: Str) -> Bool {
+    var stack: Array[Int] = array.new[Int]()
+    
+    for (var i: Int = 0; i < string.len(text); i = i + 1) {
+        var ch: Int = string.get(text, i)
+        
+        if (ch == 40) {  // '('
+            array.push(stack, 40)
+        } else if (ch == 91) {  // '['
+            array.push(stack, 91)
+        } else if (ch == 123) {  // '{'
+            array.push(stack, 123)
+        } else if (ch == 41) {  // ')'
+            if (array.len(stack) == 0) {
+                return false
+            }
+            var last: Int = array.pop(stack)
+            if (last != 40) {
+                return false
+            }
+        } else if (ch == 93) {  // ']'
+            if (array.len(stack) == 0) {
+                return false
+            }
+            var last: Int = array.pop(stack)
+            if (last != 91) {
+                return false
+            }
+        } else if (ch == 125) {  // '}'
+            if (array.len(stack) == 0) {
+                return false
+            }
+            var last: Int = array.pop(stack)
+            if (last != 123) {
+                return false
+            }
+        }
+    }
+    
+    return array.len(stack) == 0
+}

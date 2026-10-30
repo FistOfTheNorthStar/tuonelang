@@ -1,0 +1,17 @@
+struct Tally {
+    total: Int,
+    count: Int
+}
+
+record(mut t: Tally, take value: Int) -> () {
+    t.total = t.total + value;
+    t.count = t.count + 1;
+}
+
+mean_of_three(take a: Int, take b: Int, take c: Int) -> Int {
+    var tally: Tally = Tally { total: 0, count: 0 };
+    record(mut tally, take a);
+    record(mut tally, take b);
+    record(mut tally, take c);
+    return tally.total / tally.count;
+}

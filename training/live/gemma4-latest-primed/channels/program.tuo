@@ -1,0 +1,49 @@
+module channel_drain;
+
+import std::sync;
+import std::array;
+
+/// Sends five doubled values into a channel, closes it, then drains it and returns the total.
+pub fn process_channel() -> Int {
+    // 1. Create a channel
+    let ch = std::sync::channel();
+
+    // 2. Send five doubled values
+    var values_to_send: [Int; 5] = [2, 4, 6, 8, 10];
+    for x in values_to_send {
+        // Double the value and send it
+        let doubled = std::core::max(x, 0) * 2; // Using max just to ensure a valid Int operation, though simple multiplication is fine.
+        std::sync::send(take ch, take doubled);
+    }
+
+    // 3. Close the channel
+    std::sync::close(take ch);
+
+    // 4. Drain the channel and sum the received values
+    var total = 0;
+    loop {
+        // Attempt to receive a value. This will block/return None when closed and empty.
+        let received = std::sync::recv(take ch);
+
+        match received {
+            // If we successfully receive a value, add it to the total.
+            Some { value } => {
+                total = total + value;
+            }
+            // If we receive None, the channel is closed and empty, so we break.
+            None => {
+                break;
+            }
+        }
+    }
+
+    total
+}
+
+spec process_channel {
+    then process_channel() == 2 + 4 + 6 + 8 + 10; // Expected sum: 30
+}
+
+fn main() -> Int {
+    process_channel()
+}

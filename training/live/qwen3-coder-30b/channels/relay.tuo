@@ -1,0 +1,61 @@
+import std::sync
+import std::io
+
+fn relay(take from: Int, take to: Int, take threshold: Int) -> Int {
+    var count = 0
+    var reading = 0
+    
+    while true {
+        match std::sync::recv(from) {
+            Some { value: r } => {
+                reading = r
+                if reading > threshold {
+                    std::sync::send(to, reading)
+                    count = count + 1
+                }
+            }
+            None => {
+                break
+            }
+        }
+    }
+    
+    std::sync::close(to)
+    return count
+}
+
+fn main() -> Int {
+    var inbox = std::sync::channel[Int]()
+    var outbox = std::sync::channel[Int]()
+    
+    std::sync::send(inbox, 12)
+    std::sync::send(inbox, 55)
+    std::sync::send(inbox, 7)
+    std::sync::send(inbox, 90)
+    std::sync::send(inbox, 31)
+    std::sync::send(inbox, 64)
+    std::sync::close(inbox)
+    
+    var forwarded = relay(inbox, outbox, 50)
+    
+    if forwarded != 3 {
+        return forwarded
+    }
+    
+    var sum = 0
+    var value = 0
+    
+    while true {
+        match std::sync::recv(outbox) {
+            Some { value: v } => {
+                value = v
+                sum = sum + value
+            }
+            None => {
+                break
+            }
+        }
+    }
+    
+    return sum
+}

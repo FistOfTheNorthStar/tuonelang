@@ -1,0 +1,111 @@
+module echo;
+
+import std::net;
+import std::io;
+import std::time;
+
+/// Echoes data from a session back to the client
+fn echo6(take session: Int, take expected: Int) -> Int {
+    var total = 0;
+    var count = 0;
+    
+    while count < expected {
+        let result = std::net::read_byte_timeout(session, 50);
+        if result < 0 {
+            // Timeout or error
+            break;
+        }
+        let byte = result as Int;
+        // Write the byte back
+        let write_result = std::net::write_byte(session, byte);
+        if write_result < 0 {
+            // Error writing
+            break;
+        }
+        total = total + 1;
+        count = count + 1;
+    }
+    
+    total
+}
+
+/// Main function that sets up the echo server and client
+fn main() -> Int {
+    // Step 1: Listen on IPv6 loopback
+    let listen_fd = std::net::listen6(0);  // 0 means ephemeral port
+    if listen_fd < 0 {
+        return 1;
+    }
+    
+    // Get the bound port
+    let port = std::net::bound_port(listen_fd);
+    if port <= 0 {
+        std::net::close(listen_fd);
+        return 2;
+    }
+    
+    // Step 2: Connect client to ::1
+    let client_fd = std::net::connect("::1", port);
+    if client_fd < 0 {
+        std::net::close(listen_fd);
+        return 3;
+    }
+    
+    // Step 3: Accept the connection
+    let server_fd = std::net::accept(listen_fd);
+    if server_fd < 0 {
+        std::net::close(client_fd);
+        std::net::close(listen_fd);
+        return 4;
+    }
+    
+    // Close the listening socket as we don't need it anymore
+    std::net::close(listen_fd);
+    
+    // Step 4: Send "hi6" from client
+    let message = "hi6";
+    let write_result = std::net::write_all(client_fd, message);
+    if write_result < 0 {
+        std::net::close(server_fd);
+        std::net::close(client_fd);
+        return 5;
+    }
+    
+    // Step 5: Echo the data
+    let echoed = echo6(server_fd, 3);
+    if echoed != 3 {
+        std::net::close(server_fd);
+        std::net::close(client_fd);
+        return 6;
+    }
+    
+    // Step 6: Read echoed data back from client
+    var read_count = 0;
+    let mut buffer = std::string::empty();
+    while read_count < 3 {
+        let result = std::net::read_byte_timeout(client_fd, 50);
+        if result < 0 {
+            // Timeout or error
+            std::net::close(server_fd);
+            std::net::close(client_fd);
+            return 7;
+        }
+        let byte = result as Int;
+        std::string::push_byte(buffer, byte);
+        read_count = read_count + 1;
+    }
+    
+    // Verify the echoed data
+    let response = std::string::as_str(buffer);
+    if response != "hi6" {
+        std::net::close(server_fd);
+        std::net::close(client_fd);
+        return 7;
+    }
+    
+    // Clean up
+    std::net::close(server_fd);
+    std::net::close(client_fd);
+    
+    63  // Success
+}

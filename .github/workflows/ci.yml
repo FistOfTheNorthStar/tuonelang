@@ -65,8 +65,9 @@ jobs:
         run: cargo test --workspace
 
       # The training material's overlap rules (training/overlap.py): no seed
-      # may copy a public benchmark task or another seed. Pure Python, no
-      # compiler needed; the private eval seeds are checked locally.
+      # may copy a public benchmark task or another seed. The private eval
+      # seeds are checked locally. test_live.py runs the compiler through
+      # `cargo run`, which reuses the build the Test step left behind.
       - name: Training material overlap
         run: |
           python3 -m unittest discover -s training -p 'test_*.py'

@@ -1,0 +1,9 @@
+import std::math::modular
+
+checksum(in s: Str) -> Int {
+    var result: Int = 0
+    for byte in s.bytes() {
+        result = modular.add(modular.mul(result, 31), byte) % (2^32)
+    }
+    return result
+}

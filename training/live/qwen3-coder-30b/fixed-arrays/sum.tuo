@@ -1,0 +1,11 @@
+fn sum(xs: in [Int; 5]) -> Int {
+    var total: Int = 0
+    for i in 0..5 {
+        total = total + xs[i]
+    }
+    total
+}
+
+spec sum([1, 2, 3, 4, 5]) -> 15
+spec sum([0, 0, 0, 0, 0]) -> 0
+spec sum([-1, -2, -3, -4, -5]) -> -15

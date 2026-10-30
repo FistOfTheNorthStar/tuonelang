@@ -1,0 +1,44 @@
+module image;
+
+/// Calculate the buffer size for an image.
+pub fn buffer_size(take width: Int, take height: Int, take bytes_per_pixel: Int) -> Option[Int] {
+    // Check for negative inputs
+    if width < 0 || height < 0 || bytes_per_pixel < 0 {
+        return None;
+    }
+    
+    // Check for overflow in width * height
+    let area = std::int::checked_mul(width, height);
+    if std::core::is_none(area) {
+        return None;
+    }
+    
+    let area_value = std::core::unwrap_or(area, 0);
+    
+    // Check for overflow in area * bytes_per_pixel
+    let total = std::int::checked_mul(area_value, bytes_per_pixel);
+    if std::core::is_none(total) {
+        return None;
+    }
+    
+    Some { value: std::core::unwrap_or(total, 0) }
+}
+
+spec "buffer_size handles negative inputs" {
+    then buffer_size(-1, 10, 4) == None;
+    then buffer_size(10, -1, 4) == None;
+    then buffer_size(10, 10, -1) == None;
+}
+
+spec "buffer_size handles overflow" {
+    given width: Int, height: Int, bytes_per_pixel: Int;
+    when let result = buffer_size(width, height, bytes_per_pixel);
+    then (width >= 0 && height >= 0 && bytes_per_pixel >= 0 && 
+          std::int::checked_mul(width, height) == None) ==> result == None;
+}
+
+spec "buffer_size computes correct values" {
+    then buffer_size(10, 10, 4) == Some { value: 400 };
+    then buffer_size(1, 1, 1) == Some { value: 1 };
+    then buffer_size(0, 10, 4) == Some { value: 0 };
+}

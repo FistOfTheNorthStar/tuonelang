@@ -1,0 +1,85 @@
+module json_parser;
+
+import std::json;
+import std::str;
+
+/// Parses a JSON string to extract the integer 'port' member from a JSON object.
+/// Returns 0 if parsing fails or if the 'port' member is missing or not an integer.
+pub fn port_of(take json_text: Str) -> Int {
+    // 1. Attempt to parse the string into a Json structure.
+    let parse_result = std::json::parse(in json_text);
+
+    // 2. Handle parsing failure.
+    let json_node = match parse_result {
+        Ok { node } => node,
+        Err { error: e } => {
+            // If parsing fails, return 0 immediately.
+            return 0;
+        }
+    };
+
+    // 3. Check if the root node is an object.
+    if std::json::kind_of(in json_node, take node: 0) != std::json::kind_object() {
+        return 0;
+    }
+
+    // 4. Attempt to retrieve the "port" member.
+    let port_node = std::json::member(in json_node, take node: 0, in key: "port");
+
+    // 5. Check if the member exists and if it is a number.
+    if std::json::kind_of(in port_node, take node: 0) != std::json::kind_number() {
+        return 0;
+    }
+
+    // 6. Extract the number value.
+    // Since we checked it's a number, we can safely use num_of.
+    let port_float = std::json::num_of(in port_node, take node: 0);
+
+    // 7. Convert Float to Int (assuming port numbers fit within Int range).
+    // We use std::core::round for safety, although direct casting might suffice
+    // if we assume perfect JSON number representation for ports.
+    std::core::round(take port_float) as Int
+}
+
+spec port_of {
+    // Test case 1: Valid JSON object with port.
+    then port_of("{\"port\": 8080}") == 8080;
+
+    // Test case 2: Valid JSON object with different port.
+    then port_of("{\"port\": 22}") == 22;
+
+    // Test case 3: JSON object missing the "port" key.
+    then port_of("{\"host\": \"localhost\"}") == 0;
+
+    // Test case 4: JSON object where "port" is a string, not a number.
+    then port_of("{\"port\": \"http\"}") == 0;
+
+    // Test case 5: JSON object where "port" is null.
+    then port_of("{\"port\": null}") == 0;
+
+    // Test case 6: Invalid JSON format (missing closing brace).
+    then port_of("{\"port\": 80") == 0;
+
+    // Test case 7: JSON root is an array, not an object.
+    then port_of("[1, 2, 3]") == 0;
+
+    // Test case 8: Empty JSON object.
+    then port_of("{}") == 0;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let json1 = "{\"port\": 443}";
+    let port1 = port_of(std::str::Str::from(json1));
+    std::io::println(std::str::Str::from("Port 1: ") + std::str::Str::from(std::core::to_string(port1)));
+
+    let json2 = "{\"host\": \"example.com\"}";
+    let port2 = port_of(std::str::Str::from(json2));
+    std::io::println(std::str::Str::from("Port 2: ") + std::str::Str::from(std::core::to_string(port2)));
+
+    let json3 = "invalid json";
+    let port3 = port_of(std::str::Str::from(json3));
+    std::io::println(std::str::Str::from("Port 3: ") + std::str::Str::from(std::core::to_string(port3)));
+
+    0
+}

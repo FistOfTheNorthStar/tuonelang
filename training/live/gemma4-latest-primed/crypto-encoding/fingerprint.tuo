@@ -1,0 +1,84 @@
+module app;
+
+import std::crypto;
+import std::str;
+
+/// Calculates a short content fingerprint: the first 8 characters of the
+/// lowercase hex SHA-256 digest of the input data.
+pub fn fingerprint(take data: Str) -> String {
+    // 1. Calculate the full SHA-256 digest as a byte array.
+    let digest_bytes: Array[Int] = std::crypto::sha256(data);
+
+    // 2. Convert the byte array to a hexadecimal string representation.
+    // We need to manually construct the hex string from the bytes.
+    // Since we only need the first 8 characters (32 bits / 4 bytes),
+    // we only process the first 4 bytes of the digest.
+
+    // The first 4 bytes are at indices 0, 1, 2, 3.
+    let b0 = digest_bytes[0];
+    let b1 = digest_bytes[1];
+    let b2 = digest_bytes[2];
+    let b3 = digest_bytes[3];
+
+    // Helper function to convert a byte (0-255) to its two-character hex string representation.
+    fn byte_to_hex(take byte: Int) -> String {
+        // Use std::str::builder() for efficient string building.
+        let mut builder = std::str::builder();
+        // High nibble (bits 4-7)
+        let high_nibble = (byte / 16) % 16;
+        let high_char = if high_nibble < 10 {
+            std::str::to_string(high_nibble)
+        } else {
+            std::str::to_string(high_nibble - 10 + ('a' as Int))
+        };
+        builder.push(high_char);
+
+        // Low nibble (bits 0-3)
+        let low_nibble = byte % 16;
+        let low_char = if low_nibble < 10 {
+            std::str::to_string(low_nibble)
+        } else {
+            std::str::to_string(low_nibble - 10 + ('a' as Int))
+        };
+        builder.push(low_char);
+        builder.toString()
+    }
+
+    // Concatenate the hex representations of the first 4 bytes.
+    let hex_b0 = byte_to_hex(b0);
+    let hex_b1 = byte_to_hex(b1);
+    let hex_b2 = byte_to_hex(b2);
+    let hex_b3 = byte_to_hex(b3);
+
+    // Join them to form the 8-character fingerprint.
+    std::str::join(
+        std::array::of3(hex_b0, hex_b1, hex_b2),
+        std::str::join(std::array::of2(hex_b3), std::str::empty()), // This is complex, let's use a simpler join logic
+        std::str::empty()
+    );
+    
+    // Re-implementing the join simply:
+    std::str::concat(hex_b0, std::str::concat(hex_b1, std::str::concat(hex_b2, hex_b3)))
+}
+
+spec fingerprint {
+    // SHA-256("abc") = ba7816bf85e01f68...
+    then fingerprint("abc") == "ba7816bf";
+    // SHA-256("test") = eb85316031e15387...
+    then fingerprint("test") == "eb853160";
+    // SHA-256("") = e3b0c44298fc1c14...
+    then fingerprint("") == "e3b0c442";
+}
+
+fn main() -> Int {
+    // Example usage:
+    let data1 = "abc";
+    let fp1 = fingerprint(data1);
+    std::io::println(std::str::concat("Fingerprint of '", data1, "': ", fp1));
+
+    let data2 = "test";
+    let fp2 = fingerprint(data2);
+    std::io::println(std::str::concat("Fingerprint of '", data2, "': ", fp2));
+
+    0
+}

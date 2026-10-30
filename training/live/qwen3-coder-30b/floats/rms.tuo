@@ -1,0 +1,19 @@
+import std.array
+import std.math
+
+fn rms(in xs: Array[Float]) -> Float {
+    if array.len(xs) == 0 {
+        return 0.0
+    }
+    
+    var sum_of_squares: Float = 0.0
+    var i: Int = 0
+    while i < array.len(xs) {
+        var sample: Float = xs[i]
+        sum_of_squares = sum_of_squares + (sample * sample)
+        i = i + 1
+    }
+    
+    var mean_of_squares: Float = sum_of_squares / array.len(xs)
+    return math.sqrt(mean_of_squares)
+}

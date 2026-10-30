@@ -36,6 +36,9 @@ training/
   overlap.py       The overlap rules generate.py and CI enforce; run it to
                    review the closest pairs before adding seeds.
   test_overlap.py  Their tests (python3 -m unittest discover -s training).
+  live_attempts.py Asks a model for every training task and records the attempts
+                   the compiler has feedback on, under live/ (below).
+  live/            Those attempts, one directory per model run (committed).
   run_eval.py      Asks a model (any OpenAI-compatible endpoint) for a completion
                    of every held-out task; writes them to the private eval repo.
   score_eval.py    Honest scorer: compiles a model's held-out completions through
@@ -120,6 +123,47 @@ heldout_specs}`), and records only that file's hash and task count in the
 public manifest. Without the variable the training sets are generated
 exactly as before and the manifest's `eval` is `null`. In this repository a
 `.heldout.tuo` file is an error: published, its specs are not held out.
+
+### Live model attempts
+
+The breaks in `breaks.py` are mistakes a person predicted. `live_attempts.py`
+records the ones a model actually makes: it asks a model (any
+OpenAI-compatible endpoint, local Ollama by default, the same request as
+`run_eval.py`) for every training seed's task, and keeps each attempt the
+compiler has feedback on, one that does not check or whose own specs fail.
+`generate.py` emits each as a repair transcript: the attempt, the real
+`tuo check` or `tuo spec` output, then the seed's reference solution.
+
+```bash
+TUO_BIN="$(pwd)/target/release/tuo" python3 training/live_attempts.py --model qwen3-coder:30b --prime
+```
+
+An attempt is kept as source, `live/<run>/<concept>/<name>.tuo`, next to
+`live/<run>/run.json` (model, sampling, system prompt hash, counts). Model
+output cannot be regenerated from a commit, but the attempts are in the
+commit, so the dataset still is. `generate.py` recompiles every attempt and
+drops, counting it as `live_attempts_stale`, one the compiler no longer
+objects to; an attempt at a seed that no longer exists is refused, as a
+stray seed file is. Only training tasks are asked: an attempt at an eval
+task would teach the eval set.
+
+The feedback is what the model would see in a real loop, the compiler on
+the attempt as written: a spec failure comes from the attempt's own specs,
+so an attempt that passes the specs it wrote has no transcript.
+
+The committed runs (2026-10-29, temperature 0, seed 7, 139 training tasks,
+the release compiler):
+
+| Run | Kept | Passed | Errors | First diagnostics of the kept attempts |
+|-----|------|--------|--------|-----------------------------------------|
+| `qwen3-coder-30b` | 134 | 5 | 0 | parse 132, spec 1, ownership 1 |
+| `qwen3-coder-30b-primed` | 82 | 56 | 1 | parse 34, type 27, spec 9, resolve 9, ownership 3 |
+| `gemma4-latest-primed` (`--reasoning-effort none`) | 108 | 31 | 0 | parse 68, resolve 16, spec 12, type 11, ownership 1 |
+
+None duplicates a break or another run, so the 324 attempts add 324 repair
+transcripts. Without the brief the model writes another language: 98 of
+qwen3-coder's 134 attempts stop at an `import` with no `;` (often a dotted
+`import std.array`), which the parser reports only as a malformed item.
 
 ### Harvested examples
 
@@ -264,11 +308,10 @@ The seed library is the *coverage skeleton*, not the final corpus. To scale:
    it, teach the harvester a new origin (or raise its keep rate by emitting a
    stdlib function together with the module context its prompt shows).
 4. **Generate → repair with a live model** — the highest-value data is a real
-   model's *own* mistakes. Run your candidate model over the eval/seed tasks,
-   capture the completions it gets wrong, compile them to harvest the real
-   diagnostics, and add those (attempt → diagnostic → reference fix) as new
-   repair transcripts. `score_eval.py` already does the compile step; the
-   `check_diagnostic` helper in `generate.py` captures the structured error.
+   model's *own* mistakes. `live_attempts.py` does this for the training
+   tasks (see "Live model attempts" above); run it against your candidate
+   model. Never against the eval tasks: a transcript of an eval task is
+   training on the eval set.
 
 Because validation is the real compiler, the corpus can grow without ever
 drifting away from what tuonelang actually is.

@@ -1,0 +1,26 @@
+module app;
+
+import std::array;
+
+/// Pushes one element into a new array and then retrieves the element at index 0.
+pub fn first_or_zero(take value: Int) -> Int {
+    // 1. Create an empty array of size 1.
+    var arr: Array[Int] = std::array::empty();
+    
+    // 2. Push the value into the array.
+    std::array::push(mut arr, take value);
+    
+    // 3. Get the element at index 0.
+    std::array::get(arr, take 0)
+}
+
+spec first_or_zero {
+    then first_or_zero(42) == 42;
+    then first_or_zero(0) == 0;
+}
+
+fn main() -> Int {
+    let result = first_or_zero(99);
+    println(std::str::to_string(result));
+    0
+}

@@ -1,0 +1,26 @@
+module largest_array;
+
+/// Returns the largest value in a fixed-size array of 4 integers.
+pub fn largest(in xs: [Int; 4]) -> Int {
+    var max_val = xs[0];
+    var i = 1;
+    while i < 4 {
+        if xs[i] > max_val {
+            max_val = xs[i];
+        }
+        i = i + 1;
+    }
+    max_val
+}
+
+spec largest {
+    then largest([1, 2, 3, 4]) == 4;
+    then largest([5, 5, 5, 5]) == 5;
+    then largest([10, 0, -5, -10]) == 10;
+    then largest([1]) == 1; // Note: This spec will fail compilation because the signature requires [Int; 4]
+}
+
+fn main() -> Int {
+    let test_array: [Int; 4] = [10, 20, 5, 15];
+    largest(test_array)
+}

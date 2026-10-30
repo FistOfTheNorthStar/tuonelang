@@ -1,0 +1,24 @@
+module first_some;
+
+/// Returns `primary` when it holds a value and `fallback` otherwise.
+pub fn first_some[T](take primary: Option[T], take fallback: Option[T]) -> Option[T] {
+    match primary {
+        Some { value } => Some { value },
+        None => fallback,
+    }
+}
+
+spec first_some {
+    given a: Int, b: Int;
+    when let primary = Some { value: a };
+    when let fallback = Some { value: b };
+    then first_some(primary, fallback) == primary;
+
+    when let primary = None;
+    when let fallback = Some { value: b };
+    then first_some(primary, fallback) == fallback;
+
+    when let primary = None;
+    when let fallback = None;
+    then first_some(primary, fallback) == None;
+}

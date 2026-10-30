@@ -1,0 +1,50 @@
+module list;
+
+struct Node { value: Int, next: Option[Box[Node]] }
+
+fn cons(take value: Int, take rest: Option[Box[Node]]) -> Option[Box[Node]] {
+    Some { value: std::boxed::new(Node { value: value, next: rest }) }
+}
+
+fn list_sum(in list: Option[Box[Node]]) -> Int {
+    match list {
+        Some { value: node } => {
+            let Node { value, next } = std::boxed::get(node);
+            value + list_sum(next)
+        },
+        None => 0,
+    }
+}
+
+spec cons {
+    then {
+        let empty: Option[Box[Node]] = None;
+        let list = cons(1, empty);
+        let Node { value, next } = std::boxed::get(std::core::unwrap_or(list, std::boxed::new(Node { value: 0, next: None })));
+        then value == 1;
+        then next == None;
+    }
+}
+
+spec list_sum {
+    then {
+        let empty: Option[Box[Node]] = None;
+        then list_sum(empty) == 0;
+    }
+    
+    then {
+        let empty: Option[Box[Node]] = None;
+        let list = cons(5, empty);
+        then list_sum(list) == 5;
+    }
+    
+    then {
+        let empty: Option[Box[Node]] = None;
+        let list = cons(1, cons(2, cons(3, empty)));
+        then list_sum(list) == 6;
+    }
+}
+
+fn main() -> Int {
+    0
+}

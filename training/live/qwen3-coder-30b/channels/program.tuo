@@ -1,0 +1,26 @@
+import std::channel
+import std::sync
+
+fn main() -> Int {
+    var ch = channel::make_channel[Int](10)
+    
+    // Send five doubled values
+    for i in 0..5 {
+        var doubled = i * 2
+        channel::send(ch, take doubled)
+    }
+    
+    channel::close(ch)
+    
+    // Drain and sum
+    var total = 0
+    while true {
+        var result = channel::recv(ch)
+        if result is None {
+            break
+        }
+        total = total + result.unwrap().value
+    }
+    
+    return total
+}

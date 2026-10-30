@@ -1,0 +1,32 @@
+fn rename(mut roster: Array[String], in old: Str, in new_name: Str) -> Bool {
+    let found_index: Option<Int> = std::array::iter(roster).find_index(|s| s == old);
+
+    match found_index {
+        Some { value: index } => {
+            // Since String is an owning type, we must use std::array::set
+            std::array::set(roster, index, new_name);
+            true
+        }
+        None => false
+    }
+}
+
+spec rename {
+    // Test case 1: Name found and replaced
+    then rename(std::array::filled(3, "A"), "A", "B") == true;
+
+    // Test case 2: Name not found
+    then rename(std::array::filled(3, "A"), "C", "D") == false;
+
+    // Test case 3: Roster with multiple instances of 'old' (should only replace the first)
+    then rename(std::array::filled(3, "A"), "A", "B") == true;
+
+    // Test case 4: Empty roster
+    then rename(std::array::filled(0, ""), "A", "B") == false;
+
+    // Test case 5: Old name is empty string
+    then rename(std::array::filled(2, ""), "", "X") == true;
+
+    // Test case 6: New name is empty string
+    then rename(std::array::filled(2, "A"), "A", "") == true;
+}

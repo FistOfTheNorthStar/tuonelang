@@ -1,0 +1,44 @@
+module count_of;
+
+/// Count how many times needle occurs in xs.
+pub fn count_of(in xs: Array[Int], take needle: Int) -> Int {
+    let mut table = std::map::empty[Int, Int]();
+    for x in xs {
+        let existing = std::map::get(table, x);
+        let count = match existing {
+            Some { value } => value + 1,
+            None => 1,
+        };
+        std::map::insert(table, x, count);
+    }
+    
+    let found = std::map::get(table, needle);
+    match found {
+        Some { value } => value,
+        None => 0,
+    }
+}
+
+spec count_of {
+    given xs: Array[Int], needle: Int;
+    when let result = count_of(xs, needle);
+    then result == std::collections::counts(xs)[needle];
+}
+
+spec "count_of works with empty array" {
+    let xs: Array[Int] = std::array::empty();
+    then count_of(xs, 5) == 0;
+}
+
+spec "count_of works with single element" {
+    let xs: Array[Int] = std::array::filled(1, 3);
+    then count_of(xs, 3) == 1;
+    then count_of(xs, 5) == 0;
+}
+
+spec "count_of works with multiple elements" {
+    let xs: Array[Int] = std::array::of3(1, 2, 1);
+    then count_of(xs, 1) == 2;
+    then count_of(xs, 2) == 1;
+    then count_of(xs, 3) == 0;
+}

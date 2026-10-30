@@ -1,0 +1,27 @@
+module app;
+
+import std::collections;
+
+// Define the generic Pair struct
+struct Pair[T1: Type, T2: Type] {
+    first: T1,
+    second: T2
+}
+
+// Define the fst function, specialized for Pair[Int, Int] as requested,
+// but written generically to be more useful, while respecting the prompt's
+// specific requirement for Pair[Int, Int] usage in the spec.
+fn fst(in p: Pair[Int, Int]) -> Int {
+    p.first
+}
+
+// Spec for fst using the required Pair[Int, Int] type
+spec fst {
+    then fst(Pair { first: 10, second: 20 }) == 10;
+    then fst(Pair { first: 0, second: 0 }) == 0;
+}
+
+fn main() -> Int {
+    let p: Pair[Int, Int] = Pair { first: 42, second: 99 };
+    fst(p)
+}

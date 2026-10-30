@@ -1,0 +1,118 @@
+module leaderboard;
+
+/// Returns the dense rank of a given score in an array of scores.
+/// Rank 1 is the highest distinct score. Tied scores share the same rank.
+/// Returns None if the score is not present in the scores array.
+pub fn rank_of(in scores: Array[Int], take score: Int) -> Option[Int] {
+    // 1. Find all unique scores present in the input array.
+    // 2. Sort these unique scores in descending order.
+    // 3. Find the index of the target score in this sorted list.
+    // 4. The rank is (index + 1).
+
+    // Use std::collections::counts to get frequency map, then extract keys.
+    let counts_map = std::collections::counts(in scores);
+    let unique_scores_array: Array[Int] = std::map::keys(in counts_map);
+
+    // Filter out duplicates from the keys array to get unique scores.
+    // Since std::collections::counts returns a map, its keys are unique.
+    // We need to convert the Array[Int] of keys into a structure we can sort.
+    // We'll use a temporary array of unique scores.
+    let unique_scores: Array[Int] = std::collections::deduped(unique_scores_array);
+
+    // Sort the unique scores in descending order.
+    let sorted_desc: Array[Int] = std::collections::sorted_descending(in unique_scores);
+
+    // Check if the target score exists in the unique scores.
+    if !std::collections::contains(in unique_scores, take score: Int) {
+        return None { value: 0 }; // Placeholder for None, though Option[Int] handles this.
+    }
+
+    // Find the index of the target score in the descending sorted array.
+    let index_option: Option[Int] = std::collections::index_of(in sorted_desc, take needle: score);
+
+    match index_option {
+        Some { value: index } => {
+            // Rank is 1-based index.
+            Some { value: index + 1 }
+        }
+        None => {
+            // Should not happen due to the check above, but for completeness.
+            None { value: 0 }
+        }
+    }
+}
+
+/// Counts the number of entries in the scores array that exactly match the given score.
+pub fn ties(in scores: Array[Int], take score: Int) -> Int {
+    // Use std::collections::filter_into and then std::array::len.
+    let filtered_array: Array[Int] = std::collections::filter_into(in scores, take pred: fn(take Int) -> Bool {
+        |x: Int| x == score
+    });
+    std::array::len(in filtered_array)
+}
+
+spec rank_of {
+    // Test case 1: Standard ranking (1, 2, 3, 4, 5) -> Ranks 1, 2, 3, 4, 5
+    then rank_of([1, 2, 3, 4, 5], 1) == Some { value: 1 };
+    then rank_of([1, 2, 3, 4, 5], 5) == Some { value: 5 };
+
+    // Test case 2: Ties (10, 20, 10, 30, 20) -> Unique sorted: 30, 20, 10
+    // Rank 1: 30
+    // Rank 2: 20
+    // Rank 3: 10
+    then rank_of([10, 20, 10, 30, 20], 30) == Some { value: 1 };
+    then rank_of([10, 20, 10, 30, 20], 20) == Some { value: 2 };
+    then rank_of([10, 20, 10, 30, 20], 10) == Some { value: 3 };
+
+    // Test case 3: All same score (5, 5, 5) -> Unique sorted: 5
+    then rank_of([5, 5, 5], 5) == Some { value: 1 };
+
+    // Test case 4: Empty array
+    then rank_of([0, 0, 0], 1) == None { value: 0 };
+
+    // Test case 5: Score not present
+    then rank_of([10, 20, 30], 5) == None { value: 0 };
+}
+
+spec ties {
+    // Test case 1: Standard counts
+    then ties([10, 20, 10, 30, 20], 10) == 2;
+    then ties([10, 20, 10, 30, 20], 20) == 2;
+    then ties([10, 20, 10, 30, 20], 30) == 1;
+
+    // Test case 2: All same score
+    then ties([5, 5, 5], 5) == 3;
+
+    // Test case 3: Score not present
+    then ties([10, 20, 30], 5) == 0;
+
+    // Test case 4: Empty array
+    then ties([0, 0, 0], 1) == 0;
+}
+
+fn main() -> Int {
+    // Example usage: Scores [10, 20, 10, 30, 20]
+    let scores: Array[Int] = [10, 20, 10, 30, 20];
+
+    // Rank of 30 (highest) -> Rank 1
+    let rank_30 = rank_of(scores, 30);
+    // Rank of 20 -> Rank 2
+    let rank_20 = rank_of(scores, 20);
+    // Rank of 10 (lowest) -> Rank 3
+    let rank_10 = rank_of(scores, 10);
+    // Rank of 99 (not present) -> None
+    let rank_99 = rank_of(scores, 99);
+
+    // Ties for 20
+    let count_20 = ties(scores, 20);
+
+    // Print results (conceptually, as main returns Int)
+    // In a real scenario, we'd use std::io::println, but here we just return 0.
+    // println("Rank of 30: {:?}", rank_30);
+    // println("Rank of 20: {:?}", rank_20);
+    // println("Rank of 10: {:?}", rank_10);
+    // println("Rank of 99: {:?}", rank_99);
+    // println("Ties for 20: {}", count_20);
+
+    0
+}

@@ -1,0 +1,46 @@
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn manhattan(p: in Point) -> Int {
+    if p.x >= 0 {
+        if p.y >= 0 {
+            p.x + p.y
+        } else {
+            p.x + (0 - p.y)
+        }
+    } else {
+        if p.y >= 0 {
+            (0 - p.x) + p.y
+        } else {
+            (0 - p.x) + (0 - p.y)
+        }
+    }
+}
+
+spec manhattan {
+    // Test case 1: Both coordinates positive
+    var p1 = Point { x: 3, y: 4 };
+    assert manhattan(p1) == 7;
+
+    // Test case 2: First coordinate negative, second positive
+    var p2 = Point { x: -3, y: 4 };
+    assert manhattan(p2) == 7;
+
+    // Test case 3: First coordinate positive, second negative
+    var p3 = Point { x: 3, y: -4 };
+    assert manhattan(p3) == 7;
+
+    // Test case 4: Both coordinates negative
+    var p4 = Point { x: -3, y: -4 };
+    assert manhattan(p4) == 7;
+
+    // Test case 5: Zero coordinates
+    var p5 = Point { x: 0, y: 0 };
+    assert manhattan(p5) == 0;
+
+    // Test case 6: One zero coordinate
+    var p6 = Point { x: 5, y: 0 };
+    assert manhattan(p6) == 5;
+}

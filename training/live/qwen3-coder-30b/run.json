@@ -1,0 +1,20 @@
+{
+  "compiler": "tuo 0.1.0",
+  "counts": {
+    "asked": 139,
+    "empty": 0,
+    "errors": 0,
+    "kept": 134,
+    "passed": 5
+  },
+  "endpoint": "http://localhost:11434/v1",
+  "finished": "2026-10-29T13:10:47+00:00",
+  "max_tokens": null,
+  "model": "qwen3-coder:30b",
+  "primed": false,
+  "reasoning_effort": null,
+  "seed": 7,
+  "started": "2026-10-29T12:59:13+00:00",
+  "system_sha256": "1167649cea7f5a79cfef28f724790eb69d62f3ce43c5cb3e999c21f48a78c4ef",
+  "temperature": 0.0
+}

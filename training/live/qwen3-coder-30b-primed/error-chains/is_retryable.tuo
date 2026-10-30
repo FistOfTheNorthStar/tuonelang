@@ -1,0 +1,39 @@
+module job_runner;
+
+/// Check if an error chain contains a retryable error.
+pub fn is_retryable(in chain: Array[String]) -> Bool {
+    // Check each error in the chain for being timeout or connection refused
+    let i = 0;
+    while i < std::array::len(chain) {
+        let error = std::array::get(chain, i);
+        if std::core::error_is(error, "timeout") || std::core::error_is(error, "connection refused") {
+            return true;
+        }
+        i = i + 1;
+    }
+    false
+}
+
+spec is_retryable {
+    given chain: Array[String];
+    when let result = is_retryable(chain);
+    then result == false;
+}
+
+spec "timeout is retryable" {
+    given chain: Array[String];
+    when let chain_with_timeout = std::array::push(std::array::empty(), "timeout");
+    when let result = is_retryable(chain_with_timeout);
+    then result == true;
+}
+
+spec "connection refused is retryable" {
+    given chain: Array[String];
+    when let chain_with_refused = std::array::push(std::array::empty(), "connection refused");
+    when let result = is_retryable(chain_with_refused);
+    then result == true;
+}
+
+fn main() -> Int {
+    0
+}

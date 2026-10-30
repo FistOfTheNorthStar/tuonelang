@@ -1,0 +1,56 @@
+module sensor_alarm;
+
+/// Returns the index of the first temperature reading strictly above the given limit,
+/// or -1 if no reading exceeds the limit.
+pub fn first_alarm(in readings: [Int; 6], take limit: Int) -> Int {
+    var i = 0;
+    var current_reading: Int;
+
+    while i < 6 {
+        current_reading = readings[i];
+        if current_reading > limit {
+            return i; // Found the first alarm, return index immediately
+        }
+        i = i + 1;
+    }
+
+    // If the loop completes without returning, no alarm was found.
+    -1
+}
+
+spec first_alarm {
+    // Test case 1: Alarm at the first reading (index 0)
+    then first_alarm([100, 20, 30, 40, 50, 60], 99) == 0;
+
+    // Test case 2: Alarm in the middle (index 3)
+    then first_alarm([10, 20, 30, 100, 50, 60], 99) == 3;
+
+    // Test case 3: Alarm at the last reading (index 5)
+    then first_alarm([10, 20, 30, 40, 50, 100], 99) == 5;
+
+    // Test case 4: No alarm (all readings below limit)
+    then first_alarm([10, 20, 30, 40, 50, 60], 100) == -1;
+
+    // Test case 5: All readings are exactly at the limit (no alarm)
+    then first_alarm([50, 50, 50, 50, 50, 50], 50) == -1;
+
+    // Test case 6: Empty/zero readings (shouldn't happen with [Int; 6], but test boundary)
+    then first_alarm([0, 0, 0, 0, 0, 0], 0) == -1;
+}
+
+fn main() -> Int {
+    // Example usage: Check for alarms when the limit is 70.
+    let readings: [Int; 6] = [65, 72, 68, 75, 60, 71];
+    let limit = 70;
+    let alarm_index = first_alarm(readings, limit);
+
+    // If alarm_index is -1, print a message indicating no alarm.
+    if alarm_index == -1 {
+        // We use std::io::println for output in main, though it's not strictly required by the prompt.
+        // For simplicity in this example, we just return 0 if no alarm.
+        0
+    } else {
+        // Return the index found.
+        alarm_index
+    }
+}

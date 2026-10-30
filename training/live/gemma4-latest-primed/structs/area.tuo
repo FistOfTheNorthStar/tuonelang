@@ -1,0 +1,30 @@
+module app;
+
+struct Rect { w: Int, h: Int }
+
+/// Calculates the area of a rectangle.
+fn area(in r: Rect) -> Int {
+    r.w * r.h
+}
+
+/// Creates a square rectangle using field shorthand.
+fn square_rect(take side: Int) -> Rect {
+    Rect { w: side, h: side }
+}
+
+spec area {
+    then area(Rect { w: 2, h: 3 }) == 6;
+    then area(Rect { w: 10, h: 0 }) == 0;
+}
+
+spec square_rect {
+    then square_rect(5) == Rect { w: 5, h: 5 };
+    then square_rect(1) == Rect { w: 1, h: 1 };
+}
+
+fn main() -> Int {
+    let r1 = Rect { w: 4, h: 5 };
+    let r2 = square_rect(7);
+    
+    area(r1) + area(r2)
+}

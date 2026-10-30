@@ -1,0 +1,142 @@
+module tree_utils;
+
+// Define the Tree structure as specified.
+// Note: Box[T] is used for recursive types.
+enum Tree {
+    Leaf,
+    Branch { left: Box[Tree], value: Int, right: Box[Tree] }
+}
+
+/// Calculates the depth of the tree, defined as the number of Branch nodes
+/// on the longest path from the root to a Leaf. A lone Leaf has depth 0.
+fn depth(in t: Tree) -> Int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Branch { left, value, right } => {
+            // Recursively find the depth of the left and right subtrees.
+            // The depth of the current node is 1 + max(depth(left), depth(right)).
+            // We must unbox the Box contents before passing them to the recursive call.
+            let left_depth = depth(std::boxed::get(left));
+            let right_depth = depth(std::boxed::get(right));
+            
+            // Calculate 1 + max(left_depth, right_depth)
+            1 + std::core::max(left_depth, right_depth)
+        }
+    }
+}
+
+/// Calculates the sum of the 'value' field of every Branch node in the tree.
+fn total(in t: Tree) -> Int {
+    match t {
+        Tree::Leaf => 0,
+        Tree::Branch { left, value, right } => {
+            // Sum = current_value + total(left) + total(right)
+            let left_sum = total(std::boxed::get(left));
+            let right_sum = total(std::boxed::get(right));
+            
+            value + left_sum + right_sum
+        }
+    }
+}
+
+// --- Specifications ---
+
+// Helper function to create a simple tree for testing:
+//       Branch(10)
+//      /         \
+// Branch(5)    Leaf
+// /   \
+// Leaf  Leaf
+fn build_test_tree() -> Tree {
+    // Leaf
+    let leaf_l: Tree = Tree::Leaf;
+    let leaf_r: Tree = Tree::Leaf;
+
+    // Branch(5)
+    let branch_l = Tree::Branch { 
+        left: std::boxed::new(leaf_l), 
+        value: 5, 
+        right: std::boxed::new(leaf_r) 
+    };
+
+    // Branch(10)
+    Tree::Branch { 
+        left: std::boxed::new(branch_l), 
+        value: 10, 
+        right: std::boxed::new(leaf_r) 
+    }
+}
+
+// Test case for depth: Longest path is 10 -> 5 -> Leaf (Depth 2)
+spec depth {
+    given t: Tree = build_test_tree();
+    when let d = depth(t);
+    then d == 2;
+}
+
+// Test case for depth: A straight line (Depth 3)
+fn build_line_tree() -> Tree {
+    // L3 -> L2 -> L1 -> Leaf
+    let leaf: Tree = Tree::Leaf;
+    let branch1 = Tree::Branch { left: std::boxed::new(leaf), value: 1 };
+    let branch2 = Tree::Branch { left: std::boxed::new(branch1), value: 2 };
+    Tree::Branch { left: std::boxed::new(branch2), value: 3 }
+}
+
+spec depth_line {
+    given t: Tree = build_line_tree();
+    when let d = depth(t);
+    then d == 3;
+}
+
+// Test case for depth: A balanced tree (Depth 1)
+fn build_shallow_tree() -> Tree {
+    // Branch(1)
+    // /   \
+    // Leaf  Leaf
+    Tree::Branch { 
+        left: std::boxed::new(Tree::Leaf), 
+        value: 1, 
+        right: std::boxed::new(Tree::Leaf) 
+    }
+}
+
+spec depth_shallow {
+    given t: Tree = build_shallow_tree();
+    when let d = depth(t);
+    then d == 1;
+}
+
+
+// Test case for total: 10 + 5 + 1 = 16
+spec total {
+    given t: Tree = build_test_tree();
+    when let s = total(t);
+    then s == 16;
+}
+
+// Test case for total: 1 + 2 + 3 = 6
+spec total_line {
+    given t: Tree = build_line_tree();
+    when let s = total(t);
+    then s == 6;
+}
+
+// Test case for total: Only one branch (Value 1)
+spec total_shallow {
+    given t: Tree = build_shallow_tree();
+    when let s = total(t);
+    then s == 1;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let test_tree = build_test_tree();
+    let d = depth(test_tree);
+    let s = total(test_tree);
+    
+    // In a real scenario, we'd use std::io::println, but for this exercise,
+    // we just return a status code based on the calculated values.
+    // We return the sum of the depth and total for a non-zero exit status.
+    d + s
+}

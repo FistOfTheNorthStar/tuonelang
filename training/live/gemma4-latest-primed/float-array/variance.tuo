@@ -1,0 +1,78 @@
+/// Calculates the population variance of an array of floats.
+pub fn variance(in xs: Array[Float]) -> Float {
+    let n = std::array::len(xs);
+    if n == 0 {
+        0.0
+    } else {
+        // 1. Calculate the mean
+        let sum_of_elements = std::array::fold(in xs, 0.0, |acc, x| acc + x);
+        let mean = sum_of_elements / (Float(n));
+
+        // 2. Calculate the sum of squared differences from the mean
+        let sum_of_squared_diffs = std::array::fold(in xs, 0.0, |acc, x| {
+            let diff = x - mean;
+            acc + diff * diff
+        });
+
+        // 3. Divide by N (population variance)
+        sum_of_squared_diffs / (Float(n))
+    }
+}
+
+/// Calculates the population standard deviation of an array of floats.
+pub fn std_dev(in xs: Array[Float]) -> Float {
+    let variance = variance(in xs);
+    std::math::sqrt(variance)
+}
+
+spec variance {
+    // Test case for empty array
+    then variance(std::array::empty()) == 0.0;
+
+    // Test case for single element array (variance should be 0)
+    then variance(std::array::filled(1, 5.0)) == 0.0;
+
+    // Test case for known values: [2.0, 4.0, 4.0]
+    // Mean = (2+4+4)/3 = 10/3 = 3.333...
+    // Squared diffs: (2-10/3)^2 + (4-10/3)^2 + (4-10/3)^2
+    // (6/3 - 10/3)^2 + (12/3 - 10/3)^2 + (12/3 - 10/3)^2
+    // (-4/3)^2 + (2/3)^2 + (2/3)^2
+    // 16/9 + 4/9 + 4/9 = 24/9 = 8/3
+    // Variance = (8/3) / 3 = 8/9 ≈ 0.888...
+    then variance(std::array::filled(3, 2.0)).add(std::array::filled(3, 4.0)).add(std::array::filled(3, 4.0)) == 8.0/3.0; // Placeholder for manual calculation check, using the actual array construction below
+
+    // Specific test for [2.0, 4.0, 4.0]
+    then variance(std::array::of3(2.0, 4.0, 4.0)) == 8.0/9.0;
+
+    // Test case for [1.0, 2.0, 3.0]
+    // Mean = 6/3 = 2.0
+    // Squared diffs: (1-2)^2 + (2-2)^2 + (3-2)^2 = 1 + 0 + 1 = 2
+    // Variance = 2 / 3
+    then variance(std::array::of3(1.0, 2.0, 3.0)) == 2.0/3.0;
+}
+
+spec std_dev {
+    // Test case for empty array
+    then std_dev(std::array::empty()) == 0.0;
+
+    // Test case for single element array
+    then std_dev(std::array::filled(1, 5.0)) == 0.0;
+
+    // Test case for [2.0, 4.0, 4.0]
+    then std_dev(std::array::of3(2.0, 4.0, 4.0)) == std::math::sqrt(8.0/9.0);
+
+    // Test case for [1.0, 2.0, 3.0]
+    then std_dev(std::array::of3(1.0, 2.0, 3.0)) == std::math::sqrt(2.0/3.0);
+}
+
+fn main() -> Int {
+    // Example usage: [1.0, 2.0, 3.0]
+    let data: Array[Float] = std::array::of3(1.0, 2.0, 3.0);
+    let var = variance(data);
+    let std_dev_val = std_dev(data);
+
+    // Print results (conceptually, as main returns Int)
+    // In a real scenario, we might write these to a file or use a logging mechanism.
+    // For this example, we just return 0 to satisfy the main signature.
+    0
+}

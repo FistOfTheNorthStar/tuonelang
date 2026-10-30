@@ -1,0 +1,52 @@
+module app;
+
+struct Tally { total: Int, count: Int }
+
+fn record(mut t: Tally, take value: Int) -> () {
+    t.total = t.total + value;
+    t.count = t.count + 1;
+}
+
+fn mean_of_three(take a: Int, take b: Int, take c: Int) -> Int {
+    let sum = a + b + c;
+    let mean_float = (float(sum) / 3.0);
+    std::math::floor(mean_float)
+}
+
+spec record {
+    given initial_t: Tally;
+    when let t1 = record(initial_t, 10);
+    then t1.total == 10;
+    then t1.count == 1;
+
+    given initial_t: Tally;
+    when let t2 = record(initial_t, 20);
+    when let t3 = record(t2, 30);
+    then t3.total == 60;
+    then t3.count == 3;
+}
+
+spec mean_of_three {
+    then mean_of_three(0, 0, 0) == 0;
+    then mean_of_three(6, 6, 6) == 6;
+    then mean_of_three(1, 2, 3) == 2; // (1+2+3)/3 = 2.0
+    then mean_of_three(1, 1, 0) == 0; // (1+1+0)/3 = 0.66... -> 0
+    then mean_of_three(10, 1, 1) == 4; // (10+1+1)/3 = 4.0
+}
+
+fn main() -> Int {
+    let initial_t: Tally = { total: 0, count: 0 };
+    var t: Tally = initial_t;
+
+    // Test record function
+    record(t, 10);
+    record(t, 20);
+    record(t, 30);
+
+    // Test mean_of_three function
+    let mean1 = mean_of_three(1, 2, 3);
+    let mean2 = mean_of_three(10, 1, 1);
+
+    // Return a value that indicates success, e.g., the sum of the means
+    mean1 + mean2
+}

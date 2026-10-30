@@ -1,0 +1,32 @@
+import Map
+
+most_common(in xs: [Int; 6]) -> Int {
+    var counts: Map[Int, Int] = Map.new()
+    
+    for (var i: Int = 0; i < 6; i = i + 1) {
+        var value: Int = xs[i]
+        var count: Option[Int] = Map.get(counts, value)
+        
+        if (Option.is_some(count)) {
+            var current_count: Int = Option.unwrap(count)
+            Map.put(counts, value, current_count + 1)
+        } else {
+            Map.put(counts, value, 1)
+        }
+    }
+    
+    var max_count: Int = 0
+    var result: Int = 0
+    
+    for (var entry: Map.Entry[Int, Int] in Map.entries(counts)) {
+        var key: Int = Map.Entry.key(entry)
+        var value: Int = Map.Entry.value(entry)
+        
+        if (value > max_count) {
+            max_count = value
+            result = key
+        }
+    }
+    
+    return result
+}

@@ -1,0 +1,86 @@
+import std::net
+import std::io
+import std::time
+
+fn echo6(take session: Int, take expected: Int) -> Int {
+    var total = 0
+    var buffer = [0; 1]
+    
+    while total < expected {
+        var result = io::read6(session, take buffer, 50)
+        if result < 0 {
+            return -1
+        }
+        if result == 0 {
+            break
+        }
+        var write_result = io::write6(session, take buffer, 1)
+        if write_result < 0 {
+            return -1
+        }
+        total = total + 1
+    }
+    
+    return total
+}
+
+fn main() -> Int {
+    var server = std::net::listen6("::1", 0)
+    if server < 0 {
+        return 1
+    }
+    
+    var port = std::net::get_port6(server)
+    if port < 0 {
+        std::net::close6(server)
+        return 2
+    }
+    
+    var client = std::net::connect6("::1", port)
+    if client < 0 {
+        std::net::close6(server)
+        return 3
+    }
+    
+    var session = std::net::accept6(server)
+    if session < 0 {
+        std::net::close6(client)
+        std::net::close6(server)
+        return 4
+    }
+    
+    std::net::close6(server)
+    
+    var write_result = io::write6(client, take [104, 105, 54], 3)
+    if write_result < 0 {
+        std::net::close6(session)
+        std::net::close6(client)
+        return 5
+    }
+    
+    var echo_result = echo6(take session, 3)
+    if echo_result != 3 {
+        std::net::close6(session)
+        std::net::close6(client)
+        return 6
+    }
+    
+    var read_buffer = [0; 3]
+    var read_result = io::read6(client, take read_buffer, 50)
+    if read_result != 3 {
+        std::net::close6(session)
+        std::net::close6(client)
+        return 7
+    }
+    
+    if read_buffer[0] != 104 || read_buffer[1] != 105 || read_buffer[2] != 54 {
+        std::net::close6(session)
+        std::net::close6(client)
+        return 7
+    }
+    
+    std::net::close6(session)
+    std::net::close6(client)
+    
+    return 63
+}

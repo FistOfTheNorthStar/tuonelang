@@ -1,0 +1,23 @@
+import math
+
+fn apply_discount(mut prices: Array[Int], take percent: Int) {
+    var i: Int = 0
+    while i < prices.length {
+        var original_price: Int = prices[i]
+        var discounted_price: Int = (original_price * (100 - percent)) / 100
+        prices[i] = discounted_price
+        i = i + 1
+    }
+}
+
+fn discounted_total(in prices: Array[Int], take percent: Int) -> Int {
+    var total: Int = 0
+    var i: Int = 0
+    while i < prices.length {
+        var original_price: Int = prices[i]
+        var discounted_price: Int = (original_price * (100 - percent)) / 100
+        total = total + discounted_price
+        i = i + 1
+    }
+    return total
+}

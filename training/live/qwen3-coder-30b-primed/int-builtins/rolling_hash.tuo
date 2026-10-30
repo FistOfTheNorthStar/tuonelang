@@ -1,0 +1,19 @@
+module hash;
+
+/// Compute a rolling hash of a string.
+pub fn rolling_hash(in s: Str) -> U32 {
+    var hash: U32 = 0;
+    var i: Int = 0;
+    while i < std::str::len(s) {
+        let byte: Int = std::str::byte_at(s, i);
+        hash = std::int::rotate_left(hash, 5) ^ (byte as U32);
+        i = i + 1;
+    }
+    hash
+}
+
+spec rolling_hash {
+    then rolling_hash("") == 0u32;
+    then rolling_hash("a") == 0x61u32;
+    then rolling_hash("ab") == (0x61u32 ^ ((0x62u32 << 5) | (0x62u32 >> 27))) as U32;
+}

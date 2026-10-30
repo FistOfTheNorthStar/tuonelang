@@ -1,0 +1,24 @@
+import std.option
+
+fn safe_div(a in Int, b in Int) -> Option[Int] {
+    if b == 0 {
+        None
+    } else {
+        Some { value: a / b }
+    }
+}
+
+fn or_zero(o in Option[Int]) -> Int {
+    match o {
+        Some { value } => value,
+        None => 0
+    }
+}
+
+spec safe_div {
+    assert or_zero(safe_div(10, 2)) == 5
+    assert or_zero(safe_div(10, 0)) == 0
+    assert or_zero(safe_div(-10, 2)) == -5
+    assert or_zero(safe_div(10, -2)) == -5
+    assert or_zero(safe_div(-10, -2)) == 5
+}

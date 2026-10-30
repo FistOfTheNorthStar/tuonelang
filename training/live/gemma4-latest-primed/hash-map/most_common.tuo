@@ -1,0 +1,78 @@
+fn most_common(in xs: [Int; 6]) -> Int {
+    // 1. Count frequencies using a Map[Int, Int]
+    var counts: std::map::Map[Int, Int] = std::map::empty();
+    for x in xs {
+        // std::map::insert returns Option[V], we use the fact that if it exists,
+        // we get the old value, otherwise we insert and get None.
+        // Since we are iterating over a fixed array, we can just check existence
+        // or use a pattern that simulates incrementing.
+        // The standard library doesn't provide a direct 'get_or_insert_and_increment'.
+        // We must use get and then insert/update.
+
+        let current_count = std::map::get(counts, take x).unwrap_or(0);
+        // Re-inserting is necessary to update the value.
+        counts = std::map::insert(counts, take x, take current_count + 1);
+    }
+
+    // 2. Find the most common element, respecting the order of first appearance in xs.
+    // We iterate over the original array xs to ensure we return the *first* value
+    // encountered in case of a tie in frequency.
+    var max_count: Int = 0;
+    var result: Int = xs[0]; // Initialize with the first element's value
+
+    // Initialize max_count based on the first element's count
+    let initial_count = std::map::get(counts, take xs[0]).unwrap_or(0);
+    max_count = initial_count;
+    result = xs[0];
+
+    for x in xs {
+        let count = std::map::get(counts, take x).unwrap_or(0);
+
+        if count > max_count {
+            max_count = count;
+            result = x;
+        }
+        // If count == max_count, we do nothing, preserving the 'result' which
+        // was set by the first element achieving that count (or an earlier element).
+    }
+
+    result
+}
+
+spec most_common {
+    // Test case 1: Clear winner
+    then most_common([1, 2, 2, 3, 2, 4]) == 2;
+
+    // Test case 2: All unique (tie, should return the first element)
+    then most_common([1, 2, 3, 4, 5, 6]) == 1;
+
+    // Test case 3: Tie, first element wins (1 appears first, count 2)
+    then most_common([1, 2, 1, 3, 2, 3]) == 1;
+
+    // Test case 4: Tie, later element wins (2 appears first, count 2, but 3 appears later, count 2. 1 wins due to initialization/loop logic)
+    // Let's trace [1, 2, 1, 3, 2, 3]
+    // Counts: {1: 2, 2: 2, 3: 2}
+    // Init: max_count=2, result=1
+    // x=1: count=2. (2 > 2) is false.
+    // x=2: count=2. (2 > 2) is false.
+    // x=1: count=2. (2 > 2) is false.
+    // x=3: count=2. (2 > 2) is false.
+    // x=2: count=2. (2 > 2) is false.
+    // x=3: count=2. (2 > 2) is false.
+    // Result remains 1. This matches the requirement: "the first such value on a tie".
+
+    // Test case 5: Single element
+    then most_common([5, 5, 5, 5, 5, 5]) == 5;
+
+    // Test case 6: Edge case, all zeros
+    then most_common([0, 0, 0, 0, 0, 0]) == 0;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let test_array: [Int; 6] = [1, 2, 2, 3, 2, 4];
+    let result = most_common(test_array);
+    // In a real scenario, we might print or return this result.
+    // For the purpose of a runnable main, we just return 0.
+    0
+}

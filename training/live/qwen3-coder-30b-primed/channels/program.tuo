@@ -1,0 +1,36 @@
+module channel_sum;
+
+import std::sync;
+
+/// Send five doubled values into a channel, close it, then drain it and return the total.
+pub fn sum_doubled() -> Int {
+    let ch = std::sync::channel();
+    
+    // Send five doubled values
+    var i = 0;
+    while i < 5 {
+        std::sync::send(ch, i * 2);
+        i = i + 1;
+    }
+    
+    // Close the channel
+    std::sync::close(ch);
+    
+    // Drain the channel and sum the values
+    var total = 0;
+    var received = std::sync::recv(ch);
+    while std::sync::is_descriptor(received) {
+        total = total + received;
+        received = std::sync::recv(ch);
+    }
+    
+    total
+}
+
+spec sum_doubled {
+    then sum_doubled() == 20;
+}
+
+fn main() -> Int {
+    sum_doubled()
+}

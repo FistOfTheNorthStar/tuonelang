@@ -1,0 +1,75 @@
+module bus_gap;
+
+/// Calculates the largest gap between consecutive bus arrival times.
+///
+/// The input array `times` must be sorted in ascending order.
+/// Returns 0 if there are fewer than two buses.
+pub fn largest_gap(in times: Array[Int]) -> Int {
+    let len = std::array::len(times);
+
+    // If there are 0 or 1 buses, the gap is 0.
+    if len < 2 {
+        return 0;
+    }
+
+    var max_gap = 0;
+
+    // Iterate from the second element (index 1) up to the end.
+    // We use index-based iteration because we need the index to calculate the gap.
+    for i in 1..len {
+        // Calculate the gap between the current time and the previous time.
+        // Since the array is sorted, times[i] >= times[i-1].
+        let gap = times[i] - times[i - 1];
+
+        // Update max_gap if the current gap is larger.
+        if gap > max_gap {
+            max_gap = gap;
+        }
+    }
+
+    max_gap
+}
+
+spec largest_gap {
+    // Case 1: Standard case with a clear largest gap.
+    given times: Array[Int] = [10, 15, 25, 30, 40];
+    when let gap = largest_gap(times);
+    then gap == 10; // Gap between 25 and 15 is 10. Wait, gap between 15 and 25 is 10. Gap between 25 and 30 is 5. Gap between 30 and 40 is 10. Max is 10.
+
+    // Correcting the expected value based on the logic:
+    // Gaps: 15-10=5, 25-15=10, 30-25=5, 40-30=10. Max is 10.
+    then largest_gap([10, 15, 25, 30, 40]) == 10;
+
+    // Case 2: Smallest possible gap (all equal).
+    then largest_gap([5, 5, 5, 5]) == 0;
+
+    // Case 3: Only two buses.
+    then largest_gap([1, 100]) == 99;
+
+    // Case 4: Only one bus (should return 0).
+    then largest_gap([50]) == 0;
+
+    // Case 5: Empty array (should return 0).
+    then largest_gap([]) == 0;
+
+    // Case 6: Gap at the beginning.
+    then largest_gap([1, 10, 11]) == 9;
+
+    // Case 7: Gap at the end.
+    then largest_gap([1, 2, 20]) == 18;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let times1: Array[Int] = [10, 15, 25, 30, 40];
+    let gap1 = largest_gap(times1);
+
+    let times2: Array[Int] = [5, 5, 5, 5];
+    let gap2 = largest_gap(times2);
+
+    let times3: Array[Int] = [1];
+    let gap3 = largest_gap(times3);
+
+    // The return value is the exit status.
+    gap1 + gap2 + gap3
+}

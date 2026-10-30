@@ -1,0 +1,16 @@
+fn count_up(take n: Int) -> Int {
+    var sum = 0;
+    var i = 0;
+    for i in 0..n {
+        sum = sum + i;
+    }
+    sum
+}
+
+spec count_up {
+    then count_up(0) == 0;
+    then count_up(1) == 1;
+    then count_up(2) == 3;
+    then count_up(3) == 6;
+    then count_up(5) == 15;
+}

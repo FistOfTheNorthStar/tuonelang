@@ -1,0 +1,28 @@
+fn count_vowels(in s: Str) -> Int {
+    var count = 0;
+    let vowels: [Int; 5] = [97, 101, 105, 111, 117]; // ASCII for 'a', 'e', 'i', 'o', 'u'
+    let s_bytes: Array[Int] = std::str::to_bytes(in s);
+
+    for i in 0..std::array::len(s_bytes) {
+        let byte_val = std::array::get(s_bytes, i);
+        let mut is_vowel = false;
+        for j in 0..5 {
+            if byte_val == vowels[j] {
+                is_vowel = true;
+                break;
+            }
+        }
+        if is_vowel {
+            count = count + 1;
+        }
+    }
+    count
+}
+
+spec count_vowels {
+    then count_vowels("aeiou") == 5;
+    then count_vowels("rhythm") == 0;
+    then count_vowels("Apple") == 0; // Case sensitive
+    then count_vowels("a b c a e i o u") == 5;
+    then count_vowels("") == 0;
+}

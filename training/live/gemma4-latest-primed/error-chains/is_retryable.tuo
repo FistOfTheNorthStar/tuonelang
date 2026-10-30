@@ -1,0 +1,71 @@
+module job_runner;
+
+import std::core;
+import std::array;
+import std::string;
+
+/// Checks if any error in the provided error chain is a transient failure,
+/// specifically "timeout" or "connection refused".
+///
+/// The check traverses the entire chain recursively by checking the root
+/// error message if the current layer is a wrapped error.
+pub fn is_retryable(in chain: Array[String]) -> Bool {
+    // The std::core::error_is function checks if the chain contains a specific target string.
+    // We need to check for "timeout" OR "connection refused".
+    // Since std::core::error_is checks for a single target, we must check them sequentially.
+
+    // Check for "timeout"
+    let is_timeout = std::core::error_is(in chain, "timeout");
+    if is_timeout {
+        return true;
+    }
+
+    // Check for "connection refused"
+    let is_conn_refused = std::core::error_is(in chain, "connection refused");
+    if is_conn_refused {
+        return true;
+    }
+
+    // If neither specific error is found, it is not retryable based on the criteria.
+    false
+}
+
+spec is_retryable {
+    // Test case 1: Contains "timeout" at the root level.
+    given chain: Array[String];
+    when let chain1 = std::array::of3("success", "timeout", "context");
+    then is_retryable(chain1) == true;
+
+    // Test case 2: Contains "connection refused" deep in the chain.
+    given chain: Array[String];
+    when let chain2 = std::array::of3("outer", "wrapper", "connection refused");
+    then is_retryable(chain2) == true;
+
+    // Test case 3: Contains both, should return true on the first match (timeout).
+    given chain: Array[String];
+    when let chain3 = std::array::of3("timeout", "connection refused", "other");
+    then is_retryable(chain3) == true;
+
+    // Test case 4: Contains neither, should return false.
+    given chain: Array[String];
+    when let chain4 = std::array::of3("success", "permission denied", "other");
+    then is_retryable(chain4) == false;
+
+    // Test case 5: Empty chain.
+    given chain: Array[String];
+    when let chain5 = std::array::empty();
+    then is_retryable(chain5) == false;
+}
+
+fn main() -> Int {
+    // Example usage:
+    let chain_timeout: Array[String] = std::array::of3("outer", "timeout", "inner");
+    let chain_ok: Array[String] = std::array::of3("success", "permission denied", "other");
+
+    if is_retryable(chain_timeout) {
+        // In a real scenario, we would log or execute retry logic here.
+        0
+    } else {
+        1
+    }
+}

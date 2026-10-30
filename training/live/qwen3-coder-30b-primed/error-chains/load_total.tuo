@@ -1,0 +1,58 @@
+module ledger;
+
+fn parse_amount(in text: Str) -> Result[Int, Array[String]> {
+    match std::str::parse_int(text) {
+        Ok { value } => Ok { value },
+        Err { error } => Err { error: std::core::error_new("not a number") },
+    }
+}
+
+fn load_total(in first: Str, in second: Str) -> Result[Int, Array[String]> {
+    match parse_amount(first) {
+        Ok { value1 } => {
+            match parse_amount(second) {
+                Ok { value2 } => Ok { value: value1 + value2 },
+                Err { error } => Err { error: std::core::error_wrap(error, "line 2") },
+            }
+        },
+        Err { error } => Err { error: std::core::error_wrap(error, "line 1") },
+    }
+}
+
+fn report(in first: Str, in second: Str) -> String {
+    match load_total(first, second) {
+        Ok { value } => std::str::to_string(value),
+        Err { error } => std::core::error_message(error),
+    }
+}
+
+spec parse_amount {
+    given text: Str;
+    when let result = parse_amount(text);
+    then match result {
+        Ok { value } => value == 42,
+        Err { error } => std::core::error_is(error, "not a number"),
+    };
+}
+
+spec load_total {
+    given first: Str, second: Str;
+    when let result = load_total(first, second);
+    then match result {
+        Ok { value } => value == 100,
+        Err { error } => std::core::error_is(error, "line 1") || std::core::error_is(error, "line 2"),
+    };
+}
+
+spec report {
+    given first: Str, second: Str;
+    when let result = report(first, second);
+    then match result {
+        "42" => true,
+        _ => std::str::contains(result, "not a number") || std::str::contains(result, "line"),
+    };
+}
+
+fn main() -> Int {
+    0
+}

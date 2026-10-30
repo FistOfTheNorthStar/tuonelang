@@ -1,0 +1,13 @@
+import std::time
+
+fn backoff_total(take retries: Int) -> time::Duration {
+    var total = time::from_millis(0)
+    var wait_time = 100
+    var i = 0
+    while i < retries {
+        total = time::add(total, time::from_millis(wait_time))
+        wait_time = wait_time * 2
+        i = i + 1
+    }
+    return total
+}

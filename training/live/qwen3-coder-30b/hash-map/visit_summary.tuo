@@ -1,0 +1,63 @@
+import std.array
+import std.string
+import std.map
+
+fn visit_summary(in visitors: Array[Str]) -> String {
+    var seen = Map[Str, Int]()
+    var order = Array[Str]()
+    
+    for visitor in visitors {
+        var count = 0
+        if seen.contains(visitor) {
+            count = seen.get(visitor).value
+        }
+        count = count + 1
+        seen.put(visitor, count)
+        
+        if not order.contains(visitor) {
+            order.push(visitor)
+        }
+    }
+    
+    var result = ""
+    for name in order {
+        if result != "" {
+            result = result + ","
+        }
+        result = result + name + "=" + int_to_str(seen.get(name).value)
+    }
+    
+    return result
+}
+
+fn int_to_str(in n: Int) -> String {
+    if n == 0 {
+        return "0"
+    }
+    
+    var digits = Array[Str]()
+    var num = n
+    while num > 0 {
+        var digit = num % 10
+        num = num / 10
+        var digit_str = ""
+        if digit == 0 { digit_str = "0" }
+        if digit == 1 { digit_str = "1" }
+        if digit == 2 { digit_str = "2" }
+        if digit == 3 { digit_str = "3" }
+        if digit == 4 { digit_str = "4" }
+        if digit == 5 { digit_str = "5" }
+        if digit == 6 { digit_str = "6" }
+        if digit == 7 { digit_str = "7" }
+        if digit == 8 { digit_str = "8" }
+        if digit == 9 { digit_str = "9" }
+        digits.push(digit_str)
+    }
+    
+    var result = ""
+    for i in range(0, digits.len()) {
+        result = digits[digits.len() - 1 - i] + result
+    }
+    
+    return result
+}

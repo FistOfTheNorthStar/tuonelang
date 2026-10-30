@@ -1,0 +1,33 @@
+/// Returns the value from primary if it is Some, otherwise returns the value from fallback.
+/// If both are Some, primary wins. If both are None, the result is None.
+pub fn first_some[T](take primary: Option[T], take fallback: Option[T]) -> Option[T] {
+    match primary {
+        Some { value } => Some { value: value },
+        None => fallback,
+    }
+}
+
+spec first_some {
+    // Case 1: Primary is Some, Fallback is Some (Primary wins)
+    then first_some(Some { value: 10 }, Some { value: 20 }) == Some { value: 10 };
+
+    // Case 2: Primary is Some, Fallback is None
+    then first_some(Some { value: 10 }, None) == Some { value: 10 };
+
+    // Case 3: Primary is None, Fallback is Some
+    then first_some(None, Some { value: 20 }) == Some { value: 20 };
+
+    // Case 4: Both are None
+    then first_some(None, None) == None;
+}
+
+fn main() -> Int {
+    // Example usage demonstrating the logic
+    let primary_cache: Option[Int] = Some { value: 42 };
+    let fallback_default: Option[Int] = Some { value: 100 };
+
+    let result = first_some(primary_cache, fallback_default);
+
+    // Since the return type is Option[Int], we can unwrap_or for a final Int result
+    std::core::unwrap_or(result, 0)
+}

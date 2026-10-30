@@ -1,0 +1,16 @@
+import std.array
+import std.string
+
+fn rename(mut roster: Array[String], in old: Str, in new_name: Str) -> Bool {
+    var found = false
+    var i = 0
+    while i < roster.len() {
+        if roster[i] == old {
+            roster[i] = new_name
+            found = true
+            break
+        }
+        i = i + 1
+    }
+    return found
+}

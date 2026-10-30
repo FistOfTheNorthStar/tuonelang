@@ -1,0 +1,35 @@
+module string_map;
+
+import std::map;
+import std::string;
+
+fn create_map() -> Map[Str, Int] {
+    let mut m = std::map::empty[Str, Int]();
+    let s = std::string::from_str("hello world");
+    let view = std::string::as_str(s);
+    
+    // Insert a key-value pair using the string view as key
+    std::map::insert(m, view, 42);
+    m
+}
+
+fn lookup_value(in m: Map[Str, Int], take key: Str) -> Option[Int] {
+    std::map::get(m, key)
+}
+
+spec create_map {
+    then let m = create_map();
+    then std::map::len(m) == 1;
+}
+
+spec lookup_value {
+    given m: Map[Str, Int];
+    when let result = lookup_value(m, "hello world");
+    then std::core::is_some(result);
+}
+
+fn main() -> Int {
+    let m = create_map();
+    let result = lookup_value(m, "hello world");
+    std::core::unwrap_or(result, 0)
+}

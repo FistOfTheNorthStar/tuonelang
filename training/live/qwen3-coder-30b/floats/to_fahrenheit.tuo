@@ -1,0 +1,12 @@
+import std::math
+
+fn to_fahrenheit(take celsius: Float) -> Float {
+    var fahrenheit: Float = celsius * (9.0 / 5.0) + 32.0
+    return fahrenheit
+}
+
+spec to_fahrenheit {
+    expect(to_fahrenheit(0.0)) == 32.0
+    expect(to_fahrenheit(100.0)) == 212.0
+    expect(to_fahrenheit(-40.0)) == -40.0
+}

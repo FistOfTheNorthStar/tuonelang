@@ -1,0 +1,44 @@
+import std::fs
+import std::io
+
+fn main() -> Int {
+    var lock_file = "tuo_seed_cleanup.lock"
+    
+    // Step 1: Write "lock" to the file
+    var write_result = std::io::write_all(lock_file, "lock")
+    if (write_result.is_err()) {
+        return 1
+    }
+    
+    // Step 2: Check that file exists
+    var exists_result = std::fs::exists(lock_file)
+    if (!exists_result) {
+        return 2
+    }
+    
+    // Step 3: Remove the file
+    var remove_result = std::fs::remove_file(lock_file)
+    if (remove_result.is_err()) {
+        return 3
+    }
+    
+    // Step 4: Check that file no longer exists
+    var exists_after_remove = std::fs::exists(lock_file)
+    if (exists_after_remove) {
+        return 4
+    }
+    
+    // Step 5: Try to read the file and expect it to fail with not-found error
+    var read_result = std::io::read_to_string(lock_file)
+    if (!read_result.is_err()) {
+        return 5
+    }
+    
+    // Check that the error is indeed a not-found error
+    var err = read_result.err().unwrap()
+    if (!std::fs::is_not_found(err)) {
+        return 5
+    }
+    
+    return 7
+}

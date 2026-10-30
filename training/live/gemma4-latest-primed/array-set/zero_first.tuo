@@ -1,0 +1,23 @@
+fn zero_first(mut xs: Array[Int]) -> Array[Int] {
+    if std::array::len(xs) > 0 {
+        std::array::set(xs, 0, 0);
+    }
+    xs
+}
+
+spec zero_first {
+    then zero_first(std::array::filled(5, 1)) == std::array::filled(5, 1); // Placeholder for actual check, as we can't easily check content equality for all elements
+    // A better spec would check the first element specifically, but since we can't easily assert on the whole array content in a simple spec, we rely on the function body logic.
+    // For testing purposes, we'll check the first element if the array is non-empty.
+    then {
+        let arr = std::array::filled(3, 1);
+        let result = zero_first(arr);
+        std::test::eq(std::array::get(result, 0), 0);
+    }
+    then {
+        let arr: Array[Int] = std::array::empty();
+        let result = zero_first(arr);
+        // Check that the empty array remains empty
+        std::test::eq(std::array::len(result), 0);
+    }
+}

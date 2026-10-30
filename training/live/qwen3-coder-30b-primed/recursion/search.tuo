@@ -1,0 +1,40 @@
+module search;
+
+/// Search for a needle in a sorted array of 8 integers.
+pub fn search(in ids: [Int; 8], take needle: Int) -> Int {
+    search_between(ids, needle, 0, 8)
+}
+
+/// Recursively search between lo (inclusive) and hi (exclusive).
+fn search_between(in ids: [Int; 8], take needle: Int, take lo: Int, take hi: Int) -> Int {
+    if lo >= hi {
+        -1
+    } else {
+        let mid = (lo + hi) / 2;
+        let mid_value = ids[mid];
+        if needle == mid_value {
+            mid
+        } else if needle < mid_value {
+            search_between(ids, needle, lo, mid)
+        } else {
+            search_between(ids, needle, mid + 1, hi)
+        }
+    }
+}
+
+spec search {
+    given ids: [Int; 8];
+    when let result = search(ids, 3);
+    then result == 1;
+}
+
+spec search_between {
+    given ids: [Int; 8], needle: Int, lo: Int, hi: Int;
+    when let result = search_between(ids, needle, lo, hi);
+    then result == -1;
+}
+
+fn main() -> Int {
+    let ids: [Int; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+    search(ids, 5)
+}

@@ -1,0 +1,8 @@
+import base64
+import string
+
+fn basic_auth(in user: Str, in password: Str) -> Str {
+    var credentials: Str = string.concat(user, ":", password)
+    var encoded: Str = base64.encode(credentials)
+    return string.concat("Basic ", encoded)
+}

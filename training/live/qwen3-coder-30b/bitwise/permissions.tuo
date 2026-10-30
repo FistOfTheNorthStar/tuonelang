@@ -1,0 +1,15 @@
+const READ: Int = 1
+const WRITE: Int = 2
+const EXECUTE: Int = 4
+
+fn grant(take perms: Int, take flag: Int) -> Int {
+    return perms | flag
+}
+
+fn revoke(take perms: Int, take flag: Int) -> Int {
+    return perms & ~flag
+}
+
+fn allows(take perms: Int, take flag: Int) -> Bool {
+    return (perms & flag) == flag
+}

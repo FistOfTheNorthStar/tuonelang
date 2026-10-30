@@ -1,0 +1,45 @@
+module sensor_log;
+
+/// Compresses a sensor log by filtering out negative readings.
+///
+/// A negative reading marks a failed sample. This function returns a new
+/// array containing only the valid readings (zero is valid), in their
+/// original order.
+pub fn compact(in readings: Array[Int]) -> Array[Int] {
+    // Use filter_into_strings or filter_into, since the element type is Int.
+    // Since we are filtering Ints and the result must be Array[Int],
+    // we use filter_into.
+    std::collections::filter_into(in readings, take fn(take x: Int) -> Bool {
+        x >= 0
+    })
+}
+
+spec compact {
+    // Test case 1: Mixed valid and invalid readings
+    then compact([1, 2, -1, 3, 0, -5, 4]) == [1, 2, 3, 0, 4];
+
+    // Test case 2: All valid readings
+    then compact([10, 20, 30]) == [10, 20, 30];
+
+    // Test case 3: All invalid readings
+    then compact([-1, -2, -3]) == [];
+
+    // Test case 4: Empty log
+    then compact([]) == [];
+
+    // Test case 5: Only zeros
+    then compact([0, 0, 0]) == [0, 0, 0];
+}
+
+fn main() -> Int {
+    // Example usage:
+    let log1: Array[Int] = [1, 2, -1, 3, 0, -5, 4];
+    let compact1 = compact(log1);
+    // In a real scenario, we might print or process compact1.
+    // For main, we just return 0 to indicate success.
+
+    let log2: Array[Int] = [-1, -2, -3];
+    let compact2 = compact(log2);
+
+    0
+}

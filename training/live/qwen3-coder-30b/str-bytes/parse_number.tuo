@@ -1,0 +1,8 @@
+import std::str
+
+fn parse_number(in s: Str) -> Int {
+    match std::str::parse_int(s) {
+        Ok { value: n } => n,
+        Err { error: _ } => -1,
+    }
+}

@@ -1,0 +1,14 @@
+module app;
+
+/// Pushes one element to an array then reads index 0 with std::array::get.
+/// Returns 0 if the array is empty (though this case shouldn't happen since we push first).
+pub fn first_or_zero(take value: Int) -> Int {
+    let mut xs = std::array::empty();
+    std::array::push(mut xs, take value);
+    std::array::get(in xs, take 0)
+}
+
+spec first_or_zero {
+    then first_or_zero(42) == 42;
+    then first_or_zero(0) == 0;
+}

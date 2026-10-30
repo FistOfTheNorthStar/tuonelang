@@ -1,0 +1,21 @@
+import std.string
+
+fn pad_left(in s: Str, take width: Int, take fill: Int) -> String {
+    var result = String { }
+    var len = string.len(s)
+    
+    if len >= width {
+        return string.to_owned(s)
+    }
+    
+    var padding_needed = width - len
+    var i = 0
+    
+    while i < padding_needed {
+        string.push_byte(&mut result, fill)
+        i = i + 1
+    }
+    
+    string.append(&mut result, s)
+    return result
+}

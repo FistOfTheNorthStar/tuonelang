@@ -1,0 +1,11 @@
+fn rolling_hash(in s: Str) -> U32 {
+    var hash: U32 = 0
+    var i: U32 = 0
+    while i < len(s) {
+        var byte: U8 = s[i]
+        hash = (hash << 5) | (hash >> 27)
+        hash = hash ^ byte
+        i = i + 1
+    }
+    return hash
+}
