@@ -1022,13 +1022,60 @@ pub(crate) fn parser<'a>() -> Boxed<'a, 'a, Stream<'a>, SyntaxNode, Extra<'a>> {
             .then(comma_list1(import_leaf.boxed()))
             .then(tok(K::CloseBrace)),
     );
+    // An import's path also accepts `.` between segments (`std.array`): the
+    // separator is kept in the path, which still names the module it means,
+    // and the targeted `import-dotted-path` marker reports it
+    // (`parse::import_dotted_path` builds the diagnostic for both engines).
+    let import_path = tok(K::Ident)
+        .then(
+            any()
+                .filter(|tk: &Tok| matches!(tk.kind, K::ColonColon | K::Dot))
+                .then(tok(K::Ident))
+                .repeated()
+                .collect::<Vec<_>>(),
+        )
+        .validate(
+            |(first, rest): (SyntaxElement, Vec<(Tok, SyntaxElement)>), extra, emitter| {
+                if rest.iter().any(|(sep, _)| sep.kind == K::Dot) {
+                    emitter.emit(Rich::custom(
+                        extra.span(),
+                        format!("{}import-dotted-path", crate::oracle::TARGETED),
+                    ));
+                }
+                let mut els = vec![first];
+                for (sep, segment) in rest {
+                    els.push(elt(sep));
+                    els.push(segment);
+                }
+                make(SyntaxKind::Path, els)
+            },
+        );
+    // An import missing only its `;` — the next token starts another item,
+    // or the file ends — parses as if the `;` were there, and the targeted
+    // `import-semi` marker reports it (`parse::import_semi`).
+    let missing_semi = choice((
+        any()
+            .filter(|tk: &Tok| ITEM_START.contains(&tk.kind))
+            .ignored(),
+        end(),
+    ))
+    .rewind()
+    .validate(|(), extra, emitter| {
+        let span: SimpleSpan = extra.span();
+        let start = span.start;
+        emitter.emit(Rich::custom(
+            SimpleSpan::from(start..start),
+            format!("{}import-semi", crate::oracle::TARGETED),
+        ));
+        None::<SyntaxElement>
+    });
     let import_item = node!(
         SyntaxKind::ImportItem,
         tok(K::KwImport)
-            .then(path_node.clone())
+            .then(import_path)
             .then(tok(K::ColonColon).then(import_group).or_not())
             .then(tok(K::KwAs).then(tok(K::Ident)).or_not())
-            .then(tok(K::Semi)),
+            .then(choice((tok(K::Semi).map(Some), missing_semi))),
     )
     .boxed();
     let module_decl = node!(

@@ -1,0 +1,7 @@
+import std.array
+import std.net.tcp as tcp;
+import std::core
+
+fn total(in xs: Array[Int]) -> Int {
+    std::core::max(std::array::len(xs), 0)
+}

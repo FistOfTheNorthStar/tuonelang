@@ -28,7 +28,10 @@ use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
 use crate::grammar::ITEM_START;
-use crate::parse::{byte_span, call_arg_mode, code, depth_guard, let_mut, match_arm_comma};
+use crate::parse::{
+    byte_span, call_arg_mode, code, depth_guard, import_dotted_path, import_semi, let_mut,
+    match_arm_comma,
+};
 use crate::stream::{Tok, kind_name, parse_stream};
 
 /// Parse one immutable source snapshot with the handwritten engine.
@@ -294,10 +297,36 @@ impl Parser<'_> {
         Ok(node(SyntaxKind::Path, els))
     }
 
+    /// An import's path. Like [`Self::path_node`], but a segment separated by
+    /// `.` (`std.array`) is kept in the path and reported by
+    /// [`import_dotted_path`], so the import still names the module it means.
+    fn import_path(&mut self) -> R {
+        let start = self.pos;
+        let mut els = Els::new();
+        self.expect(K::Ident, &mut els)?;
+        let mut dotted = false;
+        while matches!(self.peek(), K::ColonColon | K::Dot) && self.peek2() == K::Ident {
+            dotted |= self.at(K::Dot);
+            els.push(self.bump());
+            els.push(self.bump());
+        }
+        if dotted {
+            let first = byte_span(start, self.toks, self.lex, self.source);
+            let last = byte_span(self.pos - 1, self.toks, self.lex, self.source);
+            let path = TextRange::new(first.range().start(), last.range().end())
+                .map_or(first, |range| Span::new(first.source(), range));
+            self.diagnostics.push(import_dotted_path(path, self.source));
+        }
+        Ok(node(SyntaxKind::Path, els))
+    }
+
+    /// `import PATH [:: GROUP] [as IDENT] ;`. An import missing only its `;`
+    /// (the next token starts another item, or the file ends) is reported by
+    /// [`import_semi`] and parses as if the `;` were there.
     fn import_item(&mut self) -> R {
         let mut els = Els::new();
         self.expect(K::KwImport, &mut els)?;
-        els.push(self.path_node()?);
+        els.push(self.import_path()?);
         if self.at(K::ColonColon) {
             let mark = self.mark();
             let sep = self.bump();
@@ -313,7 +342,12 @@ impl Parser<'_> {
             els.push(self.bump());
             self.expect(K::Ident, &mut els)?;
         }
-        self.expect(K::Semi, &mut els)?;
+        if self.at(K::Eof) || ITEM_START.contains(&self.peek()) {
+            let last = byte_span(self.pos - 1, self.toks, self.lex, self.source);
+            self.diagnostics.push(import_semi(last));
+        } else {
+            self.expect(K::Semi, &mut els)?;
+        }
         Ok(node(SyntaxKind::ImportItem, els))
     }
 

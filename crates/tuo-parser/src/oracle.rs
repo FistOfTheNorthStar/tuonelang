@@ -17,7 +17,7 @@ use chumsky::error::{Rich, RichReason};
 
 use tuo_diagnostics::Diagnostic;
 use tuo_lexer::LexResult;
-use tuo_source::{SourceText, Span};
+use tuo_source::{SourceText, Span, TextRange};
 use tuo_syntax::{SyntaxElement, SyntaxKind, SyntaxNode, SyntaxTree};
 
 use crate::ParseResult;
@@ -85,15 +85,24 @@ pub(crate) const TARGETED: &str = "\u{1}targeted:";
 ///
 /// `previous` spans the token before `primary`, which a missing separator
 /// needs: the fix inserts one after it. `next` spans the token after it,
-/// which a two-keyword mistake (`let mut`) needs.
+/// which a two-keyword mistake (`let mut`) needs. `whole` spans every token
+/// the marker's span covers, which a mistake of any length (a dotted import
+/// path) needs.
 fn targeted_recovery(
     message: &str,
     primary: Span,
     previous: Span,
     next: Span,
+    whole: Span,
     source: &SourceText,
 ) -> Option<Diagnostic> {
     let kind = message.strip_prefix(TARGETED)?;
+    if kind == "import-dotted-path" {
+        return Some(crate::parse::import_dotted_path(whole, source));
+    }
+    if kind == "import-semi" {
+        return Some(crate::parse::import_semi(previous));
+    }
     if kind == "let-mut" {
         return Some(crate::parse::let_mut(primary, next));
     }
@@ -148,6 +157,14 @@ fn to_diagnostic(
     let primary = byte_span(span.start, toks, lex, source);
     let previous = byte_span(span.start.saturating_sub(1), toks, lex, source);
     let next = byte_span(span.start + 1, toks, lex, source);
+    let last = byte_span(
+        span.end.saturating_sub(1).max(span.start),
+        toks,
+        lex,
+        source,
+    );
+    let whole = TextRange::new(primary.range().start(), last.range().end())
+        .map_or(primary, |range| Span::new(primary.source(), range));
 
     match error.reason() {
         // A custom message is a recovery report by default (`P0002`). The one
@@ -158,7 +175,7 @@ fn to_diagnostic(
         // handwritten engine produces the identical diagnostic directly;
         // parity over the `invalid/` corpus pins the two together.
         RichReason::Custom(message) => match targeted_recovery(
-            message, primary, previous, next, source,
+            message, primary, previous, next, whole, source,
         ) {
             Some(diagnostic) => diagnostic,
             None => Diagnostic::error(code(2), message.clone(), primary)

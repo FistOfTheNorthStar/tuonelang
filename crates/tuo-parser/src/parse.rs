@@ -272,6 +272,72 @@ pub(crate) fn let_mut(let_kw: Span, mut_kw: Span) -> Diagnostic {
     )
 }
 
+/// The targeted diagnostic for an import path whose segments are separated
+/// by `.` (`import std.array;`), where `path` spans the whole path.
+///
+/// Before it, the `.` sent the import into item-level recovery ("skipped N
+/// tokens"), and the dropped module then surfaced as an unresolved name at
+/// every use. The path now parses as the `::` path it means, and the fix is
+/// always to write `::` for each `.`: a machine-applicable edit per
+/// separator. Both engines build the diagnostic here, so they cannot drift.
+pub(crate) fn import_dotted_path(path: Span, source: &SourceText) -> Diagnostic {
+    let range = path.range();
+    let start = range.start().as_usize();
+    let text = &source.text()[start..range.end().as_usize()];
+    let edits = text
+        .match_indices('.')
+        .filter_map(|(offset, _)| {
+            let at = u32::try_from(start + offset).ok()?;
+            let dot = TextRange::new(ByteOffset::new(at), ByteOffset::new(at + 1)).ok()?;
+            Some(Edit {
+                span: Span::new(path.source(), dot),
+                replacement: "::".to_owned(),
+            })
+        })
+        .collect();
+    Diagnostic::error(
+        code(1),
+        "import paths separate segments with `::`, not `.`",
+        path,
+    )
+    .with_primary_label("write `::` between these segments")
+    .with_help(format!(
+        "`.` reaches a field; a module path is written with `::`, as in `{}`",
+        text.replace('.', "::"),
+    ))
+    .with_suggestion(
+        "replace `.` with `::`",
+        edits,
+        Confidence::MachineApplicable,
+    )
+}
+
+/// The targeted diagnostic for an import written without its closing `;`,
+/// where `last` spans the import's last token. It is reported only when the
+/// next token starts another item (or the file ends), so the `;` is all that
+/// is missing.
+///
+/// Before it, the import and everything up to the next item keyword fell into
+/// item-level recovery ("skipped N tokens"), and the dropped module then
+/// surfaced as an unresolved name at every use. The import now parses as if
+/// the `;` were there, and the fix is always to insert one after `last`: a
+/// machine-applicable edit. Both engines build the diagnostic here, so they
+/// cannot drift.
+pub(crate) fn import_semi(last: Span) -> Diagnostic {
+    let after = Span::new(last.source(), TextRange::empty(last.range().end()));
+    Diagnostic::error(code(1), "expected `;` after the import", last)
+        .with_primary_label("add `;` after this import")
+        .with_help("an import is an item, and ends with `;` like a `const` or a statement")
+        .with_suggestion(
+            "insert `;`",
+            vec![Edit {
+                span: after,
+                replacement: ";".to_owned(),
+            }],
+            Confidence::MachineApplicable,
+        )
+}
+
 /// The targeted diagnostic for a match arm written without the comma that
 /// separates it from the one before — most often after a block-bodied arm
 /// (`0 => { … }` followed by `_ => …`). `previous` spans the earlier arm's
