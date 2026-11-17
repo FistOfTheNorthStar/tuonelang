@@ -307,6 +307,15 @@ impl<'a> ParamDecl<'a> {
             .map(|index| self.ast.token_text(index))
     }
 
+    /// The parameter mode keyword with its exact span — what a fix that
+    /// changes the mode (`in` to `take`, say) replaces.
+    #[must_use]
+    pub fn mode_ref(self) -> Option<Name<'a>> {
+        child_tokens(self.node)
+            .next()
+            .map(|index| self.ast.token_name(index))
+    }
+
     /// The parameter name (`self` for the receiver).
     #[must_use]
     pub fn name(self) -> Option<&'a str> {
