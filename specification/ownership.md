@@ -242,6 +242,20 @@ fn frozen_binding() {
 }
 ```
 
+An O0004 on a place with a declaring keyword carries the edit that makes it
+mutable, so a quick fix or an agent's `apply_safe_fix` can apply it:
+
+| Root | Edit | Confidence |
+|------|------|------------|
+| `let` binding | `let` → `var` | machine-applicable |
+| `in` parameter of a `Copy` type | `in` → `take` | machine-applicable: a `Copy` argument is copied either way, so no call site changes and the write stays local |
+| `in` parameter of a `Copy` type, in a function also named as a value | `in` → `take` | probable: the mode is part of the function's `fn(…)` type, which a use site expecting `fn(in T)` would no longer accept |
+| `in` parameter of a non-`Copy` type | `in` → `mut` | probable: every caller must then pass a mutable place, and sees the write |
+| pattern binding | none (help text only) | — |
+
+A temporary passed as `mut` has no declaration to change and keeps its help
+text.
+
 ## 8. Returns
 
 Returning a value (early `return e;` or a block tail) moves it to the

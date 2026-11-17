@@ -17,6 +17,7 @@ use tuo_ast::{
 use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace};
 use tuo_resolve::{Resolution, SymbolId, SymbolKind};
 use tuo_source::{Span, TextRange};
+use tuo_syntax::SyntaxKind;
 use tuo_types::{Ty, TypeckResult};
 
 use crate::env::TypeEnv;
@@ -107,6 +108,9 @@ struct Root {
     decl: Span,
     ty: Ty,
     origin: Origin,
+    /// The `let` keyword or parameter mode keyword that declared it, when
+    /// it has one: what an `O0004` fix rewrites. A pattern binding has none.
+    keyword: Option<Span>,
 }
 
 /// The abnormal initialization state of a place. Absence from the state map
@@ -158,6 +162,10 @@ pub(crate) struct Cx<'a> {
     decls: HashMap<Span, SymbolId>,
     /// Function symbol → declared parameter modes, in order.
     fn_modes: HashMap<SymbolId, Vec<Mode>>,
+    /// Functions named as a value somewhere (ADR-0008): their parameter
+    /// modes are part of a `fn(…)` type a use site expects, so changing one
+    /// is not a local edit.
+    fn_values: HashSet<SymbolId>,
     /// Primary spans of type diagnostics: bodies containing one are skipped
     /// (§16 — poisoned types would produce noise, not signal).
     type_error_spans: Vec<Span>,
@@ -185,6 +193,7 @@ pub(crate) fn run(
         refs,
         decls,
         fn_modes: HashMap::new(),
+        fn_values: HashSet::new(),
         type_error_spans: types
             .diagnostics()
             .iter()
@@ -193,6 +202,7 @@ pub(crate) fn run(
     };
     for ast in files {
         cx.collect_modes(*ast);
+        cx.collect_fn_values(*ast);
     }
     // The builtin functions (ADR-0006, ADR-0009) have no declaration to
     // collect modes from; seed their fixed `take`/`in`/`mut` signatures so
@@ -257,6 +267,33 @@ impl Cx<'_> {
         }
     }
 
+    /// Record every function named as a value in `ast`. A direct call's
+    /// callee is never typed as an expression, so a path the type checker
+    /// gave a `fn(…)` type that resolves to a function is a value use.
+    fn collect_fn_values(&mut self, ast: Ast<'_>) {
+        for node in ast.tree().root.descendants_of_kind(SyntaxKind::PathExpr) {
+            let Some(Expr::Path(path)) = Expr::cast(ast, node) else {
+                continue;
+            };
+            let Some(span) = path.span() else {
+                continue;
+            };
+            if !matches!(self.types.expr_ty(span), Some(Ty::Fn(_))) {
+                continue;
+            }
+            let Some(&symbol) = path
+                .segment_names()
+                .last()
+                .and_then(|name| self.refs.get(&name.span))
+            else {
+                continue;
+            };
+            if self.resolution.symbol(symbol).kind == SymbolKind::Function {
+                self.fn_values.insert(symbol);
+            }
+        }
+    }
+
     /// Does the span of `item_span` contain any type-error span?
     fn has_type_errors(&self, item_span: Option<Span>) -> bool {
         let Some(outer) = item_span else {
@@ -284,6 +321,10 @@ impl Cx<'_> {
             return;
         };
         let mut checker = Body::new(self, fallback);
+        checker.fn_is_value = decl
+            .name_ref()
+            .and_then(|name| self.decls.get(&name.span))
+            .is_some_and(|symbol| self.fn_values.contains(symbol));
         checker.scopes.push(Vec::new());
         for param in decl.params() {
             let Some(name) = param.name_ref() else {
@@ -298,6 +339,13 @@ impl Cx<'_> {
                 _ => Origin::InParam,
             };
             checker.register(symbol, name, origin, true);
+            // Only a written mode is a keyword to rewrite; a parameter missing
+            // one defaults to `in` above, and its first token is its name.
+            if let Some(mode) = param.mode_ref()
+                && Mode::parse(mode.text).is_some()
+            {
+                checker.set_keyword(symbol, mode.span);
+            }
         }
         // ADR-0010 rule 3: a `Str` view in the body's tail position escapes the
         // frame (it becomes the return value). Refuse it before evaluating the
@@ -408,6 +456,9 @@ struct Body<'a> {
     diverged: bool,
     diagnostics: Vec<Diagnostic>,
     fallback: Span,
+    /// Whether the function whose body this is is also named as a value
+    /// (see [`Cx::fn_values`]): its parameter modes are then not local.
+    fn_is_value: bool,
 }
 
 impl<'a> Body<'a> {
@@ -426,6 +477,7 @@ impl<'a> Body<'a> {
             diverged: false,
             diagnostics: Vec::new(),
             fallback,
+            fn_is_value: false,
         }
     }
 
@@ -437,6 +489,92 @@ impl<'a> Body<'a> {
         span.unwrap_or(self.fallback)
     }
 
+    /// Record the keyword that declared `symbol` (see [`Root::keyword`]).
+    fn set_keyword(&mut self, symbol: SymbolId, keyword: Span) {
+        if let Some(root) = self.roots.get_mut(&symbol) {
+            root.keyword = Some(keyword);
+        }
+    }
+
+    /// The fix for an `O0004` on `symbol`: the keyword edit that makes it
+    /// mutable, with its confidence.
+    ///
+    /// - A `let` becomes `var`: machine-applicable, since the binding is
+    ///   local and the write is what the code says.
+    /// - An `in` parameter of a `Copy` type becomes `take`: also
+    ///   machine-applicable, because a `Copy` argument is copied either way,
+    ///   so no call site changes and the write stays local, as it would have
+    ///   been.
+    /// - An `in` parameter of a non-`Copy` type becomes `mut` only as a
+    ///   *probable* fix: every caller must then pass a mutable place and sees
+    ///   the write, which may not be what was meant.
+    /// - Either parameter edit is only *probable* when the function is also
+    ///   named as a value: the mode is part of its `fn(…)` type, so a use
+    ///   site expecting `fn(in T)` would stop type-checking.
+    ///
+    /// A pattern binding or a lent binding has no keyword to change.
+    fn mutability_fix(&self, symbol: SymbolId) -> Option<(String, Vec<Edit>, Confidence)> {
+        let root = self.roots.get(&symbol)?;
+        let keyword = root.keyword?;
+        let name = &root.name;
+        let (replacement, message, confidence) = match root.origin {
+            Origin::Let { .. } => (
+                "var",
+                format!("declare `{name}` with `var` to make it mutable"),
+                Confidence::MachineApplicable,
+            ),
+            Origin::InParam if self.cx.env.is_copy(&root.ty) && self.fn_is_value => (
+                "take",
+                format!(
+                    "take `{name}` by value: the function is also used as a value, whose \
+                     `fn(…)` type then changes too"
+                ),
+                Confidence::Probable,
+            ),
+            Origin::InParam if self.cx.env.is_copy(&root.ty) => (
+                "take",
+                format!(
+                    "take `{name}` by value: a `Copy` argument is copied either way, so callers \
+                     are unchanged"
+                ),
+                Confidence::MachineApplicable,
+            ),
+            Origin::InParam => (
+                "mut",
+                format!(
+                    "borrow `{name}` as `mut`: callers must then pass a mutable place, and see \
+                     the write"
+                ),
+                Confidence::Probable,
+            ),
+            _ => return None,
+        };
+        let edit = Edit {
+            span: keyword,
+            replacement: replacement.to_owned(),
+        };
+        Some((message, vec![edit], confidence))
+    }
+
+    /// Attach [`Self::mutability_fix`] to `diagnostic`, or `fallback_help`
+    /// when there is no fix.
+    fn with_mutability_fix(
+        &self,
+        diagnostic: Diagnostic,
+        symbol: SymbolId,
+        fallback_help: Option<String>,
+    ) -> Diagnostic {
+        match self.mutability_fix(symbol) {
+            Some((message, edits, confidence)) => {
+                diagnostic.with_suggestion(message, edits, confidence)
+            }
+            None => match fallback_help {
+                Some(help) => diagnostic.with_help(help),
+                None => diagnostic,
+            },
+        }
+    }
+
     fn register(&mut self, symbol: SymbolId, name: Name<'_>, origin: Origin, initialized: bool) {
         let ty = self.cx.types.type_of(symbol).cloned().unwrap_or(Ty::Error);
         self.roots.insert(
@@ -446,6 +584,7 @@ impl<'a> Body<'a> {
                 decl: name.span,
                 ty,
                 origin,
+                keyword: None,
             },
         );
         if let Some(scope) = self.scopes.last_mut() {
@@ -1108,10 +1247,9 @@ impl<'a> Body<'a> {
                 span,
             )
             .with_secondary_label(decl, format!("`{root_name}` declared immutable here"));
-            if matches!(origin, Origin::Let { .. } | Origin::PatternBinding) {
-                diagnostic = diagnostic
-                    .with_help(format!("declare it `var {root_name}` to make it mutable"));
-            }
+            let help = matches!(origin, Origin::Let { .. } | Origin::PatternBinding)
+                .then(|| format!("declare it `var {root_name}` to make it mutable"));
+            diagnostic = self.with_mutability_fix(diagnostic, place.root, help);
             self.report(diagnostic);
         }
     }
@@ -1186,10 +1324,12 @@ impl<'a> Body<'a> {
                             diagnostic =
                                 diagnostic.with_secondary_label(*init, "first initialized here");
                         }
-                        self.report(
-                            diagnostic
-                                .with_help(format!("declare it `var {root_name}` to reassign")),
+                        let diagnostic = self.with_mutability_fix(
+                            diagnostic,
+                            place.root,
+                            Some(format!("declare it `var {root_name}` to reassign")),
                         );
+                        self.report(diagnostic);
                         return;
                     }
                 }
@@ -1206,12 +1346,11 @@ impl<'a> Body<'a> {
                     origin.describe()
                 )
             };
-            let mut diagnostic = Diagnostic::error(code(4), what, span)
+            let diagnostic = Diagnostic::error(code(4), what, span)
                 .with_secondary_label(decl, format!("`{root_name}` declared immutable here"));
-            if matches!(origin, Origin::Let { .. } | Origin::PatternBinding) {
-                diagnostic = diagnostic
-                    .with_help(format!("declare it `var {root_name}` to make it mutable"));
-            }
+            let help = matches!(origin, Origin::Let { .. } | Origin::PatternBinding)
+                .then(|| format!("declare it `var {root_name}` to make it mutable"));
+            let diagnostic = self.with_mutability_fix(diagnostic, place.root, help);
             self.report(diagnostic);
             return;
         }
@@ -1423,12 +1562,17 @@ impl<'a> Body<'a> {
                     self.display(&place)
                 )
             };
-            self.report(
-                Diagnostic::error(code(4), what, span)
-                    .with_primary_label("a `mut` argument needs a mutable place")
-                    .with_secondary_label(decl, format!("`{root_name}` declared immutable here"))
-                    .with_help("`mut` borrows require a `var` binding or a `mut`/`take` parameter"),
+            let diagnostic = Diagnostic::error(code(4), what, span)
+                .with_primary_label("a `mut` argument needs a mutable place")
+                .with_secondary_label(decl, format!("`{root_name}` declared immutable here"));
+            let diagnostic = self.with_mutability_fix(
+                diagnostic,
+                place.root,
+                Some(
+                    "`mut` borrows require a `var` binding or a `mut`/`take` parameter".to_owned(),
+                ),
             );
+            self.report(diagnostic);
         }
         // Conflicts inside one argument list (§6). One report per call.
         let mut suppressed_takes: Vec<usize> = Vec::new();
@@ -1834,20 +1978,23 @@ impl<'a> Body<'a> {
                             .copied()
                             .or_else(|| self.roots.get(&key.root).map(|root| root.decl))
                             .unwrap_or(self.fallback);
-                        self.report(
-                            Diagnostic::error(
-                                code(4),
-                                format!(
-                                    "`{name}` may be initialized more than once across loop \
-                                     iterations"
-                                ),
-                                span,
-                            )
-                            .with_primary_label(
-                                "a `let` binding may be initialized at most once per path",
-                            )
-                            .with_help(format!("declare it `var {name}` to reassign")),
+                        let diagnostic = Diagnostic::error(
+                            code(4),
+                            format!(
+                                "`{name}` may be initialized more than once across loop \
+                                 iterations"
+                            ),
+                            span,
+                        )
+                        .with_primary_label(
+                            "a `let` binding may be initialized at most once per path",
                         );
+                        let diagnostic = self.with_mutability_fix(
+                            diagnostic,
+                            key.root,
+                            Some(format!("declare it `var {name}` to reassign")),
+                        );
+                        self.report(diagnostic);
                         self.heal(&key);
                     }
                 }
@@ -1918,6 +2065,9 @@ impl<'a> Body<'a> {
         for name in &names {
             if let Some(&symbol) = self.cx.decls.get(&name.span) {
                 self.register(symbol, *name, origin, initializer.is_some());
+                if let Some(keyword) = binding.keyword() {
+                    self.set_keyword(symbol, keyword.span);
+                }
             }
         }
         // ADR-0010: if this binding is initialized *exactly* with

@@ -1514,6 +1514,7 @@ dependencies = [
  "tuo-parser",
  "tuo-resolve",
  "tuo-source",
+ "tuo-syntax",
  "tuo-types",
 ]
 

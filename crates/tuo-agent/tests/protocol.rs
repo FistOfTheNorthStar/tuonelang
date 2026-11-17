@@ -350,6 +350,57 @@ fn apply_safe_fix_offers_only_compiler_authored_fixes() {
 }
 
 #[test]
+fn apply_safe_fix_makes_an_immutable_place_mutable() {
+    // O0004's keyword edits reach the agent: `let` → `var` and a `Copy`
+    // `in` → `take` are offered; a non-`Copy` `in` → `mut` is only probable,
+    // since it changes what callers must pass, so it is withheld.
+    let mut server = Server::new(Box::new(StubFormatter));
+    let text = "struct Named {\n    name: String,\n    count: Int,\n}\n\n\
+                fn rename(in p: Named) {\n    p.count = 0;\n}\n\n\
+                fn clamp(in n: Int) -> Int {\n    n = 9;\n    n\n}\n\n\
+                fn main() -> Int {\n    let x = 12;\n    x = clamp(x);\n    x\n}\n";
+    request(
+        &mut server,
+        1,
+        "set_document",
+        json!({ "uri": "m.tuo", "text": text }),
+    );
+    let result = result(&mut server, 2, "apply_safe_fix", json!({ "uri": "m.tuo" }));
+    let mut fixes: Vec<(String, String, Value)> = result["fixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|fix| {
+            let edits = fix["edits"].as_array().unwrap();
+            assert_eq!(edits.len(), 1, "{fix}");
+            (
+                fix["diagnostic"].as_str().unwrap().to_owned(),
+                edits[0]["new_text"].as_str().unwrap().to_owned(),
+                edits[0]["range"]["start"].clone(),
+            )
+        })
+        .collect();
+    fixes.sort_by(|a, b| a.1.cmp(&b.1));
+    let start = |needle: &str| {
+        let position = position_of(text, needle);
+        (position["line"].clone(), position["column"].clone())
+    };
+    assert_eq!(fixes.len(), 2, "{result}");
+    assert_eq!(fixes[0].0, "O0004");
+    assert_eq!(fixes[0].1, "take");
+    assert_eq!(
+        (fixes[0].2["line"].clone(), fixes[0].2["column"].clone()),
+        start("in n")
+    );
+    assert_eq!(fixes[1].0, "O0004");
+    assert_eq!(fixes[1].1, "var");
+    assert_eq!(
+        (fixes[1].2["line"].clone(), fixes[1].2["column"].clone()),
+        start("let x")
+    );
+}
+
+#[test]
 fn format_uses_the_injected_formatter() {
     let mut server = server_with_lib();
     let result = result(&mut server, 2, "format", json!({ "text": "fn a(){}" }));

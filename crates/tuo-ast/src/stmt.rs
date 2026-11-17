@@ -1,9 +1,10 @@
 //! Typed views over blocks and statements (grammar section F).
 
+use tuo_lexer::TokenKind;
 use tuo_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::Ast;
-use crate::context::{ast_view, child_nodes};
+use crate::context::{Name, ast_view, child_nodes};
 use crate::expr::Expr;
 use crate::item::{ConstDecl, ErrorNode};
 use crate::pat::Pattern;
@@ -77,6 +78,15 @@ impl<'a> BindingStmt<'a> {
         self.node.kind == SyntaxKind::VarStatement
     }
 
+    /// The `let` or `var` keyword with its exact span — what a fix that
+    /// makes the binding mutable replaces.
+    #[must_use]
+    pub fn keyword(self) -> Option<Name<'a>> {
+        self.ast
+            .direct_token_name(self.node, TokenKind::KwLet)
+            .or_else(|| self.ast.direct_token_name(self.node, TokenKind::KwVar))
+    }
+
     /// The bound pattern.
     #[must_use]
     pub fn pattern(self) -> Option<Pattern<'a>> {
@@ -120,7 +130,7 @@ impl<'a> ExprStmt<'a> {
     /// as its tail value.)
     #[must_use]
     pub fn has_semicolon(self) -> bool {
-        self.ast.has_token(self.node, tuo_lexer::TokenKind::Semi)
+        self.ast.has_token(self.node, TokenKind::Semi)
     }
 }
 
