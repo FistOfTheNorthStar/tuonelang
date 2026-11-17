@@ -17,6 +17,7 @@ use tuo_ast::{
 use tuo_diagnostics::{Confidence, Diagnostic, DiagnosticCode, Edit, Namespace};
 use tuo_resolve::{Resolution, SymbolId, SymbolKind};
 use tuo_source::{Span, TextRange};
+use tuo_syntax::SyntaxKind;
 use tuo_types::{Ty, TypeckResult};
 
 use crate::env::TypeEnv;
@@ -161,6 +162,10 @@ pub(crate) struct Cx<'a> {
     decls: HashMap<Span, SymbolId>,
     /// Function symbol → declared parameter modes, in order.
     fn_modes: HashMap<SymbolId, Vec<Mode>>,
+    /// Functions named as a value somewhere (ADR-0008): their parameter
+    /// modes are part of a `fn(…)` type a use site expects, so changing one
+    /// is not a local edit.
+    fn_values: HashSet<SymbolId>,
     /// Primary spans of type diagnostics: bodies containing one are skipped
     /// (§16 — poisoned types would produce noise, not signal).
     type_error_spans: Vec<Span>,
@@ -188,6 +193,7 @@ pub(crate) fn run(
         refs,
         decls,
         fn_modes: HashMap::new(),
+        fn_values: HashSet::new(),
         type_error_spans: types
             .diagnostics()
             .iter()
@@ -196,6 +202,7 @@ pub(crate) fn run(
     };
     for ast in files {
         cx.collect_modes(*ast);
+        cx.collect_fn_values(*ast);
     }
     // The builtin functions (ADR-0006, ADR-0009) have no declaration to
     // collect modes from; seed their fixed `take`/`in`/`mut` signatures so
@@ -260,6 +267,33 @@ impl Cx<'_> {
         }
     }
 
+    /// Record every function named as a value in `ast`. A direct call's
+    /// callee is never typed as an expression, so a path the type checker
+    /// gave a `fn(…)` type that resolves to a function is a value use.
+    fn collect_fn_values(&mut self, ast: Ast<'_>) {
+        for node in ast.tree().root.descendants_of_kind(SyntaxKind::PathExpr) {
+            let Some(Expr::Path(path)) = Expr::cast(ast, node) else {
+                continue;
+            };
+            let Some(span) = path.span() else {
+                continue;
+            };
+            if !matches!(self.types.expr_ty(span), Some(Ty::Fn(_))) {
+                continue;
+            }
+            let Some(&symbol) = path
+                .segment_names()
+                .last()
+                .and_then(|name| self.refs.get(&name.span))
+            else {
+                continue;
+            };
+            if self.resolution.symbol(symbol).kind == SymbolKind::Function {
+                self.fn_values.insert(symbol);
+            }
+        }
+    }
+
     /// Does the span of `item_span` contain any type-error span?
     fn has_type_errors(&self, item_span: Option<Span>) -> bool {
         let Some(outer) = item_span else {
@@ -287,6 +321,10 @@ impl Cx<'_> {
             return;
         };
         let mut checker = Body::new(self, fallback);
+        checker.fn_is_value = decl
+            .name_ref()
+            .and_then(|name| self.decls.get(&name.span))
+            .is_some_and(|symbol| self.fn_values.contains(symbol));
         checker.scopes.push(Vec::new());
         for param in decl.params() {
             let Some(name) = param.name_ref() else {
@@ -418,6 +456,9 @@ struct Body<'a> {
     diverged: bool,
     diagnostics: Vec<Diagnostic>,
     fallback: Span,
+    /// Whether the function whose body this is is also named as a value
+    /// (see [`Cx::fn_values`]): its parameter modes are then not local.
+    fn_is_value: bool,
 }
 
 impl<'a> Body<'a> {
@@ -436,6 +477,7 @@ impl<'a> Body<'a> {
             diverged: false,
             diagnostics: Vec::new(),
             fallback,
+            fn_is_value: false,
         }
     }
 
@@ -466,6 +508,9 @@ impl<'a> Body<'a> {
     /// - An `in` parameter of a non-`Copy` type becomes `mut` only as a
     ///   *probable* fix: every caller must then pass a mutable place and sees
     ///   the write, which may not be what was meant.
+    /// - Either parameter edit is only *probable* when the function is also
+    ///   named as a value: the mode is part of its `fn(…)` type, so a use
+    ///   site expecting `fn(in T)` would stop type-checking.
     ///
     /// A pattern binding or a lent binding has no keyword to change.
     fn mutability_fix(&self, symbol: SymbolId) -> Option<(String, Vec<Edit>, Confidence)> {
@@ -477,6 +522,14 @@ impl<'a> Body<'a> {
                 "var",
                 format!("declare `{name}` with `var` to make it mutable"),
                 Confidence::MachineApplicable,
+            ),
+            Origin::InParam if self.cx.env.is_copy(&root.ty) && self.fn_is_value => (
+                "take",
+                format!(
+                    "take `{name}` by value: the function is also used as a value, whose \
+                     `fn(…)` type then changes too"
+                ),
+                Confidence::Probable,
             ),
             Origin::InParam if self.cx.env.is_copy(&root.ty) => (
                 "take",

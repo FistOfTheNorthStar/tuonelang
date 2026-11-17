@@ -15,6 +15,7 @@ workspace = true
 tuo-source.workspace = true
 tuo-diagnostics.workspace = true
 tuo-ast.workspace = true
+tuo-syntax.workspace = true
 tuo-resolve.workspace = true
 tuo-types.workspace = true
 

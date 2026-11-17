@@ -4,8 +4,10 @@
 //! A `let` becomes `var` and a `Copy` `in` parameter becomes `take`, both
 //! machine-applicable. A non-`Copy` `in` parameter becomes `mut` only as a
 //! probable fix, since its callers would then have to pass a mutable place
-//! and would see the write. A pattern binding has no keyword, so it keeps
-//! the help text and gets no edit.
+//! and would see the write. A `Copy` `in` parameter of a function that is
+//! also named as a value becomes `take` only probably too, since the mode is
+//! part of the `fn(…)` type its use site expects. A pattern binding has no
+//! keyword, so it keeps the help text and gets no edit.
 //!
 //! The load-bearing test is the last one: applying every machine-applicable
 //! fix to the `O0004` fixture leaves a program that passes the whole front
@@ -125,6 +127,25 @@ fn a_pattern_binding_has_no_keyword_to_change() {
             .is_some_and(|help| help.contains("var value")),
         "the help text stays: {diagnostic:#?}"
     );
+}
+
+/// A function named as a value has its modes in a `fn(…)` type some use
+/// site expects: `fn(in Int) -> Int` no longer accepts it once `in` becomes
+/// `take`, so the edit is not caller-neutral and is only probable. The value
+/// use comes after the function, so the checker must not depend on order.
+#[test]
+fn a_copy_in_parameter_of_a_function_value_becomes_take_only_probably() {
+    let text = "fn bump(in n: Int) -> Int {\n    n = n + 1;\n    n\n}\n\n\
+                fn apply(in f: fn(in Int) -> Int, in x: Int) -> Int {\n    f(x)\n}\n\n\
+                fn caller() -> Int {\n    bump(1) + apply(bump, 41)\n}\n";
+    assert_keyword_fix(text, "in", "take", Confidence::Probable);
+}
+
+#[test]
+fn a_function_value_bound_to_a_let_counts_as_a_value_use() {
+    let text = "fn bump(in n: Int) -> Int {\n    n = n + 1;\n    n\n}\n\n\
+                fn caller() -> Int {\n    let g = bump;\n    g(1)\n}\n";
+    assert_keyword_fix(text, "in", "take", Confidence::Probable);
 }
 
 /// Apply `edits` to `text`; overlapping edits (the same keyword fixed for
