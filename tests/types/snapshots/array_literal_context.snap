@@ -1,0 +1,5 @@
+T0001@557..566 mismatched types | expected type `[I64; 2]` | actual type `[_; 3]`
+T0001@679..692 mismatched types | expected type `[_; 2]` | actual type `[_; 3]`
+T0011@750..752 type annotation needed
+T0001@825..826 mismatched types | expected type `Array[I64]` | actual type `[I64; 2]`
+T0001@883..889 mismatched types | expected type `I64` | actual type `[_; 2]`

@@ -586,7 +586,7 @@ impl<'a> Checker<'a> {
     }
 
     fn render(&self, ty: &Ty) -> String {
-        self.icx.apply(ty).render(self.resolution)
+        self.icx.display(ty).render(self.resolution)
     }
 
     fn prelude(&self, name: &str) -> Option<SymbolId> {
@@ -632,7 +632,7 @@ impl<'a> Checker<'a> {
     /// the caller somewhere equally wrong.
     fn sibling_builtin_for(&mut self, actual: &Ty) -> Option<Builtin> {
         let callee = self.current_callee?;
-        let actual = self.icx.apply(actual);
+        let actual = self.icx.view(actual);
         if matches!(actual, Ty::Error | Ty::Var(_)) {
             return None;
         }
@@ -2455,9 +2455,12 @@ impl<'a> Checker<'a> {
     ///
     /// List form `[e0, …, ek-1]`: every element unifies against one fresh
     /// element variable (a mismatch is reported at the offending element's
-    /// span) and the element *count* is the length — `[]` is a
-    /// `[_; 0]` whose element type must be solved from context or the
-    /// annotation-needed error fires at the literal. Repeat form `[x; N]`:
+    /// span) and the element *count* is the length. The literal is an
+    /// array-literal variable (ADR-0040): context makes it `[T; k]` or
+    /// `Array[T]`, and with no context it defaults to `[T; k]`. `[]` is
+    /// such a literal of length 0 whose element type must be solved from
+    /// context or the annotation-needed error fires at the literal. Repeat
+    /// form `[x; N]` is always a fixed array:
     /// the operand types the element and the validated `N` is the length;
     /// the `Copy` requirement on the repeated element is enforced by the
     /// ownership checker (duplicating a non-`Copy` value is what §2
@@ -2473,7 +2476,8 @@ impl<'a> Checker<'a> {
                     self.expect_ty(&elem, &actual, element_span);
                     count += 1;
                 }
-                Ty::FixedArray(Box::new(elem), count)
+                self.icx
+                    .fresh(VarClass::ArrayLiteral { elem, len: count }, span)
             }
             Some(ArrayLiteralKind::Repeat { value, len }) => {
                 let elem = self.expr(value);
@@ -2551,7 +2555,7 @@ impl<'a> Checker<'a> {
                 }
                 match unary.op() {
                     Some("-") => {
-                        let applied = self.icx.apply(&operand);
+                        let applied = self.icx.view(&operand);
                         match applied {
                             Ty::Int(kind) if !kind.is_signed() => {
                                 self.unsupported_op("-", &applied, span);
@@ -2573,7 +2577,7 @@ impl<'a> Checker<'a> {
                     // ADR-0019: `~` complements an integer's bits. Integers
                     // only — `!` remains the Bool operator.
                     Some("~") => {
-                        let applied = self.icx.apply(&operand);
+                        let applied = self.icx.view(&operand);
                         match applied {
                             Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never => operand,
                             other => {
@@ -2641,7 +2645,7 @@ impl<'a> Checker<'a> {
                     .index()
                     .map_or(span, |inner| self.at(value_span(&inner)));
                 let index_ty = index.index().map_or(Ty::Error, |inner| self.expr(inner));
-                match self.icx.apply(&base) {
+                match self.icx.view(&base) {
                     Ty::Array(item) | Ty::FixedArray(item, _) => {
                         self.expect_ty(&Ty::Int(IntKind::Usize), &index_ty, index_span);
                         *item
@@ -2660,7 +2664,7 @@ impl<'a> Checker<'a> {
             Expr::Cast(cast) => {
                 let inner = cast.inner().map_or(Ty::Error, |e| self.expr(e));
                 let target = cast.ty().map_or(Ty::Error, |ty| self.lower_type(ty));
-                let applied = self.icx.apply(&inner);
+                let applied = self.icx.view(&inner);
                 let valid = matches!(applied, Ty::Var(_) | Ty::Error | Ty::Never)
                     || (applied.is_numeric() && target.is_numeric())
                     || applied == target;
@@ -2711,7 +2715,7 @@ impl<'a> Checker<'a> {
                 // A loop's value is what its breaks yield; with no `break`
                 // the variable stays free and the loop diverges — but that
                 // free variable must not demand an annotation.
-                let applied = self.icx.apply(&break_ty);
+                let applied = self.icx.view(&break_ty);
                 if matches!(applied, Ty::Var(_)) {
                     let _ = self.icx.unify(&break_ty, &Ty::Never);
                     Ty::Never
@@ -2798,7 +2802,7 @@ impl<'a> Checker<'a> {
         match op {
             "+" | "-" | "*" | "/" | "%" => {
                 self.expect_ty(lhs, rhs, rhs_span);
-                let applied = self.icx.apply(lhs);
+                let applied = self.icx.view(lhs);
                 match applied {
                     Ty::Int(_) | Ty::Float(_) | Ty::Var(_) | Ty::Error | Ty::Never => {
                         // Constrain a free variable to "some integer" only
@@ -2819,7 +2823,7 @@ impl<'a> Checker<'a> {
                 // the v0 core does not define — specs compare observations
                 // (`get`/`len`/`keys`) instead. Refused here so no engine
                 // invents an order-sensitive stand-in.
-                let applied = self.icx.apply(lhs);
+                let applied = self.icx.view(lhs);
                 if matches!(applied, Ty::Map(..)) {
                     self.unsupported_op(op, &applied, span);
                 }
@@ -2827,7 +2831,7 @@ impl<'a> Checker<'a> {
             }
             "<" | "<=" | ">" | ">=" => {
                 self.expect_ty(lhs, rhs, rhs_span);
-                let applied = self.icx.apply(lhs);
+                let applied = self.icx.view(lhs);
                 match applied {
                     Ty::Int(_) | Ty::Float(_) | Ty::Char | Ty::Var(_) | Ty::Error | Ty::Never => {
                         Ty::Bool
@@ -2848,7 +2852,7 @@ impl<'a> Checker<'a> {
             // bit pattern is not defined on an IEEE-754 value here.
             "&" | "|" | "^" => {
                 self.expect_ty(lhs, rhs, rhs_span);
-                let applied = self.icx.apply(lhs);
+                let applied = self.icx.view(lhs);
                 match applied {
                     Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never => lhs.clone(),
                     other => {
@@ -2862,8 +2866,8 @@ impl<'a> Checker<'a> {
             // cast on the literal. Both sides must still be integers, and
             // the result takes the *left* operand's type.
             "<<" | ">>" => {
-                let applied = self.icx.apply(lhs);
-                let amount = self.icx.apply(rhs);
+                let applied = self.icx.view(lhs);
+                let amount = self.icx.view(rhs);
                 if !matches!(amount, Ty::Int(_) | Ty::Var(_) | Ty::Error | Ty::Never) {
                     self.unsupported_op(op, &amount, rhs_span);
                     return Ty::Error;
@@ -2881,7 +2885,7 @@ impl<'a> Checker<'a> {
     }
 
     fn field_ty(&mut self, receiver: &Ty, field: &str, span: Span) -> Ty {
-        let applied = self.icx.apply(receiver);
+        let applied = self.icx.view(receiver);
         match &applied {
             Ty::Struct(symbol, args) => {
                 let Some(def) = self.structs.get(symbol).cloned() else {
@@ -2914,7 +2918,7 @@ impl<'a> Checker<'a> {
     fn try_ty(&mut self, operand: &Ty, span: Span) -> Ty {
         // Return types are always written explicitly, so the enclosing
         // function's fallibility can be checked by shape.
-        match self.icx.apply(operand) {
+        match self.icx.view(operand) {
             Ty::Option(item) => {
                 if !matches!(self.icx.apply(&self.ret.clone()), Ty::Option(_)) {
                     let ret_rendered = self.render(&self.ret.clone());
@@ -2949,7 +2953,7 @@ impl<'a> Checker<'a> {
             }
             Ty::Error | Ty::Var(_) | Ty::Never => Ty::Error,
             other => {
-                let rendered = other.render(self.resolution);
+                let rendered = self.render(&other);
                 self.push(
                     Diagnostic::error(
                         code(9),
@@ -2966,11 +2970,11 @@ impl<'a> Checker<'a> {
     }
 
     fn element_ty(&mut self, iterable: &Ty, span: Span) -> Ty {
-        match self.icx.apply(iterable) {
+        match self.icx.view(iterable) {
             Ty::Range(item) | Ty::Array(item) | Ty::FixedArray(item, _) => *item,
             Ty::Error | Ty::Var(_) | Ty::Never => Ty::Error,
             other => {
-                let rendered = other.render(self.resolution);
+                let rendered = self.render(&other);
                 self.push(
                     Diagnostic::error(code(6), format!("type `{rendered}` is not iterable"), span)
                         .with_actual(StructuredValue::Type(rendered))
@@ -3331,7 +3335,7 @@ impl<'a> Checker<'a> {
         self.check_args(&[value.clone(), amount.clone()], args, span);
         let name = builtin.qualified_name();
         for ty in [&value, &amount] {
-            let applied = self.icx.apply(ty);
+            let applied = self.icx.view(ty);
             let integer = match applied {
                 Ty::Int(_) | Ty::Error | Ty::Never => true,
                 Ty::Var(_) => self.icx.literal_class(&applied) != Some(VarClass::Float),
@@ -3437,8 +3441,8 @@ impl<'a> Checker<'a> {
     /// component is left alone (an undetermined `empty()` is `T0011`,
     /// reported by the unsolved-variable path).
     fn reject_unsupported_map_pair(&mut self, key: &Ty, value: &Ty, span: Span) {
-        let applied_key = self.icx.apply(key);
-        let applied_value = self.icx.apply(value);
+        let applied_key = self.icx.view(key);
+        let applied_value = self.icx.view(value);
         if Self::map_pair_undetermined(&applied_key, &applied_value) {
             // Not yet solvable *here*. Inference may still determine the pair
             // from a later use of the same map, so remember the site and try
@@ -3525,7 +3529,7 @@ impl<'a> Checker<'a> {
     /// argument) and remembered, so each instantiation is checked instead
     /// (`check_generic_array_elements`).
     fn reject_unsupported_array_element(&mut self, elem: &Ty, span: Span) {
-        let resolved = self.icx.apply(elem);
+        let resolved = self.icx.view(elem);
         let mut params = Vec::new();
         self.element_params(&resolved, &mut params);
         self.array_elem_params.extend(params);
@@ -3744,7 +3748,7 @@ impl<'a> Checker<'a> {
             self.expr(arg);
         }
         let name = call.name().unwrap_or("");
-        let receiver_ty = self.icx.apply(&receiver_ty);
+        let receiver_ty = self.icx.view(&receiver_ty);
         let candidates = self.functions_taking_first(name, &receiver_ty);
         let mut diagnostic = Diagnostic::error(
             code(24),
@@ -3909,7 +3913,7 @@ impl<'a> Checker<'a> {
             }
         }
         let callee_ty = call.callee().map_or(Ty::Error, |callee| self.expr(callee));
-        match self.icx.apply(&callee_ty) {
+        match self.icx.view(&callee_ty) {
             Ty::Fn(fn_ty) => {
                 // An indirect call through a function-typed value (ADR-0008
                 // Tier 1). Argument types are checked against the function
