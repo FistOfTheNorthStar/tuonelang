@@ -1,0 +1,44 @@
+// ADR-0039: `for` over an `in Array[Int]` parameter reads the caller's array
+// where it lives — no temporary, no drop at loop exit — so the borrowed array
+// can be walked at all (before, this was `O0003`), and walked twice.
+//
+// `sum_for` walks [3, 5, 7, 11] twice, once plain and once doubled:
+// 26 + 52 = 78. `sum_indexed` computes the same through `std::array::get`
+// as an independent oracle. The caller's array is still owned and intact after
+// both calls, so `main` adds its length: 78 + 4 = 82. Exit = 82.
+fn sum_for(in xs: Array[Int]) -> Int {
+    var n = 0;
+    for x in xs {
+        n = n + x;
+    }
+    for x in xs {
+        n = n + x * 2;
+    }
+    n
+}
+
+/// The same sum by explicit index — the oracle the loops above must match.
+fn sum_indexed(in xs: Array[Int]) -> Int {
+    var n = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        n = n + std::array::get(xs, i) * 3;
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 3);
+    std::array::push(xs, 5);
+    std::array::push(xs, 7);
+    std::array::push(xs, 11);
+    let a = sum_for(xs);
+    let b = sum_indexed(xs);
+    if a == b {
+        a + std::array::len(xs)
+    } else {
+        0
+    }
+}

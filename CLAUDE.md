@@ -272,7 +272,16 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::boxed::get(b)` passed straight to an `in` parameter lends the pointee
   through MIR's `Projection::Deref` instead of copying it (kept a copy when
   another argument is `mut` or a non-`Copy` `take`), so a boxed tree is walked
-  by borrow in O(n); and — since ADR-0027 Stage B — **generic functions**,
+  by borrow in O(n); and — since ADR-0039 Stage A — **`for` reads what it
+  walks**: a place iterable (a local, a parameter of any mode, a lent binding,
+  or a field path) is read rather than moved, so an `in` array can be walked
+  and an owner can walk its array again, and the place is frozen for the
+  body — assigning it, passing it as `mut`, writing an element, or moving it
+  (or any overlapping place) is `O0013`, since `for_array` caches `len` and
+  indexes without a bounds check; lowering reads the place in situ (a whole
+  owned local nothing names afterwards still moves into the loop, so such a
+  loop lowers exactly as before; pinned by `tests/mir/golden/for_borrows`),
+  and Stages B and C stay open; and — since ADR-0027 Stage B — **generic functions**,
   monomorphized on the native path only (`tuo_mir::monomorphize`, after
   `retain_reachable` and before the optimizer, then re-verified): one clone
   per type-argument list a call reaches, each under a freshly minted

@@ -34,7 +34,7 @@ zero diagnostics today — `err/` programs are ownership errors *only*.
   ```
 
   Each case carries **exactly one** annotation; the code must be one of
-  `O0001`–`O0009` as defined in `specification/ownership.md` §15, and every
+  `O0001`–`O0013` as defined in `specification/ownership.md` §15, and every
   documented code is exercised by at least one case.
 - Files group cases by the specification section they exercise; each file's
   header comment names it.

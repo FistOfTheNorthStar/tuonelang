@@ -1,0 +1,41 @@
+// ADR-0039: `for` over an `in Array[String]` parameter. The array is read in
+// place; each element is the `array_get` deep copy (D3, unchanged), owned by
+// the body and dropped at the end of every iteration, while the caller keeps
+// the array and frees it once at its own scope end.
+//
+// The lengths are 2 + 3 + 1 = 6, summed by `for` and, as an oracle, by an
+// index loop through `std::array::get`. The array is walked twice through the
+// parameter (6 + 6 = 12) and `main` adds the caller's still-valid length
+// (3): 12 + 3 = 15. Exit = 15.
+fn total_len(in names: Array[String]) -> Int {
+    var n = 0;
+    for name in names {
+        n = n + std::string::len(name);
+    }
+    n
+}
+
+/// The same sum by explicit index — the oracle `total_len` must match.
+fn total_len_indexed(in names: Array[String]) -> Int {
+    var n = 0;
+    var i = 0;
+    while i < std::array::len(names) {
+        n = n + std::string::len(std::array::get(names, i));
+        i = i + 1;
+    }
+    n
+}
+
+fn main() -> Int {
+    var names = std::array::empty();
+    std::array::push(names, std::string::from_str("ab"));
+    std::array::push(names, std::string::from_str("cde"));
+    std::array::push(names, std::string::from_str("f"));
+    let a = total_len(names);
+    let b = total_len_indexed(names);
+    if a == b {
+        a + total_len(names) + std::array::len(names)
+    } else {
+        0
+    }
+}

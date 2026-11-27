@@ -1,0 +1,66 @@
+// ownership.md §10, ADR-0039 D2 — `for` reads its iterable in place, with the
+// length taken once before the first iteration, so the body may not assign,
+// `mut`-borrow, or move any place that overlaps the one it walks (`O0013`).
+
+struct Wrap {
+    items: Array[Int],
+    count: Int,
+}
+
+fn keep(take xs: Array[Int]) { }
+
+fn reset(mut w: Wrap) {
+    w.count = 0;
+}
+
+fn case_push_onto_iterable() {
+    var xs = std::array::empty();
+    std::array::push(xs, 1);
+    for x in xs {
+        std::array::push(xs, x); // ERROR: O0013 `push` grows the array the loop walks
+    }
+}
+
+fn case_set_on_iterable(mut xs: Array[Int]) {
+    for x in xs {
+        std::array::set(xs, 0, x); // ERROR: O0013 `set` writes the array the loop walks
+    }
+}
+
+fn case_assign_iterable(mut xs: Array[Int]) {
+    for x in xs {
+        xs = std::array::empty(); // ERROR: O0013 the loop's array is replaced
+    }
+}
+
+fn case_move_iterable(take xs: Array[Int]) {
+    for x in xs {
+        keep(xs); // ERROR: O0013 the loop's array is moved away
+    }
+}
+
+fn case_nested_loop_writes_outer_iterable(mut xs: Array[Int], in ys: Array[Int]) {
+    for x in xs {
+        for y in ys {
+            std::array::push(xs, y); // ERROR: O0013 the outer loop still walks `xs`
+        }
+    }
+}
+
+fn case_write_parent_of_field_iterable(mut w: Wrap) {
+    for x in w.items {
+        w = Wrap { items: std::array::empty(), count: x }; // ERROR: O0013 `w` contains `w.items`
+    }
+}
+
+fn case_write_inside_field_iterable(mut w: Wrap) {
+    for x in w.items {
+        w.items[0 as Usize] = x; // ERROR: O0013 the element written lies inside `w.items`
+    }
+}
+
+fn case_mut_borrow_of_parent_of_field_iterable(mut w: Wrap) {
+    for x in w.items {
+        reset(w); // ERROR: O0013 a `mut` borrow of `w` reaches `w.items`
+    }
+}
