@@ -85,7 +85,8 @@ the source place becomes uninitialized. By-value uses are:
 - a field initializer in a struct/enum literal: `Pair { first: x, … }`;
 - a returned value (`return x;` or a block's tail expression);
 - a `match` scrutinee when some arm binds a non-`Copy` part of it (§10);
-- the iterable of a `for` loop.
+- the iterable of a `for` loop when it is not a place (a call result, a
+  literal, a range expression); a place iterable is read, not moved (§10).
 
 Using a place whose value has been moved — reading it, moving it again,
 borrowing it, or moving/reading any overlapping place — is **O0001 use of
@@ -328,10 +329,9 @@ fn broken(take p: Pair, take q: Pair) -> Pair {
   moved in an iteration and not reinitialized before the back edge is
   possibly-moved at the next iteration's use site (O0002); the diagnostic
   is anchored at the responsible move, since that is where the fix goes.
-  `for` moves its iterable once, before the first iteration; loop-local
-  bindings are fresh each iteration. A deferred-initialization `let` (§7)
-  may not be initialized inside a loop body: the assignment could run once
-  per iteration, so it is a conservative O0004.
+  Loop-local bindings are fresh each iteration. A deferred-initialization
+  `let` (§7) may not be initialized inside a loop body: the assignment could
+  run once per iteration, so it is a conservative O0004.
 
 ```tuo
 // MUST COMPILE — every path replaces what it moved
@@ -353,6 +353,50 @@ fn loop_carried(take b: Box[Int]) {
     while i < 3 {
         let c = b;  // ERROR: O0002 `b` may already be moved by a previous iteration
         i = i + 1;
+    }
+}
+```
+
+- **`for` reads what it walks (ADR-0039).** When the iterable is a
+  **place** — a local, a parameter of any mode, a binding lent from an `in`
+  parameter, or a field path rooted in one — the loop **reads** it, as an
+  `in` argument reads its place: it is not moved, it stays initialized after
+  the loop, an `in` parameter may be walked, and an owner may walk its array
+  again or use it after the loop. Any other iterable (a call result, a
+  literal, a range expression) is a temporary the loop owns, dropped when
+  the loop exits.
+- **The iterable is frozen for the body.** The loop takes the length once,
+  before the first iteration, and indexes without a per-iteration bounds
+  check, so while the body runs nothing may assign to the place it walks,
+  pass it as `mut` (`std::array::push`, `std::array::set`, any `mut`
+  parameter), write an element of it (`xs[i] = v`), or move it — nor do any
+  of these to a place that **overlaps** it (§1: a prefix or an extension).
+  Each is **O0013**, anchored at the write with a secondary label at the
+  iterable. The freeze covers nested loops' bodies and ends with the body,
+  so the place may be written after the loop. Writes to places that do not
+  overlap it, including a sibling field of the same struct, are unaffected.
+- **The element binding.** A `Copy` element is copied into the binding. A
+  non-`Copy` element is a deep copy, the same as `std::array::get` returns,
+  owned by the body: the body may move it, and it is dropped at the end of
+  every iteration otherwise.
+
+```tuo
+// MUST COMPILE — an `in` array walked, and walked again
+fn sum_twice(in xs: Array[Int]) -> Int {
+    var t = 0;
+    for x in xs {
+        t = t + x;
+    }
+    for x in xs {
+        t = t + x;
+    }
+    t
+}
+
+// MUST FAIL (O0013)
+fn grow_while_walking(mut xs: Array[Int]) {
+    for x in xs {
+        std::array::push(xs, x); // ERROR: O0013 cannot modify `xs` while `for` walks it
     }
 }
 ```
@@ -515,6 +559,7 @@ the negative fixture corpus:
 | `O0010` | Repeat array literal `[x; N]` of a non-`Copy` element (ADR-0004 Stage 2). |
 | `O0011` | A `String` is moved, mutated, dropped, or overwritten while a `Str` view of it (from `std::string::as_str`) is still live, or such a view escapes its frame (ADR-0010, §13). |
 | `O0012` | An indexed write `xs[i] = v` whose element type is not `Copy`: the write overwrites the element in place and nothing would drop the value it replaces — use `std::array::set`, which does (ADR-0030). |
+| `O0013` | Inside a `for` body, an assignment, `mut` argument, indexed write, or move of a place that overlaps the place the loop walks: the loop reads its iterable in place with its length taken once, so the body may not change it — walk a copy, or loop over the indices (ADR-0039, §10). |
 
 Every diagnostic names the place, the earlier action that produced the state
 (the move site, the borrow, the conflicting argument), and — where one

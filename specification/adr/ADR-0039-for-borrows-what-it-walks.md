@@ -1,6 +1,6 @@
 # ADR-0039: `for` borrows what it walks — reading an array without an index loop
 
-- **Status:** proposed
+- **Status:** accepted (2026-11-27 — Stage A landed; see Resolution)
 - **Date:** 2026-10-19
 
 ## Context
@@ -255,3 +255,58 @@ The predictions below are fixed before implementation.
   question once generics land (ADR-0027).
 - **Lending elements** in Stage A. See D3.
 - **Any change to `par_map`**, which keeps its own crossing rules (ADR-0034).
+
+## Resolution (2026-11-27)
+
+Stage A landed. Stages B and C, and benchmark items 1, 3 and 4, are still
+open.
+
+- **Ownership** (`tuo-ownership/src/check.rs`): `for_expr` reads a place
+  iterable (`Use::Read`) and pushes it onto a frozen-place stack for the
+  body, popped when the body ends; a non-place iterable is still evaluated
+  by value (D1). An assignment, an indexed write, a `mut` argument, or a
+  move of a place overlapping a frozen one is the new **O0013**, anchored at
+  the write with a secondary label at the iterable and a help naming both
+  fixes (D2). It fires only where the write would otherwise be legal, so an
+  `in` parameter still gets `O0004`/`O0003` and never both. The two
+  `for`-specific O0003 helps are gone, with the `for_iterable` field that
+  selected them; the generic help remains.
+- **MIR** (`tuo-mir/src/lower.rs`): `for_array` indexes a place iterable
+  where it lives, with no temporary and no drop at loop exit, so the array's
+  owner drops it as usual. The exception is a whole owned local or `take`
+  parameter that nothing names after the iterable and that is not inside an
+  enclosing loop: it still moves into the loop's temporary, since moving and
+  reading are indistinguishable there, and that keeps such a loop's
+  lowering unchanged. No MIR construct, verifier rule, backend, runtime
+  function, or ABI changed. D3 is unchanged.
+- **Committed sources.** None of the committed `.tuo` sources that contain a
+  `for` loop reassigns or otherwise writes its own iterable inside the body
+  (0, as predicted). Each was checked with the compiler before and after the
+  change. The only verdict change was the fixture that pinned the old rule:
+  `err/use_after_move.tuo::case_for_consumes_iterable`, which walked a `take`
+  local twice. It moved to `ok/for_borrows.tuo` as
+  `case_take_parameter_walked_twice`. A few recorded model outputs under
+  `training/live/` lost an O0003 on a `for` over an `in` array. They still
+  fail on their other errors, and nothing under `training/` was edited.
+- **Codegen identity (benchmark item 2).** `tuo debug mir` and `tuo debug
+  mir --opt` print byte-identical MIR for a `take`-parameter `Array[Int]`
+  loop on `origin/main` and with this change. The golden
+  `tests/mir/golden/for_borrows.mir` pins it, together with the `in`-parameter
+  loop, which is the same counted loop indexing the parameter directly, with
+  no temporary and no drop. The comparison against the old index loop was
+  not made into a test. The base index loop (`while i < std::array::len(xs)`
+  with `std::array::get`) re-reads `heap_array_len` every iteration and reads
+  each element through `heap_array_get` with an `I64` cursor. The `for` loop
+  reads `len` once and indexes with a `Usize` cursor, so the two differ in
+  more than the bounds check.
+- **Pinned** by the ownership fixtures `ok/for_borrows.tuo` and
+  `err/for_frozen.tuo`, and three-way (interpreter == Cranelift == LLVM) by
+  `tests/codegen/fixtures/arr_for_in_int.tuo`, `arr_for_in_string.tuo` and
+  `arr_for_reuse.tuo`. §3, §10 and §15 of `ownership.md`, the brief,
+  `REFERENCE.md` and `CLAUDE.md` state the new rule.
+- **Still open.** Stage B (rewriting the stdlib's and examples' read-only
+  index loops into `for`), Stage C (lent non-`Copy` elements), and benchmark
+  items 1 (the LLM Check@1 tasks and rescore), 3 (runtime timings) and 4
+  (the Stage C allocation measurement). Lowering `for` over a fixed `[T; N]`
+  of non-`Copy` elements is also still open: D1 sets its rule, but the loop
+  is not lowered.

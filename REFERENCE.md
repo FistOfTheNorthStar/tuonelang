@@ -274,11 +274,18 @@ match opt {
 ### Loops
 
 ```tuo
-for x in xs { total = total + x; }     // over a fixed array (element must be Copy)
+for x in xs { total = total + x; }     // over an `Array[T]` or a `[T; N]`
 for i in 0..n { acc = acc + i; }       // half-open range
 while i < end { i = i + 1; }
 loop { break; }                        // `break [value]` gives the loop a value
 ```
+
+`for` over a place (a local, a parameter of any mode, or a field of one)
+**reads** it, so an `in xs: Array[T]` parameter can be walked and an owned
+array walked again or used after the loop (ADR-0039). The body may not
+assign to, `mut`-borrow (`std::array::push`/`set`), or move the array it
+walks: that is `O0013`. Walk a copy, or loop over the indices when the body
+must change it.
 
 `break` and `continue` are expressions; using them outside a loop is `T0013`.
 Bounded iteration is a design guarantee: array lengths are compile-time
@@ -421,8 +428,10 @@ Rules:
   `IndexOutOfBounds` trap, never undefined behavior.
 - `xs[i]` is a *read*, not a place: **no `xs[i] = v`** in v0, and the element
   must be Copy to take it by value.
-- The repeat form `[x; N]` requires a Copy element (`O0010`); `for` over an
-  array requires Copy elements too (each iteration binds a copy).
+- The repeat form `[x; N]` requires a Copy element (`O0010`). `for` reads
+  the array it walks and binds a copy of each element; the body may not
+  modify that array (`O0013`). A `[T; N]` of non-Copy elements is not
+  lowered by `for` yet.
 - Arrays of Copy elements are themselves Copy; they pass to and return from
   functions by value and compile natively.
 
