@@ -232,6 +232,14 @@ fn control(take n: Int) -> Int {
     acc * sign
 }
 
+fn walk(in xs: Array[Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    total
+}
+
 struct Point { x: Int, y: Int }
 
 enum Shape {
@@ -338,6 +346,7 @@ fn the_brief_shows_the_constructs_it_claims_to() {
         "Some { value: xs[0] }",
         "spec add {",
         "match s {",
+        "fn walk(in xs: Array[Int]) -> Int {",
     ] {
         assert!(
             brief.contains(fragment),

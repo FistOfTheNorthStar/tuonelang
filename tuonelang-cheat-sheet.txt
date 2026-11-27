@@ -71,6 +71,14 @@ between two spellings, the more explicit one is the real one.
       acc * sign
   }
 
+  fn walk(in xs: Array[Int]) -> Int {
+      var total = 0;
+      for x in xs {                // `for` READS a named array: an `in`
+          total = total + x;       // parameter can be walked, and an owned
+      }                            // one walked again after the loop
+      total
+  }
+
   struct Point { x: Int, y: Int }  // fields are `name: Type`, comma-separated
 
   enum Shape {
@@ -874,6 +882,10 @@ Further traps, in the order they usually bite:
     `std::array::set(xs, i, v)`. A buffer of known size is
     `std::array::filled(n, value)` (one allocation) or `[value; N]` (on the
     stack), not `n` pushes onto `std::array::empty()`.
+  * The body of `for x in xs` cannot modify `xs`: pushing onto it, `set`,
+    `xs[i] = v`, assigning it, or moving it inside the loop is O0013. Walk a
+    copy, or loop over the indices (`while i < std::array::len(xs)`) when the
+    body must change the array.
 
 --------------------------------------------------------------------------------
 5. A COMPLETE PROGRAM
