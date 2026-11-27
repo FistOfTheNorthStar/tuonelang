@@ -650,6 +650,32 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// ADR-0035: an index operand is any integer type, checked to be an
+    /// integer and never unified with a particular one — the ADR-0019
+    /// shift-amount rule. An unsolved index is narrowed to the integer
+    /// class, so it defaults to `I64` and can never be solved to a
+    /// non-integer later. Anything else is a `T0001` expecting "an integer
+    /// type".
+    fn expect_integer_index(&mut self, index: &Ty, span: Span) {
+        let accepted = match self.icx.apply(index) {
+            Ty::Int(_) | Ty::Error | Ty::Never => true,
+            Ty::Var(_) => {
+                let integer = self.icx.fresh(VarClass::Integer, span);
+                self.icx.unify(&integer, index).is_ok()
+            }
+            _ => false,
+        };
+        if !accepted {
+            let actual = self.render(index);
+            self.push(
+                Diagnostic::error(code(1), "mismatched types", span)
+                    .with_primary_label(format!("expected an integer type, found `{actual}`"))
+                    .with_expected(StructuredValue::Text("an integer type".to_owned()))
+                    .with_actual(StructuredValue::Type(actual)),
+            );
+        }
+    }
+
     /// Join two branch types (`if`/`match` arms): `Never` yields to the
     /// other side; anything else must unify.
     fn join(&mut self, acc: Ty, next: Ty, span: Span) -> Ty {
@@ -2643,7 +2669,7 @@ impl<'a> Checker<'a> {
                 let index_ty = index.index().map_or(Ty::Error, |inner| self.expr(inner));
                 match self.icx.apply(&base) {
                     Ty::Array(item) | Ty::FixedArray(item, _) => {
-                        self.expect_ty(&Ty::Int(IntKind::Usize), &index_ty, index_span);
+                        self.expect_integer_index(&index_ty, index_span);
                         *item
                     }
                     Ty::Error | Ty::Var(_) | Ty::Never => Ty::Error,

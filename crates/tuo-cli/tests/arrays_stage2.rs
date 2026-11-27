@@ -148,6 +148,119 @@ fn lowered_mir_has_constant_lengths_and_no_len_of_a_fixed_array() {
     }
 }
 
+/// Rewrite every MIR local token (`_` followed by digits, not inside a word)
+/// in `text` through `rename`.
+fn map_locals(text: &str, mut rename: impl FnMut(&str) -> String) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find('_') {
+        let (before, from) = rest.split_at(at);
+        out.push_str(before);
+        let digits = from[1..].len()
+            - from[1..]
+                .trim_start_matches(|c: char| c.is_ascii_digit())
+                .len();
+        let in_word = before
+            .chars()
+            .next_back()
+            .is_some_and(|c| c.is_alphanumeric() || c == '_');
+        if digits == 0 || in_word {
+            out.push('_');
+            rest = &from[1..];
+        } else {
+            out.push_str(&rename(&from[..=digits]));
+            rest = &from[1 + digits..];
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `text` with its locals renumbered in order of first appearance.
+fn renumbered(text: &str) -> String {
+    let mut seen: Vec<String> = Vec::new();
+    map_locals(text, |local| {
+        let index = seen.iter().position(|s| s == local).unwrap_or_else(|| {
+            seen.push(local.to_owned());
+            seen.len() - 1
+        });
+        format!("_{index}")
+    })
+}
+
+/// `text` with each `_a = copy _b` statement removed, its `let _a` dropped,
+/// and every later `_a` read as `_b`.
+fn without_copies(text: &str) -> String {
+    let mut copies: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if let Some((dest, src)) = line.trim().split_once(" = copy ")
+            && dest.starts_with('_')
+            && src.starts_with('_')
+            && !src.contains(['[', '.', ' '])
+        {
+            copies.push((dest.to_owned(), src.to_owned()));
+        }
+    }
+    let kept: String = text
+        .split_inclusive('\n')
+        .filter(|line| {
+            !copies.iter().any(|(dest, src)| {
+                line.trim() == format!("{dest} = copy {src}")
+                    || line.trim().starts_with(&format!("let {dest}:"))
+            })
+        })
+        .collect();
+    map_locals(&kept, |local| {
+        copies
+            .iter()
+            .find(|(dest, _)| dest == local)
+            .map_or_else(|| local.to_owned(), |(_, src)| src.clone())
+    })
+}
+
+/// ADR-0035: an `Int` index lowers to `cast int_to_int` into the `Usize`
+/// index temp, in front of the unchanged bounds check — the MIR of an
+/// explicit `xs[i as Usize]`. The explicit form also copies its cast's result
+/// into the index temp (the `Usize` path stores the index as it is), so the
+/// two are compared with that one copy collapsed and locals renumbered.
+#[test]
+fn an_int_index_lowers_to_the_mir_of_an_explicit_usize_cast() {
+    let implicit = write(
+        "index_int.tuo",
+        "fn pick(in xs: [Int; 4], take i: Int) -> Int {\n    xs[i]\n}\n",
+    );
+    let explicit = write(
+        "index_cast.tuo",
+        "fn pick(in xs: [Int; 4], take i: Int) -> Int {\n    xs[i as Usize]\n}\n",
+    );
+    let dump = |path: &str| {
+        let output = run(&["debug", "mir", path, "pick"]);
+        assert!(output.status.success(), "mir dump of {path}: {output:?}");
+        String::from_utf8(output.stdout).expect("utf-8")
+    };
+    let implicit = dump(&implicit);
+    let explicit = dump(&explicit);
+    let order = [
+        "_2 = cast int_to_int(copy _1)",
+        "_3 = const 4_usize",
+        "_4 = lt(copy _2, copy _3)",
+        "assert copy _4 [index_out_of_bounds]",
+        "copy _0[_2]",
+    ];
+    let mut from = 0;
+    for step in order {
+        let at = implicit[from..]
+            .find(step)
+            .unwrap_or_else(|| panic!("`{step}` follows in order:\n{implicit}"));
+        from += at + step.len();
+    }
+    assert_eq!(
+        renumbered(&implicit),
+        renumbered(&without_copies(&explicit)),
+        "`xs[i]` and `xs[i as Usize]` lower alike:\n{implicit}\n{explicit}"
+    );
+}
+
 /// A native array program exercising every Stage-2 backend obligation:
 /// construction (both literal forms), indexing (constant and loop-counter),
 /// a for-fold, nesting, whole-array copy, and array parameters/returns
