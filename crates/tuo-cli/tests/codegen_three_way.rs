@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use tuo_compiler::source::SourceMap;
-use tuo_mir_interp::{Interpreter, Value};
+use tuo_mir_interp::{Interpreter, RunResult, TrapKind, Value};
 
 /// The runtime's fixed trap exit status (see `tuo_runtime::TRAP_EXIT_STATUS`).
 const TRAP_EXIT_STATUS: i32 = 134;
@@ -54,6 +54,15 @@ fn fixture(name: &str) -> PathBuf {
 /// The reference outcome of `main` for the program in `path`, from the MIR
 /// interpreter.
 fn interpret(path: &Path) -> Outcome {
+    match run_main(path) {
+        Ok(Value::Int(value, _)) => Outcome::Returned((value & 0xff) as i32),
+        Ok(other) => panic!("main returned a non-integer value: {}", other.render()),
+        Err(_) => Outcome::Trapped,
+    }
+}
+
+/// `main` of the program in `path`, run on the reference interpreter.
+fn run_main(path: &Path) -> RunResult {
     let text = std::fs::read_to_string(path).expect("fixture is readable");
     let mut map = SourceMap::new();
     let file = map.intern_file(&path.display().to_string());
@@ -78,11 +87,7 @@ fn interpret(path: &Path) -> Outcome {
 
     let interpreter =
         Interpreter::new(&program, &check.types).expect("lowered MIR verifies for the interpreter");
-    match interpreter.run("main", Vec::new()) {
-        Ok(Value::Int(value, _)) => Outcome::Returned((value & 0xff) as i32),
-        Ok(other) => panic!("main returned a non-integer value: {}", other.render()),
-        Err(_) => Outcome::Trapped,
-    }
+    interpreter.run("main", Vec::new())
 }
 
 /// Build and run the fixture natively with `tuo run [--release]`, returning its
@@ -351,6 +356,54 @@ fn scratch_buffers_agree_across_all_three_engines() {
     ] {
         assert_three_way_agreement(name);
     }
+}
+
+/// Assert that `name` traps `IndexOutOfBounds` on every engine: the
+/// interpreter's trap kind, and both native runs' trap status and stderr line.
+/// `Outcome` does not tell trap kinds apart, so this pins the kind directly.
+fn assert_index_out_of_bounds_trap(name: &str) {
+    let path = fixture(name);
+    let error = run_main(&path).expect_err("the fixture traps on the interpreter");
+    assert_eq!(
+        error.kind,
+        TrapKind::IndexOutOfBounds,
+        "{name}: interpreter trap kind"
+    );
+    for release in [false, true] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_tuo"));
+        command.arg("run");
+        if release {
+            command.arg("--release");
+        }
+        let output = command.arg(&path).output().expect("the tuo binary runs");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(TRAP_EXIT_STATUS),
+            "{name} (release: {release}): exits with the trap status. stderr:\n{stderr}"
+        );
+        assert!(
+            stderr.contains("index out of bounds"),
+            "{name} (release: {release}): stderr names the trap kind. stderr:\n{stderr}"
+        );
+    }
+}
+
+/// ADR-0035 Stage A: the index operand is any integer type. `Int`, `I32` and
+/// `U8` indices read and write, and a negative index traps — through `xs[i]`
+/// and through `std::array::get` alike — with the same trap kind everywhere.
+#[test]
+fn integer_index_operands_agree_across_all_three_engines() {
+    for name in [
+        "arr_index_int.tuo",
+        "arr_index_narrow.tuo",
+        "arr_index_int_trap_negative.tuo",
+        "arr_get_trap_negative.tuo",
+    ] {
+        assert_three_way_agreement(name);
+    }
+    assert_index_out_of_bounds_trap("arr_index_int_trap_negative.tuo");
+    assert_index_out_of_bounds_trap("arr_get_trap_negative.tuo");
 }
 
 /// ADR-0028 Stage B: `Box[T]` values — `std::boxed::new`/`get`/`into` over

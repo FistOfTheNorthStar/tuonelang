@@ -1,0 +1,13 @@
+// ADR-0035: `std::array::get` with a negative `Int` index traps
+// `IndexOutOfBounds` on every engine, the semantics the ADR gives `xs[i]`.
+// This pins behaviour that already shipped.
+fn pick(in xs: Array[Int], take i: Int) -> Int {
+    std::array::get(xs, i)
+}
+
+fn main() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 1);
+    std::array::push(xs, 2);
+    pick(xs, 0 - 1)
+}

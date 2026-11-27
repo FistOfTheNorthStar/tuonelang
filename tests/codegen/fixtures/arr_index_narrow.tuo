@@ -1,0 +1,15 @@
+// ADR-0035: an `I32` and a `U8` index read and write with no cast. The `I32`
+// cursor reads 2 + 3 + 4 = 9; the `U8` write makes xs[3] 40, read back
+// through the `U8`, so main returns 9 + 40 = 49.
+fn main() -> Int {
+    var xs = [1, 2, 3, 4];
+    var acc = 0;
+    var i: I32 = 1;
+    while i < 4 {
+        acc = acc + xs[i];
+        i = i + 1;
+    }
+    let b: U8 = 3;
+    xs[b] = 40;
+    acc + xs[b]
+}
