@@ -1,0 +1,9 @@
+// ADR-0040 Stage A: `let xs: Array[Int] = [...]` is a growable array, so it
+// can be pushed onto (on a `var`) and measured with `std::array::len`.
+// Returns len * 10 + the last element = 5 * 10 + 9 = 59.
+fn main() -> Int {
+    var xs: Array[Int] = [3, 1, 4];
+    std::array::push(xs, 1);
+    std::array::push(xs, 9);
+    std::array::len(xs) * 10 + std::array::get(xs, 4)
+}

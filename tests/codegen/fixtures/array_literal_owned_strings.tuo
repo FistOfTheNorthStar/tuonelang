@@ -1,0 +1,17 @@
+// ADR-0040 Stage A: an `Array[String]` literal moves each owned element in,
+// as `std::array::push` does. `get` deep-copies an element, `pop` moves the
+// last one out, and the drop glue frees every remaining buffer exactly once
+// (a double free aborts and breaks the agreed exit).
+// Returns len(get 0) * 10 + len(popped) + len after pop = 2 * 10 + 4 + 2 = 26.
+fn main() -> Int {
+    let a = std::string::from_str("ab");
+    let b = std::string::from_str("cde");
+    let c = std::string::from_str("fghi");
+    var xs: Array[String] = [a, b, c];
+    let first = std::array::get(xs, 0);
+    let popped = match std::array::pop(xs) {
+        Some { value } => std::string::len(value),
+        None => 0,
+    };
+    std::string::len(first) * 10 + popped + std::array::len(xs)
+}

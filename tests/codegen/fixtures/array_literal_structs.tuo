@@ -1,0 +1,23 @@
+// ADR-0040 Stage A: an `Array[Point]` literal of struct values, passed to an
+// `in` parameter and read back with `get`.
+// Returns the sum of x * y over the points = 1*2 + 3*4 + 5*6 = 44.
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+fn area_sum(in points: Array[Point]) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(points) {
+        let Point { x, y } = std::array::get(points, i);
+        total = total + x * y;
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> Int {
+    let points: Array[Point] = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }, Point { x: 5, y: 6 }];
+    area_sum(points)
+}

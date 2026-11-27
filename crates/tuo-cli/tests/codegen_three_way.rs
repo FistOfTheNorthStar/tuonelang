@@ -464,6 +464,28 @@ fn owned_array_elements_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0040 Stage A: a list literal takes its array type from context. Where
+/// an `Array[T]` is expected it lowers to `std::array::empty` plus one `push`
+/// per element, so all three engines must agree on the growable literal
+/// passed to an `in` parameter, under a `let` annotation, returned, built of
+/// owned `String`s (element moves and drop glue: a double free aborts), of
+/// structs, and empty (`[]`) — and on an unconstrained literal, which stays
+/// the fixed array it always was.
+#[test]
+fn array_literals_from_context_agree_across_all_three_engines() {
+    for name in [
+        "array_literal_in_param.tuo",      // literal for an `in Array[Int]`
+        "array_literal_annotated_let.tuo", // `let xs: Array[Int] = [...]`, then push
+        "array_literal_returned.tuo",      // `-> Array[Int]` returns a literal
+        "array_literal_owned_strings.tuo", // Array[String]: moves, get, pop, drops
+        "array_literal_structs.tuo",       // Array[Point]
+        "array_literal_unconstrained.tuo", // stays `[Int; 3]`
+        "array_literal_empty.tuo",         // `[]` under `Array[Int]`, then pushes
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// ADR-0011 Stage B: the hash map. The interpreter's insertion-ordered
 /// reference table and both backends' `tuo_rt_map_*` open-addressing table
 /// must agree on every observable — insert/overwrite previous values, hit

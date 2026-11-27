@@ -1,0 +1,10 @@
+// ADR-0040 Stage A: `[]` under an `Array[Int]` annotation is an empty
+// growable array, which pushes then fill.
+// Returns len * 10 + the last element = 3 * 10 + 8 = 38.
+fn main() -> Int {
+    var xs: Array[Int] = [];
+    std::array::push(xs, 6);
+    std::array::push(xs, 7);
+    std::array::push(xs, 8);
+    std::array::len(xs) * 10 + std::array::get(xs, 2)
+}

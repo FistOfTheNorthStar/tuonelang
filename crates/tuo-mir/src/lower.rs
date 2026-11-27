@@ -1495,12 +1495,20 @@ impl FnLower<'_> {
     /// evaluate the elements left to right, then one `Aggregate` with
     /// [`AggregateKind::Array`]. Non-`Copy` element operands are `Move`,
     /// mirroring `Adt` field lowering.
+    ///
+    /// A literal the checker typed `Array[T]` (ADR-0040 Stage A) evaluates
+    /// its elements the same way, then lowers to what `std::array::empty`
+    /// and one `std::array::push` per element lower to: a `HeapOp::ArrayEmpty`
+    /// assignment and a `HeapMutOp::Push` of each element, in source order.
     fn array_lit(&mut self, expr: &Expr, elements: &[Expr]) -> Lowered {
         let ty = self.expr_ty(expr)?;
-        let Ty::FixedArray(element_ty, len) = &ty else {
-            return Err("array literal has a non-array type (compiler bug guard)".to_owned());
+        let (element_ty, len) = match &ty {
+            Ty::FixedArray(element_ty, len) => ((**element_ty).clone(), Some(*len)),
+            Ty::Array(element_ty) => ((**element_ty).clone(), None),
+            _ => {
+                return Err("array literal has a non-array type (compiler bug guard)".to_owned());
+            }
         };
-        let (element_ty, len) = ((**element_ty).clone(), *len);
         let mut fields = Vec::new();
         for (position, element) in elements.iter().enumerate() {
             let Some(value) = self.expr(element)? else {
@@ -1511,6 +1519,27 @@ impl FnLower<'_> {
             let operand = self.freeze_before(operand, element.span, &later)?;
             fields.push(operand);
         }
+        let Some(len) = len else {
+            let place = self.assign_temp(
+                Rvalue::HeapOp {
+                    op: HeapOp::ArrayEmpty,
+                    subject: None,
+                    args: Vec::new(),
+                },
+                ty,
+                expr.span,
+            )?;
+            for operand in fields {
+                let dest = self.temp(Ty::Unit, expr.span);
+                self.push(Statement::HeapMutate {
+                    op: HeapMutOp::Push,
+                    target: place.clone(),
+                    args: vec![operand],
+                    dest: Place::local(dest),
+                });
+            }
+            return Ok(Some(Value::Place(place)));
+        };
         let place = self.assign_temp(
             Rvalue::Aggregate {
                 kind: AggregateKind::Array {
