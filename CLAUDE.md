@@ -240,7 +240,8 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   been a twenty-step Newton loop that was both slow and, far from 1, wrong);
   and — since ADR-0030 — **scratch buffers**: indexed assignment `xs[i] = v`
   on a fixed or growable array in a mutable place (bounds-checked like a
-  read; `Copy` elements only, `O0012` otherwise) and
+  read, with an index of any integer type since ADR-0035; `Copy` elements
+  only, `O0012` otherwise) and
   `std::array::filled(n, v)` (one allocation; `HeapOp::ArrayFilled`), which
   took the `sha256-hash` workload and `std::crypto`'s digests 1.5x faster;
   and — since ADR-0031 — the **non-trapping integer builtins** of `std::int`:
@@ -877,7 +878,13 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   method call is the error `T0024`, with a machine-applicable rewrite to the
   free function when exactly one fits; a qualified interface-member call is
   `T0025`; an `interface`/`impl` declaration draws the `T0026` warning because
-  it lowers to nothing), and ADR-0034's worker-stack items.
+  it lowers to nothing), ADR-0034's worker-stack items, and ADR-0035 Stage A
+  (an index operand of any integer type — checked to be an integer like the
+  ADR-0019 shift amount, defaulting to `I64`, a non-integer `T0001` expecting
+  "an integer type" — lowered as `cast int_to_int` into the `Usize` index temp
+  in front of the unchanged bounds check, so a negative index traps
+  `IndexOutOfBounds`; pinned three-way, trap kind included, by
+  `integer_index_operands_agree_across_all_three_engines`).
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
