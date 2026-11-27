@@ -211,6 +211,14 @@ between two spellings, the more explicit one is the real one.
       acc * sign
   }
 
+  fn walk(in xs: Array[Int]) -> Int {
+      var total = 0;
+      for x in xs {                // `for` READS a named array: an `in`
+          total = total + x;       // parameter can be walked, and an owned
+      }                            // one walked again after the loop
+      total
+  }
+
   struct Point { x: Int, y: Int }  // fields are `name: Type`, comma-separated
 
   enum Shape {
@@ -403,7 +411,8 @@ Further traps, in the order they usually bite:
     comparing structs or enums directly.
   * Literal positions (array lengths) need a non-negative literal; `-5` is
     unary minus applied to `5`, which is an expression, not a literal.
-  * Indexing takes a `Usize`: `xs[i as Usize]`. An indexed write `xs[i] = v`
+  * The index may be any integer type: `xs[i]` with an `Int` cursor needs no
+    cast; out of range, negative included, traps. An indexed write `xs[i] = v`
     works on a `var` array (fixed or growable) when the element is `Copy`
     (Int, Float, Bool, Str); for a `String` or other owning element, use
     `std::array::set(xs, i, v)`. Known elements are a list literal,
@@ -411,6 +420,10 @@ Further traps, in the order they usually bite:
     size is `std::array::filled(n, value)` (one allocation) or `[value; N]`
     (on the stack). A value already typed `[T; N]` never converts to
     `Array[T]` (T0001): only a literal takes its type from context.
+  * The body of `for x in xs` cannot modify `xs`: pushing onto it, `set`,
+    `xs[i] = v`, assigning it, or moving it inside the loop is O0013. Walk a
+    copy, or loop over the indices (`while i < std::array::len(xs)`) when the
+    body must change the array.
 
 "#;
 

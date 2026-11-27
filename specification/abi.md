@@ -70,7 +70,7 @@ memory. Widths are exact and match `tuo_types::IntKind`/`FloatKind`.
 | `I16`/`U16` | 2 | 2 | two's-complement / unsigned |
 | `I32`/`U32` | 4 | 4 | two's-complement / unsigned |
 | `I64`/`U64` | 8 | 8 | two's-complement / unsigned |
-| `Isize`/`Usize` | 8 (pointer-width) | 8 | index/length type |
+| `Isize`/`Usize` | 8 (pointer-width) | 8 | two's-complement / unsigned |
 | `F32` | 4 | 4 | IEEE-754 binary32 |
 | `F64` (`Float`) | 8 | 8 | IEEE-754 binary64 |
 
@@ -135,7 +135,7 @@ fixed; only `Str` is inhabited in v0.
 ## Arrays
 
 `Array[T]` is the builtin **owned, growable** homogeneous sequence, indexed by
-`Usize`. Like `String`, its value is a three-word header:
+any integer type (ADR-0035). Like `String`, its value is a three-word header:
 
 ```
 struct tuo_array {

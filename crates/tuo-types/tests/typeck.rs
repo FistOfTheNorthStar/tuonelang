@@ -387,6 +387,76 @@ fn numeric_casts_are_explicit_and_allowed() {
 }
 
 // ----------------------------------------------------------------------
+// ADR-0035: the index operand is any integer type
+// ----------------------------------------------------------------------
+
+#[test]
+fn an_index_of_any_integer_type_reads_and_writes() {
+    for ty in ["Int", "I64", "I32", "U8", "U64", "Usize"] {
+        let (_, result) = check_one(&format!(
+            "fn f(take i: {ty}) -> Int {{\n\
+                 var xs = [1, 2, 3, 4];\n\
+                 xs[i] = 5;\n\
+                 xs[i]\n\
+             }}\n\
+             fn g(in xs: Array[Int], take i: {ty}) -> Int {{\n\
+                 xs[i]\n\
+             }}\n",
+        ));
+        assert_clean(&result);
+    }
+}
+
+#[test]
+fn an_int_cursor_bounded_by_len_indexes_without_a_cast() {
+    let (_, result) = check_one(
+        "fn f(in xs: Array[Int]) -> Int {\n\
+             var acc = 0;\n\
+             var i = 0;\n\
+             while i < std::array::len(xs) {\n\
+                 acc = acc + xs[i];\n\
+                 i = i + 1;\n\
+             }\n\
+             acc\n\
+         }\n",
+    );
+    assert_clean(&result);
+}
+
+#[test]
+fn an_unconstrained_index_defaults_to_i64() {
+    let (resolution, result) = check_one(
+        "fn f(in xs: [Int; 4]) -> Int {\n\
+             var acc = 0;\n\
+             var i = 0;\n\
+             while i < 4 {\n\
+                 acc = acc + xs[i];\n\
+                 i = i + 1;\n\
+             }\n\
+             acc\n\
+         }\n",
+    );
+    assert_clean(&result);
+    assert_eq!(rendered_type(&resolution, &result, "i"), "I64");
+}
+
+#[test]
+fn a_non_integer_index_expects_an_integer_type() {
+    for (ty, rendered) in [("F64", "`F64`"), ("Bool", "`Bool`")] {
+        let (_, result) = check_one(&format!(
+            "fn f(in xs: Array[Int], take x: {ty}) -> Int {{ xs[x] }}\n",
+        ));
+        assert_eq!(codes(&result), ["T0001"]);
+        let diagnostic = &result.diagnostics()[0];
+        assert_eq!(diagnostic.expected.len(), 1);
+        assert_eq!(diagnostic.expected[0].kind(), "text");
+        assert_eq!(diagnostic.expected[0].to_string(), "an integer type");
+        assert_eq!(diagnostic.actual[0].kind(), "type");
+        assert_eq!(diagnostic.actual[0].to_string(), rendered);
+    }
+}
+
+// ----------------------------------------------------------------------
 // Negative: calls, returns, operators
 // ----------------------------------------------------------------------
 

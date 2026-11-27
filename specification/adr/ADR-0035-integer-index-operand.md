@@ -1,6 +1,6 @@
 # ADR-0035: The index operand — any integer type, bounds-checked, never cast
 
-- **Status:** proposed
+- **Status:** proposed (Stage A **landed** 2026-11-27; Stages B and C open)
 - **Date:** 2026-10-14
 
 ## Context
@@ -293,3 +293,41 @@ The predictions below are fixed before implementation.
 - **Indexing `Str`, `String`, or `Map` with `[]`.** `s[0]` is `T0006` today
   and stays so, while `byte_at` and `std::map::get` remain the spellings.
 - **Slices or range indexing** (`xs[a..b]`).
+
+## Resolution (2026-11-27)
+
+Stage A landed as the Decision and Lowering sections describe. Stages B and C
+are open.
+
+- **Checker**: the `Expr::Index` arm of `tuo-types/src/check.rs` no longer
+  unifies the index with `Usize`. Like the shift amount, it accepts any
+  `Int(_)` (and the poison and `Never` types). An unsolved index variable is
+  narrowed to the integer class, so it defaults to `I64` and can never be
+  solved to a non-integer. A non-integer index is `T0001` with the expected
+  value the text "an integer type" and the actual value its type. The
+  builtins keep their `Int` parameters, and `T0018` is unchanged.
+- **Lowering**: `checked_index` in `tuo-mir/src/lower.rs` stores a `Usize`
+  index exactly as before, and any other integer index as
+  `cast int_to_int` into the same `Usize` temp, in front of the unchanged
+  `len`/`lt`/`assert [index_out_of_bounds]` sequence. No MIR construct, the
+  verifier, either backend, the runtime, or the ABI changed.
+- **Three-way pinned**: `arr_index_int` (an `Int` cursor bounded by
+  `std::array::len`, read and write, growable and fixed), `arr_index_narrow`
+  (`I32` and `U8` indices), `arr_index_int_trap_negative`, and
+  `arr_get_trap_negative`, in `codegen_three_way.rs`'s
+  `integer_index_operands_agree_across_all_three_engines`, which also checks
+  that both traps are `IndexOutOfBounds` on the interpreter and print
+  `index out of bounds` natively (benchmark item 4).
+- **Tests**: `tuo-types/tests/typeck.rs` pins each integer index type, the
+  `len`-bounded loop, the `I64` default, and the non-integer `T0001`;
+  `tests/types/fixtures/err/arrays.tuo` replaces the `I32` case with a `Bool`
+  index; `tuo-cli/tests/arrays_stage2.rs` pins that `xs[i]` lowers to the MIR
+  of `xs[i as Usize]`, less the copy into the index temp that the explicit
+  cast adds.
+- **Documents**: `static-semantics.md`, `abi.md`, `ty.rs`, the brief, and
+  `CLAUDE.md` no longer describe `Usize` as the index/length type.
+  `CONSTITUTION.md` §10 still does; it is frozen, so that change is left to
+  the language owner.
+- **Not re-recorded in this change**: the 140-program inference audit and
+  benchmark items 1 to 3 (codegen identity, the runtime tables, LLM
+  Compile@1). Items 1 and 2 belong to Stage B.

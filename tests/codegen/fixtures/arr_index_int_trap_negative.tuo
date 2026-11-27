@@ -1,0 +1,11 @@
+// ADR-0035: a negative `Int` index traps `IndexOutOfBounds` on every engine.
+// It arrives through a `take` parameter so no pass can fold it away; cast to
+// `Usize` it sign-extends past any length and fails the bounds check.
+fn pick(in xs: [Int; 4], take i: Int) -> Int {
+    xs[i]
+}
+
+fn main() -> Int {
+    let xs = [1, 2, 3, 4];
+    pick(xs, 0 - 1)
+}

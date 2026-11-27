@@ -2303,7 +2303,8 @@ impl FnLower<'_> {
     }
 
     /// `base_place[index]` as a place, behind a bounds check: evaluate the
-    /// index into a `Usize` temp, assert it is below the length (a fixed
+    /// index into a `Usize` temp (cast there when it has another integer
+    /// type, ADR-0035), assert it is below the length (a fixed
     /// array's constant, a growable array's `Len`), and project. Shared by
     /// indexed reads and, since ADR-0030, indexed writes. `None` when the
     /// index expression diverges.
@@ -2317,8 +2318,19 @@ impl FnLower<'_> {
             return Ok(None);
         };
         let index_op = Self::read_value(index_value);
-        let index_place =
-            self.assign_temp(Rvalue::Use(index_op), Ty::Int(IntKind::Usize), index.span)?;
+        // ADR-0035: the index may have any integer type. A non-`Usize` one
+        // is cast exactly as `i as Usize` would be: on the supported 64-bit
+        // hosts every value survives, and a negative one sign-extends past
+        // any length, so the unchanged bounds check below traps it.
+        let index_rvalue = match self.expr_ty(index)? {
+            Ty::Int(IntKind::Usize) => Rvalue::Use(index_op),
+            _ => Rvalue::Cast {
+                kind: CastKind::IntToInt,
+                operand: index_op,
+                to: Ty::Int(IntKind::Usize),
+            },
+        };
+        let index_place = self.assign_temp(index_rvalue, Ty::Int(IntKind::Usize), index.span)?;
         // A `[T; N]`'s length never exists at runtime: it is a constant,
         // and `Rvalue::Len` stays a growable-`Array`-only operation
         // (ADR-0004 Stage 2). Everything downstream of the `len` temp —
@@ -2726,6 +2738,30 @@ impl FnLower<'_> {
         Ok(Some(()))
     }
 
+    /// Whether a `for` over the owned local `place` moves it into the loop as
+    /// before ADR-0039: a whole local or `take` parameter that nothing names
+    /// after the iterable, outside any enclosing loop. Moving or reading it
+    /// is then indistinguishable, and moving keeps the lowering of such a
+    /// loop exactly what it was.
+    fn consumes_iterable(&self, iter: &Expr, place: &Place) -> bool {
+        let ExprKind::Path {
+            res: Res::Symbol(symbol),
+            ..
+        } = &iter.kind
+        else {
+            return false;
+        };
+        place.projection.is_empty()
+            && self.loops.is_empty()
+            && !self.borrowed_params.contains(&place.local)
+            && !self.lent.contains_key(symbol)
+            && !self.cx.resolution.references().iter().any(|reference| {
+                reference.symbol == *symbol
+                    && reference.span.source() == iter.span.source()
+                    && reference.span.range().start() >= iter.span.range().end()
+            })
+    }
+
     fn for_array(
         &mut self,
         binding: Option<SymbolId>,
@@ -2753,16 +2789,21 @@ impl FnLower<'_> {
         let Some(value) = self.expr(iter)? else {
             return Ok(None);
         };
-        // The iterable is a by-value use: the loop owns the array.
-        let operand = self.use_value(value, &array_ty);
-        let array = match operand {
-            Operand::Move(_) | Operand::Const(_) => {
-                let local = self.temp(array_ty.clone(), iter.span);
-                let place = Place::local(local);
-                self.store(&place, Rvalue::Use(operand))?;
-                place
-            }
-            Operand::Copy(place) => place,
+        // ADR-0039 D1: a place iterable is read where it lives — the
+        // ownership checker froze it for the body, so the cached `len` stays
+        // true — and its owner drops it as usual. Any other iterable is a
+        // temporary the loop owns and drops at exit.
+        let array = match value {
+            Value::Place(place) if !self.consumes_iterable(iter, &place) => place,
+            value => match self.use_value(value, &array_ty) {
+                operand @ (Operand::Move(_) | Operand::Const(_)) => {
+                    let local = self.temp(array_ty.clone(), iter.span);
+                    let place = Place::local(local);
+                    self.store(&place, Rvalue::Use(operand))?;
+                    place
+                }
+                Operand::Copy(place) => place,
+            },
         };
         let index = self.assign_temp(
             Rvalue::Use(Operand::Const(Const::Int(0, IntKind::Usize))),

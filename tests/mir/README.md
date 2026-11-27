@@ -25,6 +25,10 @@ deterministic (equal input → equal MIR). The fixtures cover, by area:
   of the husk left behind.
 - `calls.tuo` — every parameter mode, constants, generics, `impl`
   functions (recorded as `not lowered` pending the trait system).
+- `for_borrows.tuo` — `for` over a place (ADR-0039): a `take` parameter
+  nothing reuses still moves into the loop's temporary, lowered exactly as
+  before Stage A, and an `in` parameter is read in place with no temporary
+  and no drop.
 
 Bless after an intended change with:
 
