@@ -34,9 +34,9 @@ fn empty_needs_annotation() {
     let empty = [];
 }
 
-fn index_must_be_usize() -> Int {
+fn index_must_be_an_integer() -> Int {
     let xs = [1, 2, 3];
-    let i: I32 = 1;
+    let i: Bool = true;
     xs[i]
 }
 

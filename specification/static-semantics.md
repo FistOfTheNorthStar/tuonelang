@@ -158,7 +158,7 @@ name or AST position, so `I32` never equals `I64` and `String` never equals `Str
 The surface primitive set is frozen (Constitution §10):
 
 - **Signed integers** `I8 I16 I32 I64 Isize`; **unsigned** `U8 U16 U32 U64 Usize`.
-  `Isize`/`Usize` are pointer-width and are the **index/length type**.
+  `Isize`/`Usize` are pointer-width.
 - **Floats** `F32 F64`.
 - `Bool`; `Char` (a Unicode scalar value); `String` (owned UTF-8); `Str` (borrowed
   UTF-8 slice); `()` (unit, one value).
@@ -174,10 +174,13 @@ types that give the frozen rules a home; none is a new surface type:
 - **`Tuple`** — supports `.N` field access in the core but has **no v0 surface
   syntax** (tuple structs are excluded, §12).
 - **`Range`** — the internal type of `a .. b`, iterable by `for` (§16).
-- **`Array[T]`** — the builtin homogeneous array, **indexed by `Usize`**.
+- **`Array[T]`** — the builtin homogeneous array, **indexed by any integer
+  type** (bounds-checked: in bounds exactly when `0 <= i < len`, otherwise it
+  traps `IndexOutOfBounds`; see *The index operand* below).
 - **`[T; N]`** (`[EXPERIMENTAL]`, ADR-0004 Stage 2) — the inline fixed-length
-  array; `N` elements of `T`, the length part of the type, indexed by `Usize`
-  and iterable by `for`. Lengths are concrete `u64`s — there are **no length
+  array; `N` elements of `T`, the length part of the type, indexed by any
+  integer type (bounds-checked, `0 <= i < len`, traps `IndexOutOfBounds`) and
+  iterable by `for`. Lengths are concrete `u64`s — there are **no length
   variables and no length inference**: `[Int; 3]` and `[Int; 4]` are distinct
   types, and a length mismatch is an ordinary `T0001` rendering both types. The
   list literal `[a, b, c]` has its element count as the length (elements unify
@@ -195,6 +198,17 @@ types that give the frozen rules a home; none is a new surface type:
   `_` by class).
 - **`Error`** — the **poison type**, produced after an error and **unifying with
   everything**, so one mistake is reported once, not cascaded.
+
+**The index operand (ADR-0035).** In `base[index]` on an `Array[T]` or a
+`[T; N]`, read or written, the index is **checked to be an integer and never
+unified with a particular type**, the rule the ADR-0019 shift amount already
+follows. Any integer type indexes without a cast; an index nothing else
+constrains (a literal, or a cursor only literals touch) defaults to `I64` like
+every integer literal. The access is in bounds exactly when `0 <= index < len`
+over the mathematical integers; otherwise it traps `IndexOutOfBounds`, so a
+negative index traps. A non-integer index is `T0001` "mismatched types" whose
+expected value is the text "an integer type" and whose actual value is the
+index's type.
 
 ### 3.2 Signatures and inference (frozen)
 
@@ -493,10 +507,10 @@ place (`O0004` otherwise).
 **Indexed assignment (ADR-0030).** `xs[i] = v` is an assignment when `xs` is a
 fixed array `[T; N]` or a growable `Array[T]` held in a mutable place (a `var`
 binding, a `mut` parameter, a field of one, or another indexed element of
-one). The index is a `Usize` and `v` must have the element type `T`; the write
-is bounds-checked and **traps `IndexOutOfBounds`** exactly like a read. The
-element must be `Copy` (`O0012`) — for an owning element, `std::array::set`
-drops the value it replaces.
+one). The index may have any integer type (ADR-0035) and `v` must have the
+element type `T`; the write is bounds-checked and **traps `IndexOutOfBounds`**
+exactly like a read. The element must be `Copy` (`O0012`) — for an owning
+element, `std::array::set` drops the value it replaces.
 
 **Hash-map builtins (`std::map`)** — the builtin `Map[K, V]` (ADR-0011). The
 type is generic and non-`Copy` (it owns a heap table); the v0 **operation

@@ -175,10 +175,7 @@ fn candidate_consistent(candidate: &str, guidance: &Guidance) -> bool {
     }
     // If an expected type is known and the candidate is empty, it cannot fill a
     // typed hole.
-    if guidance.expected_type.is_some() && candidate.trim().is_empty() {
-        return false;
-    }
-    true
+    !(guidance.expected_type.is_some() && candidate.trim().is_empty())
 }
 
 /// Rough identifier extraction: maximal `[A-Za-z_][A-Za-z0-9_]*` runs.

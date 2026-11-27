@@ -1,0 +1,30 @@
+// ADR-0035: an `Int` cursor bounded by `std::array::len` reads and writes a
+// growable `Array[Int]` and a `[Int; 4]` with no cast. The growable array
+// becomes [10, 20, 30, 40] and the fixed one [1, 3, 5, 7]; the weighted sum
+// is 10 + 40 + 90 + 160 = 300 and the fixed sum 16, so main returns
+// 300 + 16 - 256 = 60.
+fn weighted(in xs: Array[Int]) -> Int {
+    var acc = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        acc = acc + xs[i] * (i + 1);
+        i = i + 1;
+    }
+    acc
+}
+
+fn main() -> Int {
+    var g = std::array::empty();
+    std::array::push(g, 1);
+    std::array::push(g, 2);
+    std::array::push(g, 3);
+    std::array::push(g, 4);
+    var f = [1, 2, 3, 4];
+    var i = 0;
+    while i < std::array::len(g) {
+        g[i] = g[i] * 10;
+        f[i] = f[i] + i;
+        i = i + 1;
+    }
+    weighted(g) + f[0] + f[1] + f[2] + f[3] - 256
+}

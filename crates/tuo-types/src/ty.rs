@@ -17,8 +17,8 @@ use tuo_resolve::{Resolution, SymbolId};
 pub const MAX_FIXED_ARRAY_LEN: u64 = 65_536;
 
 /// A signed or unsigned integer type of exactly specified width
-/// (Constitution §10). `Isize`/`Usize` are pointer-width; `Usize` is the
-/// index/length type.
+/// (Constitution §10). `Isize`/`Usize` are pointer-width; an index may have
+/// any of these types (ADR-0035).
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum IntKind {
     /// 8-bit signed.
@@ -40,7 +40,7 @@ pub enum IntKind {
     U32,
     /// 64-bit unsigned.
     U64,
-    /// Pointer-width unsigned — the index/length type.
+    /// Pointer-width unsigned.
     Usize,
 }
 
@@ -246,7 +246,7 @@ pub enum Ty {
     /// deliberately excluded by Constitution §12 — but the type core
     /// supports them for `.N` access and future syntax.)
     Tuple(Vec<Ty>),
-    /// `Array[T]` — the builtin homogeneous array, indexed by `Usize`.
+    /// `Array[T]` — the builtin homogeneous array, indexed by any integer type.
     Array(Box<Ty>),
     /// `Map[K, V]` — the builtin hash map (ADR-0011). The type is generic;
     /// the v0 *operation* surface is monomorphic over `(Int, Int)` and

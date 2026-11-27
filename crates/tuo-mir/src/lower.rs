@@ -2274,7 +2274,8 @@ impl FnLower<'_> {
     }
 
     /// `base_place[index]` as a place, behind a bounds check: evaluate the
-    /// index into a `Usize` temp, assert it is below the length (a fixed
+    /// index into a `Usize` temp (cast there when it has another integer
+    /// type, ADR-0035), assert it is below the length (a fixed
     /// array's constant, a growable array's `Len`), and project. Shared by
     /// indexed reads and, since ADR-0030, indexed writes. `None` when the
     /// index expression diverges.
@@ -2288,8 +2289,19 @@ impl FnLower<'_> {
             return Ok(None);
         };
         let index_op = Self::read_value(index_value);
-        let index_place =
-            self.assign_temp(Rvalue::Use(index_op), Ty::Int(IntKind::Usize), index.span)?;
+        // ADR-0035: the index may have any integer type. A non-`Usize` one
+        // is cast exactly as `i as Usize` would be: on the supported 64-bit
+        // hosts every value survives, and a negative one sign-extends past
+        // any length, so the unchanged bounds check below traps it.
+        let index_rvalue = match self.expr_ty(index)? {
+            Ty::Int(IntKind::Usize) => Rvalue::Use(index_op),
+            _ => Rvalue::Cast {
+                kind: CastKind::IntToInt,
+                operand: index_op,
+                to: Ty::Int(IntKind::Usize),
+            },
+        };
+        let index_place = self.assign_temp(index_rvalue, Ty::Int(IntKind::Usize), index.span)?;
         // A `[T; N]`'s length never exists at runtime: it is a constant,
         // and `Rvalue::Len` stays a growable-`Array`-only operation
         // (ADR-0004 Stage 2). Everything downstream of the `len` temp —
