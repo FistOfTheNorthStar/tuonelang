@@ -1,0 +1,106 @@
+// ownership.md §10, ADR-0039 — `for` reads a place iterable instead of moving
+// it: a borrowed array can be walked, an owned one walked again or used after
+// the loop, and the body may write anything that does not overlap the place
+// it walks.
+
+struct Wrap {
+    items: Array[Int],
+    count: Int,
+}
+
+struct Named {
+    names: Array[String],
+    tags: Array[String],
+}
+
+fn case_in_array_walked_twice(in xs: Array[Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    for x in xs {
+        total = total + x;
+    }
+    total
+}
+
+fn case_in_string_array_walked(in names: Array[String]) -> Int {
+    var total = 0;
+    for name in names {
+        total = total + std::string::len(name);
+    }
+    total
+}
+
+fn case_owned_local_walked_then_reused() -> Int {
+    var a = std::array::empty();
+    std::array::push(a, 2);
+    std::array::push(a, 3);
+    var total = 0;
+    for x in a {
+        total = total + x;
+    }
+    for x in a {
+        total = total + x;
+    }
+    total + std::array::len(a)
+}
+
+fn case_take_parameter_walked_twice(take items: Array[Int]) -> Int {
+    var total = 0;
+    for n in items {
+        total = total + n;
+    }
+    for n in items {
+        total = total + n;
+    }
+    total
+}
+
+fn case_field_path_walked(in w: Wrap) -> Int {
+    var total = 0;
+    for x in w.items {
+        total = total + x;
+    }
+    total + w.count
+}
+
+fn case_mut_parameter_walked_then_written(mut xs: Array[Int]) -> Int {
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    std::array::push(xs, total);
+    total
+}
+
+fn case_unrelated_place_written_in_body(in xs: Array[Int]) -> Array[Int] {
+    var out = std::array::empty();
+    for x in xs {
+        std::array::push(out, x);
+    }
+    out
+}
+
+fn case_sibling_field_written_in_body(mut w: Wrap) {
+    for x in w.items {
+        w.count = w.count + x;
+    }
+}
+
+fn case_owned_element_moved_in_body(in n: Named) -> Array[String] {
+    var out = std::array::empty();
+    for name in n.names {
+        std::array::push(out, name);
+    }
+    out
+}
+
+fn case_write_after_break_leaves_loop(mut xs: Array[Int]) {
+    for x in xs {
+        if x == 0 {
+            break;
+        }
+    }
+    std::array::push(xs, 0);
+}

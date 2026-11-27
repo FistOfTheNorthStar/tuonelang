@@ -445,10 +445,11 @@ struct Body<'a> {
     healed: BTreeSet<Place>,
     /// Places already diagnosed as moves out of borrows (O0003).
     reported_borrow_moves: HashSet<Place>,
-    /// The span of the `for` iterable being evaluated, while it is: a move
-    /// out of a borrow *there* is a loop over a borrowed array, whose fix is
-    /// not the one O0003 gives for an ordinary move.
-    for_iterable: Option<Span>,
+    /// The places enclosing `for` loops walk, innermost last, each with the
+    /// span of its iterable (ADR-0039 D2): the loop reads its iterable in
+    /// place with a length cached before the first iteration, so the body
+    /// may not assign, `mut`-borrow, or move anything overlapping one.
+    frozen: Vec<(Place, Span)>,
     /// Live `Str` views borrowed into a `String` (ADR-0010), keyed by the
     /// borrowed `String`'s root. Empty for every body that never calls
     /// `std::string::as_str`, so this is zero-cost for the common case.
@@ -472,7 +473,7 @@ impl<'a> Body<'a> {
             loops: Vec::new(),
             healed: BTreeSet::new(),
             reported_borrow_moves: HashSet::new(),
-            for_iterable: None,
+            frozen: Vec::new(),
             view_borrows: HashMap::new(),
             diverged: false,
             diagnostics: Vec::new(),
@@ -777,23 +778,8 @@ impl<'a> Body<'a> {
         } else {
             format!("cannot move `{name}` out of the borrowed parameter `{mode} {root_name}`")
         };
-        let growable = matches!(self.place_ty(place), Some(Ty::Array(_)));
-        let help = if self.for_iterable == Some(span) && growable {
-            // `for` consumes the array it walks. Telling the author to take
-            // ownership "fixes" a read-only loop by changing every caller;
-            // walking the indices is the borrow-preserving form.
-            format!(
-                "`for` moves the array it walks; to read a borrowed array, loop over its \
-                 indices instead: `var i = 0; while i < std::array::len({name}) {{ let x = \
-                 std::array::get({name}, i); ... i = i + 1; }}`"
-            )
-        } else if self.for_iterable == Some(span) {
-            format!(
-                "`for` moves what it walks; declare the parameter `take {root_name}`, or walk its indices"
-            )
-        } else {
-            format!("declare the parameter `take {root_name}` if the callee should own the value")
-        };
+        let help =
+            format!("declare the parameter `take {root_name}` if the callee should own the value");
         self.report(
             Diagnostic::error(code(3), what, span)
                 .with_primary_label("ownership cannot leave a borrowed parameter")
@@ -803,6 +789,47 @@ impl<'a> Body<'a> {
                 )
                 .with_help(help),
         );
+    }
+
+    /// Report O0013 when `place` overlaps a place an enclosing `for` walks
+    /// (ADR-0039 D2). `span` is the write; returns whether it was reported.
+    fn check_frozen(&mut self, place: &Place, span: Span) -> bool {
+        let Some((frozen, iterable)) = self
+            .frozen
+            .iter()
+            .rev()
+            .find(|(frozen, _)| frozen.overlaps(place))
+            .cloned()
+        else {
+            return false;
+        };
+        let name = self.display(&frozen);
+        let help = if matches!(self.place_ty(&frozen), Some(Ty::Array(_))) {
+            format!(
+                "walk a copy of `{name}` made before the loop, or, when the body must change \
+                 it, loop over its indices instead: `var i = 0; while i < \
+                 std::array::len({name}) {{ ... i = i + 1; }}`"
+            )
+        } else {
+            format!(
+                "walk a copy of `{name}` made before the loop, or, when the body must change \
+                 it, loop over its indices instead"
+            )
+        };
+        self.report(
+            Diagnostic::error(
+                code(13),
+                format!("cannot modify `{name}` while `for` walks it"),
+                span,
+            )
+            .with_primary_label(format!(
+                "`{}` is modified here, inside the loop",
+                self.display(place)
+            ))
+            .with_secondary_label(iterable, format!("`for` walks `{name}` here"))
+            .with_help(help),
+        );
+        true
     }
 
     /// Use `place` by value: copy if `Copy`, otherwise move it (§3).
@@ -823,6 +850,9 @@ impl<'a> Body<'a> {
             .and_then(|root| root.origin.borrow_mode())
         {
             self.report_borrow_move(place, mode, span);
+            return;
+        }
+        if self.check_frozen(place, span) {
             return;
         }
         self.state
@@ -1251,7 +1281,9 @@ impl<'a> Body<'a> {
                 .then(|| format!("declare it `var {root_name}` to make it mutable"));
             diagnostic = self.with_mutability_fix(diagnostic, place.root, help);
             self.report(diagnostic);
+            return;
         }
+        self.check_frozen(&place, span);
     }
 
     fn assign(&mut self, assign: AssignExpr<'_>) {
@@ -1352,6 +1384,9 @@ impl<'a> Body<'a> {
                 .then(|| format!("declare it `var {root_name}` to make it mutable"));
             let diagnostic = self.with_mutability_fix(diagnostic, place.root, help);
             self.report(diagnostic);
+            return;
+        }
+        if self.check_frozen(&place, span) {
             return;
         }
         // Mutable place: the old value is dropped here, so its state must be
@@ -1573,6 +1608,20 @@ impl<'a> Body<'a> {
                 ),
             );
             self.report(diagnostic);
+        }
+        // ADR-0039 D2: a `mut` borrow of a mutable place a `for` walks.
+        let mut_writes: Vec<(Place, Span)> = recs
+            .iter()
+            .filter(|rec| rec.mode == Mode::Mut)
+            .filter(|rec| {
+                self.roots
+                    .get(&rec.place.root)
+                    .is_some_and(|root| root.origin.is_mutable())
+            })
+            .map(|rec| (rec.place.clone(), rec.span))
+            .collect();
+        for (place, span) in mut_writes {
+            self.check_frozen(&place, span);
         }
         // Conflicts inside one argument list (§6). One report per call.
         let mut suppressed_takes: Vec<usize> = Vec::new();
@@ -1867,11 +1916,18 @@ impl<'a> Body<'a> {
     }
 
     fn for_expr(&mut self, for_expr: ForExpr<'_>) {
-        // §3/§10: `for` moves its iterable once, before the first iteration.
+        // §10 (ADR-0039 D1): a place iterable is read, not moved, and frozen
+        // for the body (D2); any other iterable is an owned temporary.
+        let mut frozen = None;
         if let Some(iterable) = for_expr.iterable() {
-            let outer = self.for_iterable.replace(self.at(iterable.span()));
-            self.expr(iterable, Use::Value);
-            self.for_iterable = outer;
+            let span = self.at(iterable.span());
+            match self.place_of(iterable) {
+                Some(place) => {
+                    self.read_place(&place, span);
+                    frozen = Some((place, span));
+                }
+                None => self.expr(iterable, Use::Value),
+            }
         }
         if self.diverged {
             return;
@@ -1891,8 +1947,13 @@ impl<'a> Body<'a> {
                 }
             }
         }
+        let walks_place = frozen.is_some();
+        self.frozen.extend(frozen);
         if let Some(body) = for_expr.body() {
             self.eval_block(body, Use::Value);
+        }
+        if walks_place {
+            self.frozen.pop();
         }
         if !self.diverged {
             self.scope_end();

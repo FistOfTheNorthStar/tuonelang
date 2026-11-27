@@ -2697,6 +2697,30 @@ impl FnLower<'_> {
         Ok(Some(()))
     }
 
+    /// Whether a `for` over the owned local `place` moves it into the loop as
+    /// before ADR-0039: a whole local or `take` parameter that nothing names
+    /// after the iterable, outside any enclosing loop. Moving or reading it
+    /// is then indistinguishable, and moving keeps the lowering of such a
+    /// loop exactly what it was.
+    fn consumes_iterable(&self, iter: &Expr, place: &Place) -> bool {
+        let ExprKind::Path {
+            res: Res::Symbol(symbol),
+            ..
+        } = &iter.kind
+        else {
+            return false;
+        };
+        place.projection.is_empty()
+            && self.loops.is_empty()
+            && !self.borrowed_params.contains(&place.local)
+            && !self.lent.contains_key(symbol)
+            && !self.cx.resolution.references().iter().any(|reference| {
+                reference.symbol == *symbol
+                    && reference.span.source() == iter.span.source()
+                    && reference.span.range().start() >= iter.span.range().end()
+            })
+    }
+
     fn for_array(
         &mut self,
         binding: Option<SymbolId>,
@@ -2724,16 +2748,21 @@ impl FnLower<'_> {
         let Some(value) = self.expr(iter)? else {
             return Ok(None);
         };
-        // The iterable is a by-value use: the loop owns the array.
-        let operand = self.use_value(value, &array_ty);
-        let array = match operand {
-            Operand::Move(_) | Operand::Const(_) => {
-                let local = self.temp(array_ty.clone(), iter.span);
-                let place = Place::local(local);
-                self.store(&place, Rvalue::Use(operand))?;
-                place
-            }
-            Operand::Copy(place) => place,
+        // ADR-0039 D1: a place iterable is read where it lives — the
+        // ownership checker froze it for the body, so the cached `len` stays
+        // true — and its owner drops it as usual. Any other iterable is a
+        // temporary the loop owns and drops at exit.
+        let array = match value {
+            Value::Place(place) if !self.consumes_iterable(iter, &place) => place,
+            value => match self.use_value(value, &array_ty) {
+                operand @ (Operand::Move(_) | Operand::Const(_)) => {
+                    let local = self.temp(array_ty.clone(), iter.span);
+                    let place = Place::local(local);
+                    self.store(&place, Rvalue::Use(operand))?;
+                    place
+                }
+                Operand::Copy(place) => place,
+            },
         };
         let index = self.assign_temp(
             Rvalue::Use(Operand::Const(Const::Int(0, IntKind::Usize))),

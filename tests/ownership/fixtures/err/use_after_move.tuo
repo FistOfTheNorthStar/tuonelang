@@ -116,17 +116,6 @@ fn case_move_out_of_block_then_use_source(take b: Box[Int]) {
     peek(b); // ERROR: O0001 `b` was moved out through the block expression
 }
 
-fn case_for_consumes_iterable(take items: Array[Int]) -> Int {
-    var total = 0;
-    for n in items {
-        total = total + n;
-    }
-    for n in items { // ERROR: O0001 `items` was moved by the first `for`
-        total = total + n;
-    }
-    total
-}
-
 fn case_wrapper_field_move_then_read_field(take w: Wrap) {
     let buf = w.buf;
     let n = text_length(w.buf); // ERROR: O0001 `w.buf` was moved into `buf`
