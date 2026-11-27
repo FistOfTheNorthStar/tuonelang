@@ -426,6 +426,22 @@ fn owned_heap_values_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0039 Stage A: `for` reads a place iterable where it lives instead of
+/// moving it into a temporary, so an `in` array can be walked and an owned one
+/// walked again and used after the loop. The array is never dropped at loop
+/// exit — its owner drops it once — and each owned element is still the
+/// `array_get` deep copy, dropped every iteration.
+#[test]
+fn for_over_a_place_agrees_across_all_three_engines() {
+    for name in [
+        "arr_for_in_int.tuo",    // `in Array[Int]` walked twice, index-loop oracle
+        "arr_for_in_string.tuo", // `in Array[String]`: deep copy per element, no drop of the array
+        "arr_for_reuse.tuo",     // owned local walked twice, then pushed onto and measured
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 /// ADR-0012 Stage B: a growable `Array[T]` over a **no-heap** element type
 /// beyond `Int` — the borrowed `Str` (a two-word fat pointer, moved by memcpy),
 /// `Bool` (a 1-byte scalar whose load/store must use its own width, not `I64`),

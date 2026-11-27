@@ -1,0 +1,45 @@
+// ADR-0039: an owned local walked by `for` is read, not consumed, so its
+// owner can walk it again and use it after the loop (before, the second
+// `for` was `O0001`). The array is dropped once, at the end of `main`.
+//
+// Over [4, 6, 9]: the first walk sums 19, the second walks it again counting
+// the even elements (2), and after both loops the array is extended and its
+// length read: push 1 → len 4. 19 + 2 + 4 = 25. The owned-element case walks
+// two strings ("abc", "de") twice: (3 + 2) * 2 = 10, then reads their count
+// (2): 12. Exit = 25 + 12 = 37.
+fn ints() -> Int {
+    var xs = std::array::empty();
+    std::array::push(xs, 4);
+    std::array::push(xs, 6);
+    std::array::push(xs, 9);
+    var sum = 0;
+    for x in xs {
+        sum = sum + x;
+    }
+    var evens = 0;
+    for x in xs {
+        if x % 2 == 0 {
+            evens = evens + 1;
+        }
+    }
+    std::array::push(xs, 1);
+    sum + evens + std::array::len(xs)
+}
+
+fn strings() -> Int {
+    var names = std::array::empty();
+    std::array::push(names, std::string::from_str("abc"));
+    std::array::push(names, std::string::from_str("de"));
+    var n = 0;
+    for name in names {
+        n = n + std::string::len(name);
+    }
+    for name in names {
+        n = n + std::string::len(name);
+    }
+    n + std::array::len(names)
+}
+
+fn main() -> Int {
+    ints() + strings()
+}

@@ -1,0 +1,20 @@
+// ADR-0039 — `for` over a place. A `take` parameter that nothing names after
+// the loop is still moved into the loop's temporary and dropped at loop exit,
+// exactly as before; an `in` parameter is read where it lives, with no
+// temporary and no drop.
+
+fn total_take(take xs: Array[Int]) -> Int {
+    var t = 0;
+    for x in xs {
+        t = t + x;
+    }
+    t
+}
+
+fn total_in(in xs: Array[Int]) -> Int {
+    var t = 0;
+    for x in xs {
+        t = t + x;
+    }
+    t
+}
