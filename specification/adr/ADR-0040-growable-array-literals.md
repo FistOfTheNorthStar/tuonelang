@@ -155,6 +155,20 @@ fixed. Add type-checker fixtures for the length-mismatch rule and the
 and a re-run of the inference audit ADR-0035 used shows no literal's type
 flipping.
 
+**Stage A (landed).** The inference class, the default, and the lowering are
+in. Both open questions are settled as recommended: `[]` is admitted (an
+empty `Array[T]` under an `Array[T]` context, `[T; 0]` under a fixed one, and
+`T0011` with neither), and two literals of different lengths that meet stay a
+`T0001`. Capacity is **not** reserved up front yet: no MIR operation reserves
+capacity, and adding one is a new MIR construct and runtime function, which
+this stage rules out; capacity is unobservable, so the literal lowers to
+exactly `empty` plus one `push` per element and the reservation is deferred
+as a performance change only. Benchmark item 4 (three-way agreement) is
+covered by the Stage A fixtures in `tests/codegen/fixtures/array_literal_*.tuo`,
+pinned by `array_literals_from_context_agree_across_all_three_engines` in
+`tuo-cli/tests/codegen_three_way.rs`, including element moves and drop glue
+for the `Array[String]` literal. Items 1 to 3 and Stages B and C remain open.
+
 **Stage B: the payoff.** Rewrite the 2,590 `push` lines into literals, with
 the test vectors laid out as their RFCs print them. Delete `of2`/`of3` from
 both modules, or deprecate them through the brief if a release has already

@@ -63,7 +63,11 @@ ever required.
     element for **every** `N` (uniform, no `N == 0`/`1` special cases) —
     **O0010** otherwise, since duplicating a non-`Copy` value is precisely
     what this section forbids. The list literal `[a, b, c]` has no such
-    restriction (each element is its own value, moved in). Iteration binds
+    restriction (each element is its own value, moved in). A list literal
+    typed `Array[T]` from context (ADR-0040 Stage A) is a fresh owned value,
+    as `std::array::empty()` is, and moves its elements in exactly as one
+    `std::array::push` per element would: `[s, t]` with `s: String` consumes
+    `s` and `t` (`O0001` on a later use). Iteration binds
     each element **by copy**, so a `for` over a non-`Copy`-element fixed
     array type-checks but is refused at MIR lowering, exactly as for
     `Array[T]`. `in`/`mut` parameters of type `[T; N]` alias the caller's

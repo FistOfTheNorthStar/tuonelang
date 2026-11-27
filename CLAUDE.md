@@ -271,7 +271,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   `std::boxed::get(b)` passed straight to an `in` parameter lends the pointee
   through MIR's `Projection::Deref` instead of copying it (kept a copy when
   another argument is `mut` or a non-`Copy` `take`), so a boxed tree is walked
-  by borrow in O(n); and — since ADR-0027 Stage B — **generic functions**,
+  by borrow in O(n); and — since ADR-0040 Stage A — **array literals typed
+  from context**: a list literal `[a, b, c]` the checker types `Array[T]`
+  (where an `Array[T]` is expected; unconstrained it stays `[T; n]`) lowers
+  to exactly `std::array::empty` plus one `push` per element, with no new MIR
+  construct; and — since ADR-0027 Stage B — **generic functions**,
   monomorphized on the native path only (`tuo_mir::monomorphize`, after
   `retain_reachable` and before the optimizer, then re-verified): one clone
   per type-argument list a call reaches, each under a freshly minted
