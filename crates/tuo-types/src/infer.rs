@@ -478,7 +478,7 @@ mod tests {
     }
 
     fn mismatch(result: Result<(), Mismatch>, icx: &InferCtx) -> (Ty, Ty) {
-        let mismatch = result.err().expect("unification must fail");
+        let mismatch = result.expect_err("unification must fail");
         (
             icx.display(&mismatch.expected),
             icx.display(&mismatch.actual),
