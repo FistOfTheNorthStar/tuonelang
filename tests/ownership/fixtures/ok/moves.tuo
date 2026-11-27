@@ -84,3 +84,10 @@ fn case_return_moves(take m: Msg) -> Msg {
 fn case_move_field_shorthand(take buf: String) -> Wrap {
     Wrap { buf }
 }
+
+fn case_move_into_growable_literal(take s: String, take t: String) -> Int {
+    // ADR-0040 Stage A: each element moves into the `Array[String]` literal
+    // once; the array then owns them.
+    let xs: Array[String] = [s, t];
+    std::array::len(xs)
+}
