@@ -23,20 +23,23 @@ fn help_for(name: &str, source: &str) -> String {
 }
 
 #[test]
-fn a_for_loop_over_a_borrowed_array_is_told_to_walk_its_indices() {
-    // "Declare the parameter `take xs`" would make a read-only loop consume
-    // its caller's array — the wrong fix, and the one models took.
+fn a_for_loop_that_changes_the_array_it_walks_is_told_both_fixes() {
+    // ADR-0039: `for` reads a borrowed array, so walking an `in` parameter
+    // checks cleanly. What the body may not do is change the array it walks;
+    // the help names both ways out.
     let stderr = help_for(
-        "for_over_in",
-        "module app;\n\nfn total(in xs: Array[Int]) -> Int {\n    var t = 0;\n    for x in xs {\n        t = t + x;\n    }\n    t\n}\n",
+        "for_push",
+        "module app;\n\nfn grow(mut xs: Array[Int]) {\n    for x in xs {\n        std::array::push(xs, x);\n    }\n}\n",
     );
-    assert!(stderr.contains("error[O0003]"), "{stderr}");
+    assert!(stderr.contains("error[O0013]"), "{stderr}");
     assert!(
-        stderr.contains("loop over its indices") && stderr.contains("std::array::get(xs, i)"),
+        stderr.contains("cannot modify `xs` while `for` walks it"),
         "{stderr}"
     );
     assert!(
-        !stderr.contains("declare the parameter `take xs`"),
+        stderr.contains("walk a copy of `xs`")
+            && stderr.contains("loop over its indices")
+            && stderr.contains("std::array::len(xs)"),
         "{stderr}"
     );
 }
