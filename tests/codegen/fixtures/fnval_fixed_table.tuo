@@ -1,0 +1,36 @@
+// A fixed `[fn(take Int) -> Int; N]` dispatch table (ADR-0033 Stage A, which
+// pins the function-valued shapes that already run). The table is built from
+// an array literal, read by index and called, walked by `for` with every
+// element called, and a `[f; N]` repeat literal is patched by an indexed write
+// `t[i] = g` (ADR-0030). The handlers give dissimilar results and each call is
+// weighted by its position, so a wrong element, stride or handler changes the
+// exit code.
+fn inc(take x: Int) -> Int { x + 1 }
+fn dbl(take x: Int) -> Int { x * 2 }
+fn sq(take x: Int) -> Int { x * x }
+
+fn main() -> Int {
+    let t: [fn(take Int) -> Int; 3] = [inc, dbl, sq];
+    // Indexed read, then call: sq(5) = 25.
+    let f = t[2 as Usize];
+    let picked = f(5);
+    // `for` over the table: 1*inc(3) + 2*dbl(3) + 3*sq(3) = 4 + 12 + 27 = 43.
+    var walked = 0;
+    var k = 1;
+    for g in t {
+        walked = walked + k * g(3);
+        k = k + 1;
+    }
+    // Repeat literal, then slot 2 rewritten: [inc, inc, sq, inc] applied to 4,
+    // weighted 1..4: 5 + 10 + 48 + 20 = 83.
+    var r = [inc; 4];
+    r[2 as Usize] = sq;
+    var patched = 0;
+    var j = 1;
+    for h in r {
+        patched = patched + j * h(4);
+        j = j + 1;
+    }
+    // 25 + 43 + 83 = 151
+    picked + walked + patched
+}

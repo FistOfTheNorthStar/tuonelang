@@ -1,0 +1,33 @@
+// A fixed `[Route; N]` route table (ADR-0033 Stage A, which pins the
+// function-valued shapes that already run), where `Route` holds an owned
+// `String` path beside a `fn` handler: the router's ideal record, held in the
+// fixed array v0 already admits. Each route's path length is fed to its own
+// handler, and the routes are weighted by position, so a wrong element, a
+// wrong stride over the two fields, or the wrong handler changes the exit code.
+struct Route { path: String, handler: fn(take Int) -> Int }
+
+fn root(take n: Int) -> Int { n + 10 }
+fn users(take n: Int) -> Int { n * 4 }
+fn health(take n: Int) -> Int { n - 2 }
+
+fn main() -> Int {
+    let routes = [
+        Route { path: std::string::from_str("/"), handler: root },
+        Route { path: std::string::from_str("/users"), handler: users },
+        Route { path: std::string::from_str("/health"), handler: health },
+    ];
+    var total = 0;
+    var i: Usize = 0;
+    while i < 3 {
+        let h = routes[i].handler;
+        let n = std::string::len(routes[i].path);
+        // weight (i + 1) * (path length + handler(path length))
+        total = total + ((i as Int) + 1) * (n + h(n));
+        i = i + 1;
+    }
+    // "/":       1 * (1 + 11) = 12
+    // "/users":  2 * (6 + 24) = 60
+    // "/health": 3 * (7 + 5)  = 36
+    // 12 + 60 + 36 = 108
+    total
+}
