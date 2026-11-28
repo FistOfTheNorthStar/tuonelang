@@ -3512,13 +3512,13 @@ impl<'a> Checker<'a> {
             )
             .with_primary_label(format!(
                 "the v0 map operation surface is an `Int`/`Str` key with an \
-                     `Int`/`Bool`/`Float`/`Str` value, not `{rendered}`"
+                     `Int`/`Bool`/`Float`/`Str`/`String` value, not `{rendered}`"
             ))
             .with_help(
                 "user key types await the trait system's `Hash`/`Eq` (ADR-0011), and \
-                     `String`/struct values await the deep-copy and drop path \
-                     (ADR-0023 Stage B2); use an `Int` or `Str` key with an \
-                     `Int`/`Bool`/`Float`/`Str` value",
+                     struct/enum and nested `Map` values are not yet supported \
+                     (ADR-0023 Stage B2.2); use an `Int` or `Str` key with an \
+                     `Int`/`Bool`/`Float`/`Str`/`String` value",
             )
             .with_actual(StructuredValue::Type(rendered)),
         );
@@ -3526,22 +3526,26 @@ impl<'a> Checker<'a> {
 
     /// Is `ty` a v0-supported map **value** type (ADR-0023 Stages B/B2)?
     ///
-    /// The set is the `Copy` scalars `Int`/`Bool`/`Float` (Stage B) plus the
-    /// borrowed `Str` (Stage B2). Each is a fixed-size value the table holds
-    /// inline at a stride the compiler supplies, so `get` is a plain copy out
-    /// and destruction needs no per-value glue: a scalar owns nothing, and a
-    /// `Str` *borrows* its bytes rather than owning them.
+    /// The set is the `Copy` scalars `Int`/`Bool`/`Float` (Stage B), the
+    /// borrowed `Str` (Stage B2), and the owned `String` (Stage B2.2, first
+    /// slice). Each is a fixed-size value the table holds inline at a stride
+    /// the compiler supplies. A scalar owns nothing and a `Str` *borrows* its
+    /// bytes, so `get` is a plain copy out. A `String` owns its buffer: `get`
+    /// deep-copies it, `insert`'s previous value and `remove`'s value move out
+    /// to the caller, and dropping the map runs the `String`'s drop glue on
+    /// every live entry through `tuo_rt_map_drop`'s callback.
     ///
-    /// `String` values and struct/enum values genuinely **own** heap, so they
-    /// need the deep-copy-on-read and recursive-drop machinery ADR-0012 built
-    /// for array elements, plus a `tuo_rt_map_drop` that runs per-value glue.
-    /// They stay refused until that path is wired through both backends (the
-    /// second half of Stage B2).
+    /// Struct/enum values and nested `Map` values stay refused: wiring them
+    /// (and moving to the single `is_supported_array_element` predicate) is
+    /// the rest of Stage B2.2.
     ///
     /// Keys are deliberately **not** widened here: a user key type needs the
     /// trait system's `Hash`/`Eq` (ADR-0011), which is a different decision.
     fn is_supported_map_value(ty: &Ty) -> bool {
-        matches!(ty, Ty::Int(_) | Ty::Bool | Ty::Float(_) | Ty::Str)
+        matches!(
+            ty,
+            Ty::Int(_) | Ty::Bool | Ty::Float(_) | Ty::Str | Ty::String
+        )
     }
 
     /// Refuse an `Array[T]` whose element type `T` is outside the v0-supported

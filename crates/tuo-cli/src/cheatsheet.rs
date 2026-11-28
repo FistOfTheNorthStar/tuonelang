@@ -326,8 +326,8 @@ Runs everywhere (check, interpreter, and native):
   * `Str` values: literals, `==`, and the `std::str` byte operations
   * owned `String` and growable `Array[T]` (`std::string` / `std::array`),
     including a list literal where an `Array[T]` is expected
-  * `Map[K, V]` (`std::map`): an Int or Str key, an Int, Bool, Float, or Str
-    value, insertion-ordered
+  * `Map[K, V]` (`std::map`): an Int or Str key and an
+    Int, Bool, Float, Str, or String value, insertion-ordered
   * `std::json` — parse / render / arena accessors, all pure
   * first-class NON-CAPTURING function values: a bare top-level `fn` name is a
     value of type `fn(mode T, ...) -> R`, called indirectly
@@ -594,9 +594,9 @@ fn builtin_surface() -> String {
     let mut out = String::from(
         "Built into the compiler (no module file; always available). `T` is the
 element type — Int, Float, Bool, Str, String, or a struct or enum of those; a
-map's key `K` is Int or Str and its value `V` is Int, Bool, Float, or Str. In
-`std::int`, `T` is any integer type (both operands share it) and a rotation's
-amount `N` is any integer type of its own.
+map's key `K` is Int or Str and its value `V` is
+Int, Bool, Float, Str, or String. In `std::int`, `T` is any integer type (both
+operands share it) and a rotation's amount `N` is any integer type of its own.
 
 ",
     );

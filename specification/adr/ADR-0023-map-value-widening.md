@@ -1,6 +1,6 @@
 # ADR-0023: Widening the map surface — values beyond `Int`, and what still needs traits
 
-- **Status:** proposed (Stages A, B, C **landed** 2026-09-06; Stage **B2.1** — the borrowed `Str` value — **landed** 2026-09-08; Stage **B2.2** — owned values — open)
+- **Status:** proposed (Stages A, B, C **landed** 2026-09-06; Stage **B2.1** — the borrowed `Str` value — **landed** 2026-09-08; Stage **B2.2** — owned values — **partly landed** 2026-11-28: the owned `String` value; struct/enum values, the `py2tuo` `dict[str, str]` translation with the survey re-run, and the `Map[Str, String]` `map-lookup` variant remain open)
 - **Date:** 2026-09-06
 
 ## Context
@@ -221,6 +221,92 @@ new one, and all six map fixtures pass three-way.
 allocation per entry), and nested `Map` values (out of scope; now pinned by
 `nested_maps_stay_refused_as_map_values` rather than resting on an implicit
 catch-all arm).
+
+### Stage B2.2 (first slice) — the owned `String` value — **LANDED (2026-11-28)**
+
+The first slice of B2.2 admits the one owned value whose glue both backends
+already emit for array elements: `String`, behind both key kinds. Struct and
+enum values are the rest of B2.2.
+
+**What changed.**
+
+- `is_supported_map_value` gains `Ty::String`, and nothing else; the `T0001`
+  label and help now list `Int`/`Bool`/`Float`/`Str`/`String` and say
+  struct/enum and nested `Map` values are not yet supported.
+- `tuo_runtime::map` gains `STRING_VALUE_STRIDE = 24` (the `{ptr, len, cap}`
+  header). The shim stays type-blind: insert/get/remove still memcpy `vs`
+  bytes. Both backends' `map_value_stride` return it for `String`, so
+  `Map[Int, String]` strides 32 and `Map[Str, String]` 40, and the
+  `{found, value}` out buffer widens from three words to four.
+- `insert` passes a pointer to the `String`'s header, moved into the entry
+  bitwise (the argument is a `take`). `insert`'s previous value and `remove`'s
+  value are **moved out** into the `Option[String]` result with no copy, so
+  freeing them is the caller's ordinary drop of that `Option`; a discarded
+  result (`let _ = ...`) frees the `String` exactly once. This is what the
+  interpreter already did, and the `-> Option[V]` signatures already said.
+- `get` copies the stored header out and then runs
+  `emit_heap_glue(.., HeapGlue::DeepFixup)` on the payload, on the found path
+  only, so the caller's `String` and the map's never alias. A miss is `None`
+  and allocates nothing.
+- `tuo_rt_map_drop(hdr, stride)` becomes
+  `tuo_rt_map_drop(hdr, key_size, vs, drop_value)`. When `drop_value` is
+  non-null the shim calls it on the value slot of every **live** entry, never
+  on a hole, before freeing the block. The compiler passes the address of the
+  value type's existing out-of-line drop glue (the function `Box` glue already
+  used, C calling convention) when the value owns heap, and null otherwise.
+- The interpreter needed no change: it already cloned on `get`, moved out on
+  `insert`/`remove`, and dropped a `Value::Map`'s values.
+
+**The drop callback, not an emitted loop.** The original plan left both open:
+a per-value callback, or a compiler-emitted drop loop before the plain
+deallocating drop. The loop cannot be written correctly from the compiler.
+`remove` leaves a hole whose bytes are the stale header of the value it moved
+out, and only the shim's private `live` bytes tell a hole from an entry. A loop
+over `ptr[0..len]` would read the wrong slots; a loop over the dense region
+would free moved-out buffers a second time; a loop over `keys` would allocate a
+key array and probe once per entry just to drop. The shim already walks the
+live entries (`keys`, rehome), so it walks them for the drop too, and stays
+type-blind by calling back into the compiler's glue.
+
+**ABI version 15 → 16.** A new value stride, the wider out buffer, and the new
+`tuo_rt_map_drop` signature are all layout-affecting. On the `Map[_, Int]`
+path the only change is the null callback and the reshaped drop arguments;
+`benchmarks/` is untouched.
+
+**Pinned by**
+
+- `tests/codegen/fixtures/map_string_values.tuo`, a three-way differential
+  fixture (interpreter == Cranelift == LLVM, exit 161) over `Map[Int, String]`
+  and `Map[Str, String]`: distinct value lengths (and, for `Str` keys, lengths
+  that differ from the keys'), a read overwrite result and a read removal
+  result, content compared with `==`, a `get` copy grown with `push_byte`
+  before the key is read again, a miss, and both maps dropped holding live
+  entries after a removal left a hole;
+- `crates/tuo-runtime/tests/map_model.c`, whose model checker now runs owned
+  24-byte values: heap blocks the model frees when `insert`/`remove` hand them
+  back and the `drop_value` callback frees at drop, asserting no allocation is
+  outstanding after every run and the callback ran once per live entry (and
+  never for an empty map), under ASan/UBSan. Its sanitized build had been
+  failing to compile on GCC (a `-Wformat-truncation` warning under `-Werror`),
+  so the suite had quietly been running unsanitized; that is fixed;
+- `crates/tuo-cli/tests/map_string_balance.rs`, an exact allocation balance
+  end to end: a program doing every map operation over many rounds, compiled
+  to an object by each backend, linked with the real trap/effect/map runtime
+  and a test-only counting allocator, must free exactly what it allocated
+  (Cranelift, and LLVM unoptimized, where every allocation goes through the
+  `tuo_rt_alloc` symbol);
+- checker tests: `String` values check clean on both key kinds, struct and
+  enum values (including a one-`Int`-field struct) stay `T0001` in the
+  inferred and annotated spellings, and nested maps stay refused.
+
+**Still open in B2.2:**
+
+- struct and enum values, together with moving the value check to the single
+  `is_supported_array_element` predicate;
+- `tools/py2tuo` translating `dict[str, str]`, with the 1,870-file survey
+  re-run to measure the coverage delta;
+- the `Map[Str, String]` variant of the `map-lookup` workload the benchmark
+  plan below calls for.
 
 ### Stage B (original plan) — widen `V` to the ADR-0012 element set
 

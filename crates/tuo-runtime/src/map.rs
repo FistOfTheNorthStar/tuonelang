@@ -66,11 +66,23 @@
 //! - a **borrowed `Str`** value ([`STR_VALUE_STRIDE`], Stage B2), a two-word
 //!   `{ptr, len}` view copied bytewise like the `Str` *key* already is. `Str`
 //!   borrows rather than owns, so it needs no deep copy on read-out and no drop
-//!   glue — which is exactly why it lands before `String`.
+//!   glue — which is exactly why it lands before `String`;
+//! - an **owned `String`** value ([`STRING_VALUE_STRIDE`], Stage B2.2), its
+//!   three-word `{ptr, len, cap}` header. The shim still only moves the header
+//!   bytes: `insert` moves the caller's header in, and `insert`'s previous
+//!   value and `remove`'s value are moved out to the caller, who owns them
+//!   from then on. A `get` copies the header out and the *compiler* then
+//!   deep-copies the buffer, so the map keeps its own.
 //!
-//! A value type that *owns* heap (`String`, a struct containing one) still
-//! needs the deep-copy-on-read and recursive-drop path and stays refused by the
-//! type checker (Stage B2 part two).
+//! Dropping a map whose values own heap is the one place the shim must know
+//! which values are alive: `remove` leaves a hole whose stale bytes still look
+//! like a header, and only the shim's `live` bytes tell a hole from an entry.
+//! So [`MAP_DROP_SYMBOL`] takes a `drop_value` callback — the compiler's drop
+//! glue for the value type, or null when the value owns nothing — and calls it
+//! on the value slot of every live entry before freeing the block.
+//!
+//! Struct, enum, and nested `Map` values stay refused by the type checker (the
+//! rest of Stage B2.2).
 //!
 //! What lives here in Rust is the part that is pure and testable without a C
 //! compiler: the two hash functions ([`hash_int`], [`hash_str`]) with their
@@ -117,10 +129,14 @@ pub const MAP_STR_REMOVE_SYMBOL: &str = "tuo_rt_map_str_remove";
 /// insertion order. Takes `vs` to stride over the entries.
 pub const MAP_STR_KEYS_SYMBOL: &str = "tuo_rt_map_str_keys";
 
-/// The C-ABI symbol that frees a map's block:
-/// `void tuo_rt_map_drop(long long *hdr, long long stride)` — `stride` is
-/// the entry stride ([`INT_ENTRY_STRIDE`]/[`STR_ENTRY_STRIDE`]), which the
-/// drop needs only to compute the block size handed back to `tuo_rt_dealloc`.
+/// The C-ABI symbol that drops a map's values and frees its block:
+/// `void tuo_rt_map_drop(long long *hdr, unsigned long long key_size,
+/// unsigned long long vs, void (*drop_value)(void *value))` — `key_size` and
+/// `vs` give the entry stride (`key_size + vs`, for the block size handed back
+/// to `tuo_rt_dealloc`) and the value's offset in an entry. When `drop_value`
+/// is non-null it is called once on the value slot of every **live** entry —
+/// never on a hole — before the block is freed; when it is null (a value that
+/// owns nothing) only the block is freed. An empty map calls nothing.
 pub const MAP_DROP_SYMBOL: &str = "tuo_rt_map_drop";
 
 /// The byte size of an `Int` key in an entry: one word.
@@ -137,6 +153,12 @@ pub const WORD_VALUE_STRIDE: u64 = 8;
 /// (ADR-0023 Stage B2). `Str` borrows rather than owns, so the bytes are copied
 /// as-is with no deep copy and no drop glue.
 pub const STR_VALUE_STRIDE: u64 = 16;
+
+/// The value stride of an owned `String` value: its three-word
+/// `{ptr, len, cap}` header (ADR-0023 Stage B2.2). The shim moves the header
+/// bytes; the compiler deep-copies on `get` and supplies the drop glue
+/// [`MAP_DROP_SYMBOL`] runs on every live entry.
+pub const STRING_VALUE_STRIDE: u64 = 24;
 
 /// The byte stride of one entry, given its key size and value stride. The
 /// entry is `{key, value}` packed in that order; both parts are 8-aligned
@@ -560,12 +582,26 @@ void tuo_rt_map_str_keys(const long long *hdr, unsigned long long vs, long long 
     tuo_map_keys(hdr, {str_key}, vs, out_hdr);
 }}
 
-void tuo_rt_map_drop(long long *hdr, long long stride) {{
+/* Drop the map: run `drop_value` (when non-null) on the value slot of  */
+/* every LIVE dense entry, then free the block. A hole below `used`     */
+/* still holds the stale bytes of the value `remove` moved out, so the  */
+/* live bytes, which only this shim reads, are what keep the callback   */
+/* from freeing a moved-out value a second time.                        */
+void tuo_rt_map_drop(long long *hdr, unsigned long long key_size, unsigned long long vs,
+                     void (*drop_value)(void *value)) {{
     uint64_t cap = (uint64_t)hdr[2];
     if (cap == 0) return;
     unsigned char *entries = (unsigned char *)hdr[0];
+    uint64_t stride = key_size + vs;
+    if (drop_value != 0) {{
+        const unsigned char *live = tuo_map_live(entries, cap);
+        uint64_t used = tuo_map_used(entries);
+        for (uint64_t i = 0; i < used; i++) {{
+            if (live[i]) drop_value(entries + i * stride + key_size);
+        }}
+    }}
     tuo_rt_dealloc(tuo_map_index(entries, cap),
-                   tuo_map_block_size(tuo_map_index_cap(entries), cap, (uint64_t)stride), 8);
+                   tuo_map_block_size(tuo_map_index_cap(entries), cap, stride), 8);
 }}
 "#,
         sentinel = sentinel,
@@ -646,6 +682,13 @@ mod tests {
         // ...and the copies take a fixed-size path for the common sizes
         // rather than a libc call per operation.
         assert!(source.contains("case 8: d[0] = s[0]; return;"));
+        // The drop takes the key size and value stride and runs a per-live-entry
+        // callback (ADR-0023 Stage B2.2), skipping holes.
+        assert!(source.contains(
+            "void tuo_rt_map_drop(long long *hdr, unsigned long long key_size, \
+             unsigned long long vs,\n                     void (*drop_value)(void *value))"
+        ));
+        assert!(source.contains("if (live[i]) drop_value(entries + i * stride + key_size);"));
         // Allocation flows through the existing boundary only.
         assert!(source.contains("tuo_rt_alloc"));
         assert!(source.contains("tuo_rt_dealloc"));

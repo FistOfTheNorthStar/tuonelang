@@ -71,7 +71,7 @@ the replacement, preserving the decision history.
 | [ADR-0020](ADR-0020-constant-time-code.md) | Constant-time code — the branchless subset and what tuonelang can honestly promise | accepted |
 | [ADR-0021](ADR-0021-secret-taint-tracking.md) | Secret taint tracking — marking data, not just functions | proposed |
 | [ADR-0022](ADR-0022-constant-time-bignum.md) | A constant-time bignum — why `std::bignum` cannot simply adopt `std::ct` | accepted (X25519's field landed as `std::fe25519`; Ed25519 signing and Poly1305 moved onto fixed limbs) |
-| [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed (Stages A/B/C landed; B2 open) |
+| [ADR-0023](ADR-0023-map-value-widening.md) | Widening the map surface — values beyond `Int`, and what still needs traits | proposed (Stages A/B/C, B2.1 `Str`, and B2.2's owned `String` landed; struct/enum values open) |
 | [ADR-0024](ADR-0024-capturing-closures.md) | Capturing closures — the four decisions Tier 2 actually requires | proposed |
 | [ADR-0025](ADR-0025-no-exceptions.md) | No exceptions — `Result[T, E]` and the trap are the two failure modes | accepted |
 | [ADR-0026](ADR-0026-fixed-width-integers.md) | `Int` is `I64` and traps — fixed-width integers, and why `std::bignum` is not the same thing | accepted |
@@ -237,7 +237,14 @@ CPython dict-shape survey is unchanged at 4/58, because no `dict[str, bool]` or
 correctness, not coverage, and the coverage argument rests entirely on the still
 -open **Stage B2** (heap-owning values: `Str`, `String`, structs — where the
 original deep-copy/drop analysis does hold). User **key** types stay deferred to
-the trait system, unchanged.
+the trait system, unchanged. **Stage B2.1** (the borrowed `Str` value, ABI 13)
+and the first slice of **Stage B2.2** (the owned `String` value, ABI 16) have
+since landed: `get` deep-copies a `String`, `insert`'s previous value and
+`remove`'s value move out to the caller, and `tuo_rt_map_drop` runs the value's
+drop glue on every live entry through a `drop_value` callback, because a
+`remove` hole still holds stale bytes and only the shim knows which slots are
+live. Struct and enum values, `py2tuo`'s `dict[str, str]`, and the
+`Map[Str, String]` `map-lookup` variant remain open.
 
 **ADR-0024** (capturing closures) converts ADR-0008's single deferred Tier 2
 item into **four separately decidable questions** — syntax, capture ownership,

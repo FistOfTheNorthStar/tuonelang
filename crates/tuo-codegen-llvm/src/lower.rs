@@ -3858,9 +3858,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                 Ok(())
             }
             HeapOp::MapGet => {
-                // `get(in Map, k) -> Option[Int]`: the shim probes the table
+                // `get(in Map, k) -> Option[V]`: the shim probes the table
                 // into a `{found, value}` out buffer; the Option destination
-                // is materialized from it (ADR-0011).
+                // is materialized from it (ADR-0011). A heap-owning value
+                // (`String`, ADR-0023 Stage B2.2) is then deep-copied, so the
+                // caller owns a buffer of its own and the map keeps its own.
                 let subject = subject
                     .ok_or_else(|| CodegenError::backend("map_get is missing its Map subject"))?;
                 let header = self.header_address(subject)?;
@@ -3885,7 +3887,8 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     map::MAP_INT_GET_SYMBOL
                 };
                 self.call_map_shim(symbol, &call_args)?;
-                self.write_option_scalar_dest(dest, out)
+                self.write_option_scalar_dest(dest, out)?;
+                self.deep_copy_found_map_value(dest, out)
             }
             HeapOp::MapKeys => {
                 // `keys(in Map) -> Array[K]`: the shim allocates the fresh
@@ -3935,10 +3938,11 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
     }
 
     /// A fresh `{found, value}` out buffer for the map shim calls. One word for
-    /// the found flag plus the widest value stride, so the same buffer serves a
-    /// word-sized value and a two-word `Str` view.
+    /// the found flag plus the widest value stride
+    /// ([`map::STRING_VALUE_STRIDE`]), so the same buffer serves a word-sized
+    /// value, a two-word `Str` view, and a three-word `String` header.
     fn map_out_addr(&mut self) -> Result<PointerValue<'ctx>, CodegenError> {
-        self.entry_alloca(self.ctx.i64_type().array_type(3), "map_out")
+        self.entry_alloca(self.ctx.i64_type().array_type(4), "map_out")
     }
 
     /// Declare (idempotently) and call a `tuo_rt_map_*` shim function: the
@@ -4004,12 +4008,16 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
         }
     }
 
-    /// Materialize an `Option[V]` destination from a map shim's two-word
+    /// Materialize an `Option[V]` destination from a map shim's
     /// `{found, value}` out buffer: tag = `1 - found` (`Some` is variant 0,
-    /// `None` variant 1), payload = the value word (deterministically zero
+    /// `None` variant 1), payload = the value bytes (deterministically zero
     /// when absent, so no branch is needed).
     ///
-    /// `V` is a `Copy` scalar — `Int`, `Bool`, or `Float` (ADR-0023 Stage B).
+    /// `V` is a `Copy` scalar — `Int`, `Bool`, or `Float` (ADR-0023 Stage B) —
+    /// or a multi-word `Str` view or `String` header, copied bitwise. For a
+    /// `String` this is a **move**: right for `insert`'s previous value and
+    /// `remove`'s value, which leave the map; `get` deep-copies afterwards
+    /// ([`Self::deep_copy_found_map_value`]).
     /// The shim's buffer holds untyped words, so the loaded word is narrowed
     /// back to the destination's own payload type, the exact inverse of
     /// [`Self::value_as_word`].
@@ -4071,27 +4079,82 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             .first()
             .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
         let payload_addr = self.byte_gep(dest_base, payload_offset)?;
-        if matches!(payload_ty, Ty::Str) {
-            // A `Str` value (ADR-0023 Stage B2) is a two-word view, copied out
-            // verbatim rather than narrowed. `Str` borrows, so there is nothing
-            // to deep-copy and nothing to drop.
-            let len_src = self.byte_gep(out, 16)?;
-            let vn = self
-                .builder
-                .build_load(i64_ty, len_src, "map_value_len")
-                .map_err(builder_err("loading the map Str value length"))?;
+        if matches!(payload_ty, Ty::Str | Ty::String) {
+            // A `Str` value (ADR-0023 Stage B2) is a two-word view and a
+            // `String` value (Stage B2.2) a three-word header, copied out word
+            // by word rather than narrowed.
+            let words = map_value_stride(&payload_ty) / 8;
             self.builder
                 .build_store(payload_addr, word)
-                .map_err(builder_err("storing the Option Str payload pointer"))?;
-            let len_addr = self.byte_gep(dest_base, payload_offset + 8)?;
-            self.builder
-                .build_store(len_addr, vn)
-                .map_err(builder_err("storing the Option Str payload length"))?;
+                .map_err(builder_err("storing the Option payload's first word"))?;
+            for word_index in 1..words {
+                let src = self.byte_gep(out, 8 * (word_index + 1))?;
+                let part = self
+                    .builder
+                    .build_load(i64_ty, src, "map_value_part")
+                    .map_err(builder_err("loading a map value word"))?;
+                let dst = self.byte_gep(dest_base, payload_offset + 8 * word_index)?;
+                self.builder
+                    .build_store(dst, part)
+                    .map_err(builder_err("storing an Option payload word"))?;
+            }
         } else {
             self.builder
                 .build_store(payload_addr, value)
                 .map_err(builder_err("storing the Option payload"))?;
         }
+        Ok(())
+    }
+
+    /// After a map `get` has written its `Option[V]` destination, replace a
+    /// found heap-owning payload's buffer with a fresh copy (ADR-0023 Stage
+    /// B2.2), so the caller's value and the map's stored one never alias. Only
+    /// the found path copies: a miss is `None`, allocating and freeing
+    /// nothing. A no-op for a value that owns no heap.
+    fn deep_copy_found_map_value(
+        &mut self,
+        dest: &Place,
+        out: PointerValue<'ctx>,
+    ) -> Result<(), CodegenError> {
+        let dest_ty = self.place_type(dest);
+        let Ty::Option(value) = &dest_ty else {
+            return Ok(());
+        };
+        if !ty_owns_heap(value, self.types) {
+            return Ok(());
+        }
+        let dest_base = self.aggregate_dest_address(dest)?;
+        let payload_offsets = variant_field_offsets(&dest_ty, 0, self.types)
+            .map_err(|error| self.layout_error(error))?;
+        let payload_offset = *payload_offsets
+            .first()
+            .ok_or_else(|| CodegenError::backend("Option Some payload has no field"))?;
+        let found = self
+            .builder
+            .build_load(self.ctx.i64_type(), out, "map_found")
+            .map_err(builder_err("loading the map found flag"))?
+            .into_int_value();
+        let is_found = self
+            .builder
+            .build_int_compare(
+                IntPredicate::NE,
+                found,
+                self.ctx.i64_type().const_zero(),
+                "map_is_found",
+            )
+            .map_err(builder_err("testing the map found flag"))?;
+        let copy_block = self.ctx.append_basic_block(self.value, "map_get_copy");
+        let join = self.ctx.append_basic_block(self.value, "map_get_done");
+        self.builder
+            .build_conditional_branch(is_found, copy_block, join)
+            .map_err(builder_err("branching on the map found flag"))?;
+        self.builder.position_at_end(copy_block);
+        let payload_addr = self.byte_gep(dest_base, payload_offset)?;
+        self.emit_heap_glue(value, payload_addr, HeapGlue::DeepFixup)?;
+        self.builder
+            .build_unconditional_branch(join)
+            .map_err(builder_err("joining after the map value copy"))?;
+        self.builder.position_at_end(join);
         Ok(())
     }
 
@@ -4336,8 +4399,9 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
             HeapMutOp::MapInsert | HeapMutOp::MapRemove => {
                 // The whole table transition lives in the `tuo_rt_map_*` shim
                 // (ADR-0011): pass the header, the key (and value for insert),
-                // and a two-word out buffer `{found, previous}`, then
-                // materialize the `Option[Int]` destination from it.
+                // and an out buffer `{found, previous}`, then materialize the
+                // `Option[V]` destination from it. A previous or removed value
+                // leaves the map, so it is moved out, never deep-copied.
                 let header = self.header_address(target)?;
                 let out = self.map_out_addr()?;
                 let key_is_str = self.map_key_is_str(target)?;
@@ -4369,7 +4433,13 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     // leaving the rest of the slot undefined. A `Float` is
                     // *bitcast*, never converted, so 2.5 stays 2.5.
                     let value_ty = self.operand_ty(value);
-                    let slot = if matches!(value_ty, Some(Ty::Str)) {
+                    let slot = if matches!(value_ty, Some(Ty::String)) {
+                        // An owned `String` (ADR-0023 Stage B2.2) crosses as a
+                        // pointer to its three-word header, which the shim
+                        // moves into the entry bitwise. The operand is a
+                        // `take`, so the caller never drops the source.
+                        self.operand_aggregate_address(value)?
+                    } else if matches!(value_ty, Some(Ty::Str)) {
                         // A `Str` value is its two-word view: store the parts
                         // as-is, exactly as a `Str` *key* is stored.
                         let (vp, vn) = self.str_operand_parts(value)?;
@@ -4732,13 +4802,29 @@ impl<'a, 'ctx> Lowering<'a, 'ctx> {
                     "deep-copy fixup reached a Map value (maps are not array elements in v0)",
                 )),
                 // The whole block (index + entries) is freed by the shim,
-                // which alone knows the internal layout (ADR-0011).
+                // which alone knows the internal layout (ADR-0011). It alone
+                // also knows which dense slots are live (a hole keeps the
+                // stale bytes of a moved-out value), so a heap-owning value's
+                // drop glue is handed over as a callback it runs on every
+                // live entry (ADR-0023 Stage B2.2); null when the value owns
+                // nothing.
                 HeapGlue::DropInPlace => {
-                    let stride = self
+                    let key_size = self.ctx.i64_type().const_int(map_key_size(key), false);
+                    let vs = self
                         .ctx
                         .i64_type()
-                        .const_int(map_entry_stride(key, value), false);
-                    self.call_map_shim(map::MAP_DROP_SYMBOL, &[addr.into(), stride.into()])
+                        .const_int(map_value_stride(value), false);
+                    let drop_value = if ty_owns_heap(value, self.types) {
+                        self.box_glue_function(value, HeapGlue::DropInPlace)?
+                            .as_global_value()
+                            .as_pointer_value()
+                    } else {
+                        self.ptr_ty.const_null()
+                    };
+                    self.call_map_shim(
+                        map::MAP_DROP_SYMBOL,
+                        &[addr.into(), key_size.into(), vs.into(), drop_value.into()],
+                    )
                 }
             },
             Ty::Enum(..) | Ty::Option(_) | Ty::Result(..) => self.emit_variant_glue(ty, addr, glue),
@@ -5775,13 +5861,25 @@ fn heap_op_produces_aggregate(op: HeapOp) -> bool {
 /// A `Copy` scalar (`Int`/`Bool`/`Float`) is widened into one machine word by
 /// `value_as_word`, so it strides a word regardless of its natural width. A
 /// borrowed `Str` value is its two-word `{ptr, len}` view, copied bytewise —
-/// it borrows rather than owns, so it needs no deep copy and no drop glue.
-/// Anything else is refused by the checker (`is_supported_map_value`).
+/// it borrows rather than owns, so it needs no deep copy and no drop glue. An
+/// owned `String` value is its three-word `{ptr, len, cap}` header (Stage
+/// B2.2), deep-copied on `get` and dropped through `tuo_rt_map_drop`'s
+/// callback. Anything else is refused by the checker (`is_supported_map_value`).
 fn map_value_stride(value: &Ty) -> u64 {
-    if matches!(value, Ty::Str) {
-        map::STR_VALUE_STRIDE
+    match value {
+        Ty::Str => map::STR_VALUE_STRIDE,
+        Ty::String => map::STRING_VALUE_STRIDE,
+        _ => map::WORD_VALUE_STRIDE,
+    }
+}
+
+/// The byte size of a map's key in an entry: one word for an `Int` key, the
+/// two-word view for a `Str` key.
+fn map_key_size(key: &Ty) -> u64 {
+    if matches!(key, Ty::Str) {
+        map::STR_KEY_SIZE
     } else {
-        map::WORD_VALUE_STRIDE
+        map::INT_KEY_SIZE
     }
 }
 
@@ -5789,12 +5887,7 @@ fn map_value_stride(value: &Ty) -> u64 {
 /// stride (ADR-0023 Stage B2). An `Int` key is one word, a `Str` key its
 /// two-word view. Mirrors `tuo_runtime::map`'s `entry_stride`.
 fn map_entry_stride(key: &Ty, value: &Ty) -> u64 {
-    let key_size = if matches!(key, Ty::Str) {
-        map::STR_KEY_SIZE
-    } else {
-        map::INT_KEY_SIZE
-    };
-    map::entry_stride(key_size, map_value_stride(value))
+    map::entry_stride(map_key_size(key), map_value_stride(value))
 }
 
 /// The exported symbol name of a MIR function, from its stable symbol id.

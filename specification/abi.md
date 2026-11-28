@@ -195,8 +195,8 @@ three-word header** as `String`/`Array` — `(ptr, len, cap)`, `Layout::words(3)
 — where `ptr` points at the **dense entries** buffer, `len` is the live entry
 count, and `cap` the entry capacity. An empty map is the sentinel header
 `(ZERO_SIZE_SENTINEL, 0, 0)` with no allocation. The v0 operation surface is
-an `Int`/`Str` key with an `Int`/`Bool`/`Float`/`Str` value; entries are
-stored **in insertion order**.
+an `Int`/`Str` key with an `Int`/`Bool`/`Float`/`Str`/`String` value; entries
+are stored **in insertion order**.
 
 An entry is its **key followed by its value**, so the entry stride is
 `key_size + value_stride`:
@@ -207,9 +207,11 @@ An entry is its **key followed by its value**, so the entry stride is
 | `Str` key | 16 | the borrowed `{ptr, len}` view, never copied |
 | `Int`/`Bool`/`Float` value | 8 | widened by the *compiler* into one machine word (ADR-0023 Stage B) |
 | `Str` value | 16 | the borrowed `{ptr, len}` view (ADR-0023 Stage B2) |
+| `String` value | 24 | the owned `{ptr, len, cap}` header (ADR-0023 Stage B2.2) |
 
 So `Map[Int, Int]` strides 16 and `Map[Str, Int]` strides 24 as before, while
-`Map[Int, Str]` strides 24 and `Map[Str, Str]` strides 32.
+`Map[Int, Str]` strides 24, `Map[Str, Str]` 32, `Map[Int, String]` 32, and
+`Map[Str, String]` 40.
 
 The **value stride is a caller-supplied argument** (`vs`), not a constant: the
 shim copies `vs` opaque bytes and never learns the value's type. A `Copy`
@@ -220,9 +222,24 @@ round trip. A `Str` value crosses as its two-word view, exactly like a `Str`
 key; it *borrows* rather than owns, so it needs no deep copy on read-out and no
 drop glue.
 
-Value types that **own** heap (`String`, structs containing one) are refused by
-the type checker: they need the deep-copy-on-read and recursive-drop path, and
-`tuo_rt_map_drop` does not yet run per-value glue.
+A `String` value **owns** its buffer (ADR-0023 Stage B2.2), and the shim still
+only moves its 24 header bytes; the ownership rules are the compiler's:
+
+- `insert` moves the caller's header into the entry bitwise (the argument is a
+  `take`, so the caller never drops it);
+- `get` copies the stored header out and then **deep-copies** the buffer on the
+  found path, so the caller owns an independent `String` and the map keeps its
+  own; a miss allocates nothing;
+- `insert`'s previous value and `remove`'s value **move out** to the caller in
+  the `Option[String]` result, with no copy; freeing them is the caller's
+  ordinary drop of that `Option`;
+- dropping the map runs the value's drop glue on every **live** entry through
+  `tuo_rt_map_drop`'s `drop_value` callback, then frees the block. A hole left
+  by `remove` still holds the stale header of the value it moved out, and only
+  the shim knows which dense slots are live, so the per-entry drop lives behind
+  the shim rather than in a compiler-emitted loop.
+
+Struct, enum, and nested `Map` values are still refused by the type checker.
 
 Every observable is defined by the insertion-ordered dense region: `keys`
 lists keys in insertion order, `remove` preserves the relative order of the
@@ -274,15 +291,23 @@ void tuo_rt_map_str_remove(long long *hdr, const unsigned char *kp,
                            long long *out);
 void tuo_rt_map_str_keys(const long long *hdr, unsigned long long vs,
                          long long *out_hdr);
-void tuo_rt_map_drop(long long *hdr, long long stride);
+/* `drop_value` is the value type's drop glue, called once on the value */
+/* slot of every live entry before the block is freed; null when the    */
+/* value owns nothing.                                                  */
+void tuo_rt_map_drop(long long *hdr, unsigned long long key_size,
+                     unsigned long long vs, void (*drop_value)(void *value));
 ```
 
-`out` is a two-word `{found, value}` buffer (`found` ∈ {0, 1}; `value` is 0
-when absent) from which the backend materializes the `Option[Int]` result;
-`keys` writes a fresh `Array[K]` header through `out_hdr` (allocated via
-`tuo_rt_alloc`; the sentinel header for an empty map); `drop` frees the whole
-block (index + entries) via `tuo_rt_dealloc`, taking the entry stride only to
-compute the block size. Growth doubles the entry capacity from 8, allocating
+`out` is a four-word `{found, value}` buffer — the found flag (`found` ∈
+{0, 1}) plus the widest value stride, 24 bytes, so one buffer serves every
+value type; the `vs` value bytes at `&out[1]` are zero when absent — from which
+the backend materializes the `Option[V]` result; `keys` writes a fresh
+`Array[K]` header through `out_hdr` (allocated via `tuo_rt_alloc`; the
+sentinel header for an empty map); `drop` calls `drop_value` (when non-null)
+on every live entry's value slot, at `key_size` within the entry, and then
+frees the whole block (index + entries) via `tuo_rt_dealloc`, computing the
+block size from the entry stride `key_size + vs`. An empty map's drop calls
+nothing. Growth doubles the entry capacity from 8, allocating
 a new block, copying the live entries in order, and rebuilding the index. `Map[K, V]`
 is non-`Copy`; a map moves as a 24-byte header memcpy like `String`/`Array`.
 
@@ -925,5 +950,11 @@ out-of-line function per pointee type — and added the stack-overflow trap
 (`TrapCode` `6`, raised by the runtime's guard-page handler, see "Panic / trap
 behavior") with the `tuo_rt_thread_guard`/`tuo_rt_thread_unguard` symbols
 every runtime thread arms it with; `par_map` workers also get an 8 MiB stack.
+Version `16` (ADR-0023 Stage B2.2) admitted the owned `String` map value: a
+24-byte value slot (`STRING_VALUE_STRIDE`), a four-word `{found, value}` out
+buffer, and `tuo_rt_map_drop` changing from `(hdr, stride)` to
+`(hdr, key_size, vs, drop_value)`, running the value's drop glue on every live
+entry. A `Map[_, Int]` drop now passes a null `drop_value`; nothing else on
+that path changed.
 The version is asserted by the crate's tests so a silent reinterpretation of
 bytes is impossible.

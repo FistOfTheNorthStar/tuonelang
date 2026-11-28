@@ -110,7 +110,17 @@ use tuo_types::{FloatKind, IntKind, Ty, TypeckResult, WrapperKind};
 /// node of a boxed tree (`binary-trees`'s `Node` went from 32 bytes to 16).
 /// The variant *numbering* is unchanged (`Some` = 0, `None` = 1), so the
 /// interpreter's `Value::Variant` still agrees; only where it is stored moved.
-pub const ABI_VERSION: u32 = 15;
+///
+/// `16` — the map admits an **owned `String` value** (ADR-0023 Stage B2.2):
+/// its value slot is the 24-byte `{ptr, len, cap}` header
+/// ([`crate::map::STRING_VALUE_STRIDE`]), so the compiler's `{found, value}`
+/// out buffer widens to **four words** (the found flag plus the widest value
+/// stride), and `tuo_rt_map_drop` changes shape from `(hdr, stride)` to
+/// `(hdr, key_size, vs, drop_value)`: it calls the `drop_value` callback on
+/// every live entry's value slot before freeing the block, and is passed null
+/// for a value that owns nothing. A new value stride and a changed runtime
+/// symbol signature are both layout-affecting, so the version bumps.
+pub const ABI_VERSION: u32 = 16;
 
 /// The pointer width, in bytes, of the ABI's supported hosts.
 ///
@@ -560,7 +570,10 @@ mod tests {
         // channel and mutex symbols. Version 13 made the map's value slot a
         // caller-supplied stride and its value a by-pointer argument
         // (ADR-0023 Stage B2), so every `tuo_rt_map_*` signature changed.
-        assert_eq!(ABI_VERSION, 15);
+        // Version 16 added the owned `String` map value and its
+        // per-live-entry `drop_value` callback to `tuo_rt_map_drop`
+        // (ADR-0023 Stage B2.2).
+        assert_eq!(ABI_VERSION, 16);
     }
 
     #[test]

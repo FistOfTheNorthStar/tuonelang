@@ -52,8 +52,8 @@ effect boundary** — clock, argv, and files (ADR-0013); **TCP sockets**
 **bounded waits, IPv6, and UDP** (ADR-0017); **bitwise operators and the
 crypto primitives** (ADR-0019); and **compiler-verified constant-time code**
 (ADR-0020). Six ADRs remain `proposed` and unlanded — secret taint tracking
-(ADR-0021), a constant-time bignum (ADR-0022), owned map values (ADR-0023
-Stage B2.2), capturing closures (ADR-0024), monomorphization (ADR-0027), and
+(ADR-0021), a constant-time bignum (ADR-0022), struct and enum map values
+(ADR-0023 Stage B2.2; owned `String` values have landed), capturing closures (ADR-0024), monomorphization (ADR-0027), and
 heap-wrapper values (ADR-0028) — each recorded as open rather than implied
 done.
 

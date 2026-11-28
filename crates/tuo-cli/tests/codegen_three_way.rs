@@ -581,6 +581,12 @@ fn map_operations_agree_across_all_three_engines() {
         // dependent. Every stored string has a distinct length, so a wrong
         // stride or value offset changes the answer.
         "map_str_values.tuo", // Map[Int, Str] and Map[Str, Str]
+        // ADR-0023 Stage B2.2 admitted the owned `String`: `get` deep-copies,
+        // `insert`/`remove` move the value out, and the map's drop frees every
+        // live entry through the shim's callback. The fixture mutates a `get`
+        // copy and re-reads the key, and drops each map after a removal has
+        // left a hole, so an alias or a double free changes the exit.
+        "map_string_values.tuo", // Map[Int, String] and Map[Str, String]
     ] {
         assert_three_way_agreement(name);
     }

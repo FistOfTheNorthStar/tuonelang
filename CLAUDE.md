@@ -193,7 +193,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   type `fn(mode T, …) -> R` (`layout_of(Ty::Fn)` a pointer), called
   indirectly through `Callee::Indirect` with the identical direct-call ABI
   (sret + borrow args included), pinned three-way; — since ADR-0011 — the
-  **hash map** `Map[Int, Int]`/`Map[Str, Int]` (the same three-word header
+  **hash map** `Map[K, V]` with an `Int`/`Str` key and an
+  `Int`/`Bool`/`Float`/`Str`/`String` value (ADR-0023; struct and enum
+  values are still unsupported; a `String` value is deep-copied by `get`,
+  moved out by `insert`/`remove`, and freed per live entry by the shim's
+  `drop_value` callback at map drop, ABI v16) (the same three-word header
   over dense insertion-ordered entries; every op beyond `len`/`empty` lowers
   to the linked `tuo_rt_map_*` shim, whose hidden open-addressing index uses
   the vector-pinned splitmix64/FNV-1a hashes — unobservable, since `keys` is

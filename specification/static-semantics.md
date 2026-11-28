@@ -533,10 +533,15 @@ element, `std::array::set` drops the value it replaces.
 
 **Hash-map builtins (`std::map`)** — the builtin `Map[K, V]` (ADR-0011). The
 type is generic and non-`Copy` (it owns a heap table); the v0 **operation
-surface** is `Map[Int, Int]` and `Map[Str, Int]` — the scalar keys whose
-equality and hash the language owns, with `Int` values. `K`/`V` are witnessed
-by the receiver exactly as the array element is; any other *determined* pair
-is a `T0001` naming the pair, and an undetermined `empty()` is `T0011`:
+surface** is a key `K` of `Int` or `Str` — the scalar keys whose equality and
+hash the language owns — with a value `V` of `Int`, `Bool`, `Float`, `Str`, or
+`String` (ADR-0023). Struct, enum, and nested `Map` values are not yet
+supported. A `String` value is owned by the map: `get` returns a deep copy,
+the previous value `insert` returns and the value `remove` returns move out to
+the caller, and dropping the map drops every value it still holds. `K`/`V` are
+witnessed by the receiver exactly as the array element is; any other
+*determined* pair is a `T0001` naming the pair, and an undetermined `empty()`
+is `T0011`:
 
 | Signature | Meaning |
 |-----------|---------|
