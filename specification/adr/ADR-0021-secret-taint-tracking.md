@@ -207,7 +207,7 @@ Human-written (14 rows):
 | H5 | `crates/tuo-stdlib/src/std/tls.tuo:1245` (`client_finished_matches`) | client Finished message, `verify_data` included | `std::crypto::verify` |
 | H6 | `crates/tuo-stdlib/src/std/tls.tuo:1229` (`shared_secret_is_zero`) | X25519 shared secret against all zeros | `std::ct::bytes_eq` |
 | H7 | `crates/tuo-stdlib/src/std/chacha.tuo:1203` (`aead_open`) | Poly1305 tag | `std::crypto::verify` |
-| H8 | `crates/tuo-stdlib/src/std/ed25519.tuo:604` (`verify`, through `points_equal` and `std::bignum::compare` at `crates/tuo-stdlib/src/std/bignum.tuo:219`) | the verification equation's two points, `[S]B` and `R + [h]A` | hand-written loop, returns early |
+| H8 | `crates/tuo-stdlib/src/std/ed25519.tuo:604` (`verify`, through `points_equal` and `std::bignum::compare` at `crates/tuo-stdlib/src/std/bignum.tuo:219`) | the verification equation's two points, `[S]B` and `R + [h]A` | hand-written loop, returns early (`std::bignum::compare`) |
 | H9 | `crates/tuo-stdlib/src/std/hkdf.tuo:670` (`differs`, spec helper) | derived traffic key against traffic IV | hand-written loop, does not return early |
 | H10 | `crates/tuo-stdlib/src/std/tls.tuo:3152` (`secrets_differ`, spec helper) | client and server handshake secrets | hand-written loop, does not return early |
 | H11 | `crates/tuo-stdlib/src/std/tls.tuo:3167` (`application_differs_from_handshake`, spec helper) | application and handshake secrets | hand-written loop, does not return early |
@@ -290,24 +290,22 @@ optional.
   had the language brief, which lists `verify`. So M1 to M3 show that models
   follow an explicit instruction, not what they write unprompted.
 - **The samples are small.** Three model attempts, from two models, on one
-  task. Fourteen human rows, most of them written by the same authors who
-  wrote the primitives, in a repository whose own guidance says to use them.
+  task. Fourteen human rows, in a repository whose `CLAUDE.md` describes
+  `std::crypto::verify` as the comparison to use. The repository records no
+  authorship, so nothing here says who wrote the human rows.
 
 ### Conclusion
 
 The mistake does not recur where the safe primitive exists. Every comparison
 that faces an attacker (H2, H3, H5, H6, H7) uses `std::crypto::verify` or
 `std::ct::bytes_eq`, and so do the reference solution (H1) and both model
-attempts that name a real function (M1, M3). The unprimed model that did not
-know the API still reached for a constant-time helper (M2) rather than `==`.
-The only early-returning forms are the benchmark's deliberate baseline, a
-verifier whose inputs are public, and a spec helper. The evidence is weak in
-the direction that matters for this ADR: every author here was either the
-primitive's author or was told to compare in constant time, so the survey
-cannot show what a careless author does unprompted. It finds no real program
+attempts that name a real function (M1, M3); the one unprimed attempt (M2)
+reached for a constant-time helper rather than `==`, though one kept attempt
+from one run is all the evidence for that. The evidence is weak: the one task
+that asks for a secret comparison says "in constant time" and names `verify`,
+so the survey cannot show what an author does unprompted. It finds no program
 that gets this wrong today, which supports this ADR's position that shipping
-nothing is currently right; the careless case it is meant to catch has not
-yet been observed.
+nothing is currently right.
 
 ## Consequences (if implemented)
 
