@@ -22,3 +22,10 @@ fn case_list_element_moves_in(take s: String) {
     let xs = [s];
     eat_one(s); // ERROR: O0001 `s` was moved into the literal
 }
+
+fn case_growable_literal_element_moves_in(take s: String, take t: String) {
+    // ADR-0040 Stage A: a literal typed `Array[String]` moves its elements in,
+    // as `std::array::push` does.
+    let xs: Array[String] = [s, t];
+    eat_one(s); // ERROR: O0001 `s` was moved into the growable literal
+}

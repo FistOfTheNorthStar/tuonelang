@@ -422,7 +422,15 @@ for x in xs { total = total + x; }     // bounded iteration
 Rules:
 
 - The length is part of the type: `[Int; 3]` and `[Int; 4]` are different types
-  (`T0001` on mismatch). No length inference.
+  (`T0001` on mismatch). A list literal's length is its element count, and
+  there are no length variables. The literal takes its array type from
+  context (ADR-0040 Stage A): where a `[T; N]` is expected it must have `N`
+  elements, where an `Array[T]` is expected it is a growable array (next
+  section), and where nothing constrains it it is the fixed `[T; count]`.
+  Two literals of different lengths that meet (the arms of an `if`) are a
+  `T0001`, even under an `Array[T]` annotation. `[]` is `[T; 0]` or an empty
+  `Array[T]` by context, and needs an annotation with neither (`T0011`). The
+  repeat form `[x; N]` is always fixed.
 - Maximum length **65 536** (`T0014` beyond that). `[T; 0]` is legal.
 - Indexing is bounds-checked — an out-of-range index is a deterministic
   `IndexOutOfBounds` trap, never undefined behavior.
@@ -449,9 +457,11 @@ interpreter and both native backends), with the compiler generating the
 `free` at the end of each value's scope. Both are **non-Copy** (they own a
 buffer), so passing one by value moves it.
 
-They are exposed as builtin free functions — there is no literal syntax and no
-`.method` call; you write `std::string::…` / `std::array::…`. Building one needs
-a `var` binding, because the mutators take the buffer by `mut` borrow.
+They are exposed as builtin free functions — there is no `.method` call; you
+write `std::string::…` / `std::array::…`. Growing one needs a `var` binding,
+because the mutators take the buffer by `mut` borrow. A `String` has no
+literal; an `Array[T]` is also written as a list literal wherever the context
+asks for an `Array[T]` (ADR-0040 Stage A, below).
 
 ### Owned `String` (`std::string`)
 
@@ -481,6 +491,24 @@ let first = std::array::get(xs, 0);       // 10 — checked, traps IndexOutOfBou
 std::array::set(xs, 0, 15);               // in-place indexed write — checked, traps IndexOutOfBounds (ADR-0016)
 let last = std::array::pop(xs);           // Option[Int]: Some { value: 20 }
 ```
+
+A list literal is an `Array[T]` wherever one is expected (ADR-0040 Stage A):
+
+```tuo
+fn sum(in xs: Array[Int]) -> Int { ... }
+
+let xs: Array[Int] = [1, 2, 3];           // a growable array of three elements
+let total = sum(xs) + sum([4, 5]);        // a literal for an `Array[Int]` parameter
+var ys: Array[Int] = [];                  // empty; `std::array::empty()` where nothing gives the type
+std::array::push(ys, 1);
+```
+
+It lowers to exactly `std::array::empty()` plus one `push` per element, in
+source order, so each element moves in (a `String` put in an `Array[String]`
+literal is consumed). There is no conversion: a value already typed
+`[Int; 3]` is never accepted as an `Array[Int]` (`T0001`). A literal nothing
+constrains stays the fixed array of §11, and the repeat form `[x; N]` is
+always fixed — `std::array::filled(n, x)` is the growable one.
 
 The operation surface is **element-generic** (since ADR-0012):
 `push`/`pop`/`len`/`get`/`set` operate on `Array[T]` for any supported

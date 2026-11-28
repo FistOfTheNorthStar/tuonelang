@@ -1,0 +1,49 @@
+// Array literals take their array type from context (ADR-0040 Stage A):
+// where an `Array[T]` is expected a list literal is a growable array, where
+// a `[T; N]` is expected it is a fixed array, and with neither it stays the
+// fixed array it always was.
+
+fn total(in xs: Array[Int]) -> Int {
+    std::array::len(xs)
+}
+
+fn literal_argument() -> Int {
+    total([1, 2, 3])
+}
+
+fn annotated_let() -> Int {
+    let xs: Array[Int] = [1, 2, 3];
+    total(xs)
+}
+
+fn returned_literal() -> Array[Int] {
+    [4, 5, 6]
+}
+
+fn equal_length_arms(take c: Bool) -> Int {
+    let xs: Array[Int] = if c { [1, 2] } else { [3, 4] };
+    total(xs)
+}
+
+fn empty_growable() -> Int {
+    var xs: Array[Int] = [];
+    std::array::push(xs, 1);
+    total(xs)
+}
+
+fn empty_fixed() -> [Int; 0] {
+    let xs: [Int; 0] = [];
+    xs
+}
+
+fn indexed_then_growable() -> Int {
+    let xs = [1, 2, 3];
+    let first = xs[0];
+    first + total(xs)
+}
+
+fn unconstrained_stays_fixed() -> Int {
+    let xs = [1, 2, 3];
+    let fixed: [Int; 3] = xs;
+    fixed[2]
+}

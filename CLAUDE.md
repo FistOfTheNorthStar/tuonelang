@@ -281,7 +281,11 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   indexes without a bounds check; lowering reads the place in situ (a whole
   owned local nothing names afterwards still moves into the loop, so such a
   loop lowers exactly as before; pinned by `tests/mir/golden/for_borrows`),
-  and Stages B and C stay open; and — since ADR-0027 Stage B — **generic functions**,
+  and Stages B and C stay open; and — since ADR-0040 Stage A — **array literals typed
+  from context**: a list literal `[a, b, c]` the checker types `Array[T]`
+  (where an `Array[T]` is expected; unconstrained it stays `[T; n]`) lowers
+  to exactly `std::array::empty` plus one `push` per element, with no new MIR
+  construct; and — since ADR-0027 Stage B — **generic functions**,
   monomorphized on the native path only (`tuo_mir::monomorphize`, after
   `retain_reachable` and before the optimizer, then re-verified): one clone
   per type-argument list a call reaches, each under a freshly minted

@@ -102,6 +102,15 @@ between two spellings, the more explicit one is the real one.
       }                            // arm but the last ends with `,`
   }
 
+  // A list literal is a growable Array[T] wherever an Array[T] is expected
+  // (ADR-0040); with nothing asking, it is the fixed [T; N] above.
+  fn growable() -> Int {
+      let xs: Array[Int] = [1, 2, 3];
+      var ys: Array[Int] = [];     // `[]` needs the annotation; where nothing
+      std::array::push(ys, 4);     // gives the type, `std::array::empty()`
+      std::array::len(xs) + std::array::len(ys)
+  }
+
   // Option/Result payloads are NAMED FIELDS, not positional.
   fn first(in xs: [Int; 3]) -> Option[Int] {
       Some { value: xs[0] }        // NOT `Some(xs[0])`
@@ -798,7 +807,8 @@ Runs everywhere (check, interpreter, and native):
   * fixed arrays [T; N] with checked indexing and bounded `for`
   * borrow-mode (`in` / `mut`) calls
   * `Str` values: literals, `==`, and the `std::str` byte operations
-  * owned `String` and growable `Array[T]` (`std::string` / `std::array`)
+  * owned `String` and growable `Array[T]` (`std::string` / `std::array`),
+    including a list literal where an `Array[T]` is expected
   * `Map[K, V]` (`std::map`): an Int or Str key, an Int, Bool, Float, or Str
     value, insertion-ordered
   * `std::json` — parse / render / arena accessors, all pure
@@ -880,9 +890,11 @@ Further traps, in the order they usually bite:
     cast; out of range, negative included, traps. An indexed write `xs[i] = v`
     works on a `var` array (fixed or growable) when the element is `Copy`
     (Int, Float, Bool, Str); for a `String` or other owning element, use
-    `std::array::set(xs, i, v)`. A buffer of known size is
-    `std::array::filled(n, value)` (one allocation) or `[value; N]` (on the
-    stack), not `n` pushes onto `std::array::empty()`.
+    `std::array::set(xs, i, v)`. Known elements are a list literal,
+    `let xs: Array[Int] = [1, 2, 3];`, not one push each; a buffer of known
+    size is `std::array::filled(n, value)` (one allocation) or `[value; N]`
+    (on the stack). A value already typed `[T; N]` never converts to
+    `Array[T]` (T0001): only a literal takes its type from context.
   * The body of `for x in xs` cannot modify `xs`: pushing onto it, `set`,
     `xs[i] = v`, assigning it, or moving it inside the loop is O0013. Walk a
     copy, or loop over the indices (`while i < std::array::len(xs)`) when the

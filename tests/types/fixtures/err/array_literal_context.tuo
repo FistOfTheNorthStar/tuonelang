@@ -1,0 +1,34 @@
+// Array literals take their array type from context (ADR-0040 Stage A), and
+// nothing else changes: a wrong length is still a T0001, two literals of
+// different lengths that meet are a T0001 even under an `Array[T]`
+// annotation, an unconstrained `[]` still needs an annotation, a value that
+// is already a fixed array never converts, and a literal where a non-array
+// is expected is a T0001 printing the type that was asked for.
+
+fn total(in xs: Array[Int]) -> Int {
+    std::array::len(xs)
+}
+
+fn wrong_fixed_length() -> Int {
+    let xs: [Int; 2] = [1, 2, 3];
+    xs[0]
+}
+
+fn arms_of_different_lengths(take c: Bool) -> Int {
+    let xs: Array[Int] = if c { [1, 2] } else { [1, 2, 3] };
+    total(xs)
+}
+
+fn unconstrained_empty() {
+    let e = [];
+}
+
+fn no_conversion() -> Int {
+    let a: [Int; 2] = [1, 2];
+    total(a)
+}
+
+fn literal_for_a_scalar() -> Int {
+    let n: Int = [1, 2];
+    n
+}

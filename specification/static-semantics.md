@@ -176,17 +176,35 @@ types that give the frozen rules a home; none is a new surface type:
 - **`Range`** — the internal type of `a .. b`, iterable by `for` (§16).
 - **`Array[T]`** — the builtin homogeneous array, **indexed by any integer
   type** (bounds-checked: in bounds exactly when `0 <= i < len`, otherwise it
-  traps `IndexOutOfBounds`; see *The index operand* below).
+  traps `IndexOutOfBounds`; see *The index operand* below). Since
+  ADR-0040 Stage A a list literal is also an `Array[T]` wherever the context asks
+  for one: `let xs: Array[Int] = [1, 2, 3];`, `sum([4, 5])` for an
+  `in xs: Array[Int]` parameter, a literal returned from `-> Array[Int]`, and
+  `[]` under an `Array[T]` annotation (an empty growable array). The literal's
+  elements move in, as `std::array::push` would move them. There is **no
+  implicit conversion**: a value already typed `[T; N]` never becomes
+  `Array[T]` (`T0001`); only an unresolved literal chooses. The repeat literal
+  `[x; N]` is always fixed (`std::array::filled(n, v)` is the growable one).
 - **`[T; N]`** (`[EXPERIMENTAL]`, ADR-0004 Stage 2) — the inline fixed-length
   array; `N` elements of `T`, the length part of the type, indexed by any
   integer type (bounds-checked, `0 <= i < len`, traps `IndexOutOfBounds`) and
   iterable by `for`. Lengths are concrete `u64`s — there are **no length
   variables and no length inference**: `[Int; 3]` and `[Int; 4]` are distinct
   types, and a length mismatch is an ordinary `T0001` rendering both types. The
-  list literal `[a, b, c]` has its element count as the length (elements unify
-  against one fresh element variable, mismatches reported at the offending
-  element; an unconstrained `[]` needs an annotation, `T0011`); the repeat
-  literal `[x; N]` duplicates a **`Copy`** operand (`O0010` otherwise). The
+  list literal `[a, b, c]` takes its array type **from context** (ADR-0040
+  Stage A): it is an inference variable of class `ArrayLiteral { elem, len }`,
+  where `len` is its element count and its elements unify against one fresh
+  element variable (mismatches reported at the offending element). Unified
+  with `[U; m]` it requires `m == len` and is that fixed array; unified with
+  `Array[U]` it is the growable array; unified with any other type it is a
+  `T0001` printing the asked-for type against `[elem; len]`. Two literals that
+  meet (the arms of an `if`) must have equal lengths — a length mismatch is a
+  `T0001` and never infers `Array[T]`. A literal nothing constrains
+  **defaults to `[elem; len]`**, so it keeps its meaning; indexing and `for`
+  read its element without choosing the kind. `[]` is the literal of length
+  0: `Array[T]` or `[T; 0]` by context, and with neither an unconstrained `[]`
+  needs an annotation, `T0011`. The repeat literal `[x; N]` is always a fixed
+  array and duplicates a **`Copy`** operand (`O0010` otherwise). The
   written length is a plain `INT_LITERAL` — decimal/`0x`/`0o`/`0b`, no type
   suffix — parsed to `u64` and capped at `MAX_FIXED_ARRAY_LEN = 65_536`
   (`T0014` on violation). `[T; N]` never enters name resolution; `Array` stays
@@ -195,7 +213,8 @@ types that give the frozen rules a home; none is a new surface type:
 - **`Struct` / `Enum`** (by `SymbolId`), **`Wrapper`** (`Box`/`Shared`/`Weak`, §25),
   **`Param`** (a generic type parameter, §18), **function types**.
 - **`Var`** — an unsolved inference variable (renders as `{integer}`, `{float}`, or
-  `_` by class).
+  `_` by class; an unsolved array literal renders as the `[elem; len]` it
+  defaults to).
 - **`Error`** — the **poison type**, produced after an error and **unifying with
   everything**, so one mistake is reported once, not cascaded.
 

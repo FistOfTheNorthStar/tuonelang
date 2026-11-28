@@ -1,0 +1,11 @@
+// ADR-0040 Stage A: a list literal nothing constrains stays the fixed array
+// `[Int; 3]` it always was — indexed and iterated in place.
+// Returns xs[2] * 10 + the sum of the elements = 3 * 10 + 6 = 36.
+fn main() -> Int {
+    let xs = [1, 2, 3];
+    var total = 0;
+    for x in xs {
+        total = total + x;
+    }
+    xs[2] * 10 + total
+}

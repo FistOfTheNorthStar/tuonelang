@@ -1,0 +1,12 @@
+// ADR-0040 Stage A: a function declared `-> Array[Int]` returns a list
+// literal; the caller owns the growable array it gets back.
+// Returns len * 10 + first + last = 4 * 10 + 7 + 2 = 49.
+fn digits() -> Array[Int] {
+    [7, 0, 4, 2]
+}
+
+fn main() -> Int {
+    let xs = digits();
+    let last = std::array::len(xs) - 1;
+    std::array::len(xs) * 10 + std::array::get(xs, 0) + std::array::get(xs, last)
+}

@@ -1,0 +1,16 @@
+// ADR-0040 Stage A: a list literal passed straight to an `in xs: Array[Int]`
+// parameter is a growable array built for the call and dropped after it.
+// Returns sum([1, 2, 3]) + sum([10, 20]) * 2 = 6 + 60 = 66.
+fn sum(in xs: Array[Int]) -> Int {
+    var total = 0;
+    var i = 0;
+    while i < std::array::len(xs) {
+        total = total + std::array::get(xs, i);
+        i = i + 1;
+    }
+    total
+}
+
+fn main() -> Int {
+    sum([1, 2, 3]) + sum([10, 20]) * 2
+}
