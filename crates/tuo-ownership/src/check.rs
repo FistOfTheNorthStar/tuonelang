@@ -1460,12 +1460,18 @@ impl<'a> Body<'a> {
     }
 
     fn call(&mut self, call: CallExpr<'_>) {
-        let callee_symbol = call.callee().and_then(|callee| match callee {
-            Expr::Path(path) => {
-                let name = path.segment_names().last()?;
-                self.cx.refs.get(&name.span).copied()
-            }
-            _ => None,
+        // A qualified interface call (`Area::area(p)`) is a call to the impl
+        // member the type checker selected (ADR-0032 Stage B), with that
+        // member's modes.
+        let selected = call.span().and_then(|span| self.cx.types.impl_call(span));
+        let callee_symbol = selected.or_else(|| {
+            call.callee().and_then(|callee| match callee {
+                Expr::Path(path) => {
+                    let name = path.segment_names().last()?;
+                    self.cx.refs.get(&name.span).copied()
+                }
+                _ => None,
+            })
         });
         if let Some(callee) = call.callee() {
             if let Some(place) = self.place_of(callee) {

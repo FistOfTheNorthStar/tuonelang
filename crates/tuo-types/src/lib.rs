@@ -26,9 +26,11 @@
 //! types** ([`tuo_diagnostics::StructuredValue::Type`]) alongside the
 //! rendered message, in the reserved `Txxxx` namespace.
 //!
-//! Method calls, interface bounds, `Self`, and interface-member bodies are
-//! deferred to the trait system: they poison to an error type that unifies
-//! with everything rather than producing speculative diagnostics.
+//! Interfaces and impls are checked (ADR-0032 Stage B): conformance,
+//! coherence, placement, and the non-generic qualified call `I::m(x)`, whose
+//! selected impl member [`TypeckResult::impl_call`] publishes. Interface
+//! bounds are resolved but not enforced, and an interface call in a generic
+//! body is refused (`T0025`), until Stage C.
 
 mod check;
 mod infer;
@@ -71,9 +73,22 @@ pub struct EnumShape {
     pub variants: Vec<(SymbolId, Vec<(String, Ty)>)>,
 }
 
+/// Where one impl member belongs (ADR-0032 Stage B): the interface its block
+/// implements and the type it implements it for.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct ImplMember {
+    /// The implemented interface.
+    pub interface: SymbolId,
+    /// The impl's target type (`Point` in `impl Area for Point`).
+    pub target: Ty,
+}
+
 /// Everything type checking produced for one program snapshot.
 #[derive(Debug, Default)]
 pub struct TypeckResult {
+    pub(crate) impl_calls: HashMap<Span, SymbolId>,
+    pub(crate) impl_members: HashMap<SymbolId, ImplMember>,
+    pub(crate) interface_members: HashMap<SymbolId, Vec<(String, FnTy)>>,
     pub(crate) diagnostics: Vec<Diagnostic>,
     pub(crate) symbol_types: HashMap<SymbolId, Ty>,
     pub(crate) expr_types: HashMap<Span, Ty>,
@@ -120,6 +135,33 @@ impl TypeckResult {
     #[must_use]
     pub fn enum_shape(&self, symbol: SymbolId) -> Option<&EnumShape> {
         self.enum_shapes.get(&symbol)
+    }
+
+    /// The impl member a qualified interface call selected (ADR-0032 Stage
+    /// B), keyed by the call expression's exact span: `Area::area(p)` with
+    /// `p: Point` names the `area` of `impl Area for Point`. The ownership
+    /// checker and MIR lowering read the selection here rather than
+    /// re-deriving it.
+    #[must_use]
+    pub fn impl_call(&self, span: Span) -> Option<SymbolId> {
+        self.impl_calls.get(&span).copied()
+    }
+
+    /// The interface and target of an impl member, if `symbol` is a member
+    /// of an accepted `impl` block.
+    #[must_use]
+    pub fn impl_member(&self, symbol: SymbolId) -> Option<&ImplMember> {
+        self.impl_members.get(&symbol)
+    }
+
+    /// The members of an interface, in declaration order, each with its
+    /// signature. `Self` is spelled as [`Ty::Param`] of the interface's own
+    /// symbol. Empty for a symbol that is not an interface.
+    #[must_use]
+    pub fn interface_members(&self, interface: SymbolId) -> &[(String, FnTy)] {
+        self.interface_members
+            .get(&interface)
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Is `symbol` an **effectful** function (ADR-0006 Stage A)?

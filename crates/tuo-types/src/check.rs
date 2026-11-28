@@ -6,10 +6,11 @@
 //! fresh [`InferCtx`], unifying where local inference is allowed and
 //! reporting structured mismatches everywhere else.
 //!
-//! Deliberately deferred (poisoned with [`Ty::Error`], never guessed):
-//! method calls and interface-member bodies (they need impl/interface
-//! dispatch), `Self` types, and interface bounds — those arrive with the
-//! trait system, not the core type system.
+//! Interfaces and impls are checked since ADR-0032 Stage B (see
+//! [`interfaces`]): conformance, placement, coherence, and the non-generic
+//! qualified call `I::m(x)`. Still deferred (poisoned with [`Ty::Error`],
+//! never guessed): interface bounds, which are resolved but not enforced,
+//! and interface calls in generic bodies (`T0025`, Stage C).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
@@ -26,6 +27,7 @@ use crate::TypeckResult;
 use crate::infer::{InferCtx, VarClass};
 
 mod exhaustive;
+mod interfaces;
 use crate::ty::{
     FloatKind, FnParam, FnTy, IntKind, MAX_FIXED_ARRAY_LEN, ParamMode, Ty, WrapperKind,
     parse_int_literal,
@@ -80,16 +82,34 @@ use crate::ty::{
 /// - `T0024` — a method call (ADR-0032 Stage A): free functions only, and no
 ///   engine executes one. Carries a machine-applicable rewrite to the free
 ///   call when exactly one function fits.
-/// - `T0025` — a qualified interface-member call (`Area::area(p)`), which no
-///   engine executes until ADR-0032 Stage B.
-/// - `T0026` — **warning**: an `interface`/`impl` declaration type-checks but
-///   lowers to nothing.
+/// - `T0025` — a qualified interface-member call whose first argument has a
+///   generic type parameter's type (`Area::area(v)` with `v: T`): interface
+///   calls in generic bodies are ADR-0032 Stage C.
+/// - `T0026` — **retired**: the ADR-0032 Stage A warning that an
+///   `interface`/`impl` declaration lowers to nothing, removed when Stage B
+///   lowered impl members. The code is never reused.
 /// - `T0027` — an integer literal outside its inferred type's range (`let x:
 ///   I8 = 128`), checked after inference; a negated literal is one value, so
 ///   `-128` is an `I8`.
 /// - `T0028` — a `const` initializer that is not a constant expression
 ///   (literals, other consts, and unary/binary/`as` operators over them), or
 ///   a `const` defined in terms of itself.
+/// - `T0029`–`T0031` — interface forms ADR-0032 Stage B refuses: a member
+///   whose first parameter is not the receiver (`T0029`), a member with a
+///   default body (`T0030`), and type parameters on an interface or on one
+///   of its members (`T0031`).
+/// - `T0032`–`T0034` — conformance: an `impl` missing an interface member
+///   (`T0032`), defining a function the interface does not declare
+///   (`T0033`), or defining a member whose signature differs from the
+///   interface's with `Self` replaced by the target (`T0034`).
+/// - `T0035`–`T0038` — coherence and placement: an `impl` with type
+///   parameters (`T0035`), an impl target that is not a non-generic struct
+///   or enum or a builtin scalar type (`T0036`), an `impl` outside the module
+///   of its interface and of its type (`T0037`), and a second `impl` of the
+///   same interface for the same type (`T0038`).
+/// - `T0039` — `I::m(…)` naming no member of `I`.
+/// - `T0040` — `I::m(x, …)` where the type of `x` has no `impl I`.
+/// - `T0041` — `impl X for T` where `X` is not an interface.
 fn code(number: u16) -> DiagnosticCode {
     DiagnosticCode::new(Namespace::Type, number)
 }
@@ -200,6 +220,23 @@ pub(crate) struct Checker<'a> {
     pending_generic_calls: Vec<(SymbolId, Vec<Ty>, Span)>,
     /// Every call to a generic function, with its solved type arguments.
     generic_calls: Vec<(SymbolId, Vec<Ty>, Span)>,
+    /// What `Self` means where a type is being lowered: an interface's own
+    /// placeholder ([`Ty::Param`] of the interface) or an impl's target.
+    self_ty: Option<Ty>,
+    /// Each interface's members, in declaration order (ADR-0032 Stage B).
+    interfaces: HashMap<SymbolId, Vec<interfaces::MemberDecl>>,
+    /// Every impl block as collected, checked by `check_impls`.
+    impl_drafts: Vec<interfaces::ImplDraft>,
+    /// Every accepted `impl I for T`, which qualified calls select from.
+    impls: Vec<interfaces::ImplEntry>,
+    /// Each impl block's target type, by the block's span.
+    impl_targets: HashMap<Span, Ty>,
+    /// Every function declared in an impl block.
+    impl_fns: HashSet<SymbolId>,
+    /// The members of accepted impls, published to later stages.
+    impl_members: HashMap<SymbolId, crate::ImplMember>,
+    /// Each qualified call's selected impl member, by the call's span.
+    impl_calls: HashMap<Span, SymbolId>,
     variant_owner: HashMap<SymbolId, SymbolId>,
     diagnostics: Vec<Diagnostic>,
     symbol_types: HashMap<SymbolId, Ty>,
@@ -230,8 +267,8 @@ pub(crate) struct Checker<'a> {
     ret: Ty,
     frames: Vec<Frame>,
     fallback: Span,
-    /// The module-level function whose body is being checked (`None` in
-    /// consts, specs, and impl bodies) — the source node of recorded
+    /// The function (or impl member) whose body is being checked (`None` in
+    /// consts and specs) — the source node of recorded
     /// [`Checker::call_edges`].
     current_fn: Option<SymbolId>,
     /// The builtin whose arguments are currently being checked, if any.
@@ -270,6 +307,14 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
         array_elem_params: HashSet::new(),
         pending_generic_calls: Vec::new(),
         generic_calls: Vec::new(),
+        self_ty: None,
+        interfaces: HashMap::new(),
+        impl_drafts: Vec::new(),
+        impls: Vec::new(),
+        impl_targets: HashMap::new(),
+        impl_fns: HashSet::new(),
+        impl_members: HashMap::new(),
+        impl_calls: HashMap::new(),
         variant_owner: HashMap::new(),
         diagnostics: Vec::new(),
         symbol_types: HashMap::new(),
@@ -293,6 +338,7 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
     for ast in files {
         checker.collect_signatures(*ast);
     }
+    checker.check_impls();
     checker.check_recursion_boundary();
     for ast in files {
         checker.check_file(*ast);
@@ -329,7 +375,23 @@ pub(crate) fn run(files: &[Ast<'_>], resolution: &Resolution) -> TypeckResult {
             )
         })
         .collect();
+    let interface_members = checker
+        .interfaces
+        .iter()
+        .map(|(&symbol, members)| {
+            (
+                symbol,
+                members
+                    .iter()
+                    .map(|member| (member.name.clone(), member.sig.as_fn_ty()))
+                    .collect(),
+            )
+        })
+        .collect();
     TypeckResult {
+        impl_calls: checker.impl_calls,
+        impl_members: checker.impl_members,
+        interface_members,
         diagnostics: checker.diagnostics,
         symbol_types: checker.symbol_types,
         expr_types: checker.expr_types,
@@ -1125,8 +1187,11 @@ impl<'a> Checker<'a> {
     }
 
     fn collect_signatures(&mut self, ast: Ast<'_>) {
+        let module = self.file_module(ast);
         for item in ast.file().items() {
             match item {
+                Item::Interface(decl) => self.collect_interface(decl),
+                Item::Impl(decl) => self.collect_impl(decl, module),
                 Item::Fn(decl) => {
                     if let Some(id) = self.declared_at(decl.name_ref()) {
                         let sig = self.lower_fn_sig(decl);
@@ -1189,7 +1254,13 @@ impl<'a> Checker<'a> {
         let type_params = self.generic_symbols(decl.generics());
         let params = decl
             .params()
-            .map(|param| param.ty().map_or(Ty::Error, |ty| self.lower_type(ty)))
+            .map(|param| {
+                if param.is_receiver() {
+                    self.self_ty.clone().unwrap_or(Ty::Error)
+                } else {
+                    param.ty().map_or(Ty::Error, |ty| self.lower_type(ty))
+                }
+            })
             .collect();
         let modes = decl
             .params()
@@ -1431,7 +1502,7 @@ impl<'a> Checker<'a> {
                     return Ty::Error;
                 };
                 if last.text == "Self" {
-                    return Ty::Error;
+                    return self.self_ty.clone().unwrap_or(Ty::Error);
                 }
                 self.lower_named(last, args)
             }
@@ -1601,14 +1672,15 @@ impl<'a> Checker<'a> {
             match item {
                 Item::Fn(decl) => self.check_fn(decl, None),
                 Item::Impl(decl) => {
-                    self.declaration_lowers_to_nothing("impl", decl.span());
-                    let target = decl.target().map(|ty| self.lower_type(ty));
+                    let target = decl
+                        .span()
+                        .and_then(|span| self.impl_targets.get(&span).cloned())
+                        .unwrap_or(Ty::Error);
+                    let outer = self.self_ty.replace(target.clone());
                     for function in decl.functions() {
-                        self.check_fn(function, target.clone());
+                        self.check_fn(function, Some(target.clone()));
                     }
-                }
-                Item::Interface(decl) => {
-                    self.declaration_lowers_to_nothing("interface", decl.span())
+                    self.self_ty = outer;
                 }
                 Item::Const(decl) => {
                     let Some(id) = self.declared_at(decl.name_ref()) else {
@@ -1628,32 +1700,11 @@ impl<'a> Checker<'a> {
                     self.finish_body();
                 }
                 Item::Spec(decl) => self.check_spec(decl),
-                // Interface member bodies need `Self`; deferred with the
-                // trait system.
+                // Interface members are signatures; a default body is
+                // `T0030`, refused at collection and never checked.
                 _ => {}
             }
         }
-    }
-
-    /// The `T0026` warning on an `interface`/`impl` declaration (ADR-0032
-    /// Stage A): it type-checks and harms nothing, but it lowers to nothing, so
-    /// none of its members can run. A warning, not an error — a program that
-    /// declares one runs today, and refusing it would break it for no gain.
-    fn declaration_lowers_to_nothing(&mut self, keyword: &str, span: Option<Span>) {
-        let span = self.at(span);
-        self.push(
-            Diagnostic::warning(
-                code(26),
-                format!("an `{keyword}` declaration type-checks but lowers to nothing"),
-                span,
-            )
-            .with_primary_label(format!("no engine executes this `{keyword}`'s members"))
-            .with_help(
-                "interfaces and impls are inert until ADR-0032 Stage B; write free \
-                 functions, which every engine runs",
-            )
-            .with_actual(StructuredValue::Name(keyword.to_owned())),
-        );
     }
 
     fn begin_body(&mut self, ret: Ty, fallback: Span) {
@@ -1867,9 +1918,8 @@ impl<'a> Checker<'a> {
         let Some(body) = decl.body() else {
             return;
         };
-        // Top-level functions were lowered during collection — reuse that
-        // signature so its diagnostics are not repeated. Impl functions are
-        // not module-callable and lower here.
+        // Top-level and impl functions were lowered during collection —
+        // reuse that signature so its diagnostics are not repeated.
         let collected = self
             .declared_at(decl.name_ref())
             .and_then(|id| self.fns.get(&id).cloned());
@@ -1884,10 +1934,9 @@ impl<'a> Checker<'a> {
                 .map_or(Ty::Unit, |ty| self.lower_type(ty)),
         };
         self.begin_body(ret.clone(), fallback);
-        // The purity call graph records edges out of module-level functions
-        // only (impl bodies have no module-callable symbol until the trait
-        // system lands; consts and specs are handled through the resolver's
-        // spec dependencies).
+        // The purity call graph records edges out of functions, impl members
+        // included (consts and specs are handled through the resolver's spec
+        // dependencies).
         self.current_fn = self
             .declared_at(decl.name_ref())
             .filter(|symbol| self.resolution.symbol(*symbol).kind == SymbolKind::Function);
@@ -3847,6 +3896,7 @@ impl<'a> Checker<'a> {
             .iter()
             .filter(|(symbol, sig)| {
                 self.resolution.builtin(**symbol).is_none()
+                    && !self.impl_fns.contains(*symbol)
                     && sig.type_params.is_empty()
                     && self.resolution.symbol(**symbol).name == name
                     && sig.params.first() == Some(first)
@@ -3867,35 +3917,20 @@ impl<'a> Checker<'a> {
 
     fn call(&mut self, call: tuo_ast::CallExpr<'_>, span: Span) -> Ty {
         let args: Vec<Expr<'_>> = call.args().collect();
-        // A qualified interface-member call (`Area::area(p)`) names a member
-        // no engine executes: interfaces lower to nothing until ADR-0032
-        // Stage B, so it is an error rather than silent poison (`T0025`).
-        if let Some(Expr::Path(path)) = call.callee()
-            && let Some(first) = path.segment_names().next()
-            && path.segment_names().count() >= 2
-            && self
-                .symbol_at(Some(first))
-                .is_some_and(|symbol| self.resolution.symbol(symbol).kind == SymbolKind::Interface)
-        {
-            for arg in args {
-                self.expr(arg);
+        // A qualified interface-member call (`Area::area(p)`, ADR-0032 Stage
+        // B): the segment naming the interface, then the member.
+        if let Some(Expr::Path(path)) = call.callee() {
+            let segments: Vec<Name<'_>> = path.segment_names().collect();
+            let interface = segments.iter().enumerate().find_map(|(index, segment)| {
+                self.symbol_at(Some(*segment))
+                    .filter(|symbol| self.resolution.symbol(*symbol).kind == SymbolKind::Interface)
+                    .map(|symbol| (index, symbol))
+            });
+            if let Some((index, interface)) = interface
+                && index + 1 < segments.len()
+            {
+                return self.interface_call(interface, &segments[index + 1..], &args, span);
             }
-            let written = path
-                .segment_names()
-                .map(|name| name.text)
-                .collect::<Vec<_>>()
-                .join("::");
-            self.push(
-                Diagnostic::error(
-                    code(25),
-                    format!("`{written}` calls an interface member, which no engine executes yet"),
-                    span,
-                )
-                .with_primary_label("interfaces lower to nothing until ADR-0032 Stage B")
-                .with_help("call a free function instead; an `impl` member is not callable in v0")
-                .with_actual(StructuredValue::Name(written)),
-            );
-            return Ty::Error;
         }
         // Direct calls of a named function keep the callee out of
         // value position (no function-type detour, better diagnostics).
@@ -3998,23 +4033,28 @@ impl<'a> Checker<'a> {
         }
     }
 
+    /// `T0002`: a call supplies `found` arguments where `expected` are taken.
+    fn arity_mismatch(&mut self, expected: usize, found: usize, span: Span) {
+        self.push(
+            Diagnostic::error(
+                code(2),
+                format!(
+                    "this call takes {} argument{} but {} {} supplied",
+                    expected,
+                    if expected == 1 { "" } else { "s" },
+                    found,
+                    if found == 1 { "was" } else { "were" },
+                ),
+                span,
+            )
+            .with_expected(StructuredValue::Count(expected as u64))
+            .with_actual(StructuredValue::Count(found as u64)),
+        );
+    }
+
     fn check_args(&mut self, params: &[Ty], args: &[Expr<'_>], span: Span) {
         if params.len() != args.len() {
-            self.push(
-                Diagnostic::error(
-                    code(2),
-                    format!(
-                        "this call takes {} argument{} but {} {} supplied",
-                        params.len(),
-                        if params.len() == 1 { "" } else { "s" },
-                        args.len(),
-                        if args.len() == 1 { "was" } else { "were" },
-                    ),
-                    span,
-                )
-                .with_expected(StructuredValue::Count(params.len() as u64))
-                .with_actual(StructuredValue::Count(args.len() as u64)),
-            );
+            self.arity_mismatch(params.len(), args.len(), span);
         }
         for (param, arg) in params.iter().zip(args.iter()) {
             let arg_span = self.at(value_span(arg));

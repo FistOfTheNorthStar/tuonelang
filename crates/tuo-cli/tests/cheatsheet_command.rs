@@ -326,6 +326,52 @@ fn main() -> Int {
 }
 "#;
 
+/// The brief's interface sample (ADR-0032 Stage B), as the program it is
+/// taken from.
+const INTERFACES: &str = r#"
+struct Point { x: Int, y: Int }
+
+interface Area { fn area(in self) -> Int; }
+
+impl Area for Point { fn area(in self) -> Int { self.x * self.y } }
+
+fn main() -> Int {
+    let p = Point { x: 2, y: 3 };
+    let a = Area::area(p);
+    a
+}
+"#;
+
+#[test]
+fn the_interface_sample_is_shown_compiles_and_runs() {
+    let brief = tuo(&["cheatsheet"]);
+    for fragment in [
+        "interface Area { fn area(in self) -> Int; }",
+        "impl Area for Point { fn area(in self) -> Int { self.x * self.y } }",
+        "let a = Area::area(p);",
+    ] {
+        assert!(
+            brief.contains(fragment),
+            "the brief should show `{fragment}`, which this test compiles as proof"
+        );
+    }
+    assert_accepts(INTERFACES, "the brief's interface sample");
+    let dir = std::env::temp_dir().join("tuo-cheatsheet-interfaces");
+    std::fs::create_dir_all(&dir).expect("the scratch directory is creatable");
+    let path = dir.join("area.tuo");
+    std::fs::write(&path, INTERFACES).expect("the program is writable");
+    let run = Command::new(env!("CARGO_BIN_EXE_tuo"))
+        .args(["run", path.to_str().expect("the path is UTF-8")])
+        .output()
+        .expect("the binary runs");
+    assert_eq!(
+        run.status.code(),
+        Some(6),
+        "the interface sample runs to 2 * 3: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+}
+
 #[test]
 fn the_syntax_skeleton_compiles() {
     assert_accepts(SKELETON, "the brief's syntax skeleton");

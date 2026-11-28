@@ -1,0 +1,47 @@
+// ADR-0032 Stage B: an impl targets one concrete type. Type parameters on the
+// impl are `T0035`, a type application or other non-nominal target `T0036`,
+// and a second impl of the same interface for the same type `T0038`.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Pair[T] {
+    first: T,
+    second: T,
+}
+
+interface Area {
+    fn area(in self) -> Int;
+}
+
+impl[T] Area for Pair[T] {
+    fn area(in self) -> Int {
+        0
+    }
+}
+
+impl Area for Pair[Int] {
+    fn area(in self) -> Int {
+        self.first * self.second
+    }
+}
+
+impl Area for [Int; 2] {
+    fn area(in self) -> Int {
+        0
+    }
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.y * self.x
+    }
+}

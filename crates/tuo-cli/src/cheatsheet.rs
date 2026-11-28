@@ -342,6 +342,17 @@ Runs everywhere (check, interpreter, and native):
     parts (read them, pass them `in`, never move them); `get(b)` passed to an
     `in` parameter lends the pointee without copying. So a tree is walked as
     `fn walk(in n: Node)` with `walk(std::boxed::get(child))`
+  * interfaces and impls, a member called by its PATH with the receiver first;
+    the first argument's type picks the impl:
+        interface Area { fn area(in self) -> Int; }
+        impl Area for Point { fn area(in self) -> Int { self.x * self.y } }
+        let a = Area::area(p);
+    Every member's first parameter is `in self`, `mut self` or `take self`, and
+    an impl writes exactly the interface's members, `Self` meaning its type.
+    One impl per interface and type, in the module of either. No default
+    bodies, no generic interfaces or impls. Bounds (`[T: Area]`) are NOT
+    enforced and a generic body cannot call a member (T0025). `area(p)` does
+    not name the member and `p.area()` is a method call (T0024)
 
 Native only — NOT available inside a spec (the spec sandbox is pure, and a
 spec that touches an effect is refused with R0007):
@@ -359,8 +370,8 @@ DOES NOT EXIST — do not write these, they are refused, never mis-compiled:
   * `Box::new(x)`, `box x`, `*b` — the constructor is `std::boxed::new(x)` and
     there is no dereference operator
   * method-call syntax: there are FREE FUNCTIONS only. Write `len(s)`, never
-    `s.len()` (refused with T0024, which offers the free call). `interface` /
-    `impl` declarations type-check but lower to nothing (warned with T0026).
+    `s.len()` (refused with T0024, which offers the free call). An interface
+    member is called `Area::area(p)`, never `p.area()`.
   * detached / unstructured thread spawn — concurrency is fork-join only
   * recursive struct/enum types without an indirection (refused with T0016)
 

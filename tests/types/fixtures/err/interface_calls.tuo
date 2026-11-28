@@ -1,0 +1,50 @@
+// ADR-0032 Stage B: `I::m(x, …)` selects the impl of `I` for the type of
+// `x` and is checked against that member's signature. An unknown member is
+// `T0039`, a wrong arity `T0002`, a wrong argument or result type `T0001`, and
+// a first argument whose type has no impl `T0040`. On a value of a generic
+// type the call stays `T0025` until Stage C.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+interface Area {
+    fn area(in self) -> Int;
+    fn scaled(in self, in by: Int) -> Int;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+
+    fn scaled(in self, in by: Int) -> Int {
+        self.x * self.y * by
+    }
+}
+
+fn unknown_member(in p: Point) -> Int {
+    Area::nope(p)
+}
+
+fn too_many(in p: Point) -> Int {
+    Area::area(p, 1)
+}
+
+fn wrong_argument(in p: Point) -> Int {
+    Area::scaled(p, true)
+}
+
+fn no_impl() -> Int {
+    Area::area(5)
+}
+
+fn wrong_result(in p: Point) -> Bool {
+    let b: Bool = Area::area(p);
+    b
+}
+
+fn generic[T](in v: T) -> Int {
+    Area::area(v)
+}

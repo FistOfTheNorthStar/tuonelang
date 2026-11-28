@@ -72,7 +72,7 @@ diagnostics use):
 | Kind | Noun | Notes |
 |------|------|-------|
 | `Module` | module | |
-| `Function` | function | |
+| `Function` | function | also each member of an `impl` block (ADR-0032 Stage B), which is **not** bound in its module's scope |
 | `Struct` | struct | |
 | `Enum` | enum | |
 | `Variant` | enum variant | inherits its enum's visibility |
@@ -86,6 +86,14 @@ diagnostics use):
 Each symbol records its name, kind, owning module, a `pub` flag, and its
 declaration span (`None` for entities with no written declaration, such as the root
 module).
+
+**Impl members are not module-level names** (ADR-0032 Stage B, Q2). Each member
+of an `impl` block gets its own `Function` symbol, but the symbol is not bound in
+the module scope: a bare `area(p)` never resolves to an impl member (`R0002`), and a
+spec cannot target one. The only way to call a member is through its interface,
+`Area::area(p)`, where the resolver resolves `Area` and leaves the member name to
+the type checker (§3.4). Two members of one `impl` block, or of one interface,
+sharing a name is `R0001`.
 
 ### 2.2 Scoping rules (frozen)
 
@@ -274,11 +282,51 @@ inference context. It verifies:
 Every mismatch diagnostic carries **structured expected and actual types** (not
 just a rendered string), so tools can consume them precisely.
 
-**Deferred to the trait system, never guessed:** method calls, interface bounds,
-`Self` types, and interface-member bodies **poison to `Ty::Error`** (which unifies
-with everything) rather than producing speculative diagnostics. This is a
-deliberate honesty boundary — the core type system does not pretend to check what
-the trait system will own.
+**Interfaces and impls (ADR-0032 Stage B).** The checker enforces:
+
+- **Receivers (D3).** Every interface member's first parameter is the receiver,
+  `in self`, `mut self` or `take self`. A member without one (`fn zero() -> Self;`)
+  is deferred and refused at the member (`T0029`).
+- **Interface forms.** A member with a default body is refused (`T0030`, Q4), as
+  are type parameters on an interface or on a member (`T0031`).
+- **Conformance (D3).** `impl I for T` supplies exactly the members of `I`, each
+  with `I`'s signature after `Self` is replaced by `T`: the same parameter count,
+  parameter types, parameter modes (the receiver's included) and return type. A
+  missing member is `T0032` at the impl header, an extra one `T0033` at that
+  member, and a differing one `T0034` at that member, with structured
+  expected/actual. Inside an impl, `Self` and the receiver have type `T`.
+- **Targets (D4).** `T` is a non-generic user struct or enum, or a builtin scalar
+  type (an integer or float type, `Bool`, `Char`, `Str`). An impl with type
+  parameters (`impl[T] …`, blanket or generic) is `T0035`; a type application
+  (`Pair[Int]`, `Array[Int]`, `Option[Int]`), a tuple, a fixed array, a function
+  type, or any other non-scalar builtin is `T0036`. `impl X for T` where `X` is not
+  an interface is `T0041`.
+- **Placement (D4).** `impl I for T` is written in the module that declares `I` or
+  the module that declares `T`; for a builtin `T`, in the module that declares
+  `I`. Anywhere else is `T0037`, naming both allowed modules.
+- **Coherence (D4).** A second `impl` of the same `(I, T)` pair anywhere in the
+  program is `T0038` at the second impl, pointing to the first. Because targets
+  are concrete, coherence is this duplicate check; no unification is involved.
+- **Qualified calls.** `I::m(a, …)` resolves, at check time, to the member `m` of
+  the `impl I for T` where `T` is the checked type of `a` (an unsolved integer or
+  float literal is its default, `I64` or `F64`). The remaining arguments are
+  checked against the member's signature and the call has its return type, so
+  every ordinary call diagnostic applies (`T0002` arity, `T0001` argument and
+  result types with structured expected/actual). An `m` that `I` does not declare
+  is `T0039`; a first argument whose type has no `impl I` is `T0040`, naming `I`
+  and the type; a first argument whose type is still unknown is `T0011`. The
+  selected member is published (`TypeckResult::impl_call`), and the ownership
+  checker and MIR lowering read it there: the ownership checker checks the call as
+  a call to that member with its modes (`take self` moves the argument, `mut self`
+  needs a mutable place, `in self` reads it), and lowering emits a direct call.
+  Each impl member lowers as an ordinary MIR function named
+  `Interface::member[Target]`.
+
+**Still deferred, never guessed:** interface **bounds** (`T: Area`) resolve but are
+not enforced, exactly as before Stage B. A qualified call whose first argument has a
+generic type parameter's type is refused (`T0025`): interface calls in generic
+bodies are ADR-0032 Stage C. A method call is `T0024`; there is no method-call
+syntax.
 
 ### 3.5 Type diagnostics (`Txxxx`)
 
@@ -308,21 +356,33 @@ the trait system will own.
 | `T0022` | **Warning, not an error** — the runnable-core advisory. A `Shared`/`Weak` heap-wrapper **value** (or a `Box` inside an `Array`/`Map` type — a `Box` value itself lowers since ADR-0028 Stage B) in a parameter, return, or `let`/`var` position is accepted here and executes on the reference interpreter, but no native backend lowers it, so `tuo build`/`tuo run` refuse it. Wrapper **declarations** (struct fields, enum payloads) are not reported — they lower fine, and `T0016` recommends exactly that indirection. |
 | `T0023` | **Retired.** The ADR-0027 Stage A generic-declaration advisory warned that no native backend lowered a generic `fn`; Stage B monomorphizes them on the native path (`specification/mir.md` §9), so the warning was removed rather than left false. The code is not reused. |
 | `T0024` | A method call `receiver.name(args)` (ADR-0032 Stage A). tuonelang has free functions only and no engine executes a method call; it was silently accepted (as poison) before. When exactly one function of that name takes the receiver's type first and is callable by a path from here, the diagnostic carries a **machine-applicable** rewrite to the free call (`xs.len()` → `std::array::len(xs)`); otherwise it lists the candidates. |
-| `T0025` | A qualified interface-member call (`Area::area(p)`, ADR-0032 Stage A): interfaces lower to nothing until ADR-0032 Stage B, so no engine executes the member. |
-| `T0026` | **Warning, not an error** — an `interface` or `impl` declaration (ADR-0032 Stage A) type-checks but lowers to nothing, so none of its members runs. A program declaring one runs today, so refusing it would break it for no gain. |
+| `T0025` | A qualified interface-member call whose first argument has a generic type parameter's type (`Area::area(v)` with `v: T`): interface calls in generic bodies are ADR-0032 Stage C, so the call is refused. (Introduced by Stage A for every qualified interface call; narrowed by Stage B, which made the non-generic call work.) |
+| `T0026` | **Retired.** The ADR-0032 Stage A warning that an `interface` or `impl` declaration type-checks but lowers to nothing. Stage B lowers impl members as ordinary functions, so the warning was removed rather than left false. The code is not reused. |
 | `T0027` | An integer literal outside the range of the type inference gave it (`let x: I8 = 128`, `0x100` as a `U8`, a `200` pattern against an `I8` scrutinee). Checked after inference, so a literal typed by later use is checked at that type. A unary minus applied directly to a literal (through parentheses too) makes one value, so `-128` is an `I8` and each type's minimum is spellable. Before this check such a program was accepted and MIR lowering then dropped the whole function, so its specs failed without a message and `build` reported it absent. |
 | `T0028` | A `const` initializer that is not a **constant expression** — literals, other consts, and the unary, binary, and `as` operators over them (a call, a block, a local, a struct or array literal are not) — or a `const` defined in terms of itself (`const A: Int = B; const B: Int = A;`). A constant expression is evaluated at compile time with the interpreter's arithmetic, so a const has the value the same expression computes at run time; one whose evaluation would trap (overflow, a zero divisor, an out-of-range shift) cannot be used, and each function naming it reports that trap where it is called or built. Before this check a computed initializer was accepted and every function naming the const was dropped without a message. |
+| `T0029` | An interface member whose first parameter is not the receiver (`in self`, `mut self` or `take self`), such as `fn zero() -> Self;` (ADR-0032 Stage B, D3). Members dispatched on anything but their first argument are deferred. |
+| `T0030` | An interface member with a default body (ADR-0032 Stage B, Q4). Default member bodies are not supported; each impl writes the body. |
+| `T0031` | Type parameters on an interface (`interface Convert[T]`) or on an interface member (`fn pick[T](…)`): generic interfaces and generic members are not supported (ADR-0032 Stage B). |
+| `T0032` | An `impl I for T` missing a member of `I`, reported at the impl header with the member's declaration as a secondary label. |
+| `T0033` | A function in an `impl I for T` that `I` does not declare, reported at that function. |
+| `T0034` | An impl member whose signature differs from the interface's with `Self` replaced by the target: the parameter count, a parameter's mode (the receiver's included) or type, or the return type. One diagnostic per difference, at the member, with structured expected/actual. |
+| `T0035` | An `impl` with type parameters (`impl[T] Area for Pair[T]`): blanket and generic impls are not supported (ADR-0032 D4). |
+| `T0036` | An impl target that is not a non-generic user struct or enum or a builtin scalar type: a type application, tuple, array, function type, `String`, or another non-scalar builtin. |
+| `T0037` | An `impl I for T` outside both the module declaring `I` and the module declaring `T` (for a builtin `T`, outside the module declaring `I`). The message names the allowed modules. |
+| `T0038` | A second `impl` of the same interface for the same type anywhere in the program, reported at the second with the first as a secondary label. |
+| `T0039` | `I::m(…)` where `I` declares no member `m`; the help lists `I`'s members. |
+| `T0040` | `I::m(a, …)` where the type of `a` has no `impl I`. The message names `I` and the type; the help lists the types that do implement `I`. |
+| `T0041` | `impl X for T` where `X` is not an interface (a struct, say). Inherent impls are not supported. |
 
-`T0022` and `T0026` are the table's only warnings: each reports a program the
-static semantics **accepts**. They exist because `tuo check` deliberately
-accepts a larger language than the native backends lower, and that gap should
-be visible at the offending construct rather than surfacing later as a
-spanless build failure. `T0022` reports the construct that causes it — a
-heap-wrapper value (a generic declaration was the second, until ADR-0027
-Stage B closed that gap and retired `T0023`). Because they are warnings they
-never change whether a program is accepted, and the set of programs this
-document defines as well-typed is exactly what it was before either advisory
-existed.
+`T0022` is the table's only live warning: it reports a program the static
+semantics **accepts**. It exists because `tuo check` deliberately accepts a
+larger language than the native backends lower, and that gap should be visible
+at the offending construct rather than surfacing later as a spanless build
+failure. It reports the construct that causes it — a heap-wrapper value. (A
+generic declaration was a second, until ADR-0027 Stage B closed that gap and
+retired `T0023`; an `interface`/`impl` declaration a third, until ADR-0032 Stage
+B lowered impl members and retired `T0026`.) Because it is a warning it never
+changes whether a program is accepted.
 
 Ownership-flavored array rules live in `specification/ownership.md`: indexing
 reads an element out of `Array[T]` **and** `[T; N]` alike (only `Copy`
@@ -728,7 +788,7 @@ rule the grammar deliberately does not decide.
 | `let`/`var` definite assignment before use | type checker | §9 |
 | `match` exhaustiveness & arm reachability | type checker | §17 |
 | Generic bound satisfaction; monomorphization | type checker | §18 |
-| Interface coherence (one impl per type) & orphan rules | resolver / typer | §19 |
+| Interface coherence (one impl per `(interface, type)`, `T0038`), impl placement (`T0037`), concrete targets (`T0035`/`T0036`) and conformance (`T0032`–`T0034`) — ADR-0032 Stage B | type checker | §19 |
 | `?` used only in a compatible `Result`/`Option` function | type checker | §20 |
 | Ownership: move/borrow, use-after-move, the borrow rule | ownership checker | §21, §22 |
 | No `null`; every `T` is a valid initialized `T` | type + ownership | §23 |
@@ -737,7 +797,7 @@ rule the grammar deliberately does not decide.
 | `unsafe`-only operations confined to `unsafe` blocks | type checker | §26 |
 | Spec purity: a spec's closure is effect-free (`R0007`, §3.6) | type checker | §27, ADR-0006 |
 | Spec determinism; runs on shared MIR | spec runner | §27 |
-| Receiver (`self`) only as first parameter of an `impl` method | resolver | §19 |
+| Receiver (`self`) first in every interface member (`T0029`) and, by conformance, in every impl member (`T0034`) — ADR-0032 Stage B | type checker | §19 |
 | Struct-literal-in-condition restriction | parser | `syntax.md` |
 
 The last row is the **only** restriction the parser itself enforces beyond pure
@@ -752,7 +812,7 @@ holds this document honest.
 
 - `tests/types/fixtures/ok/` — programs that must resolve **and** type-check with
   **zero diagnostics** (`adts`, `arrays`, `casts`, `control_flow`, `effects`,
-  `functions`, `impls`, `inference`, `option_result`, `specs`).
+  `functions`, `inference`, `interfaces`, `option_result`, `specs`, and others).
 - `tests/types/fixtures/err/` — programs that resolve cleanly but contain type
   errors; their diagnostics (code, span, message, structured expected/actual) are
   snapshotted under `tests/types/snapshots/`. The err stems map onto the code
@@ -760,7 +820,11 @@ holds this document honest.
   `T0005`/`T0010`, `fields` → `T0004`, `operators` → `T0006`, `exhaustive` →
   `T0007`, `casts` → `T0008`, `fallibility` → `T0009`, `annotations` → `T0011`,
   `loops` → `T0013`, `effects` → builtin-call typing plus the `R0007`
-  spec-purity gate (§3.6).
+  spec-purity gate (§3.6), `methods` → `T0024`, `interface_decls` →
+  `T0029`–`T0031`, `impl_conformance` → `T0032`–`T0034`/`T0041`,
+  `impl_coherence` → `T0035`/`T0036`/`T0038`, `impl_placement` → `T0037` (a
+  multi-file fixture, split at `//@ file <name>` lines), and `interface_calls`
+  → `T0039`/`T0040` plus the `T0001`/`T0002`/`T0025` cases of qualified calls.
 
 Every code `T0001`..`T0013` is exercised by the snapshot corpus (harness
 `crates/tuo-types/tests/fixtures.rs`; re-bless with

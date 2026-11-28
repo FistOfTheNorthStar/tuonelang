@@ -1,5 +1,6 @@
-//! Fine-grained incremental invalidation: the five edit scenarios, asserted on
-//! the *exact* set of per-item queries that re-execute.
+//! Fine-grained incremental invalidation: the five edit scenarios, and the two
+//! interface scenarios of ADR-0032 Stage B, asserted on the *exact* set of
+//! per-item queries that re-execute.
 //!
 //! The session records every derived-query **execution** (not a cache hit or a
 //! revalidation) in an execution log. Each scenario primes a program, clears
@@ -291,5 +292,141 @@ fn scenario_spec_value_only_edit_is_a_clean_cutoff() {
     assert!(
         !ran(&log, &spec_label(spec)),
         "an assertion-value-only edit leaves the dependency graph unchanged: {log:?}"
+    );
+}
+
+/// ADR-0032 Stage B (Q5): an interface, two impls of it, a caller, and a
+/// function unrelated to the interface. The impl members are ordinary
+/// per-function queries, keyed by their own symbols.
+const SHAPES: &str = "\
+struct Point { x: Int, y: Int }
+
+struct Square { side: Int }
+
+interface Area {
+    fn area(in self) -> Int;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+}
+
+impl Area for Square {
+    fn area(in self) -> Int {
+        self.side * self.side
+    }
+}
+
+fn unrelated(take n: Int) -> Int {
+    n + 1
+}
+
+fn main() -> Int {
+    let p = Point { x: 2, y: 3 };
+    Area::area(p) + unrelated(1)
+}
+";
+
+/// The `area` member of each impl (in source order), `unrelated`, and `main`.
+fn shapes_symbols(session: &IncrementalSession) -> (SymbolId, SymbolId, SymbolId, SymbolId) {
+    let funcs = session.function_symbols();
+    assert_eq!(
+        funcs.len(),
+        4,
+        "expected the two impl members, unrelated, and main"
+    );
+    (funcs[0], funcs[1], funcs[2], funcs[3])
+}
+
+#[test]
+fn scenario_impl_body_edit() {
+    let mut session = IncrementalSession::new();
+    session.set_file("shapes.tuo", SHAPES);
+    reask(&session);
+    assert!(session.is_accepted());
+    let (point_area, square_area, unrelated, main) = shapes_symbols(&session);
+
+    session.clear_executions();
+    // Change only `impl Area for Point`'s member body.
+    let edited = SHAPES.replace("        self.x * self.y\n", "        self.y * self.x\n");
+    session.set_file("shapes.tuo", &edited);
+    reask(&session);
+    let log = session.executed_queries();
+
+    // The edited member re-checks and re-lowers.
+    assert!(
+        ran(&log, &type_label(point_area)),
+        "the edited impl member must re-check: {log:?}"
+    );
+    assert!(
+        ran(&log, &mir_label(point_area)),
+        "the edited impl member must re-lower: {log:?}"
+    );
+    // A function unrelated to the interface does neither, and neither does
+    // the other impl's member.
+    assert!(
+        !ran(&log, &type_label(unrelated)),
+        "unrelated's type must not re-check: {log:?}"
+    );
+    assert!(
+        !ran(&log, &mir_label(unrelated)),
+        "unrelated's MIR must not re-lower: {log:?}"
+    );
+    assert!(
+        !ran(&log, &mir_label(square_area)),
+        "the other impl's member must not re-lower: {log:?}"
+    );
+    // The caller's signature is untouched by a member body edit.
+    assert!(
+        !ran(&log, &type_label(main)),
+        "main's type must not re-check: {log:?}"
+    );
+}
+
+#[test]
+fn scenario_interface_signature_edit() {
+    let mut session = IncrementalSession::new();
+    session.set_file("shapes.tuo", SHAPES);
+    reask(&session);
+    assert!(session.is_accepted());
+    let (point_area, square_area, _, main) = shapes_symbols(&session);
+
+    session.clear_executions();
+    // Change only the interface member's signature; the impls now disagree.
+    let edited = SHAPES.replace(
+        "    fn area(in self) -> Int;\n",
+        "    fn area(in self, in by: Int) -> Int;\n",
+    );
+    session.set_file("shapes.tuo", &edited);
+    reask(&session);
+    let log = session.executed_queries();
+
+    // Every impl member of the interface and every caller of its member
+    // re-checks.
+    for (symbol, what) in [
+        (point_area, "Point's impl member"),
+        (square_area, "Square's impl member"),
+        (main, "the caller main"),
+    ] {
+        assert!(
+            ran(&log, &type_label(symbol)),
+            "{what} must re-check: {log:?}"
+        );
+    }
+    // And the re-check is real: both impls are now reported as not
+    // conforming.
+    assert!(!session.is_accepted());
+    let conformance = session.with_semantics(|semantics| {
+        semantics
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code.to_string() == "T0034")
+            .count()
+    });
+    assert_eq!(
+        conformance, 2,
+        "each impl's `area` now has one parameter too few"
     );
 }

@@ -1,0 +1,4 @@
+T0029@239..243 member `zero` of interface `Zero` has no receiver as its first parameter | actual name `zero`
+T0030@284..290 member `scaled` of interface `Scaled` has a default body, and default member bodies are not supported | actual name `scaled`
+T0031@358..361 interface `Convert` has type parameters, which are not supported | actual name `Convert`
+T0031@427..430 member `pick` of interface `Pick` has type parameters, which are not supported | actual name `pick`

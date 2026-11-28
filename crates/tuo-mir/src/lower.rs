@@ -132,6 +132,21 @@ impl<'a> Cx<'a> {
         cx
     }
 
+    /// A function's MIR name: its own name, or for an impl member the
+    /// instance-style `Interface::member[Target]` (ADR-0032 Stage B), since
+    /// two impls commonly share a member name and a free function may too.
+    fn function_name(&self, symbol: SymbolId) -> String {
+        let name = &self.resolution.symbol(symbol).name;
+        match self.types.impl_member(symbol) {
+            Some(member) => format!(
+                "{}::{name}[{}]",
+                self.resolution.symbol(member.interface).name,
+                member.target.render(self.resolution)
+            ),
+            None => name.clone(),
+        }
+    }
+
     fn collect_fn(&mut self, function: &HirFunction) {
         let Res::Symbol(symbol) = function.symbol else {
             return;
@@ -212,18 +227,17 @@ impl<'a> Cx<'a> {
             return;
         }
         let Res::Symbol(symbol) = function.symbol else {
-            // Impl functions have no resolved symbol until the trait
-            // system lands; never drop a body silently.
+            // Only a rejected program has a function whose name did not
+            // resolve; never drop a body silently.
             program.skipped.push(Skipped {
-                name: "{impl}".to_owned(),
+                name: "{unresolved}".to_owned(),
                 symbol: None,
-                reason: "impl functions are not lowered in v0 (pending the trait system)"
-                    .to_owned(),
+                reason: "the function's name did not resolve".to_owned(),
                 span: function.span,
             });
             return;
         };
-        let name = self.resolution.symbol(symbol).name.clone();
+        let name = self.function_name(symbol);
         match FnLower::new(self, symbol, function).run(function) {
             Ok(lowered) => program.functions.push(lowered),
             Err(reason) => program.skipped.push(Skipped {
@@ -573,7 +587,7 @@ impl<'a> FnLower<'a> {
         let name = self
             .spec_name
             .clone()
-            .unwrap_or_else(|| self.cx.resolution.symbol(self.symbol).name.clone());
+            .unwrap_or_else(|| self.cx.function_name(self.symbol));
         let blocks = self
             .blocks
             .into_iter()
@@ -1747,6 +1761,20 @@ impl FnLower<'_> {
     }
 
     fn call(&mut self, expr: &Expr, callee: &Expr, args: &[Expr]) -> Lowered {
+        // A qualified interface call (`Area::area(p)`) is a direct call to
+        // the impl member the type checker selected (ADR-0032 Stage B).
+        if let Some(member) = self.cx.types.impl_call(expr.span) {
+            let modes = self
+                .cx
+                .modes
+                .get(&member)
+                .cloned()
+                .ok_or_else(|| "callee has no lowered signature".to_owned())?;
+            let Some(lowered_args) = self.lower_call_args(args, &modes)? else {
+                return Ok(None);
+            };
+            return self.emit_call(expr, Callee::Direct(member), lowered_args);
+        }
         // A direct call: the callee is a bare path resolving to a user
         // function symbol. Anything else is an indirect call through a
         // function value (ADR-0008 Tier 1).

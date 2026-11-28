@@ -1,0 +1,6 @@
+T0039@704..708 `nope` is not a member of interface `Area` | actual name `nope`
+T0002@753..769 this call takes 1 argument but 2 were supplied | expected count 1 | actual count 2
+T0001@833..837 mismatched types | expected type `I64` | actual type `Bool`
+T0040@879..880 `I64` does not implement `Area` | expected name `Area` | actual type `I64`
+T0001@942..955 mismatched types | expected type `Bool` | actual type `I64`
+T0025@1002..1015 `Area::area` on a value of generic type `T` is not supported yet | actual name `Area::area`

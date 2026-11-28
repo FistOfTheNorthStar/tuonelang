@@ -1,0 +1,25 @@
+// ADR-0032 Stage B (Q3): a spec cannot name an impl member, so impl members
+// are exercised through specs on the ordinary functions that call them.
+struct Point { x: Int, y: Int }
+
+interface Area {
+    fn area(in self) -> Int;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int { self.x * self.y }
+}
+
+impl Area for Int {
+    fn area(in self) -> Int { self * self }
+}
+
+fn total(in p: Point, in n: Int) -> Int {
+    Area::area(p) + Area::area(n)
+}
+
+spec total {
+    given p: Point = Point { x: 2, y: 5 }, n: Int = 3;
+    then total(p, n) == 19;
+    assert total(Point { x: 0, y: 9 }, 0) == 0;
+}

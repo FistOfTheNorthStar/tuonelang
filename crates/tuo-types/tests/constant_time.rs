@@ -309,3 +309,22 @@ fn all_violations_in_one_function_are_reported() {
         );
     }
 }
+
+/// ADR-0032 Stage B: an impl member cannot carry `#[constant_time]` (the
+/// grammar admits no attribute inside an `impl`), so a marked function's
+/// qualified call to one reaches an unmarked function and is refused.
+#[test]
+fn a_marked_function_may_not_call_an_impl_member() {
+    assert_eq!(
+        codes(
+            "struct Key { k: Int }\n\
+             interface Mix { fn mix(in self, in x: Int) -> Int; }\n\
+             impl Mix for Key {\n\
+                 fn mix(in self, in x: Int) -> Int { self.k ^ x }\n\
+             }\n\
+             #[constant_time]\n\
+             fn f(in key: Key, take x: Int) -> Int { Mix::mix(key, x) }\n"
+        ),
+        vec!["T0020".to_owned()]
+    );
+}

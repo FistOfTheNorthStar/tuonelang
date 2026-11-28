@@ -1,0 +1,62 @@
+// ownership.md §3/§7, ADR-0032 Stage B — a qualified interface call
+// `I::m(x)` is checked exactly like a call to the impl member it selects,
+// with that member's modes: `take self` moves the argument (`O0001` on a
+// later use), and `mut self` needs a mutable place (`O0004` on a `let`), the
+// same codes an ordinary function's `take`/`mut` parameter gives.
+
+struct Wrap {
+    buf: String,
+}
+
+struct Counter {
+    count: Int,
+}
+
+interface Consume {
+    fn consume(take self) -> Int;
+}
+
+interface Bump {
+    fn bump(mut self);
+}
+
+impl Consume for Wrap {
+    fn consume(take self) -> Int {
+        std::string::len(self.buf)
+    }
+}
+
+impl Bump for Counter {
+    fn bump(mut self) {
+        self.count = self.count + 1;
+    }
+}
+
+fn bump_counter(mut c: Counter) {
+    c.count = c.count + 1;
+}
+
+fn case_take_self_moves_the_argument(take w: Wrap) -> Int {
+    let n = Consume::consume(w);
+    n + std::string::len(w.buf) // ERROR: O0001 `w` was moved by `Consume::consume`
+}
+
+fn case_take_self_twice(take w: Wrap) -> Int {
+    Consume::consume(w) + Consume::consume(w) // ERROR: O0001 `w` was already moved
+}
+
+fn case_mut_self_on_a_let(in start: Int) -> Int {
+    let c = Counter { count: start };
+    Bump::bump(c); // ERROR: O0004 `c` is a `let` binding
+    c.count
+}
+
+fn case_mut_parameter_on_a_let(in start: Int) -> Int {
+    let c = Counter { count: start };
+    bump_counter(c); // ERROR: O0004 the same error for an ordinary `mut` parameter
+    c.count
+}
+
+fn case_mut_self_on_an_in_parameter(in c: Counter) {
+    Bump::bump(c); // ERROR: O0004 `c` is an `in` parameter
+}

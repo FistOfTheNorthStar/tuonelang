@@ -1,0 +1,47 @@
+// ADR-0032 Stage B: `in self`, `mut self` and `take self` members called by
+// qualified path. The `mut self` member writes the caller's `var`, which the
+// caller then reads; the `take self` member consumes an owned array.
+struct Counter { n: Int, step: Int }
+
+struct Bag { items: Array[Int] }
+
+interface Tick {
+    fn tick(mut self);
+    fn read(in self) -> Int;
+}
+
+interface Drain {
+    fn total(in self) -> Int;
+    fn drain(take self) -> Int;
+}
+
+impl Tick for Counter {
+    fn tick(mut self) { self.n = self.n + self.step; }
+    fn read(in self) -> Int { self.n }
+}
+
+impl Drain for Bag {
+    fn total(in self) -> Int {
+        var sum = 0;
+        for x in self.items { sum = sum + x; }
+        sum
+    }
+    fn drain(take self) -> Int {
+        let items = self.items;
+        std::array::len(items) * 10
+    }
+}
+
+fn main() -> Int {
+    var c = Counter { n: 5, step: 4 };
+    Tick::tick(c);
+    Tick::tick(c);
+    var items = std::array::empty();
+    std::array::push(items, 3);
+    std::array::push(items, 4);
+    std::array::push(items, 5);
+    let bag = Bag { items: items };
+    let seen = Drain::total(bag);
+    // 13 + 12 + 30 = 55
+    Tick::read(c) + seen + Drain::drain(bag)
+}

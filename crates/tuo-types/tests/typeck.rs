@@ -304,9 +304,103 @@ fn impl_bodies_type_self_as_the_target() {
              }\n\
          }\n",
     );
-    // `self.count` types against the target (no `T0001`); the only reports are
-    // ADR-0032 Stage A's two `T0026` warnings — the declarations lower to nothing.
-    assert_eq!(codes(&result), vec!["T0026".to_owned(), "T0026".to_owned()]);
+    // `self.count` types against the target (no `T0001`), and since ADR-0032
+    // Stage B the declarations draw no warning: the impl member lowers.
+    assert_clean(&result);
+}
+
+#[test]
+fn a_qualified_call_selects_the_impl_member_for_the_first_argument() {
+    let source = "struct Point { x: Int, y: Int }\n\
+         struct Square { side: Int }\n\
+         interface Area {\n\
+             fn area(in self) -> Int;\n\
+         }\n\
+         impl Area for Point {\n\
+             fn area(in self) -> Int { self.x * self.y }\n\
+         }\n\
+         impl Area for Square {\n\
+             fn area(in self) -> Int { self.side * self.side }\n\
+         }\n\
+         fn main() -> Int {\n\
+             let s = Square { side: 3 };\n\
+             Area::area(s)\n\
+         }\n";
+    let (resolution, result) = check_one(source);
+    assert_clean(&result);
+    // The two members share a name; the call names the `Square` one.
+    let members: Vec<SymbolId> = resolution
+        .symbols()
+        .filter(|(_, symbol)| symbol.name == "area" && symbol.kind == SymbolKind::Function)
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(members.len(), 2);
+    let square = members
+        .iter()
+        .copied()
+        .find(|&member| {
+            result
+                .impl_member(member)
+                .is_some_and(|m| m.target.render(&resolution) == "Square")
+        })
+        .expect("the Square impl member is published");
+    let start = source.find("Area::area(s)").expect("call is in the source");
+    let end = start + "Area::area(s)".len();
+    let file = resolution
+        .symbol(square)
+        .declaration
+        .expect("declared")
+        .source();
+    let call = tuo_source::Span::new(
+        file,
+        tuo_source::TextRange::new(start as u32, end as u32).expect("valid range"),
+    );
+    assert_eq!(result.impl_call(call), Some(square));
+}
+
+#[test]
+fn a_bare_call_never_reaches_an_impl_member() {
+    let program = Program::parse(&["struct Point { x: Int }\n\
+         interface Area {\n\
+             fn area(in self) -> Int;\n\
+         }\n\
+         impl Area for Point {\n\
+             fn area(in self) -> Int { self.x }\n\
+         }\n\
+         fn main() -> Int {\n\
+             let p = Point { x: 3 };\n\
+             area(p)\n\
+         }\n"]);
+    let resolution = tuo_resolve::resolve(&program.asts());
+    let codes: Vec<String> = resolution
+        .diagnostics()
+        .iter()
+        .map(|diagnostic| diagnostic.code.to_string())
+        .collect();
+    // ADR-0032 Q2: impl members are not module-level names.
+    assert_eq!(codes, vec!["R0002".to_owned()]);
+    assert!(resolution.diagnostics()[0].message.contains("`area`"));
+}
+
+#[test]
+fn a_method_call_never_offers_an_impl_member_as_its_rewrite() {
+    let (_, result) = check_one(
+        "struct Counter { count: Int }\n\
+         interface Reset {\n\
+             fn reset(in self) -> Int;\n\
+         }\n\
+         impl Reset for Counter {\n\
+             fn reset(in self) -> Int { self.count }\n\
+         }\n\
+         fn f(in c: Counter) -> Int {\n\
+             c.reset()\n\
+         }\n",
+    );
+    assert_eq!(codes(&result), vec!["T0024".to_owned()]);
+    let diagnostic = &result.diagnostics()[0];
+    // `reset` is reachable only as `Reset::reset(c)`, so a bare `reset(c)`
+    // rewrite would not resolve.
+    assert!(diagnostic.suggestions.is_empty());
 }
 
 #[test]

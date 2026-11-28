@@ -1,0 +1,21 @@
+// ADR-0032 Stage B: the interface forms Stage B refuses. Every member takes
+// its receiver first (`T0029`), has no default body (`T0030`), and neither
+// the interface nor a member has type parameters (`T0031`).
+
+interface Zero {
+    fn zero() -> Self;
+}
+
+interface Scaled {
+    fn scaled(in self, in by: Int) -> Int {
+        by
+    }
+}
+
+interface Convert[T] {
+    fn convert(in self) -> Int;
+}
+
+interface Pick {
+    fn pick[T](in self, take value: T) -> T;
+}

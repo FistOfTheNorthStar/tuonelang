@@ -1,0 +1,2 @@
+elsewhere.tuo:T0037@65..85 `impl Area for Square` is in module `elsewhere`, but it must be in module `shapes`, which declares `Area`, or module `squares`, which declares `Square` | actual text module `elsewhere`
+elsewhere.tuo:T0037@137..154 `impl Area for I64` is in module `elsewhere`, but it must be in module `shapes`, which declares `Area` (`I64` is a builtin type) | actual text module `elsewhere`
