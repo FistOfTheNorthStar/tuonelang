@@ -5,8 +5,12 @@
 //! interpreter. This suite drives the shim **directly**, compiling the real
 //! [`map_runtime_c_source`] with the model checker in `tests/map_model.c` —
 //! thousands of seeded operation sequences against an insertion-ordered
-//! association list, over `Int` and `Str` keys and one- and two-word values,
-//! plus a structural check that removal moves no entry. It builds with
+//! association list, over `Int` and `Str` keys and one-, two- and three-word
+//! values, plus a structural check that removal moves no entry. The three-word
+//! values are owned heap blocks (ADR-0023 Stage B2.2): the model frees the ones
+//! `insert`/`remove` hand back, the shim's `drop_value` callback frees the live
+//! ones at drop, and every run ends with no allocation outstanding, the
+//! callback having run once per live entry. It builds with
 //! `-Wall -Wextra -Werror` and, where the toolchain has them, AddressSanitizer
 //! and UndefinedBehaviorSanitizer, so an out-of-bounds probe or a double free
 //! fails here rather than as a corrupted value three programs later.
