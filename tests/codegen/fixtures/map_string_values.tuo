@@ -1,0 +1,163 @@
+// Map values of type `String` (ADR-0023 Stage B2.2): the owned three-word
+// header as a map value, on both key kinds.
+//
+// Adversarial by construction, because the failure modes here are silent or
+// show up only as a leak or a double free:
+//
+//   * every stored string has a DIFFERENT length, so a value read from the
+//     wrong entry (a bad stride) changes the answer rather than coinciding;
+//   * the `Str`-keyed map stores values whose lengths differ from their keys'
+//     lengths, so reading the key where the value belongs (a bad value offset)
+//     is visible;
+//   * an overwrite's returned previous value and a removal's returned value
+//     are both READ before the final reads, so a move out of the map that
+//     handed back the wrong header, or freed it, is caught;
+//   * reads compare CONTENT (`as_str(v) == "..."`), not only length;
+//   * a `get` result is mutated (`push_byte`) and the key read again: the
+//     stored value must be unchanged, so `get` must deep-copy rather than
+//     alias the map's buffer;
+//   * an overwrite's result is also discarded (`let _ = ...`), which must free
+//     the previous value exactly once;
+//   * both maps are dropped at the end of their functions while they still
+//     hold live entries, after a removal has left a hole whose stale bytes
+//     the drop must not free a second time.
+//
+// Expected exit: 161.
+
+module map_string_values;
+
+/// A `String` of the first `n` lowercase letters, built through `std::string`.
+fn letters(take n: Int) -> String {
+    var s = std::string::empty();
+    var i = 0;
+    while i < n {
+        std::string::push_byte(s, 97 + i);
+        i = i + 1;
+    }
+    s
+}
+
+/// The length of the value under `k`, or 100 for a miss.
+fn len_at(in m: Map[Int, String], take k: Int) -> Int {
+    match std::map::get(m, k) {
+        Some { value } => std::string::len(value),
+        None => 100,
+    }
+}
+
+/// Int-keyed: four distinct lengths, a read and a discarded overwrite, a read
+/// removal, a deep-copy probe, and a miss.
+fn int_keyed() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, 10, std::string::from_str("a"));
+    let _ = std::map::insert(m, 20, letters(4));
+    let _ = std::map::insert(m, 30, letters(9));
+    let _ = std::map::insert(m, 40, letters(5));
+    var total = 0;
+    // A read overwrite: the previous value moves out to the caller intact.
+    match std::map::insert(m, 20, letters(2)) {
+        Some { value } => {
+            if std::string::as_str(value) == "abcd" {
+                total = total + 1;
+            }
+        },
+        None => {},
+    }
+    // A discarded overwrite: the previous value is freed exactly once.
+    let _ = std::map::insert(m, 40, letters(6));
+    // A read removal, leaving a hole at the front of the dense entries.
+    match std::map::remove(m, 10) {
+        Some { value } => {
+            if std::string::as_str(value) == "a" {
+                total = total + 2;
+            }
+        },
+        None => {},
+    }
+    // The deep-copy probe: grow the copy `get` returned, then read the key
+    // again. The stored value must still be nine bytes.
+    match std::map::get(m, 30) {
+        Some { value } => {
+            var grown = value;
+            std::string::push_byte(grown, 33);
+            total = total + std::string::len(grown);
+        },
+        None => {},
+    }
+    total = total + len_at(m, 30);
+    // The final reads, after the overwrites and the removal.
+    total = total + len_at(m, 20);
+    total = total + len_at(m, 40);
+    match std::map::get(m, 40) {
+        Some { value } => {
+            if std::string::as_str(value) == "abcdef" {
+                total = total + 4;
+            }
+        },
+        None => {},
+    }
+    // A miss on the removed key: `None`, not the hole's stale header.
+    total = total + len_at(m, 10);
+    total
+}
+
+/// The length of the value under `k`, or 50 for a miss.
+fn str_len_at(in m: Map[Str, String], in k: Str) -> Int {
+    match std::map::get(m, k) {
+        Some { value } => std::string::len(value),
+        None => 50,
+    }
+}
+
+/// Str-keyed: value lengths deliberately differ from their keys' lengths, so
+/// reading a key where a value belongs is observable.
+fn str_keyed() -> Int {
+    var m = std::map::empty();
+    let _ = std::map::insert(m, "kk", letters(7));
+    let _ = std::map::insert(m, "k", letters(3));
+    let _ = std::map::insert(m, "kkkk", letters(11));
+    var total = 0;
+    match std::map::insert(m, "k", std::string::from_str("xyzwv")) {
+        Some { value } => {
+            if std::string::as_str(value) == "abc" {
+                total = total + 8;
+            }
+        },
+        None => {},
+    }
+    match std::map::remove(m, "kk") {
+        Some { value } => {
+            total = total + std::string::len(value);
+        },
+        None => {},
+    }
+    match std::map::get(m, "k") {
+        Some { value } => {
+            if std::string::as_str(value) == "xyzwv" {
+                total = total + 16;
+            }
+        },
+        None => {},
+    }
+    total = total + str_len_at(m, "k");
+    total = total + str_len_at(m, "kkkk");
+    total = total + str_len_at(m, "kk");
+    total
+}
+
+spec int_keyed {
+    // 1 (overwrite read) + 2 (removal read) + 10 (grown copy) + 9 (stored
+    // value unchanged) + 2 + 6 (final lengths) + 4 (content) + 100 (miss)
+    then int_keyed() == 134;
+}
+
+spec str_keyed {
+    // 8 (overwrite read) + 7 (removed length) + 16 (content) + 5 + 11
+    // (final lengths) + 50 (miss)
+    then str_keyed() == 97;
+}
+
+fn main() -> Int {
+    // 134 + 97 = 231; keep the exit inside a byte.
+    int_keyed() + str_keyed() - 70
+}

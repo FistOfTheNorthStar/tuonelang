@@ -1136,22 +1136,38 @@ fn inferred_map_with_copy_scalar_values_is_accepted() {
 }
 
 #[test]
-fn inferred_map_with_owned_string_value_is_refused() {
-    let (_, result) = check_one(&inferred_map_program("1, std::string::from_str(\"s\")"));
-    assert!(
-        codes(&result).iter().any(|code| code == "T0001"),
-        "`Map[Int, String]` built through `empty()` must be refused; got {:?}",
-        codes(&result)
-    );
+fn inferred_map_with_owned_string_value_is_accepted() {
+    // ADR-0023 Stage B2.2 (first slice): the owned `String` joins the value
+    // set. `get` deep-copies it, `insert`/`remove` move it out, and the map's
+    // drop frees every live entry's buffer, pinned at runtime on all three
+    // engines by `tests/codegen/fixtures/map_string_values.tuo`.
+    assert_clean(&check_one(&inferred_map_program("1, std::string::from_str(\"s\")")).1);
+    assert_clean(&check_one(&inferred_map_program("\"k\", std::string::from_str(\"s\")")).1);
+}
+
+/// [`inferred_map_program`] with a one-`Int`-field struct `P` and a unit-only
+/// enum `E` declared, for the value types Stage B2.2's first slice still
+/// refuses.
+fn inferred_map_program_with_user_types(insert_args: &str) -> String {
+    format!(
+        "module m;\n\
+         struct P {{ x: Int }}\n\
+         enum E {{ A, B }}\n\
+         fn f() -> Int {{\n\
+         \x20   var m = std::map::empty();\n\
+         \x20   std::map::insert(m, {insert_args});\n\
+         \x20   std::map::len(m)\n\
+         }}\n"
+    )
 }
 
 #[test]
 fn inferred_map_error_names_the_solved_pair() {
     // The diagnostic must name the pair inference actually produced, so the
     // message is actionable rather than mentioning an unsolved variable.
-    // `String` is used because it is still outside the value set after
-    // Stage B2 (the borrowed `Str` is now in it).
-    let (_, result) = check_one(&inferred_map_program("1, std::string::from_str(\"s\")"));
+    // A struct is used because it is still outside the value set after
+    // Stage B2.2's first slice (the owned `String` is now in it).
+    let (_, result) = check_one(&inferred_map_program_with_user_types("1, P { x: 1 }"));
     let message = result
         .diagnostics()
         .iter()
@@ -1159,7 +1175,7 @@ fn inferred_map_error_names_the_solved_pair() {
         .collect::<Vec<_>>()
         .join("\n");
     assert!(
-        message.contains("String"),
+        message.contains(", P]`"),
         "the diagnostic should name the solved value type; got: {message}"
     );
 }
@@ -1194,12 +1210,13 @@ fn an_unconstrained_empty_map_is_an_annotation_error_not_a_pair_error() {
 fn a_map_pair_solved_by_a_later_call_is_still_refused() {
     // The value type is determined by `insert` *after* `get` has been checked.
     // Both sites defer, and both must be re-checked once inference has run.
-    // The value is an owned `String`, still outside the Stage B2 value set.
+    // The value is a struct, still outside the Stage B2.2 value set.
     let source = "module m;\n\
+                  struct P { x: Int }\n\
                   fn f() -> Int {\n\
                   \x20   var m = std::map::empty();\n\
                   \x20   let seen = std::map::get(m, 1);\n\
-                  \x20   std::map::insert(m, 1, std::string::from_str(\"s\"));\n\
+                  \x20   std::map::insert(m, 1, P { x: 1 });\n\
                   \x20   std::map::len(m)\n\
                   }\n";
     let (_, result) = check_one(source);
@@ -1211,20 +1228,65 @@ fn a_map_pair_solved_by_a_later_call_is_still_refused() {
 }
 
 #[test]
-fn map_values_that_own_heap_stay_refused() {
-    // ADR-0023 Stage B2 widened the value set to include the *borrowed* `Str`,
-    // which needs no deep copy and no drop glue. A value that genuinely
-    // **owns** heap still needs the deep-copy-on-read and recursive-drop path
-    // (the second half of Stage B2) and must not slip in behind `Str`:
-    // `tuo_rt_map_drop` does not yet run per-value glue, so admitting one
-    // would leak an allocation per entry.
-    let value = "std::string::from_str(\"s\")";
-    let result = check_one(&inferred_map_program(&format!("1, {value}"))).1;
-    assert!(
-        codes(&result).iter().any(|code| code == "T0001"),
-        "a heap-owning map value ({value}) must stay refused; got {:?}",
-        codes(&result)
-    );
+fn map_values_that_own_heap_check_clean_as_string() {
+    // ADR-0023 Stage B2.2 (first slice) admits the one heap-owning value whose
+    // deep copy and drop both backends now emit: `String`, behind both key
+    // kinds. `tuo_rt_map_drop` runs its drop glue on every live entry, so
+    // admitting it leaks nothing.
+    for source in [
+        "module m;\n\
+         fn f() -> Int {\n\
+         \x20   var m: Map[Int, String] = std::map::empty();\n\
+         \x20   let _ = std::map::insert(m, 1, std::string::from_str(\"s\"));\n\
+         \x20   std::map::len(m)\n\
+         }\n",
+        "module m;\n\
+         fn f() -> Int {\n\
+         \x20   var m: Map[Str, String] = std::map::empty();\n\
+         \x20   let _ = std::map::insert(m, \"k\", std::string::from_str(\"s\"));\n\
+         \x20   std::map::len(m)\n\
+         }\n",
+    ] {
+        assert_clean(&check_one(source).1);
+    }
+}
+
+#[test]
+fn struct_and_enum_map_values_stay_refused() {
+    // Struct and enum values are the rest of Stage B2.2: a struct whose only
+    // field is `Int` owns nothing, but it is still outside the value set until
+    // the single-predicate move lands, so it must not slip in behind `String`.
+    // Both the inferred spelling (the one ADR-0023 Stage A found unsound) and
+    // the annotated one are pinned.
+    for value in ["P { x: 1 }", "E::A"] {
+        let result = check_one(&inferred_map_program_with_user_types(&format!(
+            "1, {value}"
+        )))
+        .1;
+        assert!(
+            codes(&result).iter().any(|code| code == "T0001"),
+            "an inferred `{value}` map value must stay refused; got {:?}",
+            codes(&result)
+        );
+    }
+    for (ty, value) in [("P", "P { x: 1 }"), ("E", "E::A")] {
+        let source = format!(
+            "module m;\n\
+             struct P {{ x: Int }}\n\
+             enum E {{ A, B }}\n\
+             fn f() -> Int {{\n\
+             \x20   var m: Map[Int, {ty}] = std::map::empty();\n\
+             \x20   let _ = std::map::insert(m, 1, {value});\n\
+             \x20   std::map::len(m)\n\
+             }}\n"
+        );
+        let result = check_one(&source).1;
+        assert!(
+            codes(&result).iter().any(|code| code == "T0001"),
+            "an annotated `Map[Int, {ty}]` must stay refused; got {:?}",
+            codes(&result)
+        );
+    }
 }
 
 #[test]
