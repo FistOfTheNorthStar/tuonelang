@@ -5,6 +5,11 @@
 //! their type diagnostics — code, span, message, and structured
 //! expected/actual values — are snapshotted into `tests/types/snapshots/`.
 //!
+//! A fixture is one file unless it contains `//@ file <name>` lines, each of
+//! which starts a file of that name (a rule spanning modules, such as impl
+//! placement, needs several). A multi-file fixture's snapshot lines name the
+//! file each diagnostic is in.
+//!
 //! Bless with: `TUO_BLESS=1 cargo test -p tuo-types --test fixtures`
 
 use std::fmt::Write as _;
@@ -23,17 +28,49 @@ struct Checked {
     lines: Vec<String>,
 }
 
+/// The files of a fixture: `(name, text)`, split at `//@ file <name>` lines.
+fn fixture_files(text: &str) -> Vec<(String, String)> {
+    if !text.lines().any(|line| line.starts_with("//@ file ")) {
+        return vec![("fixture.tuo".to_owned(), text.to_owned())];
+    }
+    let mut files: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if let Some(name) = line.strip_prefix("//@ file ") {
+            files.push((name.trim().to_owned(), String::new()));
+        } else if let Some((_, body)) = files.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    files
+}
+
 fn check_fixture(text: &str) -> Checked {
+    let files = fixture_files(text);
     let mut map = SourceMap::new();
-    let file = map.intern_file("fixture.tuo");
-    let id = map.add_source(file, text).expect("fixture fits");
-    let parse = tuo_parser::parse(map.source(id));
-    assert_eq!(
-        parse.diagnostics,
-        vec![],
-        "type fixtures must parse cleanly"
-    );
-    let asts = [Ast::new(&parse.tree, text)];
+    let ids: Vec<_> = files
+        .iter()
+        .map(|(name, text)| {
+            let file = map.intern_file(name);
+            map.add_source(file, text.as_str()).expect("fixture fits")
+        })
+        .collect();
+    let parses: Vec<_> = ids
+        .iter()
+        .map(|&id| tuo_parser::parse(map.source(id)))
+        .collect();
+    for parse in &parses {
+        assert_eq!(
+            parse.diagnostics,
+            vec![],
+            "type fixtures must parse cleanly"
+        );
+    }
+    let asts: Vec<Ast<'_>> = parses
+        .iter()
+        .zip(&files)
+        .map(|(parse, (_, text))| Ast::new(&parse.tree, text))
+        .collect();
     let resolution = tuo_resolve::resolve(&asts);
     let result = tuo_types::check(&asts, &resolution);
     let lines = result
@@ -41,8 +78,17 @@ fn check_fixture(text: &str) -> Checked {
         .iter()
         .map(|diagnostic| {
             let range = diagnostic.primary_span.range();
+            let file = if files.len() > 1 {
+                let index = ids
+                    .iter()
+                    .position(|&id| id == diagnostic.primary_span.source())
+                    .expect("a diagnostic is in a fixture file");
+                format!("{}:", files[index].0)
+            } else {
+                String::new()
+            };
             let mut line = format!(
-                "{}@{}..{} {}",
+                "{file}{}@{}..{} {}",
                 diagnostic.code,
                 range.start().as_usize(),
                 range.end().as_usize(),

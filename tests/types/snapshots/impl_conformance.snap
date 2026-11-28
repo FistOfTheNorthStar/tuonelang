@@ -1,0 +1,6 @@
+T0032@556..575 `impl Area for Point` is missing member `area` | expected name `area`
+T0033@585..594 `perimeter` is not a member of interface `Area` | actual name `perimeter`
+T0034@682..686 the receiver of `area` is `mut` but `Area::area` declares `in` | expected token `in` | actual token `mut`
+T0034@773..777 `area` returns `Bool` but `Area::area` declares `I64` | expected type `I64` | actual type `Bool`
+T0034@919..923 parameter 2 of `grow` has type `Bool` but `Shape::grow` declares `I64` | expected type `I64` | actual type `Bool`
+T0041@1010..1015 `Point` is a struct, not an interface | actual name `Point`

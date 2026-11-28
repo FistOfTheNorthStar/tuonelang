@@ -1,0 +1,4 @@
+T0035@371..374 an `impl` of `Area` has type parameters | actual name `Area`
+T0036@457..466 `Pair[I64]` cannot implement an interface | actual type `Pair[I64]`
+T0036@555..563 `[I64; 2]` cannot implement an interface | actual type `[I64; 2]`
+T0038@700..719 `Point` already implements `Area` | actual type `Point`

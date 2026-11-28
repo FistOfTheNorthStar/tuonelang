@@ -201,7 +201,7 @@ pub struct InterfaceDef {
 }
 
 /// An `impl Interface for Type { … }` block. Impl blocks declare no symbol
-/// of their own.
+/// of their own; each member function has one (ADR-0032 Stage B).
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct ImplDef {
     /// The whole block's span.

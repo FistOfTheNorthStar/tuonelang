@@ -1,0 +1,60 @@
+// ADR-0032 Stage B: an `impl` supplies exactly the interface's members, each
+// with the interface's signature after `Self` becomes the target. A missing
+// member is `T0032` at the impl header, an extra one `T0033` at that member,
+// and a mismatched one `T0034` at that member, with expected and actual.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+struct Circle {
+    r: Int,
+}
+
+struct Square {
+    side: Int,
+}
+
+interface Area {
+    fn area(in self) -> Int;
+}
+
+interface Shape {
+    fn area(in self) -> Int;
+    fn grow(in self, in by: Int) -> Self;
+}
+
+impl Area for Point {
+    fn perimeter(in self) -> Int {
+        2 * (self.x + self.y)
+    }
+}
+
+impl Area for Circle {
+    fn area(mut self) -> Int {
+        self.r * self.r * 3
+    }
+}
+
+impl Area for Square {
+    fn area(in self) -> Bool {
+        self.side > 0
+    }
+}
+
+impl Shape for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+
+    fn grow(in self, in by: Bool) -> Point {
+        Point { x: self.x, y: self.y }
+    }
+}
+
+impl Point for Circle {
+    fn area(in self) -> Int {
+        self.r
+    }
+}

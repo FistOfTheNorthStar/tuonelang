@@ -1,9 +1,9 @@
-// ADR-0032 Stage A: tuonelang has free functions only, and nothing an
-// `interface` or `impl` declares is executed by any engine. The declarations
-// type-check and draw a `T0026` warning; a method call (`T0024`, with the free
-// call offered when exactly one function fits) and a qualified interface-member
-// call (`T0025`) are errors. Before Stage A all of this checked silently and
-// failed later at `run`/`spec` with unrelated messages.
+// ADR-0032 Stage A: tuonelang has free functions only, so a method call is
+// an error (`T0024`, with the free call offered when exactly one function
+// fits). Before Stage A it checked silently and failed later at `run`/`spec`
+// with unrelated messages. Since Stage B the declarations and the qualified
+// interface-member call `Reset::reset(c)` check cleanly, and an impl member is
+// never offered as a method call's rewrite.
 
 struct Counter {
     count: Int,

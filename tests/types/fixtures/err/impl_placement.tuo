@@ -1,0 +1,47 @@
+//@ file shapes.tuo
+// ADR-0032 Stage B: `impl I for T` lives in the module declaring `I` or the
+// one declaring `T`, and with `I` for a builtin `T`. Anywhere else is
+// `T0037`, naming both allowed modules.
+module shapes;
+
+pub interface Area {
+    fn area(in self) -> Int;
+}
+//@ file points.tuo
+module points;
+
+import shapes::Area;
+
+pub struct Point {
+    x: Int,
+    y: Int,
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+}
+//@ file squares.tuo
+module squares;
+
+pub struct Square {
+    side: Int,
+}
+//@ file elsewhere.tuo
+module elsewhere;
+
+import shapes::Area;
+import squares::Square;
+
+impl Area for Square {
+    fn area(in self) -> Int {
+        1
+    }
+}
+
+impl Area for Int {
+    fn area(in self) -> Int {
+        self
+    }
+}

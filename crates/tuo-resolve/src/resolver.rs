@@ -342,7 +342,8 @@ impl Resolver {
 
     fn collect_item(&mut self, module: ModuleId, item: Item<'_>) {
         match item {
-            Item::Import(_) | Item::Impl(_) | Item::Error(_) => {}
+            Item::Import(_) | Item::Error(_) => {}
+            Item::Impl(decl) => self.collect_impl(module, decl),
             Item::Fn(decl) => {
                 self.declare(module, decl.name_ref(), SymbolKind::Function, decl.is_pub());
             }
@@ -357,11 +358,53 @@ impl Resolver {
                     SymbolKind::Interface,
                     decl.is_pub(),
                 );
+                self.distinct_member_names(decl.members().filter_map(FnDecl::name_ref));
             }
             Item::Const(decl) => {
                 self.declare(module, decl.name_ref(), SymbolKind::Const, decl.is_pub());
             }
             Item::Spec(decl) => self.collect_spec(module, decl),
+        }
+    }
+
+    /// Give every member of an `impl` block its own function symbol
+    /// (ADR-0032 Stage B), so later stages can type, lower, and call it. The
+    /// symbol is **not** bound in the module scope: an impl member is reached
+    /// only through its interface (`Area::area(p)`, which the type checker
+    /// selects), never by a bare `area(p)` (Q2). Two members of one block
+    /// sharing a name is `R0001`.
+    fn collect_impl(&mut self, module: ModuleId, decl: tuo_ast::ImplDecl<'_>) {
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        for function in decl.functions() {
+            let Some(name) = function.name_ref() else {
+                continue;
+            };
+            if let Some(&previous) = seen.get(name.text) {
+                self.duplicate_definition(name, Some(previous));
+                continue;
+            }
+            seen.insert(name.text.to_owned(), name.span);
+            self.new_symbol(
+                name.text,
+                SymbolKind::Function,
+                module,
+                false,
+                Some(name.span),
+            );
+        }
+    }
+
+    /// Report `R0001` for an interface member name written twice. Interface
+    /// members declare no symbol of their own; the type checker reads them
+    /// by name, so a repeated name would make `I::m` ambiguous.
+    fn distinct_member_names<'n>(&mut self, names: impl Iterator<Item = Name<'n>>) {
+        let mut seen: HashMap<String, Span> = HashMap::new();
+        for name in names {
+            if let Some(&previous) = seen.get(name.text) {
+                self.duplicate_definition(name, Some(previous));
+            } else {
+                seen.insert(name.text.to_owned(), name.span);
+            }
         }
     }
 

@@ -1,0 +1,76 @@
+// ADR-0032 Stage B: interfaces and impls that conform, placed with their
+// type or interface, called by qualified path. The first argument's type
+// selects the impl at check time.
+
+struct Point {
+    x: Int,
+    y: Int,
+}
+
+enum Shape {
+    Square { side: Int },
+    Rect { w: Int, h: Int },
+}
+
+interface Area {
+    fn area(in self) -> Int;
+    fn scaled(in self, in by: Int) -> Int;
+}
+
+interface Grow {
+    fn grow(mut self, in by: Int);
+    fn reset(take self) -> Self;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int {
+        self.x * self.y
+    }
+
+    fn scaled(in self, in by: Int) -> Int {
+        Area::area(self) * by
+    }
+}
+
+impl Area for Shape {
+    fn area(in self) -> Int {
+        match self {
+            Shape::Square { side } => side * side,
+            Shape::Rect { w, h } => w * h,
+        }
+    }
+
+    fn scaled(in self, in by: Int) -> Int {
+        Area::area(self) * by
+    }
+}
+
+impl Area for Int {
+    fn area(in self) -> Int {
+        self * self
+    }
+
+    fn scaled(in self, in by: Int) -> Int {
+        self * self * by
+    }
+}
+
+impl Grow for Point {
+    fn grow(mut self, in by: Int) {
+        self.x = self.x + by;
+    }
+
+    fn reset(take self) -> Self {
+        Point { x: 0, y: self.y }
+    }
+}
+
+fn main() -> Int {
+    var p = Point { x: 2, y: 3 };
+    Grow::grow(p, 1);
+    let s = Shape::Rect { w: 2, h: 5 };
+    let n: Int = 4;
+    let total = Area::area(p) + Area::scaled(s, 2) + Area::area(n) + Area::area(7);
+    let q = Grow::reset(p);
+    total + q.y
+}
