@@ -1,6 +1,6 @@
 # ADR-0034: Shared state across threads — what may cross `par_map`, atomic `Shared`, and one atomic cell
 
-- **Status:** proposed (Stage A items 1–2 **landed** 2026-10-16; the rest open)
+- **Status:** proposed (Stage A items 1–2 **landed** 2026-10-16; Stage B's point-2 `in` audit **landed** as `crates/tuo-cli/tests/in_borrow_audit.rs`; the rest open)
 - **Date:** 2026-10-14
 
 ## Context
@@ -311,6 +311,11 @@ shim, and a test confirms the shim's parameter is `const`-qualified, so a
 future builtin that writes through `in` fails the build. The router example
 builds its table once (the dogfood oracle is that served counts are
 unchanged), and `concurrent-worker` stays green.
+
+*The point-2 audit has landed:* `crates/tuo-cli/tests/in_borrow_audit.rs`
+checks its table against `Builtin::param_modes` and every listed shim
+parameter against the runtime's C source. The rest of Stage B (`in`
+elements and context, the router table) is still open.
 
 ### Stage C — `Atomic` (D3)
 
