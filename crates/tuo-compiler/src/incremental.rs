@@ -52,7 +52,7 @@ use tuo_ast::Ast;
 use tuo_db::{Computed, QueryCtx, QueryEngine, QueryHost, QueryKey, downcast, stored};
 use tuo_resolve::{Resolution, SymbolId, SymbolKind};
 use tuo_source::{FileId, SourceId, SourceMap};
-use tuo_types::{Ty, TypeckResult};
+use tuo_types::{FnTy, Ty, TypeckResult};
 
 /// Query-kind tags (the `kind` field of a [`QueryKey`]).
 mod kind {
@@ -101,7 +101,8 @@ struct ParseDigest {
 }
 
 /// One item's signature entry in a file's interface: its symbol, name, kind,
-/// visibility, and signature type. Deliberately **excludes** function bodies,
+/// visibility, and signature type — for an `interface`, its members'
+/// signatures (ADR-0032 Stage B). Deliberately **excludes** function bodies,
 /// so a body-only edit leaves the interface equal.
 #[derive(Clone, PartialEq, Eq, Debug)]
 struct InterfaceItem {
@@ -110,6 +111,7 @@ struct InterfaceItem {
     kind_tag: u8,
     is_pub: bool,
     signature: Option<Ty>,
+    members: Vec<(String, FnTy)>,
 }
 
 /// A file's signature-level interface: its items' signatures, in symbol order.
@@ -627,6 +629,12 @@ impl QueryHost for IncrementalSession {
                 for file in self.files() {
                     let _ = ctx.query(interface_key(file))?;
                 }
+                // An impl member's check is its impl's check (ADR-0032 Q5:
+                // an impl-body edit re-checks that impl), so it also reads
+                // the member's own body.
+                if self.with_snapshot(|snap| snap.types.impl_member(symbol).is_some()) {
+                    let _ = ctx.query(body_key(symbol))?;
+                }
                 let ty = self.with_snapshot(|snap| snap.types.type_of(symbol).cloned());
                 Ok(Computed::new(
                     stored(SignatureType(ty)),
@@ -810,6 +818,7 @@ fn build_interface(snap: &Snapshot, file: FileId) -> Interface {
                 kind_tag: kind_tag(symbol.kind),
                 is_pub: symbol.is_pub,
                 signature: snap.types.type_of(id).cloned(),
+                members: snap.types.interface_members(id).to_vec(),
             }
         })
         .collect();
