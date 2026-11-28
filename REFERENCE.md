@@ -166,7 +166,7 @@ let wide: I64 = small as I64;
 | `[T; N]` | Fixed-capacity inline array, length is part of the type |
 | `String` | Owned, growable, heap-backed byte buffer (`std::string`; runnable since ADR-0009) |
 | `Array[T]` | Owned, growable, heap-backed sequence (`std::array`; runnable since ADR-0009, element-generic since ADR-0012). Supported elements: `Int`, `Float` (since ADR-0016), `Bool`, `Str`, `String`, and structs/enums built from them |
-| `Map[K, V]` | Owned, heap-backed hash map (`std::map`; since ADR-0011). The v0 operation surface is `Map[Int, Int]` and `Map[Str, Int]` |
+| `Map[K, V]` | Owned, heap-backed hash map (`std::map`; since ADR-0011). The v0 operation surface is an `Int`/`Str` key with an `Int`/`Bool`/`Float`/`Str`/`String` value (ADR-0023); struct and enum values are not yet supported |
 | `Box[T]` | A unique, owning heap pointer: `std::boxed::new(v)`, `get(b)` (a copy), `into(b)` (move out). Native since ADR-0028 Stage B |
 | `Shared[T]`, `Weak[T]` | Heap-wrapper **values** (declared; no constructor, not in the runnable core) |
 | `()` | Unit |
@@ -543,11 +543,12 @@ it is heap-backed, **non-Copy** (passing one by value moves it), exposed as
 builtin free functions under `std::map::…` — no literal syntax, no `.method` —
 and it runs in all three engines.
 
-The **type** `Map[K, V]` is generic, but the v0 **operation surface is
-monomorphic** over two instantiations: **`Map[Int, Int]`** and
-**`Map[Str, Int]`**. A call with any other key or value type is an ordinary
-`T0001`. Key and value types are witnessed by context, so an `empty()` whose
-pair never gets determined is `T0011`.
+The **type** `Map[K, V]` is generic, but the v0 **operation surface** is a
+fixed set: the key `K` is **`Int`** or **`Str`**, and the value `V` is
+**`Int`**, **`Bool`**, **`Float`**, **`Str`**, or **`String`** (ADR-0023). A
+call with any other key or value type — a struct, an enum, or a nested `Map`
+value — is an ordinary `T0001`. Key and value types are witnessed by context,
+so an `empty()` whose pair never gets determined is `T0011`.
 
 ```tuo
 var m = std::map::empty();
@@ -602,6 +603,24 @@ let ks = std::map::keys(m);
 `Map[Str, Int]` is the identical surface with `K = Str`, which composes with
 `std::string::as_str` (ADR-0010) to key a map by an owned `String`'s bytes.
 
+An owned **`String` value** (ADR-0023 Stage B2.2) follows the ownership rules
+an `Array[String]` element does. `insert` moves the value in. `get` returns a
+**copy**: mutating it leaves the stored value unchanged. The previous value
+`insert` returns and the value `remove` returns are **moved out** of the map,
+and the caller owns them. Dropping the map frees every value still in it.
+
+```tuo
+var names = std::map::empty();
+let _ = std::map::insert(names, "ada", std::string::from_str("Lovelace"));
+match std::map::get(names, "ada") {
+    Some { value } => {
+        var copy = value;
+        std::string::push_byte(copy, 33);   // the stored value is unchanged
+    },
+    None => {},
+}
+```
+
 Map operations are **pure** (allocation is deterministic, not an effect), so
 specs may build maps in the sandbox. `std::collections::counts(in xs:
 Array[Int]) -> Map[Int, Int]` is the stdlib's frequency table over this surface:
@@ -616,9 +635,10 @@ spec distinct_count {
 }
 ```
 
-Deferred, honestly: map **values** beyond `Int` (`Map[Str, String]` and friends
-are an additive later increment — the *type* admits any `V`, the v0 *ops* are
-`V = Int`), and a `Set[K]` (a set is a `Map[K, Unit]`; the map ships first).
+Deferred, honestly: struct, enum, and nested `Map` **values** (the rest of
+ADR-0023 Stage B2.2 — the *type* admits any `V`, the v0 *ops* are the value set
+above), user key types (they need the trait system's `Hash`/`Eq`), and a
+`Set[K]` (a set is a `Map[K, Unit]`; the map ships first).
 
 ---
 
@@ -920,7 +940,7 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Floats (`F32`/`F64`) arithmetic, comparison, casts | ✅ | ✅ | ✅ |
 | `Str` values (literals, `==`, `std::str::len`/`byte_at`/`slice`) | ✅ | ✅ | ✅ |
 | Owned `String`, growable `Array[T]` (`std::string`/`std::array` incl. `set`; elements `Int`/`Float`/`Bool`/`Str`/`String` + supported structs/enums) | ✅ | ✅ | ✅ |
-| `Map[K, V]` hash map (`std::map`; surface `Map[Int, Int]` / `Map[Str, Int]`), insertion-ordered `keys` | ✅ | ✅ | ✅ |
+| `Map[K, V]` hash map (`std::map`; `Int`/`Str` key, `Int`/`Bool`/`Float`/`Str`/`String` value), insertion-ordered `keys` | ✅ | ✅ | ✅ |
 | `std::json` (`parse`/`render`, arena accessors — all pure) | ✅ | ✅ | ✅ |
 | First-class (non-capturing) function values `fn(mode T, …) -> R`, indirect calls | ✅ | ✅ | ✅ |
 | `std::rt::write`/`read_byte`/`write_string`/`exit` host effects | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
