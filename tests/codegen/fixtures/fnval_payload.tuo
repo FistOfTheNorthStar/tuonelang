@@ -1,0 +1,32 @@
+// A function value carried as a payload (ADR-0033 Stage A, which pins the
+// function-valued shapes that already run): once as an `Option[fn(...)]`
+// payload and once as a field of an enum variant beside an `Int`. Each is
+// matched out and called; the `None` and the other variant take distinct
+// fallbacks, so a wrong arm or wrong handler changes the exit code.
+enum Action { Apply { f: fn(take Int) -> Int, x: Int }, Skip }
+
+fn halve(take x: Int) -> Int { x / 2 }
+fn plus_nine(take x: Int) -> Int { x + 9 }
+
+fn call_opt(take o: Option[fn(take Int) -> Int], take x: Int) -> Int {
+    match o {
+        Some { value } => value(x),
+        None => 1,
+    }
+}
+
+fn perform(take a: Action) -> Int {
+    match a {
+        Action::Apply { f, x } => f(x),
+        Action::Skip => 3,
+    }
+}
+
+fn main() -> Int {
+    // Option: halve(40) = 20 ; None => 1
+    let o = call_opt(Some { value: halve }, 40) + call_opt(None, 40);
+    // Enum: plus_nine(30) = 39 ; Skip => 3
+    let e = perform(Action::Apply { f: plus_nine, x: 30 }) + perform(Action::Skip);
+    // 21 + 2 * 42 = 105
+    o + 2 * e
+}

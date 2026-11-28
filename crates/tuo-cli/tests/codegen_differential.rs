@@ -267,6 +267,9 @@ fn function_values_match_the_interpreter() {
     // direct-call ABI (scalar/aggregate/borrow args, sret return) — only the
     // call target differs. The default (Cranelift) backend must agree with the
     // interpreter, which dispatches an indirect call exactly like a direct one.
+    // ADR-0033 Stage A adds a function value stored as data: a fixed `[fn; N]`
+    // table, a struct field, an `Option` payload and enum variant field, and a
+    // fixed `[Route; N]` with an owned `String` beside the `fn`.
     for name in [
         "fnval_apply.tuo",
         "fnval_fold.tuo",
@@ -274,6 +277,10 @@ fn function_values_match_the_interpreter() {
         "fnval_aggregate_ret.tuo",
         "fnval_borrow_arg.tuo",
         "fnval_const_forwarded.tuo",
+        "fnval_fixed_table.tuo",
+        "fnval_struct_field.tuo",
+        "fnval_payload.tuo",
+        "fnval_fixed_route_table.tuo",
     ] {
         assert_agrees(name);
     }

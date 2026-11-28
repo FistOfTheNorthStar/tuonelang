@@ -597,20 +597,29 @@ fn map_operations_agree_across_all_three_engines() {
 /// callee value's `Ty::Fn` (identical ABI to the direct path). All three engines
 /// must agree: the interpreter dispatches an indirect call exactly like a direct
 /// one, and both backends materialize the function's address and call through
-/// it. The five fixtures cover a function value passed and called (`apply`), a
+/// it. The fixtures cover a function value passed and called (`apply`), a
 /// hand fold applying it repeatedly (`fold3`), a value flowing through a local
 /// and a branch (`select`), an indirect call whose callee returns a struct (the
-/// sret path — `aggregate_ret`), and an indirect call to a `mut`-parameter
-/// function whose write-back is observed by the caller (the borrow path).
+/// sret path — `aggregate_ret`), an indirect call to a `mut`-parameter
+/// function whose write-back is observed by the caller (the borrow path), and
+/// a `const fn` forwarded into the callee operand. ADR-0033 Stage A adds the
+/// function value as data: a fixed `[fn; N]` table (literal, indexed read,
+/// `for`, repeat literal, indexed write), a struct field, an `Option` payload
+/// and an enum variant field, and a fixed `[Route; N]` whose element holds an
+/// owned `String` beside the `fn`.
 #[test]
 fn function_values_agree_across_all_three_engines() {
     for name in [
-        "fnval_apply.tuo",           // fn value passed as an arg + called indirectly
-        "fnval_fold.tuo",            // one indirect-call site over two code pointers
-        "fnval_select.tuo",          // fn value through a scalar local + a branch
-        "fnval_aggregate_ret.tuo",   // indirect call, struct return via sret
-        "fnval_borrow_arg.tuo",      // indirect call, `mut` borrow write-back
-        "fnval_const_forwarded.tuo", // opt forwards `const fn` into the callee
+        "fnval_apply.tuo",             // fn value passed as an arg + called indirectly
+        "fnval_fold.tuo",              // one indirect-call site over two code pointers
+        "fnval_select.tuo",            // fn value through a scalar local + a branch
+        "fnval_aggregate_ret.tuo",     // indirect call, struct return via sret
+        "fnval_borrow_arg.tuo",        // indirect call, `mut` borrow write-back
+        "fnval_const_forwarded.tuo",   // opt forwards `const fn` into the callee
+        "fnval_fixed_table.tuo",       // `[fn; N]` literal, index, `for`, `[f; N]`, `t[i] = g`
+        "fnval_struct_field.tuo",      // fn struct field read and called
+        "fnval_payload.tuo",           // fn in an `Option` payload and an enum variant field
+        "fnval_fixed_route_table.tuo", // `[Route; N]`, a `String` beside the fn
     ] {
         assert_three_way_agreement(name);
     }

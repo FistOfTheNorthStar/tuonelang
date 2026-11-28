@@ -1,0 +1,24 @@
+// A struct with a function-valued field (ADR-0033 Stage A, which pins the
+// function-valued shapes that already run). Two `Op` values carry different
+// handlers beside a scalar argument; each field is read back and called, so
+// calling the wrong handler or reading the wrong field changes the exit code.
+struct Op { arg: Int, handler: fn(take Int) -> Int }
+
+fn triple(take x: Int) -> Int { x * 3 }
+fn minus_seven(take x: Int) -> Int { x - 7 }
+
+fn run(take op: Op) -> Int {
+    let h = op.handler;
+    h(op.arg)
+}
+
+fn main() -> Int {
+    let a = Op { arg: 11, handler: triple };
+    let b = Op { arg: 50, handler: minus_seven };
+    // A field read and called in place: triple(11) = 33.
+    let g = a.handler;
+    let direct = g(a.arg);
+    // Through a parameter: minus_seven(50) = 43; doubled to weight it apart.
+    // 33 + 2 * 43 = 119
+    direct + 2 * run(b)
+}

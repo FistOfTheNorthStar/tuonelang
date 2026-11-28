@@ -151,13 +151,75 @@ ADR-0024's D3 keeps two options open:
 
 ## Staging
 
-**Stage A — measure, then pin what already works.** Temporarily relax the arm
+**Stage A — measure, then pin what already works.** — **LANDED (2026-11-28)** Temporarily relax the arm
 and run all three engines over `push`/`get`/`set`/`pop`/`filled` with `fn`
 elements and with an `Array[Route]` carrying a `String` beside the `fn`. Record
 any premise above that fails, in this ADR. Whatever happens, add three-way
 fixtures for what runs today: a fixed `[fn; N]` table, a `fn` struct field, a
 `fn` enum/`Option` payload, and a `[Route; N]`. This half is independently
 landable.
+
+### Stage A measurements
+
+Measured 2026-11-28 on Linux x86-64 with the `tuo` debug binary built from
+`main`, after temporarily adding `Ty::Fn(_) => true` to
+`is_supported_array_element`. The relaxation was reverted afterwards and is
+not part of this change; the probe programs were throwaway and are not
+committed. Each probe's `main` returns a distinct value, computed from
+dissimilar handlers weighted by position, so a wrong element, stride or handler
+would change it. The commands, per engine:
+
+- check: `tuo check probe.tuo`
+- interpreter: `tuo spec probe.tuo`, over a spec `then main() == <expected>;`
+- Cranelift: `tuo run probe.tuo; echo $?`
+- LLVM: `tuo run --release probe.tuo; echo $?`
+
+| Probe | check | interp | Cranelift | LLVM |
+|---|---|---|---|---|
+| `std::array::push` three handlers, `std::array::get` each and call it, plus `len` | ok | 104 | 104 | 104 |
+| `push` three, `std::array::set(hs, 0, sq)` and `hs[1] = neg`, `pop` matched and called, `get` the rest | ok | 61 | 61 | 61 |
+| `std::array::filled(4, inc)`, `hs[2] = sq`, `get` each and call it | ok | 87 | 87 | 87 |
+| `Array[Route]` (`path: String` beside `handler: fn(take Int) -> Int`) built by `push` through a `mut` parameter, `get` each, path length fed to its handler | ok | 108 | 108 | 108 |
+| `std::array::get(hs, 2)` on a two-element `Array[fn(…)]` | ok | trap `index_out_of_bounds` | 134 | 134 |
+| `hs[2]` on a two-element `Array[fn(…)]` | ok | trap `index_out_of_bounds` | 134 | 134 |
+
+Every engine agreed on every probe. With the one checker arm added, nothing
+else refused, crashed or diverged. On the unmodified checker the same probes
+fail `check` with `T0001` (`` `Array[fn(take I64) -> I64]` is not supported in
+v0 `` and `` `Array[Route]` is not supported in v0 ``).
+
+The premises in "Why the backends should need no new code":
+
+- **`scalar_type` dispatch for push, set and get** — held. Push, `set`, the
+  indexed write and `get` stored and loaded the code pointer on both backends,
+  and the call through the loaded value reached the right handler.
+- **Stride and layout for `filled` and `pop`** — held. `filled` laid out four
+  copies that an indexed write could patch singly, and `pop` returned the last
+  element as `Some` and left the first two in place. The `Array[Route]` probe
+  read both fields of every element at the right offset.
+- **`ty_owns_heap` is false for `Ty::Fn`** — held. No glue ran on the `fn`
+  elements, and in `Array[Route]` the `String` field beside the `fn` was deep
+  copied on `get` and dropped without a trap or a wrong length.
+- **`require_native_array_element` and `ty_contains_wrapper`** — held. Neither
+  backend refused an `Array[fn(…)]` or an `Array[Route]` element, since
+  `ty_contains_wrapper` does not descend into a function signature.
+- **The interpreter's `Value::Fn` inside `Value::Array`** — held. The
+  interpreter gave the same results as both backends, including the bounds
+  trap on a non-empty array, which finding 1 had measured only on an empty one.
+
+Pinned by the four fixtures this stage adds under `tests/codegen/fixtures/`,
+each listed in `function_values_agree_across_all_three_engines`
+(`codegen_three_way.rs`) and `function_values_match_the_interpreter`
+(`codegen_differential.rs`), and all passing on the unmodified checker:
+
+- `fnval_fixed_table.tuo` (exit 151): a `[fn(take Int) -> Int; 3]` literal,
+  an indexed read and call, a `for` over the table, a `[inc; 4]` repeat
+  literal, and an indexed write `r[2] = sq`.
+- `fnval_struct_field.tuo` (exit 119): a struct `fn` field, read and called.
+- `fnval_payload.tuo` (exit 105): a `fn` as an `Option` payload and as an
+  enum variant field, each matched out and called.
+- `fnval_fixed_route_table.tuo` (exit 108): a fixed `[Route; 3]` with an
+  owned `String` path beside the `fn` handler.
 
 **Stage B — the widening.** The checker arm. New three-way fixtures under
 `tests/codegen/fixtures/` (`fnval_array_push_get`, `fnval_array_set_pop`,
