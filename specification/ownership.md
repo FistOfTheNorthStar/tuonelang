@@ -139,6 +139,15 @@ not repeat the mode — the callee's signature is the contract.
   the call). Inside the callee, `x` is a mutable, owned place: it may be
   read, mutated, moved out of, returned, or simply dropped at scope end.
 
+**Nothing writes through an `in` borrow.** In user code, a write through an
+`in` parameter is `O0004` (§7). A builtin's body is not user code, so the
+builtins are audited instead: `crates/tuo-cli/tests/in_borrow_audit.rs`
+lists every builtin with an `in` parameter, records whether both backends
+lower it inline or through a runtime shim, and checks that each such shim
+takes the `in` data as a `const`-qualified pointer. Because nothing writes
+through `in`, `in` data is safe for several threads to read at once. This
+is point 2 of ADR-0034's invariant.
+
 **The borrow rule (frozen).** At any point a value has either any number of
 `in` borrows or exactly one `mut` borrow, never both. Because v0 has no
 reference types, a borrow exists **only while its call executes**; borrows

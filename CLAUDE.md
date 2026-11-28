@@ -891,7 +891,10 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   method call is the error `T0024`, with a machine-applicable rewrite to the
   free function when exactly one fits; a qualified interface-member call is
   `T0025`; an `interface`/`impl` declaration draws the `T0026` warning because
-  it lowers to nothing), ADR-0034's worker-stack items, and ADR-0035 Stage A
+  it lowers to nothing), ADR-0034's worker-stack items and its point-2 `in`
+  audit (every builtin with an `in` parameter is listed with the runtime
+  shims it lowers to, each shim's `in` pointer checked `const` against the
+  C source by `crates/tuo-cli/tests/in_borrow_audit.rs`), and ADR-0035 Stage A
   (an index operand of any integer type — checked to be an integer like the
   ADR-0019 shift amount, defaulting to `I64`, a non-integer `T0001` expecting
   "an integer type" — lowered as `cast int_to_int` into the `Usize` index temp

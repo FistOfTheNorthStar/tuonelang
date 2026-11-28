@@ -82,7 +82,7 @@ the replacement, preserving the decision history.
 | [ADR-0031](ADR-0031-wrapping-arithmetic-and-rotation.md) | Wrapping arithmetic and rotation — named non-trapping integer operations (Q-0006) | accepted (all stages landed) |
 | [ADR-0032](ADR-0032-traits-and-method-dispatch.md) | Interfaces and method dispatch — bounds first, and no `x.f()` until it is measured | proposed (Stage A landed) |
 | [ADR-0033](ADR-0033-function-valued-array-elements.md) | Function-valued array elements — admitting `fn` values to the growable `Array` | proposed |
-| [ADR-0034](ADR-0034-shared-state-across-threads.md) | Shared state across threads — what may cross `par_map`, atomic `Shared`, and one atomic cell | proposed (worker stacks landed) |
+| [ADR-0034](ADR-0034-shared-state-across-threads.md) | Shared state across threads — what may cross `par_map`, atomic `Shared`, and one atomic cell | proposed (worker stacks and `in` audit landed) |
 | [ADR-0035](ADR-0035-integer-index-operand.md) | The index operand — any integer type, bounds-checked, never cast | proposed (Stage A landed) |
 | [ADR-0036](ADR-0036-tls-in-tuonelang.md) | TLS in tuonelang — admitting ciphers, key exchange, and certificates into the standard library | accepted (retroactive; conformance gaps fixed) |
 | [ADR-0037](ADR-0037-reading-through-borrows.md) | Reading through borrows — lent pattern bindings, and a boxed pointee lent without a copy | accepted |
