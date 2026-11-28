@@ -889,15 +889,29 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   ADR-0031 Stage A (a `#[constant_time]` shift by a non-literal amount is
   `T0019`, since the amount's range check is a branch), ADR-0032 Stage A (a
   method call is the error `T0024`, with a machine-applicable rewrite to the
-  free function when exactly one fits; a qualified interface-member call is
-  `T0025`; an `interface`/`impl` declaration draws the `T0026` warning because
-  it lowers to nothing), ADR-0034's worker-stack items, and ADR-0035 Stage A
+  free function when exactly one fits), ADR-0034's worker-stack items, and ADR-0035 Stage A
   (an index operand of any integer type — checked to be an integer like the
   ADR-0019 shift amount, defaulting to `I64`, a non-integer `T0001` expecting
   "an integer type" — lowered as `cast int_to_int` into the `Usize` index temp
   in front of the unchanged bounds check, so a negative index traps
   `IndexOutOfBounds`; pinned three-way, trap kind included, by
-  `integer_index_operands_agree_across_all_three_engines`).
+  `integer_index_operands_agree_across_all_three_engines`). ADR-0032 **Stage B
+  has landed** too: interfaces and impls are checked — every member takes its
+  receiver first (`T0029`; no default bodies, `T0030`; no generic interfaces or
+  members, `T0031`), an impl supplies exactly its interface's members with
+  `Self` substituted, modes included (`T0032`–`T0034`), targets a non-generic
+  struct/enum or builtin scalar (`T0035`/`T0036`), lives with its interface or
+  its type (`T0037`), and is the only impl of its pair (`T0038`) — and a
+  non-generic `Area::area(p)` selects the impl by its first argument's type at
+  check time (`T0039`/`T0040` otherwise), published in
+  `TypeckResult::impl_call` for the ownership checker and MIR lowering, which
+  lowers each impl member as an ordinary function (`Area::area[Point]`) and
+  the call as a direct call, pinned three-way by
+  `interface_calls_agree_across_all_three_engines`. Impl members are not
+  module-level names (a bare `area(p)` is `R0002`), the `T0026` warning is
+  retired, and `T0025` now refuses only a qualified call on a value of generic
+  type: bounds stay unenforced and generic bodies cannot call members until
+  Stage C.
 - **The 0.1 release gate is a checklist backed by artifacts, and the report is
   generated, never asserted.** `specification/RELEASE-0.1-GATE.md` fixes the sixteen
   criteria that must be `MET` (or explicitly `RELEASE-BLOCKING`) before tuonelang 0.1
@@ -1170,8 +1184,9 @@ plus `benchmarks/`, `corpus/`, `examples/`, and `specification/adr/`.
   have globally unique names and only 61 collide (28 shared names, most of
   them field-arithmetic vocabulary such as `add`/`mul`/`zero` inside the
   crypto stack), so the twenty-four-module split is not what makes a name
-  hard to place. Because **methods are not lowered** (`impl`
-  method calls are v0 no-ops pending the trait system), the library is *free
+  hard to place. Because **there is no method syntax** (`x.f()` is
+  `T0024`; interface members are called by path since ADR-0032 Stage B, and
+  generic code cannot call them until Stage C), the library is *free
   functions only*, and each module separates an **executable tier** (pure
   computation — ordering, `Option`/`Result` combinators, `Duration` arithmetic,
   error classification, the pure state models of a latch/lock — which runs and

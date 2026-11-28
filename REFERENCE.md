@@ -368,9 +368,9 @@ let c = Color::Red;
 let sh = Shape::Circle { r: 4 };
 ```
 
-- Field access is `p.x`. **Method syntax is not lowered in v0** — `impl` blocks
-  and interfaces parse, but you write free functions (`area(s)`, not
-  `s.area()`). The stdlib follows the same rule.
+- Field access is `p.x`. **There is no method syntax**: `s.area()` is the
+  error `T0024`. Write free functions (`area(s)`), or an interface member
+  called by its path (`Area::area(s)`, §9a). The stdlib is free functions only.
 - **A struct or enum may not reach itself** through its own fields/payloads —
   through any chain of by-value fields, array/map elements, `Option`/`Result`
   payloads, or tuple/fixed-array components. That is a type error at the
@@ -378,6 +378,59 @@ let sh = Shape::Circle { r: 4 };
   `Box`/`Shared`/`Weak` indirection. Recursive data holds itself behind a
   `Box` (`next: Option[Box[Node]]`, built with `std::boxed::new`), or uses the
   index-arena pattern (the way `std::json` does).
+
+---
+
+## 9a. Interfaces and impls (ADR-0032 Stage B)
+
+An interface declares members whose first parameter is the receiver
+(`in self`, `mut self` or `take self`); `Self` is the implementing type. An
+`impl Interface for Type` supplies every member with exactly that signature,
+`Self` replaced by the type, modes included. A member is called by its path,
+receiver first, and the type of the first argument selects the impl:
+
+```tuo
+struct Point { x: Int, y: Int }
+
+interface Area {
+    fn area(in self) -> Int;
+    fn scaled(in self, in by: Int) -> Int;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int { self.x * self.y }
+    fn scaled(in self, in by: Int) -> Int { Area::area(self) * by }
+}
+
+impl Area for Int {
+    fn area(in self) -> Int { self * self }
+    fn scaled(in self, in by: Int) -> Int { self * by }
+}
+
+fn main() -> Int {
+    let p = Point { x: 2, y: 3 };
+    Area::area(p) + Area::scaled(p, 2) + Area::area(4)   // 6 + 12 + 16
+}
+```
+
+- **Qualified calls only.** `area(p)` does not name the member (`R0002`), and
+  `p.area()` is a method call (`T0024`). A spec cannot target an impl member;
+  spec the ordinary function that calls it.
+- **Conformance** is checked: a missing member is `T0032`, an extra one `T0033`,
+  a different signature (a mode, a parameter or return type, the count) `T0034`.
+- **Targets** are non-generic structs and enums and the builtin scalars
+  (integers, floats, `Bool`, `Char`, `Str`). `impl[T] …` is `T0035`; `Pair[Int]`,
+  `Array[Int]`, `Option[Int]`, tuples, arrays and function types are `T0036`.
+- **Placement and coherence:** an impl lives in the module that declares the
+  interface or the one that declares the type (with the interface, for a
+  builtin type), `T0037` otherwise; one impl per interface and type, `T0038`.
+- **Not supported:** members without a receiver first (`fn zero() -> Self;`,
+  `T0029`), default member bodies (`T0030`), generic interfaces and generic
+  members (`T0031`). Bounds such as `fn f[T: Area]` resolve but are **not
+  enforced**, and a generic body cannot call an interface member:
+  `Area::area(v)` with `v: T` is `T0025` until ADR-0032 Stage C.
+- Impl members run on every engine: each lowers as an ordinary function
+  (`Area::area[Point]` in `tuo debug mir`) and the call is a direct call.
 
 ---
 
@@ -933,7 +986,9 @@ Float operations (where they run at all) follow IEEE-754 and never trap.
 | Stdlib effect tier: `std::io::print`/`println`/`read_line`, `std::process::exit`/`arg_count`/`arg`, `std::time::now`, `std::fs::read`/`write`/`exists`/`remove`, `std::net::listen`/`bound_port`/`accept`/`connect`/`close`/`accept_timeout`/`connect_timeout`/`read_byte_timeout`/`listen6`/`peer_family`/`udp_bind`/`udp_send`/`udp_recv`/`udp_byte_at`/`udp_peer_port`, `std::sync::par_map`/`channel`/`send`/`recv`/`close`/`mutex`/`lock`/`unlock` | ✅ | ❌ (sandbox; specs gated by `R0007`) | ✅ |
 | `Box[T]` values (`std::boxed::new`/`get`/`into`), recursive types through `Box` (ADR-0028 Stage B) | ✅ | ✅ | ✅ |
 | Capturing closures (Tier 2), `Shared`/`Weak` heap-wrapper values | declared / refused | ❌ | ❌ refused |
-| Method calls, `impl` bodies | parse | not lowered | not lowered |
+| Interface members called as `Interface::member(x, …)` on a concrete type (ADR-0032 Stage B) | ✅ | ✅ | ✅ |
+| Interface calls on a generic type (`T0025`), enforced bounds (ADR-0032 Stage C) | ❌ refused / not enforced | ❌ | ❌ |
+| Method calls `x.f()` | ❌ refused (`T0024`) | ❌ | ❌ |
 | Recursive nominal types (a struct/enum reaching itself without a `Box`/`Shared`/`Weak` indirection) | ❌ refused (`T0016`) | ❌ | ❌ |
 
 "Refused" means a clear `Unsupported` error naming the construct, pointing you
@@ -956,8 +1011,15 @@ invalid cast · `T0009` invalid `?` · `T0010` wrong type-argument count ·
 break/continue outside loop · `T0014` invalid fixed-array length · `T0015` a
 builtin or generic function is not first-class (cannot be used as a value) ·
 `T0016` recursive struct/enum without a `Box`/`Shared`/`Weak` indirection ·
+`T0024` method call · `T0025` interface call on a generic type (Stage C) ·
 `T0027` integer literal out of range · `T0028` `const` initializer is not a
-constant expression.
+constant expression · `T0029` interface member without a receiver first ·
+`T0030` default member body · `T0031` generic interface or member · `T0032`
+impl missing a member · `T0033` impl member not in the interface · `T0034`
+impl member signature differs · `T0035` generic impl · `T0036` impl target not
+a concrete nominal or scalar type · `T0037` misplaced impl · `T0038` duplicate
+impl · `T0039` not a member of the interface · `T0040` type does not implement
+the interface · `T0041` `impl` of something that is not an interface.
 
 **Ownership** — `O0001` use of moved value · `O0003` move out of borrowed
 param · `O0005` conflicting borrows in a call · `O0006` move of borrowed value

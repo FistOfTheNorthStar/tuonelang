@@ -1,6 +1,6 @@
 # ADR-0032: Interfaces and method dispatch — bounds first, and no `x.f()` until it is measured
 
-- **Status:** proposed (Stage A **landed** 2026-10-16; Stages B–D open)
+- **Status:** proposed (Stage A **landed** 2026-10-16; Stage B **landed** 2026-11-28; Stages C–D open)
 - **Date:** 2026-10-14
 
 ## Context
@@ -282,7 +282,34 @@ worth landing even if nothing else here is.
 D3, D4, and conformance. Impl members lower as ordinary MIR functions and a
 non-generic `Area::area(p)` lowers to a direct call, pinned three-way. Little
 use alone — it is a longer spelling of `point_area(p)` — it is staged so the
-checking rules are tested before generic code depends on them.
+checking rules are tested before generic code depends on them. *Landed
+2026-11-28.* The checker refuses an interface member without a receiver first
+(`T0029`), with a default body (`T0030`), and type parameters on an interface or
+a member (`T0031`); checks conformance — a missing member (`T0032`), an extra
+one (`T0033`), a differing signature, modes included (`T0034`); refuses a
+generic impl (`T0035`), a non-concrete target (`T0036`: targets are non-generic
+user structs and enums and the builtin scalars, `Str` included), a misplaced
+impl (`T0037`), a duplicate `(I, T)` impl (`T0038`), and `impl X for T` where
+`X` is not an interface (`T0041`); and resolves `I::m(x, …)` to the member of
+the impl for the type of `x`, with an unknown member `T0039` and a type with no
+impl `T0040`. The selection is published in `TypeckResult::impl_call`, which the
+ownership checker (the member's modes) and MIR lowering (a direct call to the
+member, named `Area::area[Point]`) read. `T0025` narrows to a qualified call on
+a value of generic type, which is Stage C; the `T0026` warning is retired.
+Bounds stay unenforced. The open questions were settled for this stage as
+follows: **Q1** not needed — with no generics the impl is selected at check
+time and the lowered call names the member, so the interpreter runs it as an
+ordinary function; **Q2** qualified calls only, impl members are not
+module-level names; **Q3** no syntax for a spec to name an impl member — impl
+members run through specs on ordinary functions that call them; **Q4** default
+member bodies are refused; **Q5** the impl-body and interface-signature edits
+are pinned in `tuo-compiler/tests/incremental_stages.rs`; **Q6** the codes above
+are the next free ones after `T0028`. Pinned by the `interface_decls`,
+`impl_conformance`, `impl_coherence`, `impl_placement` and `interface_calls`
+type fixtures, `tests/types/fixtures/ok/interfaces.tuo`, the ownership fixture
+`err/interface_calls.tuo`, `tests/mir/golden/calls`, and
+`interface_calls_agree_across_all_three_engines`. The benchmark plan's
+measurements are Stage C's and are not part of this stage.
 
 **Stage C — bounds enforced and lowered.** Bounds are checked at every
 instantiation (F3 becomes an error) and interface calls in generic bodies
