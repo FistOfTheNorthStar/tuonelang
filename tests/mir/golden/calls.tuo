@@ -1,4 +1,5 @@
-// Calls in every parameter mode, constants, generics, and impl blocks.
+// Calls in every parameter mode, constants, generics, and impl members
+// called through their interface.
 
 const LIMIT: Int = 100;
 const SCALE: Int = -3;
@@ -47,4 +48,8 @@ fn borrow_a_temporary() -> Int {
 
 fn generic_round_trip(in n: Int) -> Int {
     identity(n)
+}
+
+fn stepped(in counter: Counter) -> Int {
+    Stepper::step(counter)
 }

@@ -35,6 +35,17 @@ fn spec_passes_for_a_program_whose_specs_hold() {
 }
 
 #[test]
+fn a_spec_on_a_function_calling_impl_members_runs() {
+    // ADR-0032 Stage B (Q3): impl members run in the interpreter through the
+    // ordinary function that calls them by qualified path.
+    let output = run(&["spec", &path("interface_calls.tuo")]);
+    let stderr = String::from_utf8(output.stderr).expect("utf-8");
+    assert!(output.status.success(), "the spec passes: {stderr}");
+    assert!(stderr.contains("ok total"));
+    assert!(stderr.contains("1 passed, 0 failed"));
+}
+
+#[test]
 fn spec_fails_and_reports_expected_and_actual() {
     let output = run(&["spec", &path("failing.tuo")]);
     assert!(!output.status.success(), "a failing spec → failure exit");

@@ -610,6 +610,22 @@ fn function_values_agree_across_all_three_engines() {
     }
 }
 
+/// ADR-0032 Stage B: impl members lower as ordinary functions and a qualified
+/// call `I::m(x)` as a direct call to the member the type checker selected.
+/// One interface with impls on a struct, an enum and `Int` (so the selection
+/// by the first argument's type is observable), and the three receivers:
+/// `in self`, a `mut self` write the caller's `var` then shows, and a `take
+/// self` consuming an owned array. Every call feeds the exit code.
+#[test]
+fn interface_calls_agree_across_all_three_engines() {
+    for name in [
+        "iface_two_impls.tuo", // one interface, three impl targets, `in self`
+        "iface_receivers.tuo", // `mut self` write-back and `take self` consumption
+    ] {
+        assert_three_way_agreement(name);
+    }
+}
+
 #[test]
 fn both_backends_refuse_an_unsupported_program_rather_than_miscompile() {
     // A program still outside the native subset (a function with a heap-wrapper

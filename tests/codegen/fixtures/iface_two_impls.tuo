@@ -1,0 +1,43 @@
+// ADR-0032 Stage B: one interface, impls for three types (a struct, an enum
+// and a builtin), each selected at check time by the first argument's type.
+struct Point { x: Int, y: Int }
+
+enum Shape {
+    Square { side: Int },
+    Rect { w: Int, h: Int },
+}
+
+interface Area {
+    fn area(in self) -> Int;
+    fn scaled(in self, in by: Int) -> Int;
+}
+
+impl Area for Point {
+    fn area(in self) -> Int { self.x * self.y }
+    fn scaled(in self, in by: Int) -> Int { Area::area(self) * by }
+}
+
+impl Area for Shape {
+    fn area(in self) -> Int {
+        match self {
+            Shape::Square { side } => side * side,
+            Shape::Rect { w, h } => w * h,
+        }
+    }
+    fn scaled(in self, in by: Int) -> Int { Area::area(self) + by }
+}
+
+impl Area for Int {
+    fn area(in self) -> Int { self + 1 }
+    fn scaled(in self, in by: Int) -> Int { self - by }
+}
+
+fn main() -> Int {
+    let p = Point { x: 2, y: 3 };
+    let s = Shape::Square { side: 4 };
+    let r = Shape::Rect { w: 2, h: 5 };
+    let n: Int = 9;
+    // 6 + 12 + 16 + 13 + 10 + 10 + 6 = 73
+    Area::area(p) + Area::scaled(p, 2) + Area::area(s) + Area::scaled(r, 3)
+        + Area::area(n) + Area::area(9) + Area::scaled(n, 3)
+}

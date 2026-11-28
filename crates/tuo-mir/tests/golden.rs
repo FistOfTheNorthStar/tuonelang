@@ -35,8 +35,8 @@ fn lower_to_text(name: &str, text: &str) -> String {
         "{name}: fixture has resolution errors"
     );
     let types = tuo_types::check(&asts, &resolution);
-    // Warnings are allowed (an `impl` draws `T0026`, ADR-0032 Stage A, and
-    // still lowers to nothing); only an error disqualifies a fixture.
+    // Warnings are allowed; only an error disqualifies a fixture. (Impl
+    // blocks drew the `T0026` warning until ADR-0032 Stage B lowered them.)
     let errors: Vec<_> = types
         .diagnostics()
         .iter()

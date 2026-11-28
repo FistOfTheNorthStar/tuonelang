@@ -1,4 +1,7 @@
-// not lowered: fn {impl}: impl functions are not lowered in v0 (pending the trait system)
+fn Stepper::step[Counter](_0: in Counter) -> I64 {
+bb0:
+    return const 1_i64
+}
 
 fn inspect(_0: in I64) -> I64 {
     let _1: I64;
@@ -59,5 +62,12 @@ fn generic_round_trip(_0: in I64) -> I64 {
     let _1: I64;
 bb0:
     _1 = call identity(copy _0)
+    return copy _1
+}
+
+fn stepped(_0: in Counter) -> I64 {
+    let _1: I64;
+bb0:
+    _1 = call Stepper::step[Counter](borrow _0)
     return copy _1
 }

@@ -39,11 +39,11 @@ pub struct Program {
 /// A function body the v0 lowering declined, and why.
 #[derive(Clone, Debug)]
 pub struct Skipped {
-    /// The function's name (`{impl}` for impl functions, which have no
-    /// resolved symbol until the trait system lands).
+    /// The function's name (`{unresolved}` for a function whose name did
+    /// not resolve).
     pub name: String,
     /// The function's symbol, so a call to it can say why it is absent
-    /// (`None` for impl functions).
+    /// (`None` for a function whose name did not resolve).
     pub symbol: Option<SymbolId>,
     /// The reason lowering declined (one of the documented v0 limits).
     pub reason: String,
